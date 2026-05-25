@@ -3,6 +3,12 @@ export { ExternalMcpManager, type ExternalMcpServerConfig, type ExternalMcpServe
 export { type HttpGatewayOptions, type HttpGatewayServer, startHttpGateway } from "./http.ts";
 export { type StartMcpServerOptions, startMcpServer } from "./mcp.ts";
 export type {
+	AuthOAuthBeginParams,
+	AuthOAuthBeginResult,
+	AuthOAuthCancelParams,
+	AuthOAuthCancelResult,
+	AuthOAuthWaitParams,
+	AuthOAuthWaitResult,
 	AuthRemoveParams,
 	AuthRemoveResult,
 	AuthSetApiKeyParams,

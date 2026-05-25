@@ -47,7 +47,8 @@ const route = await mirror.create({
 });
 if (route.destinations.length !== 2) throw new Error("Mirror route should keep all destinations");
 const inboundDestinations = await mirror.destinationsFor({ platform: "telegram", chatId: "tg-chat-1" }, "inbound");
-if (inboundDestinations.length !== 2) throw new Error(`Inbound destinations should match: ${inboundDestinations.length}`);
+if (inboundDestinations.length !== 2)
+	throw new Error(`Inbound destinations should match: ${inboundDestinations.length}`);
 const outboundDestinations = await mirror.destinationsFor({ platform: "telegram", chatId: "tg-chat-1" }, "outbound");
 if (outboundDestinations.length !== 2) throw new Error("Outbound destinations should match");
 const noMatch = await mirror.destinationsFor({ platform: "telegram", chatId: "other" }, "inbound");
@@ -62,7 +63,12 @@ const footerEnabled = buildRuntimeFooter(
 	{ platform: "telegram", model: "claude-opus-4-7", provider: "anthropic", durationMs: 4_321, chunks: 3 },
 	{ ...DEFAULT_FOOTER_CONFIG, enabled: true, includeChunks: true },
 );
-if (footerEnabled === undefined || !footerEnabled.includes("claude-opus-4-7") || !footerEnabled.includes("4.3s") || !footerEnabled.includes("chunks: 3")) {
+if (
+	footerEnabled === undefined ||
+	!footerEnabled.includes("claude-opus-4-7") ||
+	!footerEnabled.includes("4.3s") ||
+	!footerEnabled.includes("chunks: 3")
+) {
 	throw new Error(`Footer missing fields: ${footerEnabled}`);
 }
 const appended = appendRuntimeFooter(
@@ -91,7 +97,8 @@ const entryHit = await stickerCache.get(fakeKey, {
 		return { data: Buffer.from("again"), mime: "image/webp" };
 	},
 });
-if (entryHit === undefined || entryHit.cacheFile !== entry.cacheFile) throw new Error("Sticker cache should return cached entry");
+if (entryHit === undefined || entryHit.cacheFile !== entry.cacheFile)
+	throw new Error("Sticker cache should return cached entry");
 if (downloadCount.value !== 1) throw new Error(`Sticker cache should not re-download, got ${downloadCount.value}`);
 
 const hooks = new HookRegistry({

@@ -7,12 +7,7 @@ const homeDir = await mkdtemp(join(tmpdir(), "clanky-install-"));
 const previousMessagingArgs = process.env.CLANKY_MCP_SERVERS_JSON;
 process.env.CLANKY_MCP_SERVERS_JSON = JSON.stringify([]);
 
-const installEnvArgs = [
-	"--env",
-	"CLANKY_MCP_SERVERS_JSON=[]",
-	"--env",
-	"AGENT_IDENTITY=install-smoke",
-];
+const installEnvArgs = ["--env", "CLANKY_MCP_SERVERS_JSON=[]", "--env", "AGENT_IDENTITY=install-smoke"];
 
 let launchd: CommandResult;
 let systemd: CommandResult;

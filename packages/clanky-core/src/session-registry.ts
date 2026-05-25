@@ -43,6 +43,13 @@ import {
 	type SetMemoryConsentInput,
 } from "./memory/store.ts";
 import {
+	type ModelOAuthBeginResult,
+	type ModelOAuthCredentialResult,
+	OPENAI_CODEX_OAUTH_PROVIDER,
+	type StartOpenAiCodexOAuthOptions,
+	startOpenAiCodexOAuthLogin,
+} from "./model-oauth.ts";
+import {
 	getModelAuthStatus,
 	type ModelAuthMutationResult,
 	type ModelAuthStatus,
@@ -176,12 +183,20 @@ export interface PendingPromptCheckpointInput {
 	jobId?: string;
 }
 
+export type ModelOAuthLoginResult = ModelAuthMutationResult;
+
 interface MutableRegisteredSession extends RegisteredSession {
 	lastUsedAt: Date;
 }
 
 interface PendingPromptCheckpoint extends PendingPromptCheckpointInput {
 	createdAt: string;
+}
+
+interface PendingModelOAuthLogin {
+	cancel(): void;
+	completion: Promise<ModelOAuthLoginResult>;
+	provider: string;
 }
 
 export const DEFAULT_SESSION_IDLE_TTL_MS = 60 * 60 * 1000;
@@ -204,6 +219,7 @@ export class SessionRegistry {
 	private readonly skillUsage: SkillUsageStore;
 	private readonly memoryStore: MemoryStore;
 	private readonly sessions = new Map<string, MutableRegisteredSession>();
+	private readonly modelOAuthLogins = new Map<string, PendingModelOAuthLogin>();
 	private agentToolHandlers: ClankyAgentToolHandlers;
 	private skillWatcher: ClankySkillWatcher | undefined;
 	private started = false;
@@ -534,8 +550,58 @@ export class SessionRegistry {
 		return result;
 	}
 
+	async beginModelOAuthLogin(providerInput: string = OPENAI_CODEX_OAUTH_PROVIDER): Promise<ModelOAuthBeginResult> {
+		const provider = normalizeModelOAuthProvider(providerInput);
+		const oauthOptions: StartOpenAiCodexOAuthOptions = {};
+		if (process.env.CLANKY_OPENAI_OAUTH_ISSUER !== undefined)
+			oauthOptions.issuerBaseUrl = process.env.CLANKY_OPENAI_OAUTH_ISSUER;
+		if (process.env.CLANKY_OPENAI_OAUTH_TOKEN_URL !== undefined)
+			oauthOptions.tokenUrl = process.env.CLANKY_OPENAI_OAUTH_TOKEN_URL;
+		const started = await startOpenAiCodexOAuthLogin(oauthOptions);
+		const completion = started.completion.then((result) => this.storeModelOAuthCredential(result));
+		completion.catch(() => undefined);
+		this.modelOAuthLogins.set(started.loginId, {
+			cancel: started.cancel,
+			completion,
+			provider,
+		});
+		void completion.finally(() => {
+			const cleanup = setTimeout(
+				() => {
+					this.modelOAuthLogins.delete(started.loginId);
+				},
+				5 * 60 * 1000,
+			);
+			cleanup.unref?.();
+		});
+		return started.info;
+	}
+
+	async waitModelOAuthLogin(loginId: string): Promise<ModelOAuthLoginResult> {
+		const pending = this.modelOAuthLogins.get(loginId);
+		if (pending === undefined) throw new Error(`Unknown OAuth login: ${loginId}`);
+		return await pending.completion;
+	}
+
+	cancelModelOAuthLogin(loginId: string): { cancelled: boolean; provider?: string } {
+		const pending = this.modelOAuthLogins.get(loginId);
+		if (pending === undefined) return { cancelled: false };
+		pending.cancel();
+		this.modelOAuthLogins.delete(loginId);
+		return { cancelled: true, provider: pending.provider };
+	}
+
 	setAgentToolHandlers(handlers: ClankyAgentToolHandlers): void {
 		this.agentToolHandlers = this.withDefaultAgentToolHandlers(handlers);
+	}
+
+	private storeModelOAuthCredential(result: ModelOAuthCredentialResult): ModelOAuthLoginResult {
+		const authStorage = AuthStorage.create(this.paths.authFile);
+		authStorage.set(result.provider, result.credential);
+		const errors = authStorage.drainErrors();
+		if (errors.length > 0) throw errors[0];
+		this.refreshLiveModelAuth();
+		return { provider: result.provider, status: this.modelAuthStatus() };
 	}
 
 	private refreshLiveModelAuth(): void {
@@ -984,6 +1050,14 @@ function resolveRequestedModel(
 	if (matches.length === 1) return matches[0];
 	if (matches.length > 1) throw new Error(`Ambiguous model override: ${requestedModel}`);
 	throw new Error(`Unknown model override: ${requestedModel}`);
+}
+
+function normalizeModelOAuthProvider(providerInput: string): string {
+	const provider = providerInput.trim().toLowerCase();
+	if (provider === "openai" || provider === "codex" || provider === OPENAI_CODEX_OAUTH_PROVIDER) {
+		return OPENAI_CODEX_OAUTH_PROVIDER;
+	}
+	throw new Error(`Unsupported OAuth provider: ${providerInput}. Supported provider: ${OPENAI_CODEX_OAUTH_PROVIDER}`);
 }
 
 function normalizedFlushLimit(limit: number | undefined): number {

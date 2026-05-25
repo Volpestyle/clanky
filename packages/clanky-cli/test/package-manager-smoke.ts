@@ -283,9 +283,7 @@ const requiredDevPiDependencies = new Map([
 	["@clanky/gateway", new Set(["@earendil-works/pi-ai"])],
 	["@clanky/messaging", new Set(["@earendil-works/pi-ai"])],
 ]);
-const requiredMcpDependencies = new Map([
-	["@clanky/gateway", new Set(["@modelcontextprotocol/sdk"])],
-]);
+const requiredMcpDependencies = new Map([["@clanky/gateway", new Set(["@modelcontextprotocol/sdk"])]]);
 const requiredPlanRuntimeDependencies = new Map([
 	["@clanky/core", new Set(["chokidar"])],
 	["@clanky/gateway", new Set(["@hono/node-server", "hono", "ws"])],

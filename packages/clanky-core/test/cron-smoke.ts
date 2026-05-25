@@ -5,7 +5,6 @@ import {
 	buildCronIdempotencyKey,
 	CronJobStore,
 	CronScheduler,
-	type CronSchedulerOptions,
 	type CronTickResult,
 	DEFAULT_CRON_TICK_INTERVAL_MS,
 	resolveClankyPaths,

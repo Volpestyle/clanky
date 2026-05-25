@@ -24,7 +24,9 @@ import {
 	addCronJob,
 	addSkill,
 	addTask,
+	beginAuthOAuth,
 	callExternalMcpTool,
+	cancelAuthOAuth,
 	createLinearIssue,
 	disableCronJob,
 	enableCronJob,
@@ -60,12 +62,15 @@ import {
 	setAuthApiKey,
 	setMemoryConsent,
 	updateTask,
+	waitAuthOAuth,
 } from "./operations.ts";
 import { isRpcInput, PiRpcSocket } from "./pi-rpc.ts";
 import {
 	type GatewayRequest,
 	type GatewayResponse,
 	isGatewayRequest,
+	readAuthOAuthBeginParams,
+	readAuthOAuthWaitParams,
 	readAuthRemoveParams,
 	readAuthSetApiKeyParams,
 	readCronAddParams,
@@ -394,6 +399,7 @@ function handleFirstLine(
 	closeGateway: () => Promise<void>,
 	line: string,
 ): PiRpcSocket | undefined {
+	if (line.endsWith("\r")) line = line.slice(0, -1);
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(line);
@@ -483,6 +489,18 @@ async function dispatch(
 
 	if (request.method === "auth.remove") {
 		return removeAuth(registry, readAuthRemoveParams(request.params));
+	}
+
+	if (request.method === "auth.oauth.begin") {
+		return await beginAuthOAuth(registry, readAuthOAuthBeginParams(request.params));
+	}
+
+	if (request.method === "auth.oauth.wait") {
+		return await waitAuthOAuth(registry, readAuthOAuthWaitParams(request.params));
+	}
+
+	if (request.method === "auth.oauth.cancel") {
+		return cancelAuthOAuth(registry, readAuthOAuthWaitParams(request.params));
 	}
 
 	if (request.method === "memory.status") {

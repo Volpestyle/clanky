@@ -1,6 +1,8 @@
 import { stdin as input, stdout as output } from "node:process";
 import { createInterface } from "node:readline/promises";
 import {
+	type AuthOAuthBeginResult,
+	type AuthOAuthWaitResult,
 	type AuthRemoveResult,
 	type AuthSetApiKeyResult,
 	type AuthStatusResult,
@@ -38,12 +40,23 @@ interface DashboardData {
 }
 
 const DEFAULT_INTERVAL_MS = 3000;
+const DEFAULT_OAUTH_WAIT_TIMEOUT_MS = 16 * 60 * 1000;
 const DASHBOARD_SESSION_LIMIT = 8;
 const DASHBOARD_RESUME_KEYS: readonly KeyId[] = ["1", "2", "3", "4", "5", "6", "7", "8"];
 const DASHBOARD_QUIT_KEYS: readonly KeyId[] = ["ctrl+c", "q"];
 const DASHBOARD_OPENAI_AUTH_KEYS: readonly KeyId[] = ["a"];
+const DASHBOARD_CHAT_KEYS: readonly KeyId[] = ["c"];
+const DASHBOARD_SCROLL_UP_KEYS: readonly KeyId[] = ["up", "k"];
+const DASHBOARD_SCROLL_DOWN_KEYS: readonly KeyId[] = ["down", "j"];
+const DASHBOARD_PAGE_UP_KEYS: readonly KeyId[] = ["pageUp"];
+const DASHBOARD_PAGE_DOWN_KEYS: readonly KeyId[] = ["pageDown"];
+const DASHBOARD_HOME_KEYS: readonly KeyId[] = ["home"];
+const DASHBOARD_END_KEYS: readonly KeyId[] = ["end"];
 
 type DashboardAction =
+	| {
+			type: "new-chat";
+	  }
 	| {
 			type: "openai-auth";
 	  }
@@ -88,8 +101,10 @@ async function runInteractiveDashboard(options: RunDashboardOptions): Promise<vo
 	const initialData = await fetchDashboardData(options.socketFile);
 	const terminal = new ProcessTerminal();
 	const tui = new TUI(terminal, false);
-	const dashboard = new DashboardComponent(renderDashboardData(initialData));
+	tui.setClearOnShrink(true);
+	const dashboard = new DashboardComponent(initialData, () => tui.requestRender());
 	tui.addChild(dashboard);
+	tui.setFocus(dashboard);
 	let webSocket: WebSocket | undefined;
 	let interval: NodeJS.Timeout | undefined;
 	let stopped = false;
@@ -100,11 +115,9 @@ async function runInteractiveDashboard(options: RunDashboardOptions): Promise<vo
 		try {
 			const data = await fetchDashboardData(options.socketFile);
 			latestSessions = data.sessions;
-			dashboard.setText(renderDashboardData(data));
+			dashboard.setData(data);
 		} catch (error) {
-			dashboard.setText(
-				`Clanky Dashboard\n================\n\nError: ${error instanceof Error ? error.message : String(error)}`,
-			);
+			dashboard.setError(error instanceof Error ? error.message : String(error));
 		}
 		tui.requestRender();
 	};
@@ -133,6 +146,10 @@ async function runInteractiveDashboard(options: RunDashboardOptions): Promise<vo
 				stopDashboard({ type: "openai-auth" });
 				return { consume: true };
 			}
+			if (matchesDashboardKey(data, DASHBOARD_CHAT_KEYS)) {
+				stopDashboard({ type: "new-chat" });
+				return { consume: true };
+			}
 			const sessionId = dashboardSessionIdForKey(latestSessions, data);
 			if (sessionId !== undefined) {
 				stopDashboard({ type: "resume-session", sessionId });
@@ -143,6 +160,7 @@ async function runInteractiveDashboard(options: RunDashboardOptions): Promise<vo
 		process.once("SIGINT", stop);
 		process.once("SIGTERM", stop);
 		tui.start();
+		tui.requestRender(true);
 		void redraw();
 		interval = setInterval(() => {
 			void redraw();
@@ -162,6 +180,13 @@ async function runInteractiveDashboard(options: RunDashboardOptions): Promise<vo
 		const chatOptions: Parameters<typeof runChat>[0] = {
 			socketFile: options.socketFile,
 			sessionId: nextAction.sessionId,
+		};
+		if (options.eventStreamUrl !== undefined) chatOptions.eventStreamUrl = options.eventStreamUrl;
+		await runChat(chatOptions);
+	}
+	if (nextAction?.type === "new-chat") {
+		const chatOptions: Parameters<typeof runChat>[0] = {
+			socketFile: options.socketFile,
 		};
 		if (options.eventStreamUrl !== undefined) chatOptions.eventStreamUrl = options.eventStreamUrl;
 		await runChat(chatOptions);
@@ -218,21 +243,350 @@ async function redrawDashboard(socketFile: string): Promise<void> {
 }
 
 class DashboardComponent implements Component {
-	private text: string;
+	private data: DashboardData | undefined;
+	private error: string | undefined;
+	private scrollOffset = 0;
+	private readonly requestRender: () => void;
 
-	constructor(text: string) {
-		this.text = text;
+	constructor(data: DashboardData, requestRender: () => void) {
+		this.data = data;
+		this.requestRender = requestRender;
 	}
 
-	setText(text: string): void {
-		this.text = text;
+	setData(data: DashboardData): void {
+		this.data = data;
+		this.error = undefined;
+	}
+
+	setError(error: string): void {
+		this.error = error;
 	}
 
 	render(width: number): string[] {
-		return this.text.split("\n").map((line) => truncateToWidth(line, width));
+		const height = Math.max(1, output.rows ?? 24);
+		const viewportHeight = Math.max(1, height - 1);
+		const safeWidth = Math.max(40, width);
+		const content = renderInteractiveDashboard(this.data, this.error, safeWidth);
+		const maxScrollOffset = Math.max(0, content.length - viewportHeight);
+		this.scrollOffset = Math.max(0, Math.min(this.scrollOffset, maxScrollOffset));
+		const visible = content.slice(this.scrollOffset, this.scrollOffset + viewportHeight);
+		if (maxScrollOffset > 0) {
+			visible[1] = paintLine(
+				`${actionsLine()}   ${scrollStatus(this.scrollOffset, viewportHeight, content.length)}`,
+				safeWidth,
+				ANSI_SURFACE_HEADER,
+			);
+		}
+		return fillViewport(visible, safeWidth, height);
+	}
+
+	handleInput(data: string): void {
+		if (matchesDashboardKey(data, DASHBOARD_SCROLL_UP_KEYS)) {
+			this.scrollBy(-1);
+			return;
+		}
+		if (matchesDashboardKey(data, DASHBOARD_SCROLL_DOWN_KEYS)) {
+			this.scrollBy(1);
+			return;
+		}
+		if (matchesDashboardKey(data, DASHBOARD_PAGE_UP_KEYS)) {
+			this.scrollBy(-Math.max(4, Math.floor((output.rows ?? 24) * 0.7)));
+			return;
+		}
+		if (matchesDashboardKey(data, DASHBOARD_PAGE_DOWN_KEYS)) {
+			this.scrollBy(Math.max(4, Math.floor((output.rows ?? 24) * 0.7)));
+			return;
+		}
+		if (matchesDashboardKey(data, DASHBOARD_HOME_KEYS)) {
+			this.scrollTo(0);
+			return;
+		}
+		if (matchesDashboardKey(data, DASHBOARD_END_KEYS)) {
+			this.scrollTo(Number.MAX_SAFE_INTEGER);
+		}
 	}
 
 	invalidate(): void {}
+
+	private scrollBy(delta: number): void {
+		this.scrollTo(this.scrollOffset + delta);
+	}
+
+	private scrollTo(offset: number): void {
+		const nextOffset = Math.max(0, offset);
+		if (nextOffset === this.scrollOffset) return;
+		this.scrollOffset = nextOffset;
+		this.requestRender();
+	}
+}
+
+const ANSI_RESET = "\x1b[0m";
+const ANSI_BOLD = "\x1b[1m";
+const ANSI_BOLD_RESET = "\x1b[22m";
+const ANSI_FG_RESET = "\x1b[39m";
+const ANSI_SURFACE_HEADER = "";
+const ANSI_SURFACE_PANEL = "";
+
+const COLOR_ACCENT = 81;
+const COLOR_BORDER = 244;
+const COLOR_ERROR = 203;
+const COLOR_MUTED = 245;
+const COLOR_SUCCESS = 114;
+const COLOR_TEXT = 252;
+const COLOR_WARNING = 221;
+
+function renderInteractiveDashboard(
+	data: DashboardData | undefined,
+	error: string | undefined,
+	width: number,
+): string[] {
+	const safeWidth = Math.max(40, width);
+	const lines: string[] = [
+		paintLine(headerLine(data), safeWidth, ANSI_SURFACE_HEADER),
+		paintLine(actionsLine(), safeWidth, ANSI_SURFACE_PANEL),
+		paintLine("", safeWidth, ANSI_SURFACE_PANEL),
+	];
+	if (error !== undefined) {
+		lines.push(...renderSinglePanel("Error", [fg(COLOR_ERROR, error)], safeWidth, 5));
+		return lines;
+	}
+	if (data === undefined) {
+		lines.push(...renderSinglePanel("Loading", [muted("Waiting for daemon data...")], safeWidth, 5));
+		return lines;
+	}
+
+	if (safeWidth >= 96) {
+		const leftWidth = Math.floor((safeWidth - 3) * 0.48);
+		const rightWidth = safeWidth - leftWidth - 3;
+		lines.push(
+			...joinPanels(
+				panel("Daemon", statusPanelLines(data.status), leftWidth, 8),
+				panel("Model Auth", authPanelLines(data.auth), rightWidth, 8),
+				safeWidth,
+			),
+		);
+	} else {
+		lines.push(...renderSinglePanel("Daemon", statusPanelLines(data.status), safeWidth, 8));
+		lines.push(...renderSinglePanel("Model Auth", authPanelLines(data.auth), safeWidth, 8));
+	}
+
+	lines.push(paintLine("", safeWidth, ANSI_SURFACE_PANEL));
+	lines.push(...renderSinglePanel("Sessions", sessionsPanelLines(data.sessions), safeWidth, 6));
+	lines.push(paintLine("", safeWidth, ANSI_SURFACE_PANEL));
+	if (safeWidth >= 112) {
+		const leftWidth = Math.floor((safeWidth - 3) * 0.5);
+		const rightWidth = safeWidth - leftWidth - 3;
+		lines.push(
+			...joinPanels(
+				panel("Tasks", tasksPanelLines(data.tasks), leftWidth, 7),
+				panel("Cron", cronPanelLines(data.cron), rightWidth, 7),
+				safeWidth,
+			),
+		);
+	} else {
+		lines.push(...renderSinglePanel("Tasks", tasksPanelLines(data.tasks), safeWidth, 7));
+		lines.push(...renderSinglePanel("Cron", cronPanelLines(data.cron), safeWidth, 7));
+	}
+	return lines;
+}
+
+function headerLine(data: DashboardData | undefined): string {
+	const profile = data?.status.profile ?? "default";
+	const live = data?.status.liveSessions ?? 0;
+	return `${bold(fg(COLOR_ACCENT, "Clanky Dashboard"))}  ${muted("profile")} ${fg(
+		COLOR_TEXT,
+		profile,
+	)}  ${muted("live")} ${statusTone(live > 0, String(live))}`;
+}
+
+function actionsLine(): string {
+	return `${muted("Actions")}  ${key("[c]")} chat   ${key("[a]")} OpenAI auth/OAuth   ${key("[1-8]")} resume   ${key("[PgUp/PgDn]")} scroll   ${key("[q]")} quit`;
+}
+
+function scrollStatus(scrollOffset: number, viewportHeight: number, totalLines: number): string {
+	const start = Math.min(totalLines, scrollOffset + 1);
+	const end = Math.min(totalLines, scrollOffset + viewportHeight);
+	return muted(`${start}-${end}/${totalLines}`);
+}
+
+function statusPanelLines(status: StatusResult): string[] {
+	const uptimeSeconds = Math.floor(status.uptimeMs / 1000);
+	return [
+		field("Daemon", `${statusTone(true, "running")} ${muted(`pid ${status.pid}`)} ${muted(`up ${uptimeSeconds}s`)}`),
+		field("Profile", `${status.profile} ${muted(status.profileDir)}`),
+		field("Sessions", `${status.liveSessions} live`),
+		field("Linear", `${booleanText(status.linearConfigured)} ${muted(`outbox ${status.linearOutboxPending}`)}`),
+		field("Cron", `${status.enabledCronJobs}/${status.cronJobs} enabled`),
+		...status.warnings.map((warning) => fg(COLOR_WARNING, warning)),
+	];
+}
+
+function authPanelLines(auth: AuthStatusResult): string[] {
+	const openAi = auth.providers.find((provider) => provider.provider === "openai");
+	const openAiCodex = auth.providers.find((provider) => provider.provider === "openai-codex");
+	const authProviders = auth.authProviders.length === 0 ? muted("none") : auth.authProviders.join(", ");
+	const availableProviders = auth.availableProviders.length === 0 ? muted("none") : auth.availableProviders.join(", ");
+	return [
+		field("Credentials", booleanText(auth.configured)),
+		field("Models", `${auth.availableModels} ${muted("available")}`),
+		field("Providers", availableProviders),
+		field("Stored", authProviders),
+		field("OpenAI", providerText(openAi)),
+		field("Codex OAuth", providerText(openAiCodex)),
+		field("Auth file", muted(auth.authFile)),
+	];
+}
+
+function sessionsPanelLines(result: SessionListResult): string[] {
+	if (result.sessions.length === 0) return [muted("No sessions")];
+	const lines = [muted("Key  Session   State  Msgs  Label")];
+	let shortcutIndex = 0;
+	for (const session of result.sessions.slice(0, DASHBOARD_SESSION_LIMIT)) {
+		const state = session.live ? fg(COLOR_SUCCESS, "live") : muted("saved");
+		const shortcut =
+			session.sessionFile === undefined || shortcutIndex >= DASHBOARD_RESUME_KEYS.length
+				? "-"
+				: DASHBOARD_RESUME_KEYS[shortcutIndex++];
+		const label = session.name ?? session.firstMessage ?? "";
+		lines.push(
+			`${key(`[${shortcut}]`)} ${fixedCell(session.id.slice(0, 8), 8)}  ${fixedAnsiCell(state, 5)}  ${fixedCell(
+				`${session.messageCount ?? 0}`,
+				4,
+			)}  ${label}`,
+		);
+	}
+	if (result.sessions.length > DASHBOARD_SESSION_LIMIT)
+		lines.push(muted(`${result.sessions.length - DASHBOARD_SESSION_LIMIT} more sessions`));
+	return lines;
+}
+
+function tasksPanelLines(result: TaskListResult): string[] {
+	if (result.tasks.length === 0) return [muted("No tasks")];
+	const lines = [muted("Task      Status       Pri     Linear        Session")];
+	for (const task of result.tasks.slice(0, 8)) {
+		const linear = task.linearIssue ?? "-";
+		const session = task.sessionId?.slice(0, 8) ?? "-";
+		lines.push(
+			`${fixedCell(task.id.slice(0, 8), 8)}  ${fixedCell(task.status, 11)}  ${fixedCell(
+				task.priority,
+				6,
+			)}  ${fixedCell(linear, 12)}  ${fixedCell(session, 8)}  ${task.title}`,
+		);
+	}
+	if (result.tasks.length > 8) lines.push(muted(`${result.tasks.length - 8} more tasks`));
+	return lines;
+}
+
+function cronPanelLines(result: CronListResult): string[] {
+	if (result.jobs.length === 0) return [muted("No cron jobs")];
+	const lines = [muted("Job       State     Next          Schedule")];
+	for (const job of result.jobs.slice(0, 8)) {
+		const state = job.enabled ? fg(COLOR_SUCCESS, "enabled") : muted("disabled");
+		lines.push(
+			`${fixedCell(job.id.slice(0, 8), 8)}  ${fixedAnsiCell(state, 8)}  ${fixedCell(
+				nextFireCountdown(job.nextFire),
+				12,
+			)}  ${job.schedule}`,
+		);
+	}
+	if (result.jobs.length > 8) lines.push(muted(`${result.jobs.length - 8} more cron jobs`));
+	return lines;
+}
+
+function panel(title: string, body: string[], width: number, minBodyRows: number): string[] {
+	const safeWidth = Math.max(24, width);
+	const innerWidth = safeWidth - 4;
+	const rows = body.slice(0, Math.max(minBodyRows, body.length));
+	while (rows.length < minBodyRows) rows.push("");
+	const titleText = ` ${title} `;
+	const titleWidth = visibleWidth(titleText);
+	const ruleWidth = Math.max(0, safeWidth - titleWidth - 3);
+	const top = `${border("+")}${border("-")}${bold(fg(COLOR_TEXT, titleText))}${border(
+		"-".repeat(ruleWidth),
+	)}${border("+")}`;
+	const rendered = [fitAnsi(top, safeWidth)];
+	for (const row of rows) {
+		rendered.push(`${border("|")} ${fitAnsi(row, innerWidth)} ${border("|")}`);
+	}
+	rendered.push(border(`+${"-".repeat(safeWidth - 2)}+`));
+	return rendered;
+}
+
+function renderSinglePanel(title: string, body: string[], width: number, minBodyRows: number): string[] {
+	return panel(title, body, width, minBodyRows).map((line) => paintLine(line, width, ANSI_SURFACE_PANEL));
+}
+
+function joinPanels(left: string[], right: string[], width: number): string[] {
+	const rows = Math.max(left.length, right.length);
+	const leftWidth = visibleWidth(left[0] ?? "");
+	const rightWidth = visibleWidth(right[0] ?? "");
+	const result: string[] = [];
+	for (let index = 0; index < rows; index++) {
+		const row = `${fitAnsi(left[index] ?? "", leftWidth)}${" ".repeat(3)}${fitAnsi(right[index] ?? "", rightWidth)}`;
+		result.push(paintLine(row, width, ANSI_SURFACE_PANEL));
+	}
+	return result;
+}
+
+function fillViewport(lines: string[], width: number, height: number): string[] {
+	const result = lines.slice(0, Math.max(1, height - 1));
+	while (result.length < Math.max(1, height - 1)) result.push(paintLine("", width, ANSI_SURFACE_PANEL));
+	return result;
+}
+
+function field(label: string, value: string): string {
+	return `${muted(fixedCell(label, 12))} ${value}`;
+}
+
+function booleanText(value: boolean): string {
+	return value ? fg(COLOR_SUCCESS, "set") : fg(COLOR_WARNING, "missing");
+}
+
+function providerText(provider: AuthStatusResult["providers"][number] | undefined): string {
+	if (provider === undefined || !provider.configured) return fg(COLOR_WARNING, "missing");
+	if (provider.source === "environment" && provider.label !== undefined)
+		return fg(COLOR_SUCCESS, `env:${provider.label}`);
+	if (provider.source === "stored") return fg(COLOR_SUCCESS, "stored");
+	return fg(COLOR_SUCCESS, provider.source ?? "configured");
+}
+
+function statusTone(ok: boolean, text: string): string {
+	return fg(ok ? COLOR_SUCCESS : COLOR_WARNING, text);
+}
+
+function key(text: string): string {
+	return bold(fg(COLOR_ACCENT, text));
+}
+
+function border(text: string): string {
+	return fg(COLOR_BORDER, text);
+}
+
+function muted(text: string): string {
+	return fg(COLOR_MUTED, text);
+}
+
+function bold(text: string): string {
+	return `${ANSI_BOLD}${text}${ANSI_BOLD_RESET}`;
+}
+
+function fg(color: number, text: string): string {
+	return `\x1b[38;5;${color}m${text}${ANSI_FG_RESET}`;
+}
+
+function paintLine(text: string, width: number, background: string): string {
+	const line = fitAnsi(text, width);
+	return `${background}${line}${ANSI_RESET}`;
+}
+
+function fitAnsi(text: string, width: number): string {
+	const truncated = truncateToWidth(text, width, "");
+	return `${truncated}${" ".repeat(Math.max(0, width - visibleWidth(truncated)))}`;
+}
+
+function fixedAnsiCell(value: string, width: number): string {
+	const text = truncateToWidth(value.replace(/\s+/g, " ").trim(), width);
+	return `${text}${" ".repeat(Math.max(0, width - visibleWidth(text)))}`;
 }
 
 export async function renderDashboard(socketFile: string): Promise<string> {
@@ -245,7 +599,7 @@ function renderDashboardData(data: DashboardData): string {
 		"Clanky Dashboard",
 		"================",
 		"",
-		"Actions: [a] OpenAI auth  [1-8] resume  [q] quit",
+		"Actions: [c] chat  [a] OpenAI auth/OAuth  [1-8] resume  [q] quit",
 		"",
 		renderStatus(data.status),
 		"",
@@ -284,6 +638,7 @@ function renderStatus(status: StatusResult): string {
 
 function renderAuth(auth: AuthStatusResult): string {
 	const openAi = auth.providers.find((provider) => provider.provider === "openai");
+	const openAiCodex = auth.providers.find((provider) => provider.provider === "openai-codex");
 	const authProviders = auth.authProviders.length === 0 ? "none" : auth.authProviders.join(",");
 	const availableProviders = auth.availableProviders.length === 0 ? "none" : auth.availableProviders.join(",");
 	return [
@@ -291,6 +646,7 @@ function renderAuth(auth: AuthStatusResult): string {
 		`  credentials=${auth.configured ? "set" : "missing"} available_models=${auth.availableModels} available_providers=${availableProviders}`,
 		`  stored_providers=${authProviders}`,
 		`  OpenAI: ${formatProviderAuth(openAi)}`,
+		`  OpenAI Codex OAuth: ${formatProviderAuth(openAiCodex)}`,
 		`  auth_file=${auth.authFile}`,
 	].join("\n");
 }
@@ -309,14 +665,31 @@ async function runOpenAiAuthSetup(socketFile: string): Promise<void> {
 	output.write(
 		`Current OpenAI status: ${formatProviderAuth(auth.providers.find((provider) => provider.provider === "openai"))}\n`,
 	);
-	output.write("Enter a new OpenAI API key to store it. Enter '-' to remove stored OpenAI auth.\n");
-	const secret = await readSecretLine("OPENAI_API_KEY: ");
-	const value = secret?.trim();
-	if (value === undefined || value.length === 0) {
+	output.write(
+		`Current OpenAI Codex OAuth status: ${formatProviderAuth(auth.providers.find((provider) => provider.provider === "openai-codex"))}\n`,
+	);
+	output.write(
+		"\n1. Store OpenAI API key\n2. OpenAI OAuth login for Codex\n-. Remove stored OpenAI API key\nx. Remove stored OpenAI OAuth\n",
+	);
+	const choice = (await readSecretLine("choice: "))?.trim().toLowerCase();
+	if (choice === undefined || choice.length === 0) {
 		output.write("OpenAI auth unchanged.\n\n");
 		return;
 	}
-	if (value === "-") {
+	if (choice === "2" || choice === "oauth" || choice === "codex") {
+		await runOpenAiOAuthSetup(socketFile);
+		return;
+	}
+	if (choice === "x") {
+		const result = (await requestGateway({
+			socketFile,
+			method: "auth.remove",
+			params: { provider: "openai-codex" },
+		})) as AuthRemoveResult;
+		output.write(`Removed stored OpenAI OAuth. available_models=${result.status.availableModels}\n\n`);
+		return;
+	}
+	if (choice === "-") {
 		const result = (await requestGateway({
 			socketFile,
 			method: "auth.remove",
@@ -325,12 +698,50 @@ async function runOpenAiAuthSetup(socketFile: string): Promise<void> {
 		output.write(`Removed stored OpenAI auth. available_models=${result.status.availableModels}\n\n`);
 		return;
 	}
+	if (choice !== "1" && choice !== "key" && choice !== "api-key") {
+		output.write("OpenAI auth unchanged.\n\n");
+		return;
+	}
+	output.write("Enter a new OpenAI API key to store it.\n");
+	const secret = await readSecretLine("OPENAI_API_KEY: ");
+	const value = secret?.trim();
+	if (value === undefined || value.length === 0) {
+		output.write("OpenAI auth unchanged.\n\n");
+		return;
+	}
 	const result = (await requestGateway({
 		socketFile,
 		method: "auth.set_api_key",
 		params: { provider: "openai", apiKey: value },
 	})) as AuthSetApiKeyResult;
 	output.write(`Stored OpenAI auth. available_models=${result.status.availableModels}\n\n`);
+}
+
+async function runOpenAiOAuthSetup(socketFile: string): Promise<void> {
+	const begin = (await requestGateway({
+		socketFile,
+		method: "auth.oauth.begin",
+		params: { provider: "openai-codex" },
+	})) as AuthOAuthBeginResult;
+	output.write("\nOpenAI OAuth\n============\n");
+	output.write(`${begin.instructions}\n\n`);
+	output.write(`URL: ${begin.verificationUrl}\n`);
+	output.write(`Code: ${begin.userCode}\n`);
+	output.write(`Expires: ${begin.expiresAt}\n\n`);
+	output.write("Waiting for login to complete...\n");
+	const result = (await requestGateway({
+		socketFile,
+		method: "auth.oauth.wait",
+		params: { loginId: begin.loginId },
+		timeoutMs: oauthWaitTimeoutMs(begin.expiresAt),
+	})) as AuthOAuthWaitResult;
+	output.write(`Stored OpenAI OAuth. available_models=${result.status.availableModels}\n\n`);
+}
+
+function oauthWaitTimeoutMs(expiresAt: string): number {
+	const expiresAtMs = Date.parse(expiresAt);
+	if (!Number.isFinite(expiresAtMs)) return DEFAULT_OAUTH_WAIT_TIMEOUT_MS;
+	return Math.max(60_000, expiresAtMs - Date.now() + 60_000);
 }
 
 async function readSecretLine(prompt: string): Promise<string | undefined> {

@@ -22,6 +22,8 @@ import type {
 	MemoryWriteResult,
 	ModelAuthMutationResult,
 	ModelAuthStatus,
+	ModelOAuthBeginResult,
+	ModelOAuthLoginResult,
 	RememberMemoryInput,
 	SessionSearchResult,
 	SetMemoryConsentInput,
@@ -34,6 +36,9 @@ export type GatewayMethod =
 	| "auth.status"
 	| "auth.set_api_key"
 	| "auth.remove"
+	| "auth.oauth.begin"
+	| "auth.oauth.wait"
+	| "auth.oauth.cancel"
 	| "memory.status"
 	| "memory.search"
 	| "memory.remember"
@@ -135,6 +140,25 @@ export interface AuthRemoveParams {
 export type AuthSetApiKeyResult = ModelAuthMutationResult;
 
 export type AuthRemoveResult = ModelAuthMutationResult;
+
+export interface AuthOAuthBeginParams {
+	provider?: string;
+}
+
+export type AuthOAuthBeginResult = ModelOAuthBeginResult;
+
+export interface AuthOAuthWaitParams {
+	loginId: string;
+}
+
+export type AuthOAuthWaitResult = ModelOAuthLoginResult;
+
+export type AuthOAuthCancelParams = AuthOAuthWaitParams;
+
+export interface AuthOAuthCancelResult {
+	cancelled: boolean;
+	provider?: string;
+}
 
 export type MemoryStatusResult = MemoryStatus;
 
@@ -320,6 +344,9 @@ export function isGatewayRequest(value: unknown): value is GatewayRequest {
 		candidate.method === "auth.status" ||
 		candidate.method === "auth.set_api_key" ||
 		candidate.method === "auth.remove" ||
+		candidate.method === "auth.oauth.begin" ||
+		candidate.method === "auth.oauth.wait" ||
+		candidate.method === "auth.oauth.cancel" ||
 		candidate.method === "memory.status" ||
 		candidate.method === "memory.search" ||
 		candidate.method === "memory.remember" ||
@@ -461,6 +488,25 @@ export function readAuthSetApiKeyParams(value: unknown): AuthSetApiKeyParams {
 		throw new Error("auth set params require a non-empty apiKey");
 	}
 	return { provider, apiKey };
+}
+
+export function readAuthOAuthBeginParams(value: unknown): AuthOAuthBeginParams {
+	if (value === undefined) return {};
+	if (typeof value !== "object" || value === null) {
+		throw new Error("auth oauth begin params must be an object");
+	}
+	const candidate = value as Record<string, unknown>;
+	const params: AuthOAuthBeginParams = {};
+	if (candidate.provider !== undefined) params.provider = readAuthProvider(candidate.provider);
+	return params;
+}
+
+export function readAuthOAuthWaitParams(value: unknown): AuthOAuthWaitParams {
+	if (typeof value !== "object" || value === null) {
+		throw new Error("auth oauth wait params must be an object");
+	}
+	const candidate = value as Record<string, unknown>;
+	return { loginId: readNonEmptyString(candidate.loginId ?? candidate.login_id, "auth oauth loginId") };
 }
 
 function readMemoryScope(value: unknown): NonNullable<MemorySearchOptions["scope"]> {

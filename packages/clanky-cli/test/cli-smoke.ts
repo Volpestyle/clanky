@@ -90,6 +90,30 @@ assertIncludes(visibleOutput, "Clanky daemon is not running. Start it with `clan
 if (visibleOutput.includes("Start it now?")) {
 	throw new Error("Noninteractive clanky tui should not prompt to start the daemon");
 }
+const defaultTui = await runClankyWithEnv([], {
+	...process.env,
+	CLANKY_HOME: homeDir,
+	CLANKY_PROFILE: "default",
+});
+if (defaultTui.code === 0) {
+	throw new Error(
+		`Expected clanky without a daemon to run TUI and fail\nstdout:\n${defaultTui.stdout}\nstderr:\n${defaultTui.stderr}`,
+	);
+}
+assertIncludes(
+	`${defaultTui.stdout}\n${defaultTui.stderr}`,
+	"Clanky daemon is not running. Start it with `clanky start` first.",
+);
+const defaultTuiWithFlags = await runClanky(["--home", homeDir]);
+if (defaultTuiWithFlags.code === 0) {
+	throw new Error(
+		`Expected commandless clanky flags without a daemon to run TUI and fail\nstdout:\n${defaultTuiWithFlags.stdout}\nstderr:\n${defaultTuiWithFlags.stderr}`,
+	);
+}
+assertIncludes(
+	`${defaultTuiWithFlags.stdout}\n${defaultTuiWithFlags.stderr}`,
+	"Clanky daemon is not running. Start it with `clanky start` first.",
+);
 await verifyTuiPromptInPseudoTty(homeDir);
 
 await verifyDetachedStart();

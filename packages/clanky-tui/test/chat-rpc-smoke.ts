@@ -50,6 +50,9 @@ try {
 	if (!sessionResult.stdout.includes(`Clanky Chat (${seeded.id})`)) {
 		throw new Error(`TUI did not switch to the requested session\nstdout:\n${sessionResult.stdout}`);
 	}
+	if (!sessionResult.stdout.includes("Seeded chat session") || !sessionResult.stdout.includes("Seeded chat answer")) {
+		throw new Error(`TUI did not render resumed session history\nstdout:\n${sessionResult.stdout}`);
+	}
 
 	console.log(
 		JSON.stringify({

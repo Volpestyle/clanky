@@ -25,11 +25,16 @@ import { formatSkillPrompt, hasLinearCredentials } from "@clanky/core";
 import type {
 	ChatSessionMapping,
 	MessagingManager,
-	MessagingStatus,
 	Platform as MessagingPlatform,
+	MessagingStatus,
 } from "@clanky/messaging";
 import type { ExternalMcpManager } from "./external-mcp.ts";
 import type {
+	AuthOAuthBeginParams,
+	AuthOAuthBeginResult,
+	AuthOAuthCancelResult,
+	AuthOAuthWaitParams,
+	AuthOAuthWaitResult,
 	AuthRemoveParams,
 	AuthSetApiKeyParams,
 	CronAddResult,
@@ -78,11 +83,32 @@ export function removeAuth(registry: SessionRegistry, params: AuthRemoveParams):
 	return registry.removeModelAuth(params.provider);
 }
 
+export async function beginAuthOAuth(
+	registry: SessionRegistry,
+	params: AuthOAuthBeginParams,
+): Promise<AuthOAuthBeginResult> {
+	return await registry.beginModelOAuthLogin(params.provider);
+}
+
+export async function waitAuthOAuth(
+	registry: SessionRegistry,
+	params: AuthOAuthWaitParams,
+): Promise<AuthOAuthWaitResult> {
+	return await registry.waitModelOAuthLogin(params.loginId);
+}
+
+export function cancelAuthOAuth(registry: SessionRegistry, params: AuthOAuthWaitParams): AuthOAuthCancelResult {
+	return registry.cancelModelOAuthLogin(params.loginId);
+}
+
 export async function getMemoryStatus(registry: SessionRegistry): Promise<MemoryStatus> {
 	return await registry.memoryStatus();
 }
 
-export async function searchMemory(registry: SessionRegistry, params: MemorySearchOptions): Promise<MemorySearchResult> {
+export async function searchMemory(
+	registry: SessionRegistry,
+	params: MemorySearchOptions,
+): Promise<MemorySearchResult> {
 	return await registry.searchMemory(params);
 }
 

@@ -113,6 +113,7 @@ export interface ServiceEnvEntry {
 function usage(): string {
 	return [
 		"Usage:",
+		"  clanky [--profile <name>] [--home <path>] [--watch] [--http <host:port>] [--session <id>]",
 		"  clanky start [--profile <name>] [--home <path>] [--cwd <path>] [--http [host:port] | --bind [host:port]] [--new-token] [--detach] [--mcp] [--once]",
 		"  clanky send [--profile <name>] [--home <path>] [--cwd <path>] [--http <host:port>] [--session <id>] [--skill <name>] [--provider <provider>] [--model <model>] <prompt>",
 		"  clanky session list [--profile <name>] [--home <path>]",
@@ -165,7 +166,9 @@ function parseServiceEnvName(value: string): string {
 
 function parseArgs(argv: string[]): ParsedArgs {
 	if (argv[0] === "--help" || argv[0] === "-h") argv = ["help", ...argv.slice(1)];
-	const [command = "help", ...rest] = argv;
+	const [first, ...tail] = argv;
+	const command = first === undefined || first.startsWith("-") ? "tui" : first;
+	const rest = first === undefined ? [] : first.startsWith("-") ? argv : tail;
 	const parsed: ParsedArgs = {
 		command,
 		files: [],
@@ -1976,11 +1979,6 @@ function isJsonRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isTruthyEnv(value: string | undefined): boolean {
-	const normalized = normalizedEnv(value)?.toLowerCase();
-	return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
-}
-
 function normalizedEnv(value: string | undefined): string | undefined {
 	const trimmed = value?.trim();
 	return trimmed === undefined || trimmed.length === 0 ? undefined : trimmed;
@@ -1990,10 +1988,6 @@ function herdrContext(paneId: string | undefined, socketPath: string | undefined
 	if (paneId === undefined) return "missing_pane";
 	if (socketPath === undefined) return "missing_socket";
 	return socketFile === "present" ? "ready_preflight" : "blocked_socket_missing";
-}
-
-async function commandExists(command: string): Promise<boolean> {
-	return (await findExecutable(command)) !== undefined;
 }
 
 async function findExecutable(command: string): Promise<string | undefined> {

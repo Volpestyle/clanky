@@ -93,6 +93,13 @@ export {
 	stableMemorySourceId,
 } from "./memory/store.ts";
 export {
+	type ModelOAuthBeginResult,
+	type ModelOAuthCredentialResult,
+	OPENAI_CODEX_OAUTH_PROVIDER,
+	type StartedModelOAuthLogin,
+	startOpenAiCodexOAuthLogin,
+} from "./model-oauth.ts";
+export {
 	getModelAuthStatus,
 	getModelCredentialsStatus,
 	type ModelAuthMutationResult,
@@ -165,6 +172,7 @@ export {
 	type FlushLinearOutboxResult,
 	type ForkRegisteredSessionOptions,
 	type ForkRegisteredSessionResult,
+	type ModelOAuthLoginResult,
 	type RegisteredSession,
 	SessionRegistry,
 	type SessionRegistryOptions,

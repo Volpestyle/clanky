@@ -169,6 +169,19 @@ try {
 	if (!isRecord(commandsData) || !Array.isArray(commandsData.commands)) {
 		throw new Error(`get_commands returned unexpected payload: ${JSON.stringify(commands)}`);
 	}
+	const profileNotifyPromise = responses.nextEvent("extension_ui_request");
+	const profileCommandPromise = responses.next("profile-command-1");
+	socket.write(`${JSON.stringify({ id: "profile-command-1", type: "prompt", message: "/profile" })}\n`);
+	const profileCommand = await profileCommandPromise;
+	assert(profileCommand.command === "prompt" && profileCommand.success === true, "extension command prompt failed");
+	const profileNotify = await profileNotifyPromise;
+	if (
+		profileNotify.method !== "notify" ||
+		typeof profileNotify.message !== "string" ||
+		!profileNotify.message.includes("Profile")
+	) {
+		throw new Error(`extension UI notify returned unexpected payload: ${JSON.stringify(profileNotify)}`);
+	}
 
 	const statsPromise = responses.next("stats-1");
 	socket.write(`${JSON.stringify({ id: "stats-1", type: "get_session_stats" })}\n`);

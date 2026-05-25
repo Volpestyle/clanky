@@ -6,6 +6,7 @@ export {
 	type FlushLinearOutboxResult,
 	type ForkRegisteredSessionOptions,
 	type ForkRegisteredSessionResult,
+	type ModelOAuthLoginResult,
 	type RegisteredSession,
 	SessionRegistry,
 	type SessionRegistryOptions,

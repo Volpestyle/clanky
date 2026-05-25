@@ -199,12 +199,7 @@ export function createClankyExtensionFactories(handlers: ClankyAgentToolHandlers
 		handlers.memoryConsent !== undefined ||
 		handlers.selfMemory !== undefined ||
 		handlers.profileStatus !== undefined;
-	if (
-		indexMessage === undefined &&
-		beforeProviderRequest === undefined &&
-		memoryPacket === undefined &&
-		!hasCommands
-	) {
+	if (indexMessage === undefined && beforeProviderRequest === undefined && memoryPacket === undefined && !hasCommands) {
 		return [];
 	}
 	return [

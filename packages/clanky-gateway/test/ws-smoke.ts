@@ -350,12 +350,6 @@ function property(value: unknown, key: string): unknown {
 	return value[key];
 }
 
-function stringArrayProperty(value: unknown, key: string): string[] {
-	const item = property(value, key);
-	if (!Array.isArray(item)) return [];
-	return item.filter((entry) => typeof entry === "string");
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }

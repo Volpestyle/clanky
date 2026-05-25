@@ -1,6 +1,18 @@
+import { randomUUID } from "node:crypto";
 import type { Socket } from "node:net";
 import type { RegisteredSession, SessionRegistry } from "@clanky/core";
-import type { RpcCommand, RpcResponse, RpcSessionState, SourceInfo } from "@earendil-works/pi-coding-agent";
+import {
+	type ExtensionUIContext,
+	type ExtensionUIDialogOptions,
+	type ExtensionWidgetOptions,
+	type RpcCommand,
+	type RpcResponse,
+	type RpcSessionState,
+	type SourceInfo,
+	Theme,
+	type ThemeColor,
+	type WorkingIndicatorOptions,
+} from "@earendil-works/pi-coding-agent";
 
 type RpcExtensionUIResponse = {
 	type: "extension_ui_response";
@@ -9,6 +21,46 @@ type RpcExtensionUIResponse = {
 	confirmed?: boolean;
 	cancelled?: true;
 };
+
+type RpcExtensionUIRequest =
+	| { type: "extension_ui_request"; id: string; method: "select"; title: string; options: string[]; timeout?: number }
+	| { type: "extension_ui_request"; id: string; method: "confirm"; title: string; message: string; timeout?: number }
+	| {
+			type: "extension_ui_request";
+			id: string;
+			method: "input";
+			title: string;
+			placeholder?: string;
+			timeout?: number;
+	  }
+	| { type: "extension_ui_request"; id: string; method: "editor"; title: string; prefill?: string }
+	| {
+			type: "extension_ui_request";
+			id: string;
+			method: "notify";
+			message: string;
+			notifyType?: "info" | "warning" | "error";
+	  }
+	| {
+			type: "extension_ui_request";
+			id: string;
+			method: "setStatus";
+			statusKey: string;
+			statusText: string | undefined;
+	  }
+	| {
+			type: "extension_ui_request";
+			id: string;
+			method: "setWidget";
+			widgetKey: string;
+			widgetLines: string[] | undefined;
+			widgetPlacement?: "aboveEditor" | "belowEditor";
+	  }
+	| { type: "extension_ui_request"; id: string; method: "setTitle"; title: string }
+	| { type: "extension_ui_request"; id: string; method: "set_editor_text"; text: string };
+
+type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;
+type RpcExtensionUIRequestBody = DistributiveOmit<RpcExtensionUIRequest, "id" | "type">;
 
 type RpcInput = RpcCommand | RpcExtensionUIResponse;
 
@@ -25,11 +77,74 @@ interface PiRpcSocketOptions {
 	initialSessionId?: string;
 }
 
+const RPC_THEME_FG: Record<ThemeColor, number> = {
+	accent: 81,
+	border: 244,
+	borderAccent: 81,
+	borderMuted: 240,
+	success: 114,
+	error: 203,
+	warning: 221,
+	muted: 245,
+	dim: 240,
+	text: 252,
+	thinkingText: 245,
+	userMessageText: 252,
+	customMessageText: 252,
+	customMessageLabel: 81,
+	toolTitle: 81,
+	toolOutput: 252,
+	mdHeading: 252,
+	mdLink: 81,
+	mdLinkUrl: 245,
+	mdCode: 221,
+	mdCodeBlock: 252,
+	mdCodeBlockBorder: 244,
+	mdQuote: 245,
+	mdQuoteBorder: 244,
+	mdHr: 244,
+	mdListBullet: 81,
+	toolDiffAdded: 114,
+	toolDiffRemoved: 203,
+	toolDiffContext: 245,
+	syntaxComment: 245,
+	syntaxKeyword: 81,
+	syntaxFunction: 114,
+	syntaxVariable: 252,
+	syntaxString: 221,
+	syntaxNumber: 214,
+	syntaxType: 141,
+	syntaxOperator: 245,
+	syntaxPunctuation: 245,
+	thinkingOff: 245,
+	thinkingMinimal: 81,
+	thinkingLow: 114,
+	thinkingMedium: 221,
+	thinkingHigh: 214,
+	thinkingXhigh: 203,
+	bashMode: 114,
+};
+
+const RPC_THEME = new Theme(
+	RPC_THEME_FG,
+	{
+		selectedBg: 236,
+		userMessageBg: 236,
+		customMessageBg: 236,
+		toolPendingBg: 236,
+		toolSuccessBg: 236,
+		toolErrorBg: 236,
+	},
+	"256color",
+	{ name: "clanky-rpc" },
+);
+
 export class PiRpcSocket {
 	private readonly registry: SessionRegistry;
 	private readonly socket: Socket;
 	private current: RegisteredSession | undefined;
 	private unsubscribe: (() => void) | undefined;
+	private readonly pendingExtensionRequests = new Map<string, (response: RpcExtensionUIResponse) => void>();
 	private queue = Promise.resolve();
 	private closed = false;
 
@@ -39,7 +154,7 @@ export class PiRpcSocket {
 		const initialSessionId = options.initialSessionId;
 		if (initialSessionId !== undefined) {
 			this.queue = this.queue.then(async () => {
-				this.bind(await this.registry.getOrOpen(initialSessionId));
+				await this.bind(await this.registry.getOrOpen(initialSessionId));
 			});
 		}
 	}
@@ -47,6 +162,7 @@ export class PiRpcSocket {
 	handleLine(line: string): void {
 		this.queue = this.queue.then(async () => {
 			if (this.closed) return;
+			if (line.endsWith("\r")) line = line.slice(0, -1);
 			let parsed: unknown;
 			try {
 				parsed = JSON.parse(line);
@@ -58,7 +174,10 @@ export class PiRpcSocket {
 				this.writeError(undefined, "unknown", "Invalid Pi RPC command");
 				return;
 			}
-			if (parsed.type === "extension_ui_response") return;
+			if (parsed.type === "extension_ui_response") {
+				this.pendingExtensionRequests.get(parsed.id)?.(parsed);
+				return;
+			}
 			await this.handleCommand(parsed);
 		});
 	}
@@ -101,7 +220,7 @@ export class PiRpcSocket {
 			case "new_session": {
 				const createOptions: Parameters<typeof this.registry.createSession>[0] = {};
 				if (command.parentSession !== undefined) createOptions.parentSession = command.parentSession;
-				this.bind(await this.registry.createSession(createOptions));
+				await this.bind(await this.registry.createSession(createOptions));
 				return success(id, "new_session", { cancelled: false });
 			}
 			case "get_state":
@@ -179,7 +298,7 @@ export class PiRpcSocket {
 				return success(id, "export_html", { path: await current.session.exportToHtml(command.outputPath) });
 			}
 			case "switch_session": {
-				this.bind(await this.sessionForPath(command.sessionPath));
+				await this.bind(await this.sessionForPath(command.sessionPath));
 				return success(id, "switch_session", { cancelled: false });
 			}
 			case "fork": {
@@ -189,7 +308,7 @@ export class PiRpcSocket {
 					entryId: command.entryId,
 					position: "before",
 				});
-				if (!result.cancelled) this.bind(result.session);
+				if (!result.cancelled) await this.bind(result.session);
 				return success(id, "fork", {
 					text: result.cancelled ? "" : (result.selectedText ?? ""),
 					cancelled: result.cancelled,
@@ -204,7 +323,7 @@ export class PiRpcSocket {
 					entryId: leafId,
 					position: "at",
 				});
-				if (!result.cancelled) this.bind(result.session);
+				if (!result.cancelled) await this.bind(result.session);
 				return success(id, "clone", { cancelled: result.cancelled });
 			}
 			case "get_fork_messages": {
@@ -224,7 +343,11 @@ export class PiRpcSocket {
 			}
 			case "get_messages": {
 				const current = await this.ensureCurrent();
-				return success(id, "get_messages", { messages: current.session.messages });
+				const contextMessages = current.session.sessionManager.buildSessionContext().messages;
+				const liveMessages = current.session.messages;
+				return success(id, "get_messages", {
+					messages: liveMessages.length > contextMessages.length ? liveMessages : contextMessages,
+				});
 			}
 			case "get_commands": {
 				const current = await this.ensureCurrent();
@@ -260,16 +383,200 @@ export class PiRpcSocket {
 	private async ensureCurrent(): Promise<RegisteredSession> {
 		if (this.current !== undefined) return this.current;
 		const current = await this.registry.createSession();
-		this.bind(current);
+		await this.bind(current);
 		return current;
 	}
 
-	private bind(next: RegisteredSession): void {
+	private async bind(next: RegisteredSession): Promise<void> {
 		this.unsubscribe?.();
 		this.current = next;
+		await next.session.bindExtensions({
+			uiContext: this.createExtensionUIContext(),
+			commandContextActions: {
+				waitForIdle: async () => {
+					const current = await this.ensureCurrent();
+					await current.session.agent.waitForIdle();
+				},
+				newSession: async (options) => {
+					const createOptions: Parameters<typeof this.registry.createSession>[0] = {};
+					if (options?.parentSession !== undefined) createOptions.parentSession = options.parentSession;
+					const created = await this.registry.createSession(createOptions);
+					if (options?.setup !== undefined) await options.setup(created.session.sessionManager);
+					await this.bind(created);
+					return { cancelled: false };
+				},
+				fork: async (entryId, forkOptions) => {
+					const current = await this.ensureCurrent();
+					const result = await this.registry.forkLiveSession({
+						sourceSessionId: current.id,
+						entryId,
+						position: forkOptions?.position ?? "before",
+					});
+					if (!result.cancelled) await this.bind(result.session);
+					return { cancelled: result.cancelled };
+				},
+				navigateTree: async (targetId, options) => {
+					const current = await this.ensureCurrent();
+					const treeOptions: Parameters<typeof current.session.navigateTree>[1] = {};
+					if (options?.summarize !== undefined) treeOptions.summarize = options.summarize;
+					if (options?.customInstructions !== undefined) treeOptions.customInstructions = options.customInstructions;
+					if (options?.replaceInstructions !== undefined) treeOptions.replaceInstructions = options.replaceInstructions;
+					if (options?.label !== undefined) treeOptions.label = options.label;
+					const result = await current.session.navigateTree(targetId, treeOptions);
+					return { cancelled: result.cancelled };
+				},
+				switchSession: async (sessionPath) => {
+					await this.bind(await this.sessionForPath(sessionPath));
+					return { cancelled: false };
+				},
+				reload: async () => {
+					const current = await this.ensureCurrent();
+					await current.session.reload();
+				},
+			},
+			shutdownHandler: () => {
+				this.socket.end();
+			},
+			onError: (error) => {
+				this.write({ type: "extension_error", ...error });
+			},
+		});
 		this.unsubscribe = next.session.subscribe((event) => {
 			this.write(event);
 		});
+	}
+
+	private createExtensionUIContext(): ExtensionUIContext {
+		return {
+			select: async (title, options, opts) => {
+				const request: RpcExtensionUIRequest = {
+					type: "extension_ui_request",
+					id: "",
+					method: "select",
+					title,
+					options,
+				};
+				if (opts?.timeout !== undefined) request.timeout = opts.timeout;
+				return await this.extensionDialog(opts, undefined, request, (response) =>
+					response.cancelled === true ? undefined : typeof response.value === "string" ? response.value : undefined,
+				);
+			},
+			confirm: async (title, message, opts) => {
+				const request: RpcExtensionUIRequest = {
+					type: "extension_ui_request",
+					id: "",
+					method: "confirm",
+					title,
+					message,
+				};
+				if (opts?.timeout !== undefined) request.timeout = opts.timeout;
+				return await this.extensionDialog(opts, false, request, (response) =>
+					response.cancelled === true ? false : response.confirmed === true,
+				);
+			},
+			input: async (title, placeholder, opts) => {
+				const request: RpcExtensionUIRequest = { type: "extension_ui_request", id: "", method: "input", title };
+				if (placeholder !== undefined) request.placeholder = placeholder;
+				if (opts?.timeout !== undefined) request.timeout = opts.timeout;
+				return await this.extensionDialog(opts, undefined, request, (response) =>
+					response.cancelled === true ? undefined : typeof response.value === "string" ? response.value : undefined,
+				);
+			},
+			notify: (message, type) => {
+				if (type === undefined) {
+					this.writeExtensionRequest({ method: "notify", message });
+					return;
+				}
+				this.writeExtensionRequest({ method: "notify", message, notifyType: type });
+			},
+			onTerminalInput: () => () => undefined,
+			setStatus: (key, text) => {
+				this.writeExtensionRequest({ method: "setStatus", statusKey: key, statusText: text });
+			},
+			setWorkingMessage: (_message?: string) => undefined,
+			setWorkingVisible: (_visible: boolean) => undefined,
+			setWorkingIndicator: (_options?: WorkingIndicatorOptions) => undefined,
+			setHiddenThinkingLabel: (_label?: string) => undefined,
+			setWidget: (key: string, content: unknown, options?: ExtensionWidgetOptions) => {
+				if (content === undefined || Array.isArray(content)) {
+					const request: Omit<Extract<RpcExtensionUIRequest, { method: "setWidget" }>, "type" | "id"> = {
+						method: "setWidget",
+						widgetKey: key,
+						widgetLines: content,
+					};
+					if (options?.placement !== undefined) request.widgetPlacement = options.placement;
+					this.writeExtensionRequest(request);
+				}
+			},
+			setFooter: () => undefined,
+			setHeader: () => undefined,
+			setTitle: (title) => {
+				this.writeExtensionRequest({ method: "setTitle", title });
+			},
+			custom: async <T>() => undefined as T,
+			pasteToEditor: (text) => {
+				this.writeExtensionRequest({ method: "set_editor_text", text });
+			},
+			setEditorText: (text) => {
+				this.writeExtensionRequest({ method: "set_editor_text", text });
+			},
+			getEditorText: () => "",
+			editor: async (title, prefill) => {
+				const request: RpcExtensionUIRequest = { type: "extension_ui_request", id: "", method: "editor", title };
+				if (prefill !== undefined) request.prefill = prefill;
+				return await this.extensionDialog(undefined, undefined, request, (response) =>
+					response.cancelled === true ? undefined : typeof response.value === "string" ? response.value : undefined,
+				);
+			},
+			addAutocompleteProvider: () => undefined,
+			setEditorComponent: () => undefined,
+			getEditorComponent: () => undefined,
+			theme: RPC_THEME,
+			getAllThemes: () => [],
+			getTheme: () => undefined,
+			setTheme: () => ({ success: false, error: "Theme switching is not supported over Clanky Pi RPC" }),
+			getToolsExpanded: () => false,
+			setToolsExpanded: () => undefined,
+		};
+	}
+
+	private async extensionDialog<T>(
+		options: ExtensionUIDialogOptions | undefined,
+		defaultValue: T,
+		request: RpcExtensionUIRequest,
+		parse: (response: RpcExtensionUIResponse) => T,
+	): Promise<T> {
+		if (options?.signal?.aborted) return defaultValue;
+		const id = randomUUID();
+		return await new Promise<T>((resolve) => {
+			let timeout: NodeJS.Timeout | undefined;
+			const cleanup = () => {
+				if (timeout !== undefined) clearTimeout(timeout);
+				options?.signal?.removeEventListener("abort", onAbort);
+				this.pendingExtensionRequests.delete(id);
+			};
+			const finish = (value: T) => {
+				cleanup();
+				resolve(value);
+			};
+			const onAbort = () => {
+				finish(defaultValue);
+			};
+			options?.signal?.addEventListener("abort", onAbort, { once: true });
+			if (options?.timeout !== undefined) {
+				timeout = setTimeout(() => {
+					finish(defaultValue);
+				}, options.timeout);
+			}
+			this.pendingExtensionRequests.set(id, (response) => {
+				finish(parse(response));
+			});
+			this.write({ ...request, id });
+		});
+	}
+
+	private writeExtensionRequest(request: RpcExtensionUIRequestBody): void {
+		this.write({ type: "extension_ui_request", id: randomUUID(), ...request });
 	}
 
 	private async sessionForPath(sessionPath: string): Promise<RegisteredSession> {
