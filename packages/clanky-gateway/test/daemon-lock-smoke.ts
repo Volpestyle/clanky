@@ -1,15 +1,31 @@
+import { execFile } from "node:child_process";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { promisify } from "node:util";
 import { resolveClankyPaths } from "@clanky/core";
 import { type GatewayServer, startGatewayServer } from "@clanky/gateway";
+
+const execFileAsync = promisify(execFile);
 
 const homeDir = await mkdtemp(join(tmpdir(), "clanky-daemon-lock-"));
 const paths = resolveClankyPaths({ homeDir });
 const previousExternalMcpConfig = process.env.CLANKY_MCP_SERVERS_JSON;
 
 await mkdir(dirname(paths.daemonLockFile), { recursive: true, mode: 0o700 });
-await writeFile(paths.daemonLockFile, `${process.pid}\n`, { mode: 0o600 });
+
+// Case 1 (live lock): a real running daemon holds the lock. Use the actual
+// process start time of the current node test runner so it matches.
+const currentProcessStartedAt = await readProcessStartTime(process.pid);
+if (currentProcessStartedAt === undefined) {
+	throw new Error("Daemon-lock smoke test requires `ps -o lstart=` to be available on this platform");
+}
+await writeLockJson(paths.daemonLockFile, {
+	pid: process.pid,
+	startedAt: currentProcessStartedAt,
+	bootId: "live-test-boot",
+});
+
 const externalMcpMarker = join(homeDir, "external-mcp-started");
 const externalMcpScript = join(homeDir, "external-mcp-marker.mjs");
 await writeFile(
@@ -46,8 +62,9 @@ if (await fileExists(externalMcpMarker)) {
 	throw new Error("Live daemon lock should block startup before external MCP subprocesses are spawned");
 }
 
+// Case 2 (stale dead PID): unused PID, lock should be reclaimed.
 const stalePid = findUnusedPid();
-await writeFile(paths.daemonLockFile, `${stalePid}\n`, { mode: 0o600 });
+await writeLockJson(paths.daemonLockFile, { pid: stalePid, startedAt: Date.now(), bootId: "stale-test-boot" });
 const server = await startGatewayServer({ homeDir });
 await server.close();
 
@@ -58,8 +75,29 @@ await readFile(paths.daemonLockFile, "utf8").then(
 	() => undefined,
 );
 
+// Case 3 (recycled PID): current pid is alive, but lock's startedAt is from
+// long ago — the lock must be detected as a recycled-PID stale lock.
+await writeLockJson(paths.daemonLockFile, {
+	pid: process.pid,
+	startedAt: 1_000_000_000_000,
+	bootId: "recycled-test-boot",
+});
+const recycledServer = await startGatewayServer({ homeDir });
+await recycledServer.close();
+
+// Case 4 (empty lock file): empty content should be treated as stale.
+await writeFile(paths.daemonLockFile, "", { mode: 0o600 });
+const emptyServer = await startGatewayServer({ homeDir });
+await emptyServer.close();
+
+// Case 5 (malformed JSON): garbage content should be treated as stale.
+await writeFile(paths.daemonLockFile, "not-valid-json{{{", { mode: 0o600 });
+const malformedServer = await startGatewayServer({ homeDir });
+await malformedServer.close();
+
+// Case 6 (concurrent stale reclaim): existing race-safety contract.
 const racingStalePid = findUnusedPid();
-await writeFile(paths.daemonLockFile, `${racingStalePid}\n`, { mode: 0o600 });
+await writeLockJson(paths.daemonLockFile, { pid: racingStalePid, startedAt: Date.now(), bootId: "race-test-boot" });
 const racingStarts = await Promise.allSettled(Array.from({ length: 6 }, () => startGatewayServer({ homeDir })));
 const startedServers = racingStarts
 	.filter((result): result is PromiseFulfilledResult<GatewayServer> => result.status === "fulfilled")
@@ -105,6 +143,22 @@ function findUnusedPid(): number {
 		}
 	}
 	throw new Error("Could not find an unused PID for daemon lock smoke test");
+}
+
+async function readProcessStartTime(pid: number): Promise<number | undefined> {
+	try {
+		const { stdout } = await execFileAsync("ps", ["-o", "lstart=", "-p", String(pid)]);
+		const trimmed = stdout.trim();
+		if (trimmed.length === 0) return undefined;
+		const parsed = Date.parse(trimmed);
+		return Number.isFinite(parsed) ? parsed : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+async function writeLockJson(file: string, record: { pid: number; startedAt: number; bootId: string }): Promise<void> {
+	await writeFile(file, `${JSON.stringify(record)}\n`, { mode: 0o600 });
 }
 
 async function fileExists(file: string): Promise<boolean> {

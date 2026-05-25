@@ -234,7 +234,12 @@ export class CronJobStore {
 			.sort()
 			.reverse();
 		for (const file of outputs.slice(OUTPUTS_TO_KEEP)) {
-			await unlink(join(this.paths.cronOutputsDir, file)).catch(() => undefined);
+			const target = join(this.paths.cronOutputsDir, file);
+			await unlink(target).catch((error: unknown) => {
+				console.error(
+					`cron output rotation failed for ${target}: ${error instanceof Error ? error.message : String(error)}`,
+				);
+			});
 		}
 	}
 
@@ -432,12 +437,7 @@ function normalizeCronJob(value: unknown, now: Date): CronJob | undefined {
 }
 
 function isCronDelivery(value: string): value is CronDelivery {
-	return (
-		value === "stdout" ||
-		value === "file" ||
-		value.startsWith("session:") ||
-		value.startsWith("linear:")
-	);
+	return value === "stdout" || value === "file" || value.startsWith("session:") || value.startsWith("linear:");
 }
 
 function stringValue(value: unknown): string | undefined {

@@ -295,7 +295,12 @@ async function promptWithTimeout(
 		await Promise.race([promptPromise, timeoutPromise]);
 	} finally {
 		if (timeout !== undefined) clearTimeout(timeout);
-		if (timedOut) await promptPromise.catch(() => undefined);
+		if (timedOut)
+			await promptPromise.catch((error: unknown) => {
+				console.error(
+					`cron prompt rejected after timeout (${timeoutSeconds}s): ${error instanceof Error ? error.message : String(error)}`,
+				);
+			});
 	}
 }
 
@@ -304,7 +309,11 @@ async function acquireTickLock(lockFile: string): Promise<(() => Promise<void>) 
 	try {
 		await writeFile(lockFile, `${process.pid}\n`, { flag: "wx", mode: 0o600 });
 		return async () => {
-			await unlink(lockFile).catch(() => undefined);
+			await unlink(lockFile).catch((error: unknown) => {
+				console.error(
+					`cron lock cleanup failed for ${lockFile}: ${error instanceof Error ? error.message : String(error)}`,
+				);
+			});
 		};
 	} catch (error) {
 		if (!isFileExistsError(error)) throw error;
@@ -312,7 +321,11 @@ async function acquireTickLock(lockFile: string): Promise<(() => Promise<void>) 
 
 	const existingPid = await readExistingPid(lockFile);
 	if (existingPid !== undefined && isProcessAlive(existingPid)) return undefined;
-	await unlink(lockFile).catch(() => undefined);
+	await unlink(lockFile).catch((error: unknown) => {
+		console.error(
+			`cron stale lock removal failed for ${lockFile}: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	});
 	try {
 		await writeFile(lockFile, `${process.pid}\n`, { flag: "wx", mode: 0o600 });
 	} catch (error) {
@@ -320,7 +333,11 @@ async function acquireTickLock(lockFile: string): Promise<(() => Promise<void>) 
 		throw error;
 	}
 	return async () => {
-		await unlink(lockFile).catch(() => undefined);
+		await unlink(lockFile).catch((error: unknown) => {
+			console.error(
+				`cron lock cleanup failed for ${lockFile}: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		});
 	};
 }
 

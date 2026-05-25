@@ -80,7 +80,11 @@ export class ExternalMcpManager {
 				runtime.tools = await listToolSummaries(runtime.client);
 			} catch (error) {
 				runtime.error = error instanceof Error ? error.message : String(error);
-				await runtime.transport?.close().catch(() => undefined);
+				await runtime.transport?.close().catch((closeError: unknown) => {
+					console.error(
+						`external MCP transport close failed during boot for ${config.name}: ${closeError instanceof Error ? closeError.message : String(closeError)}`,
+					);
+				});
 				delete runtime.transport;
 			}
 		}
@@ -128,7 +132,11 @@ export class ExternalMcpManager {
 	async close(): Promise<void> {
 		await Promise.all(
 			[...this.runtimes.values()].map(async (runtime) => {
-				await runtime.transport?.close().catch(() => undefined);
+				await runtime.transport?.close().catch((error: unknown) => {
+					console.error(
+						`external MCP transport close failed for ${runtime.config.name}: ${error instanceof Error ? error.message : String(error)}`,
+					);
+				});
 			}),
 		);
 		this.runtimes.clear();

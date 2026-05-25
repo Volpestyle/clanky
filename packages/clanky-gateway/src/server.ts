@@ -1,6 +1,9 @@
+import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { dirname } from "node:path";
+import { promisify } from "node:util";
 import { CronScheduler, SessionRegistry, type SessionRegistryOptions } from "@clanky/core";
 import {
 	type AdapterFactory,
@@ -826,12 +829,20 @@ async function closeServer(server: Server): Promise<void> {
 	});
 }
 
+interface DaemonLockRecord {
+	pid: number;
+	startedAt: number;
+	bootId: string;
+}
+
+const execFileAsync = promisify(execFile);
+
 async function acquireDaemonLock(lockFile: string): Promise<() => Promise<void>> {
 	await mkdir(dirname(lockFile), { recursive: true, mode: 0o700 });
-	const pidText = `${process.pid}\n`;
+	const lockText = `${JSON.stringify({ pid: process.pid, startedAt: Date.now(), bootId: randomUUID() })}\n`;
 
 	try {
-		await writeFile(lockFile, pidText, { flag: "wx", mode: 0o600 });
+		await writeFile(lockFile, lockText, { flag: "wx", mode: 0o600 });
 		return async () => {
 			await unlink(lockFile).catch(() => undefined);
 		};
@@ -839,19 +850,19 @@ async function acquireDaemonLock(lockFile: string): Promise<() => Promise<void>>
 		if (!isFileExistsError(error)) throw error;
 	}
 
-	const existingPid = await readExistingPid(lockFile);
-	if (existingPid !== undefined && isProcessAlive(existingPid)) {
-		throw new Error(`Clanky daemon already appears to be running with pid ${existingPid}`);
+	const existing = await readExistingLock(lockFile);
+	if (existing !== undefined && (await isLockHolderRunning(existing))) {
+		throw new Error(`Clanky daemon already appears to be running with pid ${existing.pid}`);
 	}
 
 	await unlink(lockFile).catch(() => undefined);
 	try {
-		await writeFile(lockFile, pidText, { flag: "wx", mode: 0o600 });
+		await writeFile(lockFile, lockText, { flag: "wx", mode: 0o600 });
 	} catch (error) {
 		if (!isFileExistsError(error)) throw error;
-		const competingPid = await readExistingPid(lockFile);
-		if (competingPid !== undefined && isProcessAlive(competingPid)) {
-			throw new Error(`Clanky daemon already appears to be running with pid ${competingPid}`);
+		const competing = await readExistingLock(lockFile);
+		if (competing !== undefined && (await isLockHolderRunning(competing))) {
+			throw new Error(`Clanky daemon already appears to be running with pid ${competing.pid}`);
 		}
 		throw new Error("Clanky daemon lock was claimed by another process");
 	}
@@ -860,11 +871,48 @@ async function acquireDaemonLock(lockFile: string): Promise<() => Promise<void>>
 	};
 }
 
-async function readExistingPid(lockFile: string): Promise<number | undefined> {
+async function readExistingLock(lockFile: string): Promise<DaemonLockRecord | undefined> {
+	let content: string;
 	try {
-		const content = await readFile(lockFile, "utf8");
-		const pid = Number.parseInt(content.trim(), 10);
-		return Number.isInteger(pid) && pid > 0 ? pid : undefined;
+		content = await readFile(lockFile, "utf8");
+	} catch {
+		return undefined;
+	}
+	const trimmed = content.trim();
+	if (trimmed.length === 0) return undefined;
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(trimmed);
+	} catch {
+		return undefined;
+	}
+	if (typeof parsed !== "object" || parsed === null) return undefined;
+	const record = parsed as Record<string, unknown>;
+	const pid = record.pid;
+	const startedAt = record.startedAt;
+	const bootId = record.bootId;
+	if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return undefined;
+	if (typeof startedAt !== "number" || !Number.isFinite(startedAt)) return undefined;
+	if (typeof bootId !== "string" || bootId.length === 0) return undefined;
+	return { pid, startedAt, bootId };
+}
+
+const PROCESS_START_TOLERANCE_MS = 2_000;
+
+async function isLockHolderRunning(lock: DaemonLockRecord): Promise<boolean> {
+	if (!isProcessAlive(lock.pid)) return false;
+	const startedAt = await readProcessStartTime(lock.pid);
+	if (startedAt === undefined) return true;
+	return Math.abs(startedAt - lock.startedAt) <= PROCESS_START_TOLERANCE_MS;
+}
+
+async function readProcessStartTime(pid: number): Promise<number | undefined> {
+	try {
+		const { stdout } = await execFileAsync("ps", ["-o", "lstart=", "-p", String(pid)]);
+		const trimmed = stdout.trim();
+		if (trimmed.length === 0) return undefined;
+		const parsed = Date.parse(trimmed);
+		return Number.isFinite(parsed) ? parsed : undefined;
 	} catch {
 		return undefined;
 	}
