@@ -13,6 +13,12 @@ export {
 	type TaskCreateToolInput,
 } from "./agent-tools.ts";
 export {
+	type ClankyChatMode,
+	isAgentRoomEnrolled,
+	resolveClankyChatMode,
+	shouldStartStandaloneChatGateway,
+} from "./chat-mode.ts";
+export {
 	hasLinearCredentials,
 	LinearClient,
 	type LinearClientOptions,

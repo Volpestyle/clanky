@@ -4,6 +4,8 @@ import {
 	hasLinearCredentials,
 	LinearClient,
 	loadClankySkills,
+	resolveClankyChatMode,
+	shouldStartStandaloneChatGateway,
 } from "@clanky/core";
 import type { ClankyStores } from "./stores.ts";
 
@@ -50,6 +52,8 @@ export function createClankyHandlers(paths: ClankyPaths, stores: ClankyStores): 
 			sessionsDir: paths.sessionsDir,
 			skillsDir: paths.skillsDir,
 			profileSkillsDir: paths.profileSkillsDir,
+			chatMode: resolveClankyChatMode(process.env),
+			standaloneChatGatewayEnabled: shouldStartStandaloneChatGateway(process.env),
 		}),
 
 		linearCreateIssue: async (input) => {

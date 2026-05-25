@@ -7,7 +7,9 @@ import {
 	type MemoryForgetToolInput,
 	type MemoryRememberToolInput,
 	type MemorySearchToolInput,
+	resolveClankyChatMode,
 	type ScheduleCronToolInput,
+	shouldStartStandaloneChatGateway,
 	type TaskCreateToolInput,
 } from "@clanky/core";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -50,6 +52,7 @@ const handlers: ClankyAgentToolHandlers = {
 };
 
 const tools = createClankyToolDefinitions(handlers);
+assertChatModeHelpers();
 const expectedNames = [
 	"schedule_cron",
 	"mcp_call",
@@ -124,6 +127,15 @@ for (const prefix of expectedCallPrefixes) {
 }
 
 console.log(JSON.stringify({ tools: tools.length, calls: calls.length }));
+
+function assertChatModeHelpers(): void {
+	if (resolveClankyChatMode({}) !== "standalone") {
+		throw new Error("Expected default chat mode to be standalone");
+	}
+	if (shouldStartStandaloneChatGateway({ AGENTROOM: "1" })) {
+		throw new Error("Expected AGENTROOM=1 to disable standalone chat gateway startup");
+	}
+}
 
 function stubAtom(claim: string) {
 	return {
