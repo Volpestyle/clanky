@@ -37,7 +37,7 @@
 
 ## Live Gates
 
-- Model, Linear, and chat-gateway tokens (Discord bot tokens, etc.) remain live gates requiring credentials or user approval. Clanky may read its own agent-owned Discord token (`CLANKY_DISCORD_TOKEN`); it must never read the room connector token owned by AgentRoom.
+- Model, Linear, and chat-gateway tokens (Discord bot tokens, etc.) remain live gates requiring credentials or user approval. Clanky's agent-owned Discord token is resolved from `CLANKY_DISCORD_TOKEN` env (wins) or the profile `AuthStorage` entry under provider id `clanky-discord` (`<profileDir>/auth.json`, perms `0600`, populated interactively by the `/discord-login` slash command). Clanky must never read the room connector token owned by AgentRoom.
 
 ## State Safety
 

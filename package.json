@@ -11,9 +11,15 @@
 		"browser:playwright": "playwright",
 		"check": "biome check --write --error-on-warnings . && tsgo --noEmit",
 		"clanky": "tsx agents/clanky/src/bin.ts",
-		"smoke": "pnpm smoke:clanky && pnpm smoke:agent-tools",
+		"smoke": "pnpm smoke:clanky && pnpm smoke:voice && pnpm smoke:agent-tools",
 		"smoke:agent-tools": "tsx packages/clanky-core/test/agent-tools-smoke.ts",
-		"smoke:clanky": "tsx agents/clanky/test/runtime-smoke.ts"
+		"smoke:clanky": "tsx agents/clanky/test/runtime-smoke.ts",
+		"smoke:voice": "tsx agents/clanky/test/voice-smoke.ts",
+		"voice:native:check": "OPUS_STATIC=1 LIBOPUS_STATIC=1 OPUS_NO_PKG=1 LIBOPUS_NO_PKG=1 OPUS_NO_PKG_CONFIG=1 CMAKE_POLICY_VERSION_MINIMUM=3.5 cargo check --locked --manifest-path agents/clanky/src/voice/clankvox/Cargo.toml",
+		"voice:native:clean": "cargo clean --manifest-path agents/clanky/src/voice/clankvox/Cargo.toml",
+		"voice:native:test": "OPUS_STATIC=1 LIBOPUS_STATIC=1 OPUS_NO_PKG=1 LIBOPUS_NO_PKG=1 OPUS_NO_PKG_CONFIG=1 CMAKE_POLICY_VERSION_MINIMUM=3.5 cargo test --locked --manifest-path agents/clanky/src/voice/clankvox/Cargo.toml",
+		"voice:build": "OPUS_STATIC=1 LIBOPUS_STATIC=1 OPUS_NO_PKG=1 LIBOPUS_NO_PKG=1 OPUS_NO_PKG_CONFIG=1 CMAKE_POLICY_VERSION_MINIMUM=3.5 cargo build --release --locked --manifest-path agents/clanky/src/voice/clankvox/Cargo.toml",
+		"voice:live": "tsx agents/clanky/test/voice-live.ts"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.3.5",

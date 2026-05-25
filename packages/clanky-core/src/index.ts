@@ -22,6 +22,15 @@ export {
 	shouldStartStandaloneChatGateway,
 } from "./chat-mode.ts";
 export {
+	type ClankyDiscordCredentialKind,
+	type ClankyDiscordCredentialPayload,
+	type ClankyStoredDiscordCredential,
+	DEFAULT_CLANKY_DISCORD_PROVIDER_ID,
+	loadStoredDiscordCredential,
+	removeStoredDiscordCredential,
+	saveStoredDiscordCredential,
+} from "./discord-credentials.ts";
+export {
 	hasLinearCredentials,
 	LinearClient,
 	type LinearClientOptions,

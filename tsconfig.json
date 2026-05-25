@@ -1,4 +1,5 @@
 {
 	"extends": "./tsconfig.base.json",
-	"include": ["packages/*/src/**/*.ts", "packages/*/test/**/*.ts", "agents/*/src/**/*.ts", "agents/*/test/**/*.ts"]
+	"include": ["packages/*/src/**/*.ts", "packages/*/test/**/*.ts", "agents/*/src/**/*.ts", "agents/*/test/**/*.ts"],
+	"exclude": ["agents/clanky/src/voice/clankvox/target/**"]
 }

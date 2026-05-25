@@ -1,0 +1,1672 @@
+import { EventEmitter } from "node:events";
+import { setTimeout as sleep } from "node:timers/promises";
+import {
+	DEFAULT_REALTIME_MODEL,
+	extractRealtimeFunctionCallEnvelopes,
+	resolveAgentDiscordVoiceConfig,
+	startAgentDiscordVoiceBridge,
+} from "../src/agentDiscordVoice.ts";
+import {
+	type ClankvoxDecodedVideoFrame,
+	type ClankvoxGuildLike,
+	createClankvoxVoiceAdapterProxy,
+} from "../src/voice/clankvoxIpcClient.ts";
+import { bindClankvoxRealtimeBridge } from "../src/voice/clankvoxRealtimeBridge.ts";
+import {
+	createDiscordStreamDiscovery,
+	type DiscordRawPacket,
+	type DiscordStreamDiscovery,
+	type DiscoveredDiscordStream,
+	deriveDiscordStreamWatchDaveChannelId,
+} from "../src/voice/discordStreamDiscovery.ts";
+import { DiscordVoiceTurnBuffer, mixPcm16MonoFrames } from "../src/voice/discordVoiceTurnBuffer.ts";
+import {
+	describeVoiceLiveValidationRequirements,
+	hasVoiceLiveSuccessRequirements,
+	hasVoiceLiveValidationRequirements,
+	isVoiceLiveValidationSatisfied,
+	parseVoiceLiveValidationRequirements,
+	requiresNativeDiscordScreenWatch,
+	validateVoiceLiveStatus,
+} from "../src/voice/liveValidation.ts";
+import { buildVoiceLiveValidationResult } from "../src/voice/liveValidationResult.ts";
+import {
+	buildInputAudioAppendEvent,
+	buildRealtimeSessionUpdateEvent,
+	splitRealtimeInputAudioChunk,
+	stringifyRealtimeFunctionOutput,
+} from "../src/voice/openAiRealtimeClient.ts";
+
+type JsonRecord = Record<string, unknown>;
+
+async function main(): Promise<void> {
+	assertVoiceConfig();
+	assertRealtimeSessionUpdateShape();
+	assertRealtimeAudioAppendShape();
+	assertRealtimeFunctionOutputSerialization();
+	assertRealtimeFunctionCallParsing();
+	assertDiscordVoiceTurnBuffer();
+	assertDiscordVoiceTurnBufferMixing();
+	assertClankvoxVoiceAdapterProxy();
+	assertFakeClankvoxRealtimeBridge();
+	assertDiscordStreamDiscovery();
+	assertVoiceLiveValidation();
+	assertVoiceLiveValidationResult();
+	await assertFakeVoiceBridgeRealtimeTools();
+	await assertFakeVoiceBridgeBotTokenScreenWatchGuard();
+	await assertFakeVoiceBridgeScreenWatchSwitchCleanup();
+	await assertFakeVoiceBridgeGatewaySessionFallback();
+	await assertFakeVoiceBridgeRealtimeStreamingToolDedup();
+	console.log("voice-smoke: PASS");
+}
+
+function assertVoiceConfig(): void {
+	const config = resolveAgentDiscordVoiceConfig(
+		{
+			CLANKY_DISCORD_VOICE_ENABLED: "1",
+			CLANKY_DISCORD_TOKEN: "discord-token",
+			CLANKY_DISCORD_VOICE_GUILD_ID: "guild-1",
+			CLANKY_DISCORD_VOICE_CHANNEL_ID: "channel-1",
+			OPENAI_API_KEY: "openai-key",
+		},
+		{
+			providerId: "clanky-discord",
+			token: "discord-token",
+			credentialKind: "bot-token",
+			source: "env",
+		},
+	);
+	if (config === undefined) throw new Error("voice-smoke: expected voice config");
+	if (config.openAiRealtimeModel !== DEFAULT_REALTIME_MODEL) {
+		throw new Error(`voice-smoke: default realtime model mismatch: ${config.openAiRealtimeModel}`);
+	}
+	if (config.videoFrameAutoAttachIntervalMs !== 2_000) {
+		throw new Error("voice-smoke: default screen frame auto-attach interval mismatch");
+	}
+	const unthrottled = resolveAgentDiscordVoiceConfig(
+		{
+			CLANKY_DISCORD_VOICE_ENABLED: "1",
+			CLANKY_DISCORD_TOKEN: "discord-token",
+			CLANKY_DISCORD_VOICE_GUILD_ID: "guild-1",
+			CLANKY_DISCORD_VOICE_CHANNEL_ID: "channel-1",
+			OPENAI_API_KEY: "openai-key",
+			CLANKY_DISCORD_VOICE_VIDEO_FRAME_INTERVAL_MS: "0",
+		},
+		{
+			providerId: "clanky-discord",
+			token: "discord-token",
+			credentialKind: "bot-token",
+			source: "env",
+		},
+	);
+	if (unthrottled?.videoFrameAutoAttachIntervalMs !== 0) {
+		throw new Error("voice-smoke: screen frame auto-attach interval override did not parse");
+	}
+}
+
+function assertRealtimeSessionUpdateShape(): void {
+	const tool = {
+		type: "function" as const,
+		name: "ask_pi",
+		description: "Delegate to Pi.",
+		parameters: { type: "object", properties: {}, additionalProperties: false },
+	};
+	const event = buildRealtimeSessionUpdateEvent({
+		model: DEFAULT_REALTIME_MODEL,
+		voice: "marin",
+		instructions: "Talk briefly.",
+		tools: [tool],
+		toolChoice: "auto",
+	});
+	const session = expectRecord(event.session, "session");
+	if (event.type !== "session.update") throw new Error("voice-smoke: expected session.update");
+	if (session.type !== "realtime") throw new Error("voice-smoke: session.type must be realtime");
+	if (session.model !== DEFAULT_REALTIME_MODEL) throw new Error("voice-smoke: session model missing");
+	const audio = expectRecord(session.audio, "session.audio");
+	const audioInput = expectRecord(audio.input, "session.audio.input");
+	const audioOutput = expectRecord(audio.output, "session.audio.output");
+	if (audioInput.format !== "pcm16") throw new Error("voice-smoke: realtime input audio format missing");
+	if (audioInput.turn_detection !== null) throw new Error("voice-smoke: realtime turn detection should be manual");
+	if (audioOutput.format !== "pcm16") throw new Error("voice-smoke: realtime output audio format missing");
+	if (audioOutput.voice !== "marin") throw new Error("voice-smoke: realtime voice missing");
+	if ("input_audio_format" in session) throw new Error("voice-smoke: session should use GA nested audio input config");
+	const tools = session.tools;
+	if (!Array.isArray(tools) || tools.length !== 1) throw new Error("voice-smoke: session tools missing");
+}
+
+function assertRealtimeAudioAppendShape(): void {
+	const alignedAudio = Buffer.from([1, 2, 3, 4, 5, 6]);
+	const event = buildInputAudioAppendEvent(alignedAudio);
+	if (event === undefined) throw new Error("voice-smoke: expected realtime audio append event");
+	if (event.type !== "input_audio_buffer.append") throw new Error("voice-smoke: expected audio append event type");
+	if (event.audio !== alignedAudio.toString("base64")) {
+		throw new Error("voice-smoke: realtime audio append should send the complete PCM buffer");
+	}
+	if (buildInputAudioAppendEvent(Buffer.alloc(0)) !== undefined) {
+		throw new Error("voice-smoke: empty realtime audio append should be skipped");
+	}
+	const firstSplit = splitRealtimeInputAudioChunk(Buffer.from([1, 2, 3, 4, 5]));
+	if (firstSplit.event !== undefined || firstSplit.remainder.toString("hex") !== "0102030405") {
+		throw new Error("voice-smoke: realtime audio split should hold sub-six-byte PCM tails");
+	}
+	const secondSplit = splitRealtimeInputAudioChunk(Buffer.from([6, 7, 8]), firstSplit.remainder);
+	if (
+		secondSplit.event?.audio !== Buffer.from([1, 2, 3, 4, 5, 6]).toString("base64") ||
+		secondSplit.remainder.toString("hex") !== "0708"
+	) {
+		throw new Error("voice-smoke: realtime audio split should emit aligned chunks and keep the next tail");
+	}
+}
+
+function assertRealtimeFunctionOutputSerialization(): void {
+	if (stringifyRealtimeFunctionOutput("plain text") !== "plain text") {
+		throw new Error("voice-smoke: string realtime function output should pass through unchanged");
+	}
+	if (stringifyRealtimeFunctionOutput(undefined) !== "null") {
+		throw new Error("voice-smoke: undefined realtime function output should become null string");
+	}
+	if (stringifyRealtimeFunctionOutput({ ok: true, count: 2 }) !== '{"ok":true,"count":2}') {
+		throw new Error("voice-smoke: object realtime function output should serialize to JSON");
+	}
+	const circular: JsonRecord = {};
+	circular.self = circular;
+	const fallback = expectRecord(
+		JSON.parse(stringifyRealtimeFunctionOutput(circular)) as unknown,
+		"circular function output fallback",
+	);
+	if (fallback.ok !== false || !String(fallback.error).includes("serialize")) {
+		throw new Error("voice-smoke: circular realtime function output did not produce structured fallback");
+	}
+}
+
+function assertRealtimeFunctionCallParsing(): void {
+	const doneEvent = {
+		type: "response.done",
+		response: {
+			output: [
+				{
+					type: "function_call",
+					name: "ask_pi",
+					call_id: "call_1",
+					arguments: '{"prompt":"hello"}',
+				},
+			],
+		},
+	};
+	const envelopes = extractRealtimeFunctionCallEnvelopes(doneEvent);
+	if (envelopes.length !== 1) throw new Error(`voice-smoke: expected one function call, got ${envelopes.length}`);
+	const [envelope] = envelopes;
+	if (envelope?.callId !== "call_1" || envelope.name !== "ask_pi" || envelope.argumentsJson !== '{"prompt":"hello"}') {
+		throw new Error("voice-smoke: function call envelope did not parse response.done output");
+	}
+}
+
+function assertDiscordVoiceTurnBuffer(): void {
+	const subscriptions: string[] = [];
+	const appendedUsers: string[] = [];
+	let commits = 0;
+	let responses = 0;
+	let pendingTimer: (() => void) | undefined;
+	const readPendingTimer = () => pendingTimer;
+	const timerHandle = {} as ReturnType<typeof setTimeout>;
+	const buffer = new DiscordVoiceTurnBuffer({
+		flushDelayMs: 1,
+		subscribeUser(userId) {
+			subscriptions.push(userId);
+		},
+		appendInputAudio(userId) {
+			appendedUsers.push(userId);
+		},
+		commitInputAudioBuffer() {
+			commits += 1;
+		},
+		createAudioResponse() {
+			responses += 1;
+		},
+		setTimer(callback) {
+			pendingTimer = callback;
+			return timerHandle;
+		},
+		clearTimer() {
+			pendingTimer = undefined;
+		},
+	});
+	buffer.speakingStart("user-a");
+	buffer.userAudio("user-a", Buffer.from([1, 2, 3, 4, 5, 6]));
+	buffer.speakingStart("user-b");
+	buffer.userAudio("user-b", Buffer.from([7, 8, 9, 10, 11, 12]));
+	buffer.userAudioEnd("user-a");
+	if (readPendingTimer() !== undefined)
+		throw new Error("voice-smoke: group turn flushed while another speaker was active");
+	buffer.userAudioEnd("user-b");
+	const flush = readPendingTimer();
+	if (flush === undefined) throw new Error("voice-smoke: group turn did not schedule idle flush");
+	flush();
+	if (commits !== 1 || responses !== 1) throw new Error("voice-smoke: group turn did not commit one response");
+	if (subscriptions.join(",") !== "user-a,user-b") throw new Error("voice-smoke: speakers were not subscribed");
+	if (appendedUsers.join(",") !== "user-a,user-b") throw new Error("voice-smoke: speaker audio was not appended");
+}
+
+function assertDiscordVoiceTurnBufferMixing(): void {
+	const mixed = mixPcm16MonoFrames([pcm16([10_000, 20_000, -20_000]), pcm16([10_000, 20_000, -20_000])]);
+	if (samplesFromPcm16(mixed).join(",") !== "20000,32767,-32768") {
+		throw new Error("voice-smoke: PCM mixer did not sum and clamp overlapping speaker frames");
+	}
+
+	const appended: { userId: string; samples: number[] }[] = [];
+	const buffer = new DiscordVoiceTurnBuffer({
+		mixAudio: true,
+		subscribeUser() {},
+		appendInputAudio(userId, pcm) {
+			appended.push({ userId, samples: samplesFromPcm16(pcm) });
+		},
+		commitInputAudioBuffer() {},
+		createAudioResponse() {},
+	});
+	buffer.speakingStart("user-a");
+	buffer.speakingStart("user-b");
+	buffer.userAudio("user-a", pcm16([1_000, 2_000]));
+	buffer.userAudio("user-b", pcm16([3_000, 4_000]));
+	buffer.flushNow();
+	if (appended.length !== 1 || appended[0]?.userId !== "mixed" || appended[0].samples.join(",") !== "4000,6000") {
+		throw new Error("voice-smoke: group voice mixer did not combine same-turn active speaker audio");
+	}
+	buffer.dispose();
+}
+
+function assertClankvoxVoiceAdapterProxy(): void {
+	const adapterPayloads: JsonRecord[] = [];
+	const shardPayloads: JsonRecord[] = [];
+	let destroyed = false;
+	const callbacksSeen: string[] = [];
+	const guild: ClankvoxGuildLike = {
+		shard: {
+			send(payload) {
+				shardPayloads.push(payload);
+			},
+		},
+		voiceAdapterCreator(callbacks) {
+			callbacks.onVoiceServerUpdate({ token: "voice-token" });
+			callbacks.onVoiceStateUpdate({ session_id: "voice-session", user_id: "user-1" });
+			callbacksSeen.push("registered");
+			return {
+				sendPayload(payload) {
+					adapterPayloads.push(payload);
+					return true;
+				},
+				destroy() {
+					destroyed = true;
+				},
+			};
+		},
+	};
+	const proxy = createClankvoxVoiceAdapterProxy(guild, {
+		onVoiceServerUpdate(data) {
+			if (data.token === "voice-token") callbacksSeen.push("server");
+		},
+		onVoiceStateUpdate(data) {
+			if (data.session_id === "voice-session") callbacksSeen.push("state");
+		},
+	});
+	if (!proxy.send({ op: 4 })) throw new Error("voice-smoke: clankvox adapter proxy send failed");
+	if (adapterPayloads.length !== 1 || shardPayloads.length !== 0) {
+		throw new Error("voice-smoke: clankvox adapter proxy should prefer adapter.sendPayload over shard.send");
+	}
+	proxy.destroy();
+	if (!destroyed || callbacksSeen.join(",") !== "server,state,registered") {
+		throw new Error("voice-smoke: clankvox adapter proxy did not register callbacks or destroy adapter");
+	}
+
+	const fallbackPayloads: JsonRecord[] = [];
+	const fallback = createClankvoxVoiceAdapterProxy(
+		{
+			shard: {
+				send(payload) {
+					fallbackPayloads.push(payload);
+				},
+			},
+		},
+		{
+			onVoiceServerUpdate() {},
+			onVoiceStateUpdate() {},
+		},
+	);
+	if (!fallback.send({ op: 4 }) || fallbackPayloads.length !== 1) {
+		throw new Error("voice-smoke: clankvox adapter proxy did not fall back to shard.send");
+	}
+}
+
+function assertFakeClankvoxRealtimeBridge(): void {
+	const vox = new FakeClankvox();
+	const realtime = new FakeRealtime();
+	let pendingTimer: (() => void) | undefined;
+	const readPendingTimer = () => pendingTimer;
+	const timerHandle = {} as ReturnType<typeof setTimeout>;
+	let latestFrame: ClankvoxDecodedVideoFrame | undefined;
+	const turnBuffer = bindClankvoxRealtimeBridge({
+		vox,
+		realtime,
+		onDecodedVideoFrame(frame) {
+			latestFrame = frame;
+		},
+		turnBuffer: {
+			flushDelayMs: 1,
+			setTimer(callback) {
+				pendingTimer = callback;
+				return timerHandle;
+			},
+			clearTimer() {
+				pendingTimer = undefined;
+			},
+		},
+	});
+	vox.emit("speakingStart", "speaker-1");
+	vox.emit("userAudio", "speaker-1", Buffer.from([1, 2, 3, 4, 5, 6]));
+	vox.emit("userAudioEnd", "speaker-1");
+	const flush = readPendingTimer();
+	if (flush === undefined) throw new Error("voice-smoke: fake clankvox audio did not schedule realtime flush");
+	flush();
+	if (vox.subscriptions[0] !== "speaker-1") throw new Error("voice-smoke: fake clankvox speaker was not subscribed");
+	if (realtime.audioAppends !== 1 || realtime.commits !== 1 || realtime.responses !== 1) {
+		throw new Error("voice-smoke: fake clankvox audio did not reach realtime");
+	}
+	const frame: ClankvoxDecodedVideoFrame = {
+		userId: "speaker-1",
+		ssrc: 123,
+		width: 640,
+		height: 360,
+		jpegBase64: "aW1hZ2U=",
+		rtpTimestamp: 456,
+		streamType: "screen",
+		rid: null,
+	};
+	vox.emit("decodedVideoFrame", frame);
+	if (latestFrame !== frame || realtime.videoFrames !== 1) {
+		throw new Error("voice-smoke: fake clankvox screen frame did not reach realtime");
+	}
+	turnBuffer.dispose();
+}
+
+function assertDiscordStreamDiscovery(): void {
+	const client = new FakeRawGatewayClient();
+	let discovered: DiscoveredDiscordStream | undefined;
+	let createDiscovered: DiscoveredDiscordStream | undefined;
+	let deleted: DiscoveredDiscordStream | undefined;
+	const discovery = createDiscordStreamDiscovery(client, {
+		onStreamCredentials(stream) {
+			discovered = stream;
+			if (stream.streamKey === "guild:guild-1:voice-1:user-create-creds") createDiscovered = stream;
+		},
+		onStreamDeleted(stream) {
+			deleted = stream;
+		},
+	});
+	client.emitRaw({
+		t: "GUILD_CREATE",
+		d: {
+			id: "guild-1",
+			voice_states: [{ self_stream: true, channel_id: "voice-1", user_id: "cold-start-user" }],
+		},
+	});
+	client.emitRaw({
+		t: "VOICE_STATE_UPDATE",
+		d: {
+			self_stream: true,
+			guild_id: "guild-1",
+			channel_id: "voice-1",
+			user_id: "user-1",
+		},
+	});
+	client.emitRaw({
+		t: "STREAM_CREATE",
+		d: {
+			stream_key: "guild:guild-1:voice-1:user-1",
+			rtc_server_id: "9002",
+		},
+	});
+	client.emitRaw({
+		t: "STREAM_SERVER_UPDATE",
+		d: {
+			stream_key: "guild:guild-1:voice-1:user-1",
+			endpoint: "voice.example",
+			token: "stream-token",
+		},
+	});
+	const stream = discovery.findStream("user-1", { guildId: "guild-1", channelId: "voice-1" });
+	if (stream?.endpoint !== "voice.example") throw new Error("voice-smoke: stream credentials were not recorded");
+	if (stream.rtcServerId !== "9002") throw new Error("voice-smoke: stream rtc server id was not preserved");
+	if (discovered === undefined) throw new Error("voice-smoke: stream credentials hook did not fire");
+	client.emitRaw({
+		t: "STREAM_CREATE",
+		d: {
+			stream_key: "guild:guild-1:voice-1:user-create-creds",
+			rtc_server_id: "9003",
+			endpoint: "voice-create.example",
+			token: "stream-create-token",
+		},
+	});
+	if (
+		createDiscovered?.endpoint !== "voice-create.example" ||
+		createDiscovered.token !== "stream-create-token" ||
+		createDiscovered.rtcServerId !== "9003"
+	) {
+		throw new Error("voice-smoke: stream credentials hook did not fire from credentialed STREAM_CREATE");
+	}
+	if (discovery.findStream(undefined, { guildId: "guild-1", channelId: "other-voice" }) !== undefined) {
+		throw new Error("voice-smoke: stream lookup did not respect voice channel scope");
+	}
+	if (discovery.findStream("cold-start-user", { guildId: "guild-1", channelId: "voice-1" }) === undefined) {
+		throw new Error("voice-smoke: guild create existing streamer was not discovered");
+	}
+	if (deriveDiscordStreamWatchDaveChannelId(stream.rtcServerId) !== "9001") {
+		throw new Error("voice-smoke: stream watch DAVE channel derivation changed");
+	}
+	discovery.requestWatch("guild:guild-1:voice-1:user-1");
+	if (client.sent[0]?.payload.op !== 20) throw new Error("voice-smoke: stream watch did not send OP20");
+	client.emitRaw({
+		t: "VOICE_STATE_UPDATE",
+		d: {
+			self_stream: false,
+			guild_id: "guild-1",
+			channel_id: "voice-1",
+			user_id: "user-1",
+		},
+	});
+	if (deleted?.streamKey !== "guild:guild-1:voice-1:user-1") {
+		throw new Error("voice-smoke: stream was not removed on self_stream=false");
+	}
+	discovery.stop();
+}
+
+function assertVoiceLiveValidation(): void {
+	const requirements = parseVoiceLiveValidationRequirements({
+		CLANKY_DISCORD_VOICE_REQUIRE_INPUT_AUDIO: "1",
+		CLANKY_DISCORD_VOICE_REQUIRE_GROUP_AUDIO: "1",
+		CLANKY_DISCORD_VOICE_REQUIRE_OUTPUT_AUDIO: "1",
+		CLANKY_DISCORD_VOICE_REQUIRE_TOOL_CALL: "1",
+		CLANKY_DISCORD_VOICE_REQUIRE_ASK_PI: "1",
+		CLANKY_DISCORD_VOICE_REQUIRE_STREAM_WATCH: "1",
+		CLANKY_DISCORD_VOICE_REQUIRE_SCREEN_FRAME: "1",
+		CLANKY_DISCORD_VOICE_FAIL_ON_REALTIME_ERROR: "1",
+	});
+	const failures = validateVoiceLiveStatus(
+		{
+			voice: {
+				stats: {
+					discordInputAudioEventCount: 1,
+					discordInputMaxConcurrentSpeakers: 2,
+					realtimeAudioDeltaCount: 1,
+					realtimeFunctionCallCount: 1,
+					askPiCallCount: 1,
+					streamWatchConnectCount: 1,
+					decodedVideoFrameCount: 1,
+					realtimeErrorEventCount: 0,
+					realtimeSocketErrorCount: 0,
+					realtimeSocketCloseCount: 0,
+				},
+			},
+		},
+		requirements,
+	);
+	if (failures.length > 0) throw new Error(`voice-smoke: unexpected live validation failures: ${failures.join(", ")}`);
+	if (
+		!isVoiceLiveValidationSatisfied(
+			{
+				voice: {
+					stats: {
+						discordInputAudioEventCount: 1,
+						discordInputMaxConcurrentSpeakers: 2,
+						realtimeAudioDeltaCount: 1,
+						realtimeFunctionCallCount: 1,
+						askPiCallCount: 1,
+						streamWatchConnectCount: 1,
+						decodedVideoFrameCount: 1,
+						realtimeErrorEventCount: 0,
+						realtimeSocketErrorCount: 0,
+						realtimeSocketCloseCount: 0,
+					},
+				},
+			},
+			requirements,
+		)
+	) {
+		throw new Error("voice-smoke: satisfied live validation helper returned false");
+	}
+	const missing = validateVoiceLiveStatus({ voice: { stats: {} } }, requirements);
+	if (missing.length !== 7)
+		throw new Error(`voice-smoke: expected seven live validation failures, got ${missing.length}`);
+	if (isVoiceLiveValidationSatisfied({ voice: { stats: {} } }, requirements)) {
+		throw new Error("voice-smoke: satisfied live validation helper returned true for missing stats");
+	}
+	const realtimeErrorFailures = validateVoiceLiveStatus(
+		{
+			voice: {
+				stats: {
+					discordInputAudioEventCount: 1,
+					discordInputMaxConcurrentSpeakers: 2,
+					realtimeAudioDeltaCount: 1,
+					realtimeFunctionCallCount: 1,
+					askPiCallCount: 1,
+					streamWatchConnectCount: 1,
+					decodedVideoFrameCount: 1,
+					realtimeSocketErrorCount: 1,
+				},
+			},
+		},
+		requirements,
+	);
+	if (!realtimeErrorFailures.some((failure) => failure.includes("Realtime API/socket errors"))) {
+		throw new Error("voice-smoke: realtime error validation did not fail on socket error counter");
+	}
+
+	const all = parseVoiceLiveValidationRequirements({ CLANKY_DISCORD_VOICE_REQUIRE_ALL: "1" });
+	const allFailures = validateVoiceLiveStatus({ voice: { stats: {} } }, all);
+	if (allFailures.length !== 7) throw new Error("voice-smoke: require-all did not enable every live validation check");
+	if (!requiresNativeDiscordScreenWatch(all)) {
+		throw new Error("voice-smoke: require-all should require native Discord screen watch");
+	}
+	if (describeVoiceLiveValidationRequirements(all).length !== 7) {
+		throw new Error("voice-smoke: require-all did not produce every live validation checklist item");
+	}
+	const none = parseVoiceLiveValidationRequirements({});
+	if (requiresNativeDiscordScreenWatch(none)) {
+		throw new Error("voice-smoke: empty requirements should not require native Discord screen watch");
+	}
+	if (describeVoiceLiveValidationRequirements(none).length !== 0) {
+		throw new Error("voice-smoke: empty live validation requirements should not produce checklist items");
+	}
+	const failOnly = parseVoiceLiveValidationRequirements({ CLANKY_DISCORD_VOICE_FAIL_ON_REALTIME_ERROR: "1" });
+	if (!hasVoiceLiveValidationRequirements(failOnly)) {
+		throw new Error("voice-smoke: fail-on-realtime-error should count as a final validation requirement");
+	}
+	if (hasVoiceLiveSuccessRequirements(failOnly)) {
+		throw new Error("voice-smoke: fail-on-realtime-error should not let STOP_WHEN_VALID stop immediately");
+	}
+	if (!isVoiceLiveValidationSatisfied({ voice: { stats: {} } }, failOnly)) {
+		throw new Error("voice-smoke: fail-on-realtime-error should pass final validation when no errors were counted");
+	}
+}
+
+function assertVoiceLiveValidationResult(): void {
+	const requirements = parseVoiceLiveValidationRequirements({
+		CLANKY_DISCORD_VOICE_REQUIRE_INPUT_AUDIO: "1",
+	});
+	const startedAt = new Date("2026-05-25T00:00:00.000Z");
+	const finishedAt = new Date("2026-05-25T00:00:05.000Z");
+	const passing = buildVoiceLiveValidationResult({
+		startedAt,
+		finishedAt,
+		phase: "final",
+		requirements,
+		failures: [],
+		status: { voice: { stats: { discordInputAudioEventCount: 1 } } },
+	});
+	if (!passing.validation.enabled || !passing.validation.passed || passing.durationMs !== 5_000) {
+		throw new Error("voice-smoke: passing live result artifact shape was incorrect");
+	}
+	const failed = buildVoiceLiveValidationResult({
+		startedAt,
+		finishedAt,
+		phase: "preflight",
+		requirements,
+		failures: ["missing Discord credential"],
+		error: new Error("missing Discord credential"),
+	});
+	if (failed.validation.passed || failed.error?.message !== "missing Discord credential") {
+		throw new Error("voice-smoke: failed live result artifact did not preserve failure/error details");
+	}
+}
+
+async function assertFakeVoiceBridgeRealtimeTools(): Promise<void> {
+	const realtime = new FakeBridgeRealtime();
+	const vox = new FakeBridgeClankvox();
+	const runtime = new FakeVoiceRuntime();
+	const discovery = new FakeVoiceStreamDiscovery({
+		streamKey: "guild:guild-1:voice-1:streamer-1",
+		guildId: "guild-1",
+		channelId: "voice-1",
+		userId: "streamer-1",
+		endpoint: "voice.example",
+		token: "stream-token",
+		rtcServerId: "9002",
+		updatedAt: Date.now(),
+	});
+	const handle = await startAgentDiscordVoiceBridge({
+		runtime: runtime as never,
+		client: new FakeVoiceDiscordClient() as never,
+		discordConfig: {
+			providerId: "clanky-discord",
+			token: "discord-token",
+			credentialKind: "user-token",
+			source: "env",
+		},
+		config: {
+			enabled: true,
+			guildId: "guild-1",
+			channelId: "voice-1",
+			openAiApiKey: "openai-key",
+			openAiRealtimeModel: DEFAULT_REALTIME_MODEL,
+			openAiRealtimeVoice: "marin",
+		},
+		dependencies: {
+			createRealtime() {
+				return realtime;
+			},
+			async spawnVox() {
+				return vox;
+			},
+			createStreamDiscovery() {
+				return discovery;
+			},
+		},
+	});
+	if (handle === undefined) throw new Error("voice-smoke: fake voice bridge did not start");
+	if (!realtime.connected) throw new Error("voice-smoke: fake realtime was not connected by voice bridge");
+	const tools = realtime.connectOptions?.tools
+		?.map((tool) => tool.name)
+		.sort()
+		.join(",");
+	if (tools !== "ask_pi,list_screen_shares,see_screenshare_snapshot,start_screen_watch,stop_screen_watch") {
+		throw new Error(`voice-smoke: fake voice bridge realtime tools mismatch: ${tools}`);
+	}
+	realtime.emit("audio_delta", "AQIDBA==");
+	if (vox.audioSends[0]?.sampleRate !== 24_000) {
+		throw new Error("voice-smoke: realtime audio delta was not sent to Discord audio");
+	}
+	handle.requestTextUtterance(" scripted voice prompt ");
+	if (realtime.textUtterances[0] !== "scripted voice prompt") {
+		throw new Error("voice-smoke: voice bridge did not forward scripted text utterance to Realtime");
+	}
+	const restoreWarn = silenceConsoleWarn();
+	try {
+		realtime.emit("transcript", { text: "hello", eventType: "response.output_audio_transcript.delta" });
+		realtime.emit("error_event", { type: "error", error: { message: "fake realtime error" } });
+		realtime.emit("socket_error", new Error("fake socket error"));
+		realtime.emit("socket_closed", { code: 1000, reason: "fake close" });
+	} finally {
+		restoreWarn();
+	}
+	vox.emit("speakingStart", "speaker-1");
+	vox.emit("userAudio", "speaker-1", Buffer.from([1, 2, 3, 4, 5, 6]));
+	vox.emit("speakingStart", "speaker-2");
+	vox.emit("userAudio", "speaker-2", Buffer.from([7, 8, 9, 10]));
+	vox.emit("userAudioEnd", "speaker-1");
+	vox.emit("userAudioEnd", "speaker-2");
+
+	realtime.emit("event", {
+		type: "response.done",
+		response: {
+			output: [
+				{
+					type: "function_call",
+					name: "ask_pi",
+					call_id: "call-pi",
+					arguments: '{"prompt":"summarize this for voice"}',
+				},
+			],
+		},
+	});
+	await waitUntil(() => realtime.functionOutputs.some((output) => output.callId === "call-pi"), "ask_pi output");
+	if (!runtime.session.messages[0]?.includes("summarize this for voice")) {
+		throw new Error("voice-smoke: ask_pi did not forward prompt to Pi runtime");
+	}
+	const askOutput = expectRecord(
+		realtime.functionOutputs.find((output) => output.callId === "call-pi")?.output,
+		"ask_pi output",
+	);
+	if (askOutput.text !== "Pi voice answer.") throw new Error("voice-smoke: ask_pi output did not include Pi answer");
+
+	realtime.emit("event", {
+		type: "response.done",
+		response: {
+			output: [
+				{
+					type: "function_call",
+					name: "list_screen_shares",
+					call_id: "call-list-screen",
+					arguments: "{}",
+				},
+			],
+		},
+	});
+	await waitUntil(
+		() => realtime.functionOutputs.some((output) => output.callId === "call-list-screen"),
+		"list_screen_shares output",
+	);
+	const listOutput = expectRecord(
+		realtime.functionOutputs.find((output) => output.callId === "call-list-screen")?.output,
+		"list_screen_shares output",
+	);
+	if (!Array.isArray(listOutput.streams) || listOutput.streams.length !== 1) {
+		throw new Error("voice-smoke: list_screen_shares did not return discovered stream");
+	}
+	const listedStream = expectRecord(listOutput.streams[0], "listed stream");
+	if (listedStream.streamKey !== "guild:guild-1:voice-1:streamer-1" || listedStream.hasCredentials !== true) {
+		throw new Error("voice-smoke: list_screen_shares did not expose screen-share stream metadata");
+	}
+
+	realtime.emit("event", {
+		type: "response.done",
+		response: {
+			output: [
+				{
+					type: "function_call",
+					name: "start_screen_watch",
+					call_id: "call-screen",
+					arguments: '{"target":"streamer-1"}',
+				},
+			],
+		},
+	});
+	await waitUntil(
+		() => realtime.functionOutputs.some((output) => output.callId === "call-screen"),
+		"start_screen_watch output",
+	);
+	if (discovery.requestedWatchKeys[0] !== "guild:guild-1:voice-1:streamer-1") {
+		throw new Error("voice-smoke: start_screen_watch did not request Discord STREAM_WATCH");
+	}
+	if (vox.videoSubscriptions[0]?.userId !== "streamer-1") {
+		throw new Error("voice-smoke: start_screen_watch did not subscribe target video");
+	}
+	const streamWatchConnect = vox.streamWatchConnections[0];
+	if (streamWatchConnect?.sessionId !== "voice-session-1" || streamWatchConnect.daveChannelId !== "9001") {
+		throw new Error("voice-smoke: start_screen_watch did not connect stream_watch with voice session/DAVE id");
+	}
+	const screenOutput = expectRecord(
+		realtime.functionOutputs.find((output) => output.callId === "call-screen")?.output,
+		"screen output",
+	);
+	if (screenOutput.ok !== true || screenOutput.hasCredentials !== true) {
+		throw new Error("voice-smoke: start_screen_watch did not return successful credentialed status");
+	}
+	if (handle.status().activeStreamWatchKey !== "guild:guild-1:voice-1:streamer-1") {
+		throw new Error("voice-smoke: voice bridge did not track active screen watch");
+	}
+
+	const frame: ClankvoxDecodedVideoFrame = {
+		userId: "streamer-1",
+		ssrc: 44,
+		width: 640,
+		height: 360,
+		jpegBase64: "ZnJhbWU=",
+		rtpTimestamp: 99,
+		streamType: "screen",
+		rid: null,
+	};
+	vox.emit("decodedVideoFrame", frame);
+	await waitUntil(() => realtime.videoFrames.length === 1, "decoded frame append");
+	const laterFrame: ClankvoxDecodedVideoFrame = {
+		...frame,
+		width: 800,
+		height: 450,
+		jpegBase64: "bGF0ZXItZnJhbWU=",
+		rtpTimestamp: 100,
+	};
+	vox.emit("decodedVideoFrame", laterFrame);
+	await sleep(10);
+	if (realtime.videoFrames.length !== 1) {
+		throw new Error("voice-smoke: rapid decoded screen frame should be throttled before auto-attach");
+	}
+	realtime.emit("event", {
+		type: "response.done",
+		response: {
+			output: [
+				{
+					type: "function_call",
+					name: "see_screenshare_snapshot",
+					call_id: "call-snapshot",
+					arguments: "{}",
+				},
+			],
+		},
+	});
+	await waitUntil(
+		() => realtime.functionOutputs.some((output) => output.callId === "call-snapshot"),
+		"snapshot output",
+	);
+	const snapshotOutput = expectRecord(
+		realtime.functionOutputs.find((output) => output.callId === "call-snapshot")?.output,
+		"snapshot output",
+	);
+	const videoFrameCount = (realtime.videoFrames as unknown[]).length;
+	if (snapshotOutput.ok !== true || snapshotOutput.width !== 800 || videoFrameCount !== 2) {
+		throw new Error("voice-smoke: snapshot tool did not attach latest screen-share frame");
+	}
+	realtime.emit("event", {
+		type: "response.done",
+		response: {
+			output: [
+				{
+					type: "function_call",
+					name: "stop_screen_watch",
+					call_id: "call-stop-screen",
+					arguments: "{}",
+				},
+			],
+		},
+	});
+	await waitUntil(
+		() => realtime.functionOutputs.some((output) => output.callId === "call-stop-screen"),
+		"stop_screen_watch output",
+	);
+	const stopOutput = expectRecord(
+		realtime.functionOutputs.find((output) => output.callId === "call-stop-screen")?.output,
+		"stop screen output",
+	);
+	if (stopOutput.ok !== true || stopOutput.streamKey !== "guild:guild-1:voice-1:streamer-1") {
+		throw new Error("voice-smoke: stop_screen_watch did not return stopped screen-watch status");
+	}
+	if (handle.status().activeStreamWatchKey !== undefined || handle.status().activeVideoUserId !== undefined) {
+		throw new Error("voice-smoke: stop_screen_watch did not clear active screen watch state");
+	}
+	realtime.emit("event", {
+		type: "response.done",
+		response: {
+			output: [
+				{
+					type: "function_call",
+					name: "ask_pi",
+					call_id: "call-error",
+					arguments: "{}",
+				},
+			],
+		},
+	});
+	await waitUntil(() => realtime.functionOutputs.some((output) => output.callId === "call-error"), "tool error output");
+	const errorOutput = expectRecord(
+		realtime.functionOutputs.find((output) => output.callId === "call-error")?.output,
+		"tool error output",
+	);
+	if (errorOutput.ok !== false || !String(errorOutput.error).includes("ask_pi requires prompt")) {
+		throw new Error("voice-smoke: failed ask_pi did not return structured function-call error output");
+	}
+	const stats = expectRecord(handle.status().stats, "voice bridge stats");
+	if (
+		stats.realtimeAudioDeltaCount !== 1 ||
+		stats.realtimeAudioDeltaBytes !== 4 ||
+		stats.discordOutputAudioSendCount !== 1 ||
+		stats.realtimeTranscriptCount !== 1 ||
+		stats.realtimeErrorEventCount !== 1 ||
+		stats.realtimeSocketErrorCount !== 1 ||
+		stats.realtimeSocketCloseCount !== 1
+	) {
+		throw new Error("voice-smoke: voice bridge did not count realtime audio/status output");
+	}
+	if (
+		stats.speakingStartCount !== 2 ||
+		stats.discordInputUniqueSpeakerCount !== 2 ||
+		stats.discordInputMaxConcurrentSpeakers !== 2 ||
+		stats.discordInputGroupOverlapCount !== 1 ||
+		stats.discordInputAudioEventCount !== 2 ||
+		stats.discordInputAudioBytes !== 10
+	) {
+		throw new Error("voice-smoke: voice bridge did not count Discord input audio");
+	}
+	if (
+		stats.realtimeFunctionCallCount !== 6 ||
+		stats.realtimeFunctionCallOutputCount !== 6 ||
+		stats.realtimeFunctionCallErrorCount !== 1 ||
+		stats.askPiCallCount !== 2
+	) {
+		throw new Error("voice-smoke: voice bridge did not count realtime tool calls");
+	}
+	if (stats.screenShareListCount !== 1) {
+		throw new Error("voice-smoke: voice bridge did not count screen-share listing");
+	}
+	if (
+		stats.screenWatchRequestCount !== 1 ||
+		stats.screenWatchSuccessCount !== 1 ||
+		stats.screenWatchStopCount !== 1 ||
+		stats.streamWatchConnectCount !== 1 ||
+		stats.streamWatchDisconnectCount !== 1
+	) {
+		throw new Error("voice-smoke: voice bridge did not count screen-watch setup");
+	}
+	if (
+		stats.decodedVideoFrameCount !== 2 ||
+		stats.snapshotSuccessCount !== 1 ||
+		stats.videoFrameAttachCount !== 2 ||
+		stats.videoFrameAutoAttachSkipCount !== 1
+	) {
+		throw new Error("voice-smoke: voice bridge did not count decoded/attached screen frames");
+	}
+
+	await handle.stop();
+	if (!discovery.stopped) throw new Error("voice-smoke: fake stream discovery was not stopped");
+	if (!vox.destroyed) throw new Error("voice-smoke: fake clankvox was not destroyed");
+	if (vox.videoUnsubscriptions[0] !== "streamer-1") {
+		throw new Error("voice-smoke: stop_screen_watch did not unsubscribe screen-share video");
+	}
+	if (vox.streamWatchDisconnects[0] !== "tool_stop_screen_watch" || vox.streamWatchDisconnects.length !== 1) {
+		throw new Error("voice-smoke: stop_screen_watch did not disconnect stream_watch exactly once");
+	}
+}
+
+async function assertFakeVoiceBridgeBotTokenScreenWatchGuard(): Promise<void> {
+	const realtime = new FakeBridgeRealtime();
+	const vox = new FakeBridgeClankvox();
+	const discovery = new FakeVoiceStreamDiscovery({
+		streamKey: "guild:guild-1:voice-1:streamer-1",
+		guildId: "guild-1",
+		channelId: "voice-1",
+		userId: "streamer-1",
+		endpoint: "voice.example",
+		token: "stream-token",
+		rtcServerId: "9002",
+		updatedAt: Date.now(),
+	});
+	const handle = await startAgentDiscordVoiceBridge({
+		runtime: new FakeVoiceRuntime() as never,
+		client: new FakeVoiceDiscordClient() as never,
+		discordConfig: {
+			providerId: "clanky-discord",
+			token: "discord-token",
+			credentialKind: "bot-token",
+			source: "env",
+		},
+		config: {
+			enabled: true,
+			guildId: "guild-1",
+			channelId: "voice-1",
+			openAiApiKey: "openai-key",
+			openAiRealtimeModel: DEFAULT_REALTIME_MODEL,
+			openAiRealtimeVoice: "marin",
+		},
+		dependencies: {
+			createRealtime() {
+				return realtime;
+			},
+			async spawnVox() {
+				return vox;
+			},
+			createStreamDiscovery() {
+				return discovery;
+			},
+		},
+	});
+	if (handle === undefined) throw new Error("voice-smoke: bot-token voice bridge did not start");
+	if (handle.status().nativeScreenWatchSupported !== false) {
+		throw new Error("voice-smoke: bot-token voice bridge should report native screen watch unsupported");
+	}
+	realtime.emit("event", {
+		type: "response.done",
+		response: {
+			output: [
+				{
+					type: "function_call",
+					name: "list_screen_shares",
+					call_id: "call-list-bot-screen",
+					arguments: "{}",
+				},
+			],
+		},
+	});
+	await waitUntil(
+		() => realtime.functionOutputs.some((output) => output.callId === "call-list-bot-screen"),
+		"bot-token list_screen_shares output",
+	);
+	const listOutput = expectRecord(
+		realtime.functionOutputs.find((output) => output.callId === "call-list-bot-screen")?.output,
+		"bot-token list_screen_shares output",
+	);
+	if (listOutput.nativeWatchSupported !== false || !String(listOutput.warning).includes("user-token")) {
+		throw new Error("voice-smoke: bot-token list_screen_shares did not report user-token requirement");
+	}
+	realtime.emit("event", {
+		type: "response.done",
+		response: {
+			output: [
+				{
+					type: "function_call",
+					name: "start_screen_watch",
+					call_id: "call-screen-bot-token",
+					arguments: '{"target":"streamer-1"}',
+				},
+			],
+		},
+	});
+	await waitUntil(
+		() => realtime.functionOutputs.some((output) => output.callId === "call-screen-bot-token"),
+		"bot-token start_screen_watch output",
+	);
+	const screenOutput = expectRecord(
+		realtime.functionOutputs.find((output) => output.callId === "call-screen-bot-token")?.output,
+		"bot-token screen output",
+	);
+	if (screenOutput.ok !== false || screenOutput.credentialKind !== "bot-token") {
+		throw new Error("voice-smoke: bot-token start_screen_watch did not return unsupported credential result");
+	}
+	if (
+		discovery.requestedWatchKeys.length !== 0 ||
+		vox.videoSubscriptions.length !== 0 ||
+		vox.streamWatchConnections.length !== 0
+	) {
+		throw new Error("voice-smoke: bot-token start_screen_watch should not issue native watch commands");
+	}
+	const stats = expectRecord(handle.status().stats, "bot-token screen watch stats");
+	if (stats.screenWatchRequestCount !== 1 || stats.screenWatchUnsupportedCount !== 1) {
+		throw new Error("voice-smoke: bot-token screen watch unsupported stats were not counted");
+	}
+	await handle.stop();
+}
+
+async function assertFakeVoiceBridgeScreenWatchSwitchCleanup(): Promise<void> {
+	const realtime = new FakeBridgeRealtime();
+	const vox = new FakeBridgeClankvox();
+	const discovery = new FakeVoiceMultiStreamDiscovery([
+		{
+			streamKey: "guild:guild-1:voice-1:streamer-1",
+			guildId: "guild-1",
+			channelId: "voice-1",
+			userId: "streamer-1",
+			endpoint: "voice-1.example",
+			token: "stream-token-1",
+			rtcServerId: "9002",
+			updatedAt: Date.now(),
+		},
+		{
+			streamKey: "guild:guild-1:voice-1:streamer-2",
+			guildId: "guild-1",
+			channelId: "voice-1",
+			userId: "streamer-2",
+			endpoint: "voice-2.example",
+			token: "stream-token-2",
+			rtcServerId: "9004",
+			updatedAt: Date.now() + 1,
+		},
+	]);
+	const handle = await startAgentDiscordVoiceBridge({
+		runtime: new FakeVoiceRuntime() as never,
+		client: new FakeVoiceDiscordClient() as never,
+		discordConfig: {
+			providerId: "clanky-discord",
+			token: "discord-token",
+			credentialKind: "user-token",
+			source: "env",
+		},
+		config: {
+			enabled: true,
+			guildId: "guild-1",
+			channelId: "voice-1",
+			openAiApiKey: "openai-key",
+			openAiRealtimeModel: DEFAULT_REALTIME_MODEL,
+			openAiRealtimeVoice: "marin",
+		},
+		dependencies: {
+			createRealtime() {
+				return realtime;
+			},
+			async spawnVox() {
+				return vox;
+			},
+			createStreamDiscovery() {
+				return discovery;
+			},
+		},
+	});
+	if (handle === undefined) throw new Error("voice-smoke: switch voice bridge did not start");
+	realtime.emit("event", {
+		type: "response.done",
+		response: {
+			output: [
+				{
+					type: "function_call",
+					name: "start_screen_watch",
+					call_id: "call-screen-switch-1",
+					arguments: '{"target":"streamer-1"}',
+				},
+			],
+		},
+	});
+	await waitUntil(
+		() => realtime.functionOutputs.some((output) => output.callId === "call-screen-switch-1"),
+		"first switch start_screen_watch output",
+	);
+	realtime.emit("event", {
+		type: "response.done",
+		response: {
+			output: [
+				{
+					type: "function_call",
+					name: "start_screen_watch",
+					call_id: "call-screen-switch-2",
+					arguments: '{"target":"streamer-2"}',
+				},
+			],
+		},
+	});
+	await waitUntil(
+		() => realtime.functionOutputs.some((output) => output.callId === "call-screen-switch-2"),
+		"second switch start_screen_watch output",
+	);
+	if (vox.videoUnsubscriptions[0] !== "streamer-1") {
+		throw new Error("voice-smoke: switching screen watch did not unsubscribe prior video user");
+	}
+	if (vox.streamWatchDisconnects[0] !== "screen_watch_switch") {
+		throw new Error("voice-smoke: switching screen watch did not disconnect previous stream_watch");
+	}
+	if (vox.streamWatchConnections.length !== 2 || vox.streamWatchConnections[1]?.daveChannelId !== "9003") {
+		throw new Error("voice-smoke: switching screen watch did not connect the second stream");
+	}
+	if (handle.status().activeStreamWatchKey !== "guild:guild-1:voice-1:streamer-2") {
+		throw new Error("voice-smoke: switching screen watch did not update active stream key");
+	}
+	await handle.stop();
+	if (vox.streamWatchDisconnects[1] !== "voice_bridge_stop") {
+		throw new Error("voice-smoke: switched screen watch did not disconnect active stream on bridge stop");
+	}
+}
+
+async function assertFakeVoiceBridgeGatewaySessionFallback(): Promise<void> {
+	const realtime = new FakeBridgeRealtime();
+	const vox = new FakeBridgeClankvox();
+	vox.voiceSessionId = undefined;
+	const discovery = new FakeVoiceStreamDiscovery({
+		streamKey: "guild:guild-1:voice-1:streamer-1",
+		guildId: "guild-1",
+		channelId: "voice-1",
+		userId: "streamer-1",
+		endpoint: "voice.example",
+		token: "stream-token",
+		rtcServerId: "9002",
+		updatedAt: Date.now(),
+	});
+	const handle = await startAgentDiscordVoiceBridge({
+		runtime: new FakeVoiceRuntime() as never,
+		client: new FakeVoiceDiscordClient("gateway-session-1") as never,
+		discordConfig: {
+			providerId: "clanky-discord",
+			token: "discord-token",
+			credentialKind: "user-token",
+			source: "env",
+		},
+		config: {
+			enabled: true,
+			guildId: "guild-1",
+			channelId: "voice-1",
+			openAiApiKey: "openai-key",
+			openAiRealtimeModel: DEFAULT_REALTIME_MODEL,
+			openAiRealtimeVoice: "marin",
+		},
+		dependencies: {
+			createRealtime() {
+				return realtime;
+			},
+			async spawnVox() {
+				return vox;
+			},
+			createStreamDiscovery() {
+				return discovery;
+			},
+		},
+	});
+	if (handle === undefined) throw new Error("voice-smoke: fallback voice bridge did not start");
+	realtime.emit("event", {
+		type: "response.done",
+		response: {
+			output: [
+				{
+					type: "function_call",
+					name: "start_screen_watch",
+					call_id: "call-screen-fallback",
+					arguments: '{"target":"streamer-1"}',
+				},
+			],
+		},
+	});
+	await waitUntil(
+		() => realtime.functionOutputs.some((output) => output.callId === "call-screen-fallback"),
+		"fallback start_screen_watch output",
+	);
+	if (vox.streamWatchConnections[0]?.sessionId !== "gateway-session-1") {
+		throw new Error("voice-smoke: screen watch did not fall back to Discord gateway voice session id");
+	}
+	await handle.stop();
+}
+
+async function assertFakeVoiceBridgeRealtimeStreamingToolDedup(): Promise<void> {
+	const realtime = new FakeBridgeRealtime();
+	const vox = new FakeBridgeClankvox();
+	const runtime = new FakeVoiceRuntime();
+	const handle = await startAgentDiscordVoiceBridge({
+		runtime: runtime as never,
+		client: new FakeVoiceDiscordClient() as never,
+		discordConfig: {
+			providerId: "clanky-discord",
+			token: "discord-token",
+			credentialKind: "bot-token",
+			source: "env",
+		},
+		config: {
+			enabled: true,
+			guildId: "guild-1",
+			channelId: "voice-1",
+			openAiApiKey: "openai-key",
+			openAiRealtimeModel: DEFAULT_REALTIME_MODEL,
+			openAiRealtimeVoice: "marin",
+		},
+		dependencies: {
+			createRealtime() {
+				return realtime;
+			},
+			async spawnVox() {
+				return vox;
+			},
+			createStreamDiscovery() {
+				return new FakeVoiceStreamDiscovery({
+					streamKey: "guild:guild-1:voice-1:streamer-1",
+					guildId: "guild-1",
+					channelId: "voice-1",
+					userId: "streamer-1",
+					endpoint: null,
+					token: null,
+					rtcServerId: null,
+					updatedAt: Date.now(),
+				});
+			},
+		},
+	});
+	if (handle === undefined) throw new Error("voice-smoke: streaming tool bridge did not start");
+	const item = {
+		id: "item-stream",
+		type: "function_call",
+		name: "ask_pi",
+		call_id: "call-stream",
+		arguments: '{"prompt":"streamed prompt"}',
+	};
+	realtime.emit("event", {
+		type: "response.output_item.added",
+		item: { ...item, arguments: "" },
+		output_index: 0,
+		response_id: "response-stream",
+	});
+	realtime.emit("event", {
+		type: "response.function_call_arguments.delta",
+		call_id: "call-stream",
+		item_id: "item-stream",
+		delta: '{"prompt":',
+		output_index: 0,
+		response_id: "response-stream",
+	});
+	realtime.emit("event", {
+		type: "response.function_call_arguments.delta",
+		call_id: "call-stream",
+		item_id: "item-stream",
+		delta: '"streamed prompt"}',
+		output_index: 0,
+		response_id: "response-stream",
+	});
+	realtime.emit("event", {
+		type: "response.function_call_arguments.done",
+		name: "ask_pi",
+		call_id: "call-stream",
+		item_id: "item-stream",
+		arguments: '{"prompt":"streamed prompt"}',
+		output_index: 0,
+		response_id: "response-stream",
+	});
+	await waitUntil(
+		() => realtime.functionOutputs.some((output) => output.callId === "call-stream"),
+		"streaming ask_pi output",
+	);
+	realtime.emit("event", {
+		type: "response.output_item.done",
+		item,
+		output_index: 0,
+		response_id: "response-stream",
+	});
+	realtime.emit("event", {
+		type: "response.done",
+		response: { output: [item] },
+	});
+	await sleep(10);
+	const outputs = realtime.functionOutputs.filter((output) => output.callId === "call-stream");
+	if (outputs.length !== 1) {
+		throw new Error(`voice-smoke: streamed realtime tool call executed ${outputs.length} times`);
+	}
+	if (runtime.session.messages.length !== 1 || !runtime.session.messages[0]?.includes("streamed prompt")) {
+		throw new Error("voice-smoke: streamed realtime tool call did not execute ask_pi exactly once");
+	}
+	await handle.stop();
+}
+
+class FakeRawGatewayClient {
+	readonly sent: { shardId: number; payload: { op: number; d: unknown } }[] = [];
+	private listener: ((packet: DiscordRawPacket) => void) | undefined;
+	readonly ws = {
+		_ws: {
+			send: (shardId: number, payload: { op: number; d: unknown }) => {
+				this.sent.push({ shardId, payload });
+			},
+		},
+		shards: {
+			first: () => ({ id: 7 }),
+		},
+	};
+
+	on(event: "raw", listener: (packet: DiscordRawPacket) => void): void {
+		if (event === "raw") this.listener = listener;
+	}
+
+	off(event: "raw", listener: (packet: DiscordRawPacket) => void): void {
+		if (event === "raw" && this.listener === listener) this.listener = undefined;
+	}
+
+	emitRaw(packet: DiscordRawPacket): void {
+		this.listener?.(packet);
+	}
+}
+
+class FakeClankvox extends EventEmitter {
+	readonly subscriptions: string[] = [];
+
+	subscribeUser(userId: string): void {
+		this.subscriptions.push(userId);
+	}
+}
+
+class FakeRealtime {
+	audioAppends = 0;
+	commits = 0;
+	responses = 0;
+	videoFrames = 0;
+
+	appendInputAudioPcm(): void {
+		this.audioAppends += 1;
+	}
+
+	commitInputAudioBuffer(): void {
+		this.commits += 1;
+	}
+
+	createAudioResponse(): void {
+		this.responses += 1;
+	}
+
+	appendInputVideoFrame(): void {
+		this.videoFrames += 1;
+	}
+}
+
+class FakeVoiceDiscordClient extends EventEmitter {
+	readonly user = { id: "clanky-user", username: "clanky" };
+	readonly guild: JsonRecord;
+	readonly guilds = {
+		cache: {
+			get: () => this.guild,
+		},
+		fetch: async () => this.guild,
+	};
+	readonly ws = {
+		_ws: {
+			send() {},
+		},
+		shards: {
+			first: () => ({ id: 0 }),
+		},
+	};
+
+	constructor(gatewaySessionId?: string) {
+		super();
+		this.guild = {
+			voiceAdapterCreator: () => ({ destroy() {} }),
+			members:
+				gatewaySessionId === undefined
+					? undefined
+					: {
+							me: {
+								voice: { sessionId: gatewaySessionId },
+							},
+						},
+		};
+	}
+
+	isReady(): boolean {
+		return true;
+	}
+}
+
+class FakeVoiceRuntimeSession {
+	readonly messages: string[] = [];
+	private readonly subscribers = new Set<(event: JsonRecord) => void>();
+
+	subscribe(listener: (event: JsonRecord) => void): () => void {
+		this.subscribers.add(listener);
+		return () => {
+			this.subscribers.delete(listener);
+		};
+	}
+
+	async sendUserMessage(message: string): Promise<void> {
+		this.messages.push(message);
+		queueMicrotask(() => {
+			this.emit({
+				type: "message_end",
+				message: {
+					role: "assistant",
+					stopReason: "endTurn",
+					content: [{ type: "text", text: "Pi voice answer." }],
+				},
+			});
+		});
+	}
+
+	private emit(event: JsonRecord): void {
+		for (const subscriber of this.subscribers) subscriber(event);
+	}
+}
+
+class FakeVoiceRuntime {
+	readonly session = new FakeVoiceRuntimeSession();
+}
+
+class FakeBridgeRealtime extends EventEmitter {
+	connected = false;
+	closed = false;
+	connectOptions:
+		| {
+				tools?: { name: string }[];
+		  }
+		| undefined;
+	readonly functionOutputs: { callId: string; output: unknown }[] = [];
+	readonly videoFrames: { mimeType: string; dataBase64: string }[] = [];
+	readonly textUtterances: string[] = [];
+	audioAppends = 0;
+	commits = 0;
+	responses = 0;
+
+	async connect(options: { tools?: { name: string }[] }): Promise<void> {
+		this.connected = true;
+		this.connectOptions = options;
+	}
+
+	async close(): Promise<void> {
+		this.closed = true;
+	}
+
+	appendInputAudioPcm(): void {
+		this.audioAppends += 1;
+	}
+
+	commitInputAudioBuffer(): void {
+		this.commits += 1;
+	}
+
+	createAudioResponse(): void {
+		this.responses += 1;
+	}
+
+	appendInputVideoFrame(input: { mimeType: string; dataBase64: string }): void {
+		this.videoFrames.push(input);
+	}
+
+	requestTextUtterance(text: string): void {
+		this.textUtterances.push(text);
+	}
+
+	sendFunctionCallOutput(input: { callId: string; output: unknown }): void {
+		this.functionOutputs.push(input);
+	}
+}
+
+class FakeBridgeClankvox extends EventEmitter {
+	readonly isAlive = true;
+	readonly videoSubscriptions: { userId: string }[] = [];
+	readonly videoUnsubscriptions: string[] = [];
+	readonly streamWatchConnections: {
+		endpoint: string;
+		token: string;
+		serverId: string;
+		sessionId: string;
+		userId: string;
+		daveChannelId: string;
+	}[] = [];
+	readonly streamWatchDisconnects: (string | null | undefined)[] = [];
+	readonly audioSends: { pcmBase64: string; sampleRate?: number }[] = [];
+	destroyed = false;
+	voiceSessionId: string | undefined = "voice-session-1";
+
+	sendAudio(pcmBase64: string, sampleRate?: number): void {
+		const send: { pcmBase64: string; sampleRate?: number } = { pcmBase64 };
+		if (sampleRate !== undefined) send.sampleRate = sampleRate;
+		this.audioSends.push(send);
+	}
+
+	subscribeUser(): void {}
+
+	subscribeUserVideo(input: { userId: string }): void {
+		this.videoSubscriptions.push(input);
+	}
+
+	unsubscribeUserVideo(userId: string): void {
+		this.videoUnsubscriptions.push(userId);
+	}
+
+	streamWatchConnect(input: {
+		endpoint: string;
+		token: string;
+		serverId: string;
+		sessionId: string;
+		userId: string;
+		daveChannelId: string;
+	}): void {
+		this.streamWatchConnections.push(input);
+	}
+
+	streamWatchDisconnect(reason?: string | null): void {
+		this.streamWatchDisconnects.push(reason);
+	}
+
+	getLastVoiceSessionId(): string | undefined {
+		return this.voiceSessionId;
+	}
+
+	async destroy(): Promise<void> {
+		this.destroyed = true;
+	}
+}
+
+class FakeVoiceStreamDiscovery implements DiscordStreamDiscovery {
+	readonly requestedWatchKeys: string[] = [];
+	stopped = false;
+
+	constructor(private readonly stream: DiscoveredDiscordStream) {}
+
+	stop(): void {
+		this.stopped = true;
+	}
+
+	listStreams(): DiscoveredDiscordStream[] {
+		return [this.stream];
+	}
+
+	findStream(target?: string): DiscoveredDiscordStream | undefined {
+		const normalizedTarget = target?.trim();
+		if (
+			normalizedTarget === undefined ||
+			normalizedTarget.length === 0 ||
+			this.stream.userId === normalizedTarget ||
+			this.stream.streamKey === normalizedTarget
+		) {
+			return this.stream;
+		}
+		return undefined;
+	}
+
+	requestWatch(streamKey: string): void {
+		this.requestedWatchKeys.push(streamKey);
+	}
+}
+
+class FakeVoiceMultiStreamDiscovery implements DiscordStreamDiscovery {
+	readonly requestedWatchKeys: string[] = [];
+	stopped = false;
+
+	constructor(private readonly streams: DiscoveredDiscordStream[]) {}
+
+	stop(): void {
+		this.stopped = true;
+	}
+
+	listStreams(): DiscoveredDiscordStream[] {
+		return this.streams;
+	}
+
+	findStream(
+		target?: string,
+		scope: { guildId?: string; channelId?: string } = {},
+	): DiscoveredDiscordStream | undefined {
+		const normalizedTarget = target?.trim();
+		const guildId = scope.guildId?.trim();
+		const channelId = scope.channelId?.trim();
+		return this.streams.find((stream) => {
+			if (guildId !== undefined && guildId.length > 0 && stream.guildId !== guildId) return false;
+			if (channelId !== undefined && channelId.length > 0 && stream.channelId !== channelId) return false;
+			if (normalizedTarget === undefined || normalizedTarget.length === 0) return true;
+			return stream.userId === normalizedTarget || stream.streamKey === normalizedTarget;
+		});
+	}
+
+	requestWatch(streamKey: string): void {
+		this.requestedWatchKeys.push(streamKey);
+	}
+}
+
+async function waitUntil(predicate: () => boolean, label: string): Promise<void> {
+	for (let attempt = 0; attempt < 50; attempt += 1) {
+		if (predicate()) return;
+		await sleep(5);
+	}
+	throw new Error(`voice-smoke: timed out waiting for ${label}`);
+}
+
+function expectRecord(value: unknown, name: string): JsonRecord {
+	if (value !== null && typeof value === "object" && !Array.isArray(value)) return value as JsonRecord;
+	throw new Error(`voice-smoke: expected ${name} to be an object`);
+}
+
+function pcm16(samples: number[]): Buffer {
+	const buffer = Buffer.alloc(samples.length * 2);
+	for (const [index, sample] of samples.entries()) buffer.writeInt16LE(sample, index * 2);
+	return buffer;
+}
+
+function samplesFromPcm16(pcm: Buffer): number[] {
+	const samples: number[] = [];
+	for (let offset = 0; offset + 1 < pcm.length; offset += 2) samples.push(pcm.readInt16LE(offset));
+	return samples;
+}
+
+function silenceConsoleWarn(): () => void {
+	const original = console.warn;
+	console.warn = () => undefined;
+	return () => {
+		console.warn = original;
+	};
+}
+
+main().catch((error: unknown) => {
+	console.error("voice-smoke: FAIL");
+	console.error(error instanceof Error ? (error.stack ?? error.message) : String(error));
+	process.exit(1);
+});

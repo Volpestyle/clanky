@@ -5,3 +5,5 @@ dist/
 .DS_Store
 .clanky/
 .clanky-tmp/
+tmp/
+agents/clanky/src/voice/clankvox/target/

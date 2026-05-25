@@ -4,6 +4,7 @@ import {
 	createClankyExtensionFactories,
 	createClankyToolDefinitions,
 	loadClankySkills,
+	loadStoredDiscordCredential,
 	resolveClankyPaths,
 } from "@clanky/core";
 import {
@@ -17,7 +18,8 @@ import {
 	SessionManager,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { startAgentDiscordGateway } from "./agentDiscordGateway.ts";
+import { createDiscordAuthExtensionFactory, resolveDefaultDiscordProviderId } from "./discordAuth.ts";
+import { ClankyDiscordGatewayController } from "./discordGatewayController.ts";
 import { createClankyHandlers } from "./handlers.ts";
 import { loadPersona } from "./persona.ts";
 import { createClankyStores } from "./stores.ts";
@@ -27,6 +29,29 @@ export interface RunClankyOptions {
 	homeDir?: string;
 	profile?: string;
 	initialMessage?: string;
+}
+
+/**
+ * Append a "Discord identity" block to the persona markdown if a Discord
+ * credential is stored for this profile. Tells Clanky who he is on Discord
+ * from turn 1 without needing a tool call. Env-driven tokens skip this
+ * block today (no stored identity to read); run `/discord-login` to fill
+ * it in.
+ */
+function augmentPersonaWithDiscordIdentity(basePersona: string, authStorage: AuthStorage, providerId: string): string {
+	const stored = loadStoredDiscordCredential(authStorage, providerId);
+	if (stored === undefined) return basePersona;
+	const { identity, credentialKind, conversationId } = stored.payload;
+	if (identity === undefined) return basePersona;
+	const block = [
+		"## Discord identity",
+		"",
+		`You are connected to Discord as ${identity.username} (id ${identity.id}, ${credentialKind}).`,
+		conversationId !== undefined
+			? `You are bound to Discord conversation id ${conversationId}.`
+			: "You respond to DMs and to messages where you are @-mentioned.",
+	].join("\n");
+	return `${basePersona}\n\n${block}`;
 }
 
 /**
@@ -50,14 +75,22 @@ function resolvePackageRoot(): string {
  */
 function buildRuntimeFactory(opts: {
 	paths: ReturnType<typeof resolveClankyPaths>;
-	personaMarkdown: string;
+	basePersona: string;
+	authStorage: AuthStorage;
+	discordProviderId: string;
+	gatewayController: ClankyDiscordGatewayController;
 }): CreateAgentSessionRuntimeFactory {
-	const { paths, personaMarkdown } = opts;
+	const { paths, basePersona, authStorage, discordProviderId, gatewayController } = opts;
 	const stores = createClankyStores(paths);
 	const handlers = createClankyHandlers(paths, stores);
+	const discordAuthFactory = createDiscordAuthExtensionFactory({
+		authStorage,
+		providerId: discordProviderId,
+		authFilePath: paths.authFile,
+		gatewayController,
+	});
 
 	return async ({ cwd: runtimeCwd, sessionManager, sessionStartEvent }) => {
-		const authStorage = AuthStorage.create(paths.authFile);
 		const modelRegistry = ModelRegistry.create(authStorage, paths.modelsFile);
 		const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false } });
 
@@ -68,9 +101,12 @@ function buildRuntimeFactory(opts: {
 			modelRegistry,
 			settingsManager,
 			resourceLoaderOptions: {
-				extensionFactories: createClankyExtensionFactories(handlers),
-				systemPromptOverride: (existing: string | undefined): string =>
-					existing && existing.length > 0 ? `${existing}\n\n${personaMarkdown}` : personaMarkdown,
+				extensionFactories: [...createClankyExtensionFactories(handlers), discordAuthFactory],
+				// Recomputed per call so post-`/discord-login` reloads pick up the new identity.
+				systemPromptOverride: (existing: string | undefined): string => {
+					const persona = augmentPersonaWithDiscordIdentity(basePersona, authStorage, discordProviderId);
+					return existing && existing.length > 0 ? `${existing}\n\n${persona}` : persona;
+				},
 				skillsOverride: (current: ReturnType<typeof loadClankySkills>) => {
 					const clankySkills = loadClankySkills({ paths });
 					const byName = new Map<string, (typeof current.skills)[number]>();
@@ -108,16 +144,29 @@ export async function createClankyRuntime(options: RunClankyOptions = {}) {
 	if (options.homeDir !== undefined) pathsOptions.homeDir = options.homeDir;
 	if (options.profile !== undefined) pathsOptions.profile = options.profile;
 	const paths = resolveClankyPaths(pathsOptions);
-	const personaMarkdown = await loadPersona(resolvePackageRoot());
-	const createRuntime = buildRuntimeFactory({ paths, personaMarkdown });
+	const basePersona = await loadPersona(resolvePackageRoot());
+	const authStorage = AuthStorage.create(paths.authFile);
+	const discordProviderId = resolveDefaultDiscordProviderId();
+	const gatewayController = new ClankyDiscordGatewayController({
+		authStorage,
+		bridgeLogPath: `${paths.profileDir}/discord-bridge.log`,
+	});
+	const createRuntime = buildRuntimeFactory({
+		paths,
+		basePersona,
+		authStorage,
+		discordProviderId,
+		gatewayController,
+	});
 
 	const runtime = await createAgentSessionRuntime(createRuntime, {
 		cwd,
 		agentDir: paths.profileDir,
 		sessionManager: SessionManager.create(cwd, paths.sessionsDir),
 	});
+	gatewayController.bindRuntime(runtime);
 
-	return { runtime, paths };
+	return { runtime, paths, authStorage, gatewayController };
 }
 
 /**
@@ -128,8 +177,8 @@ export async function createClankyRuntime(options: RunClankyOptions = {}) {
  * disables compaction, and hands the runtime to `InteractiveMode`.
  */
 export async function runClanky(options: RunClankyOptions = {}): Promise<void> {
-	const { runtime } = await createClankyRuntime(options);
-	const chatGateway = await startAgentDiscordGateway({ runtime });
+	const { runtime, gatewayController } = await createClankyRuntime(options);
+	await gatewayController.start();
 
 	const interactiveOptions: ConstructorParameters<typeof InteractiveMode>[1] = {};
 	if (options.initialMessage !== undefined) interactiveOptions.initialMessage = options.initialMessage;
@@ -139,6 +188,6 @@ export async function runClanky(options: RunClankyOptions = {}): Promise<void> {
 		await mode.init();
 		await mode.run();
 	} finally {
-		await chatGateway?.stop();
+		await gatewayController.stop();
 	}
 }
