@@ -29,6 +29,9 @@ importers:
 
   agents/clanky:
     dependencies:
+      '@agentroom/chat-discord':
+        specifier: link:../../../agent-room/packages/integrations/chat-discord
+        version: link:../../../agent-room/packages/integrations/chat-discord
       '@clanky/core':
         specifier: workspace:*
         version: link:../../packages/clanky-core

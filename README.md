@@ -9,20 +9,22 @@ AgentRoom is the room/runtime daemon. Clanky works naturally inside any
 AgentRoom because AgentRoom can launch it as a normal Pi harness command and
 audit the room send/read flow around it.
 
-## Deployment Topologies
+## Room And Chat Ownership
 
-Two supported shapes; pick one per profile. Full contract in
-`docs/AGENTROOM.md`.
+Two axes are independent. Full contract in `docs/AGENTROOM.md`.
 
-- **Standalone Clanky.** No AgentRoom daemon. For chat (e.g. Discord),
-  Clanky imports `@agentroom/chat-discord` as a library and runs the
-  gateway in-process under his own bot token. Direct Discord <-> Clanky.
-- **Enrolled multi-agent room.** AgentRoom daemon owns the chat gateway and
-  the connector bot token. Inbound traffic routes to a designated lead
-  Clanky; worker Clankies receive work via AgentRoom's native messaging and
-  never see Discord directly. Multi-agent attribution in chat uses Discord
-  webhook mode so a single bot token can post as distinct
-  `username`/`avatar_url` per agent.
+- **Room participation.** Clanky can run outside AgentRoom or be launched into
+  a room as a normal Pi harness.
+- **Gateway ownership.** Each Discord conversation is owned either by Clanky
+  directly or by the AgentRoom daemon. Agent-owned Discord keeps Clanky's own
+  bot identity and token, even while Clanky participates in a room. Room-owned
+  Discord uses the room connector bot and routes through AgentRoom.
+
+For a personal Clanky, the intuitive setup is agent-owned Discord plus optional
+AgentRoom participation for coordinating with other agents. For a shared
+multi-agent public channel, use a room-owned connector with webhook attribution.
+Agent-owned Discord starts when `CLANKY_DISCORD_TOKEN` is present and
+`CLANKY_CHAT_GATEWAY_OWNER` is `agent` (the default).
 
 ## Layout
 
@@ -71,9 +73,17 @@ development, run AgentRoom from a shell where this checkout's bin is on `PATH`,
 or use a wrapper command that enters this checkout before starting Clanky.
 
 AgentRoom supplies room/runtime environment variables such as `AGENTROOM`,
-`AGENTROOM_AGENT_ID`, `AGENTROOM_ROOM_ID`, and `AGENTROOM_ROLE`. Clanky does
-not need AgentRoom as a package dependency; it just runs as a Pi agent process
-inside the room.
+`AGENTROOM_AGENT_ID`, `AGENTROOM_ROOM_ID`, and `AGENTROOM_ROLE`. These mark
+room participation; they do not decide who owns Clanky's Discord identity.
+Use `CLANKY_CHAT_GATEWAY_OWNER=room` or `CLANKY_CHAT_GATEWAY_OWNER=off` when a
+launcher should suppress Clanky's agent-owned gateway.
+
+Agent-owned Discord runtime env:
+
+- `CLANKY_DISCORD_TOKEN`: Clanky's own Discord bot/user token.
+- `CLANKY_DISCORD_CREDENTIAL_KIND`: `bot-token` (default) or `user-token`.
+- `CLANKY_DISCORD_CONVERSATION_ID`: optional DM/channel/thread allowlist. When
+  omitted, Clanky accepts DMs and messages that mention it.
 
 See `docs/AGENTROOM.md` for the integration contract.
 

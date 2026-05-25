@@ -19,11 +19,12 @@
 
 - Use pnpm only. Do not add npm lockfiles or npm scripts.
 - Keep the workspace `minimumReleaseAge`, `strictPeerDependencies`, `verifyStoreIntegrity`, and explicit `onlyBuiltDependencies` pnpm guards enabled unless the user explicitly approves changing supply-chain policy.
+- When working on Clanky agent runtime behavior, Pi `InteractiveMode`, sessions, model/tool wiring, or harness integration, first inspect `/Users/jamesvolpe/web/pi` and prefer the published `@earendil-works/pi-*` APIs and local Pi patterns over guesses.
 - Keep package boundaries clean:
   - `agents/clanky` (`@clanky/agent`) owns the runnable Pi `InteractiveMode`, persona wiring, and the `clanky` bin.
   - `packages/clanky-core` (`@clanky/core`) owns Pi integration, memory, profile paths, state storage, Linear stores, skills loading, and model-facing tools.
   - `skills/` holds bundled Clanky skills loaded from disk.
-- Chat gateways (Discord, etc.) are not packages in this repo. Clanky consumes them either by importing `@agentroom/chat-discord` in standalone mode or by deferring to an AgentRoom daemon in enrolled mode. See `docs/AGENTROOM.md`.
+- Chat gateways (Discord, etc.) are not packages in this repo. Clanky consumes them by importing `@agentroom/chat-discord` for agent-owned conversations, even when also participating in AgentRoom. Room-owned connector channels are owned by the AgentRoom daemon. See `docs/AGENTROOM.md`.
 - Do not patch or vendor Pi. Use published `@earendil-works/pi-*` packages and exported APIs.
 
 ## Verification
@@ -36,7 +37,7 @@
 
 ## Live Gates
 
-- Model, Linear, and chat-gateway tokens (Discord bot tokens, etc.) remain live gates requiring credentials or user approval. Standalone Clanky reads them from its own profile; enrolled Clanky must never read them at all.
+- Model, Linear, and chat-gateway tokens (Discord bot tokens, etc.) remain live gates requiring credentials or user approval. Clanky may read its own agent-owned Discord token (`CLANKY_DISCORD_TOKEN`); it must never read the room connector token owned by AgentRoom.
 
 ## State Safety
 

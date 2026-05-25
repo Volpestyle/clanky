@@ -13,16 +13,17 @@
  *
  * Run via: pnpm exec tsx agents/clanky/test/runtime-smoke.ts
  */
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { resolveAgentDiscordGatewayConfig } from "../src/agentDiscordGateway.ts";
 import { createClankyRuntime } from "../src/runClanky.ts";
 
 async function main(): Promise<void> {
+	assertAgentDiscordGatewayConfig();
 	const tmpRoot = await mkdtemp(join(tmpdir(), "clanky-agent-smoke-"));
 	const homeDir = join(tmpRoot, "home");
 	const cwd = join(tmpRoot, "work");
-	const { mkdir } = await import("node:fs/promises");
 	await mkdir(cwd, { recursive: true });
 
 	try {
@@ -61,6 +62,28 @@ async function main(): Promise<void> {
 		console.log("runtime-smoke: PASS");
 	} finally {
 		await rm(tmpRoot, { recursive: true, force: true });
+	}
+}
+
+function assertAgentDiscordGatewayConfig(): void {
+	if (resolveAgentDiscordGatewayConfig({}) !== undefined) {
+		throw new Error("smoke: Discord gateway should not start without CLANKY_DISCORD_TOKEN");
+	}
+	const enrolledConfig = resolveAgentDiscordGatewayConfig({
+		AGENTROOM: "1",
+		CLANKY_DISCORD_TOKEN: "token",
+		CLANKY_DISCORD_CONVERSATION_ID: "conversation-1",
+	});
+	if (enrolledConfig?.conversationId !== "conversation-1") {
+		throw new Error("smoke: AGENTROOM=1 should still allow agent-owned Discord config");
+	}
+	if (
+		resolveAgentDiscordGatewayConfig({
+			CLANKY_CHAT_GATEWAY_OWNER: "room",
+			CLANKY_DISCORD_TOKEN: "token",
+		}) !== undefined
+	) {
+		throw new Error("smoke: room-owned mode should suppress agent Discord config");
 	}
 }
 

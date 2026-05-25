@@ -17,6 +17,7 @@ import {
 	SessionManager,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import { startAgentDiscordGateway } from "./agentDiscordGateway.ts";
 import { createClankyHandlers } from "./handlers.ts";
 import { loadPersona } from "./persona.ts";
 import { createClankyStores } from "./stores.ts";
@@ -128,11 +129,16 @@ export async function createClankyRuntime(options: RunClankyOptions = {}) {
  */
 export async function runClanky(options: RunClankyOptions = {}): Promise<void> {
 	const { runtime } = await createClankyRuntime(options);
+	const chatGateway = await startAgentDiscordGateway({ runtime });
 
 	const interactiveOptions: ConstructorParameters<typeof InteractiveMode>[1] = {};
 	if (options.initialMessage !== undefined) interactiveOptions.initialMessage = options.initialMessage;
 
 	const mode = new InteractiveMode(runtime, interactiveOptions);
-	await mode.init();
-	await mode.run();
+	try {
+		await mode.init();
+		await mode.run();
+	} finally {
+		await chatGateway?.stop();
+	}
 }
