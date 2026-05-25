@@ -9,6 +9,7 @@ export type {
 	AuthOAuthCancelResult,
 	AuthOAuthWaitParams,
 	AuthOAuthWaitResult,
+	AuthProvidersResult,
 	AuthRemoveParams,
 	AuthRemoveResult,
 	AuthSetApiKeyParams,

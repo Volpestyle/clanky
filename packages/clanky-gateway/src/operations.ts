@@ -1,4 +1,5 @@
 import type {
+	AuthProviderInfo,
 	CreateClankySkillInput,
 	CreateClankyTaskInput,
 	CreateCronJobInput,
@@ -73,6 +74,10 @@ import { type GatewayEventHub, gatewayEvent } from "./ws.ts";
 
 export function getAuthStatus(registry: SessionRegistry): ModelAuthStatus {
 	return registry.modelAuthStatus();
+}
+
+export function listAuthProviders(registry: SessionRegistry): AuthProviderInfo[] {
+	return registry.listAuthProviders();
 }
 
 export function setAuthApiKey(registry: SessionRegistry, params: AuthSetApiKeyParams): ModelAuthMutationResult {

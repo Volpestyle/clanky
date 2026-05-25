@@ -93,11 +93,16 @@ export {
 	stableMemorySourceId,
 } from "./memory/store.ts";
 export {
+	ANTHROPIC_OAUTH_PROVIDER,
+	type AuthProviderInfo,
+	GITHUB_COPILOT_OAUTH_PROVIDER,
+	listAuthProviderInfos,
 	type ModelOAuthBeginResult,
 	type ModelOAuthCredentialResult,
 	OPENAI_CODEX_OAUTH_PROVIDER,
 	type StartedModelOAuthLogin,
-	startOpenAiCodexOAuthLogin,
+	type StartProviderOAuthOptions,
+	startProviderOAuthLogin,
 } from "./model-oauth.ts";
 export {
 	getModelAuthStatus,

@@ -1,4 +1,5 @@
 import type {
+	AuthProviderInfo,
 	ClankyTask,
 	LinearCreateIssueResult as CoreLinearCreateIssueResult,
 	CreateClankySkillInput,
@@ -36,6 +37,7 @@ export type GatewayMethod =
 	| "auth.status"
 	| "auth.set_api_key"
 	| "auth.remove"
+	| "auth.providers"
 	| "auth.oauth.begin"
 	| "auth.oauth.wait"
 	| "auth.oauth.cancel"
@@ -127,6 +129,8 @@ export interface StatusResult {
 }
 
 export type AuthStatusResult = ModelAuthStatus;
+
+export type AuthProvidersResult = AuthProviderInfo[];
 
 export interface AuthSetApiKeyParams {
 	apiKey: string;
@@ -344,6 +348,7 @@ export function isGatewayRequest(value: unknown): value is GatewayRequest {
 		candidate.method === "auth.status" ||
 		candidate.method === "auth.set_api_key" ||
 		candidate.method === "auth.remove" ||
+		candidate.method === "auth.providers" ||
 		candidate.method === "auth.oauth.begin" ||
 		candidate.method === "auth.oauth.wait" ||
 		candidate.method === "auth.oauth.cancel" ||

@@ -1,6 +1,14 @@
 import { createConnection, type Socket } from "node:net";
-import { requestGateway, type SessionListResult } from "@clanky/gateway";
+import { type AuthProvidersResult, requestGateway, type SessionListResult } from "@clanky/gateway";
 import type { RpcCommand, RpcResponse, RpcSessionState } from "@earendil-works/pi-coding-agent";
+
+export type AuthProviderInfo = AuthProvidersResult[number];
+
+export async function fetchAuthProviders(socketFile: string): Promise<AuthProviderInfo[]> {
+	const result = (await requestGateway({ socketFile, method: "auth.providers" })) as AuthProvidersResult;
+	if (!Array.isArray(result)) throw new Error("auth.providers must return an array");
+	return result;
+}
 
 export type RpcAgentMessage = Extract<
 	RpcResponse,

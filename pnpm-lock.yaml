@@ -122,6 +122,10 @@ importers:
       ws:
         specifier: ^8.20.1
         version: 8.20.1
+    devDependencies:
+      '@earendil-works/pi-ai':
+        specifier: ^0.75.4
+        version: 0.75.4(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.20.1)(zod@4.4.3)
 
 packages:
 

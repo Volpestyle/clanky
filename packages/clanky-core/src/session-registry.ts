@@ -43,11 +43,14 @@ import {
 	type SetMemoryConsentInput,
 } from "./memory/store.ts";
 import {
+	ANTHROPIC_OAUTH_PROVIDER,
+	type AuthProviderInfo,
+	GITHUB_COPILOT_OAUTH_PROVIDER,
+	listAuthProviderInfos,
 	type ModelOAuthBeginResult,
 	type ModelOAuthCredentialResult,
 	OPENAI_CODEX_OAUTH_PROVIDER,
-	type StartOpenAiCodexOAuthOptions,
-	startOpenAiCodexOAuthLogin,
+	startProviderOAuthLogin,
 } from "./model-oauth.ts";
 import {
 	getModelAuthStatus,
@@ -552,12 +555,7 @@ export class SessionRegistry {
 
 	async beginModelOAuthLogin(providerInput: string = OPENAI_CODEX_OAUTH_PROVIDER): Promise<ModelOAuthBeginResult> {
 		const provider = normalizeModelOAuthProvider(providerInput);
-		const oauthOptions: StartOpenAiCodexOAuthOptions = {};
-		if (process.env.CLANKY_OPENAI_OAUTH_ISSUER !== undefined)
-			oauthOptions.issuerBaseUrl = process.env.CLANKY_OPENAI_OAUTH_ISSUER;
-		if (process.env.CLANKY_OPENAI_OAUTH_TOKEN_URL !== undefined)
-			oauthOptions.tokenUrl = process.env.CLANKY_OPENAI_OAUTH_TOKEN_URL;
-		const started = await startOpenAiCodexOAuthLogin(oauthOptions);
+		const started = await startProviderOAuthLogin(provider);
 		const completion = started.completion.then((result) => this.storeModelOAuthCredential(result));
 		completion.catch(() => undefined);
 		this.modelOAuthLogins.set(started.loginId, {
@@ -575,6 +573,10 @@ export class SessionRegistry {
 			cleanup.unref?.();
 		});
 		return started.info;
+	}
+
+	listAuthProviders(): AuthProviderInfo[] {
+		return listAuthProviderInfos();
 	}
 
 	async waitModelOAuthLogin(loginId: string): Promise<ModelOAuthLoginResult> {
@@ -1054,10 +1056,17 @@ function resolveRequestedModel(
 
 function normalizeModelOAuthProvider(providerInput: string): string {
 	const provider = providerInput.trim().toLowerCase();
-	if (provider === "openai" || provider === "codex" || provider === OPENAI_CODEX_OAUTH_PROVIDER) {
-		return OPENAI_CODEX_OAUTH_PROVIDER;
-	}
-	throw new Error(`Unsupported OAuth provider: ${providerInput}. Supported provider: ${OPENAI_CODEX_OAUTH_PROVIDER}`);
+	if (provider === "codex" || provider === OPENAI_CODEX_OAUTH_PROVIDER) return OPENAI_CODEX_OAUTH_PROVIDER;
+	if (provider === "claude" || provider === ANTHROPIC_OAUTH_PROVIDER) return ANTHROPIC_OAUTH_PROVIDER;
+	if (provider === "copilot" || provider === GITHUB_COPILOT_OAUTH_PROVIDER) return GITHUB_COPILOT_OAUTH_PROVIDER;
+	const known = new Set(
+		listAuthProviderInfos()
+			.filter((info) => info.supportsOAuth)
+			.map((info) => info.id),
+	);
+	if (known.has(provider)) return provider;
+	const supported = Array.from(known).sort().join(", ");
+	throw new Error(`Unsupported OAuth provider: ${providerInput}. Supported providers: ${supported}`);
 }
 
 function normalizedFlushLimit(limit: number | undefined): number {

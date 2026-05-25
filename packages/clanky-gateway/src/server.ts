@@ -39,6 +39,7 @@ import {
 	getMessagingStatus,
 	getStatus,
 	linkLinearIssue,
+	listAuthProviders,
 	listCronJobs,
 	listExternalMcpServers,
 	listLinearLinks,
@@ -481,6 +482,10 @@ async function dispatch(
 
 	if (request.method === "auth.status") {
 		return getAuthStatus(registry);
+	}
+
+	if (request.method === "auth.providers") {
+		return listAuthProviders(registry);
 	}
 
 	if (request.method === "auth.set_api_key") {

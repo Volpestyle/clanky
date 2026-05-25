@@ -1,17 +1,48 @@
-import { Buffer } from "node:buffer";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type AuthSetApiKeyResult, type AuthStatusResult, requestGateway, startGatewayServer } from "@clanky/gateway";
+import {
+	type OAuthCredentials,
+	type OAuthLoginCallbacks,
+	type OAuthProviderInterface,
+	registerOAuthProvider,
+	resetOAuthProviders,
+} from "@earendil-works/pi-ai/oauth";
 import { dashboardSessionIdForKey, renderDashboard } from "../src/dashboard.ts";
 
+const FAKE_CODEX_URL = "https://auth.openai.com/codex/device";
+const FAKE_CODEX_USER_CODE = "CLANKY-OAUTH";
+const FAKE_CODEX_ACCESS = "clanky-oauth-access";
+const FAKE_CODEX_REFRESH = "clanky-oauth-refresh";
+
+const fakeOpenAiCodex: OAuthProviderInterface = {
+	id: "openai-codex",
+	name: "OpenAI Codex",
+	async login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
+		callbacks.onAuth({ url: FAKE_CODEX_URL, instructions: FAKE_CODEX_USER_CODE });
+		await new Promise<void>((resolve) => {
+			setTimeout(resolve, 25);
+		});
+		if (callbacks.signal?.aborted) throw new Error("aborted");
+		return {
+			access: FAKE_CODEX_ACCESS,
+			refresh: FAKE_CODEX_REFRESH,
+			expires: Date.now() + 60 * 60 * 1000,
+		};
+	},
+	async refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {
+		return { ...credentials, access: `${credentials.access}-refreshed`, expires: Date.now() + 60 * 60 * 1000 };
+	},
+	getApiKey(credentials: OAuthCredentials): string {
+		return credentials.access;
+	},
+};
+
 const homeDir = await mkdtemp(join(tmpdir(), "clanky-dashboard-"));
-const previousEnv = captureEnv("AGENT_IDENTITY", "OPENAI_API_KEY", "CLANKY_OPENAI_OAUTH_ISSUER");
+const previousEnv = captureEnv("AGENT_IDENTITY", "OPENAI_API_KEY");
 process.env.AGENT_IDENTITY = "dashboard-smoke";
 delete process.env.OPENAI_API_KEY;
-const oauthServer = await startFakeOpenAiOAuthServer();
-process.env.CLANKY_OPENAI_OAUTH_ISSUER = oauthServer.issuer;
 const server = await startGatewayServer({ homeDir });
 
 try {
@@ -57,7 +88,7 @@ try {
 	const dashboard = await renderDashboard(server.socketFile);
 	for (const expected of [
 		"Clanky Dashboard",
-		"Actions: [c] chat  [a] OpenAI auth/OAuth  [1-8] resume  [q] quit",
+		"Actions: [c] chat  [a] auth menu  [1-8] resume  [q] quit",
 		"Daemon: running",
 		"Model Auth",
 		"OpenAI: missing",
@@ -104,13 +135,17 @@ try {
 	if (authedDashboard.includes("sk-dashboard-openai-smoke")) {
 		throw new Error("Dashboard leaked the stored OpenAI API key");
 	}
+	registerOAuthProvider(fakeOpenAiCodex);
 	const oauthBegin = (await requestGateway({
 		socketFile: server.socketFile,
 		method: "auth.oauth.begin",
 		params: { provider: "openai-codex" },
 	})) as { loginId: string; userCode: string; verificationUrl: string };
-	if (oauthBegin.userCode !== "CLANKY-OAUTH") {
+	if (oauthBegin.userCode !== FAKE_CODEX_USER_CODE) {
 		throw new Error(`auth.oauth.begin returned unexpected payload: ${JSON.stringify(oauthBegin)}`);
+	}
+	if (oauthBegin.verificationUrl !== FAKE_CODEX_URL) {
+		throw new Error(`auth.oauth.begin returned unexpected verification URL: ${JSON.stringify(oauthBegin)}`);
 	}
 	const oauthResult = (await requestGateway({
 		socketFile: server.socketFile,
@@ -119,6 +154,11 @@ try {
 	})) as { provider: string; status: AuthStatusResult };
 	if (oauthResult.provider !== "openai-codex" || !oauthResult.status.authProviders.includes("openai-codex")) {
 		throw new Error(`auth.oauth.wait returned unexpected status: ${JSON.stringify(oauthResult)}`);
+	}
+	const oauthAuthFile = JSON.parse(await readFile(oauthResult.status.authFile, "utf8")) as Record<string, unknown>;
+	const storedCodex = oauthAuthFile["openai-codex"] as Record<string, unknown> | undefined;
+	if (!storedCodex || storedCodex.type !== "oauth" || storedCodex.access !== FAKE_CODEX_ACCESS) {
+		throw new Error(`OpenAI Codex OAuth credential not stored: ${JSON.stringify(storedCodex)}`);
 	}
 	if (!session.session.modelRegistry.getAvailable().some((model) => model.provider === "openai-codex")) {
 		throw new Error("Live dashboard session did not refresh OpenAI OAuth");
@@ -129,7 +169,7 @@ try {
 			throw new Error(`OAuth dashboard output missing ${expected}\n${oauthDashboard}`);
 		}
 	}
-	if (oauthDashboard.includes("clanky-oauth-access")) {
+	if (oauthDashboard.includes(FAKE_CODEX_ACCESS)) {
 		throw new Error("Dashboard leaked the stored OpenAI OAuth token");
 	}
 	await requestGateway({
@@ -176,101 +216,9 @@ try {
 	console.log(JSON.stringify({ sessionId: session.id, jobId: job.id, bytes: dashboard.length }));
 } finally {
 	await server.close();
-	await oauthServer.close();
 	restoreEnv(previousEnv);
+	resetOAuthProviders();
 	await rm(homeDir, { force: true, recursive: true });
-}
-
-interface FakeOAuthServer {
-	close(): Promise<void>;
-	issuer: string;
-}
-
-async function startFakeOpenAiOAuthServer(): Promise<FakeOAuthServer> {
-	const server = createServer((request, response) => {
-		handleFakeOAuthRequest(request, response).catch((error: unknown) => {
-			response.statusCode = 500;
-			response.end(error instanceof Error ? error.message : String(error));
-		});
-	});
-	await new Promise<void>((resolve, reject) => {
-		server.once("error", reject);
-		server.listen(0, "127.0.0.1", () => resolve());
-	});
-	const address = server.address();
-	if (typeof address !== "object" || address === null) throw new Error("Fake OAuth server did not bind to a port");
-	return {
-		close: async () => {
-			await new Promise<void>((resolve, reject) => {
-				server.close((error) => {
-					if (error) {
-						reject(error);
-					} else {
-						resolve();
-					}
-				});
-			});
-		},
-		issuer: `http://127.0.0.1:${address.port}`,
-	};
-}
-
-async function handleFakeOAuthRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
-	const chunks: Buffer[] = [];
-	for await (const chunk of request) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-	const body = Buffer.concat(chunks).toString("utf8");
-	if (request.method === "POST" && request.url === "/api/accounts/deviceauth/usercode") {
-		writeJson(response, {
-			device_auth_id: "device-clanky-oauth",
-			expires_in: 60,
-			interval: 0.01,
-			user_code: "CLANKY-OAUTH",
-			verification_uri: "https://auth.openai.com/codex/device",
-		});
-		return;
-	}
-	if (request.method === "POST" && request.url === "/api/accounts/deviceauth/token") {
-		if (!body.includes("device-clanky-oauth")) {
-			writeJson(response, { error: "unknown_device" }, 400);
-			return;
-		}
-		writeJson(response, {
-			authorization_code: "authorization-clanky-oauth",
-			code_verifier: "verifier-clanky-oauth",
-		});
-		return;
-	}
-	if (request.method === "POST" && request.url === "/oauth/token") {
-		if (!body.includes("authorization-clanky-oauth")) {
-			writeJson(response, { error: "invalid_grant" }, 400);
-			return;
-		}
-		writeJson(response, {
-			access_token: fakeJwt(),
-			expires_in: 3600,
-			refresh_token: "clanky-oauth-refresh",
-		});
-		return;
-	}
-	writeJson(response, { error: "not_found" }, 404);
-}
-
-function writeJson(response: ServerResponse, payload: Record<string, unknown>, status = 200): void {
-	response.statusCode = status;
-	response.setHeader("Content-Type", "application/json");
-	response.end(JSON.stringify(payload));
-}
-
-function fakeJwt(): string {
-	const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
-	const payload = Buffer.from(
-		JSON.stringify({
-			exp: Math.floor(Date.now() / 1000) + 3600,
-			"https://api.openai.com/auth": { chatgpt_account_id: "account-clanky-oauth" },
-			sub: "clanky-oauth-access",
-		}),
-	).toString("base64url");
-	return `${header}.${payload}.signature`;
 }
 
 function captureEnv(...names: string[]): Map<string, string | undefined> {
