@@ -1,11 +1,13 @@
 import {
 	type ClankyAgentToolHandlers,
 	type ClankyPaths,
+	getWebBackendStatus,
 	hasLinearCredentials,
 	LinearClient,
 	loadClankySkills,
 	resolveClankyChatGatewayOwner,
 	resolveClankyChatMode,
+	runOpenAiWebSearch,
 	shouldStartAgentChatGateway,
 } from "@clanky/core";
 import type { ClankyStores } from "./stores.ts";
@@ -67,5 +69,7 @@ export function createClankyHandlers(paths: ClankyPaths, stores: ClankyStores): 
 		},
 
 		linearLink: async (input) => stores.linearLinks.link(input),
+		webSearch: async (input, signal) => runOpenAiWebSearch(input, signal === undefined ? {} : { signal }),
+		webBackendStatus: async () => getWebBackendStatus({ cwd: process.cwd() }),
 	};
 }

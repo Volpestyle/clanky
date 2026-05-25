@@ -12,6 +12,7 @@ import {
 	type ScheduleCronToolInput,
 	shouldStartAgentChatGateway,
 	type TaskCreateToolInput,
+	type WebSearchToolInput,
 } from "@clanky/core";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 
@@ -50,6 +51,14 @@ const handlers: ClankyAgentToolHandlers = {
 		calls.push(`memory-forget:${input.id ?? `${input.scope}:${input.subjectId}`}`);
 		return { forgotten: 1 };
 	},
+	webSearch: async (input) => {
+		calls.push(`web-search:${input.query}`);
+		return { answer: "searched", input };
+	},
+	webBackendStatus: async () => {
+		calls.push("web-status");
+		return { openaiWebSearch: { available: true } };
+	},
 };
 
 const tools = createClankyToolDefinitions(handlers);
@@ -63,6 +72,8 @@ const expectedNames = [
 	"memory_remember",
 	"memory_search",
 	"memory_forget",
+	"web_backend_status",
+	"web_search",
 ];
 assertToolNames(tools, expectedNames);
 
@@ -111,6 +122,13 @@ await executeTool(tools, "memory_forget", {
 	id: "memory-tool",
 } satisfies MemoryForgetToolInput);
 
+await executeTool(tools, "web_search", {
+	query: "Linear pricing",
+	search_context_size: "low",
+} satisfies WebSearchToolInput);
+
+await executeTool(tools, "web_backend_status", {});
+
 const expectedCallPrefixes = [
 	"schedule:",
 	"linear-create:",
@@ -120,6 +138,8 @@ const expectedCallPrefixes = [
 	"memory-remember:",
 	"memory-search:",
 	"memory-forget:",
+	"web-search:",
+	"web-status",
 ];
 for (const prefix of expectedCallPrefixes) {
 	if (!calls.some((entry) => entry.startsWith(prefix))) {

@@ -23,6 +23,7 @@ import type {
 } from "./memory/store.ts";
 import type { CreateClankySkillInput } from "./skills/loader.ts";
 import { extractIndexableMessageText, type SessionIndexMessageInput } from "./state/index-db.ts";
+import type { OpenAiWebSearchInput } from "./web/operator.ts";
 
 type ClankyMessageEndEvent = {
 	message: Parameters<typeof extractIndexableMessageText>[0];
@@ -145,6 +146,40 @@ const memoryForgetSchema = Type.Object({
 	subject_id: Type.Optional(Type.String()),
 });
 
+const searchContextSizeSchema = Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("high")]);
+const returnTokenBudgetSchema = Type.Union([Type.Literal("default"), Type.Literal("unlimited")]);
+const reasoningEffortSchema = Type.Union([
+	Type.Literal("low"),
+	Type.Literal("medium"),
+	Type.Literal("high"),
+	Type.Literal("xhigh"),
+]);
+const approximateUserLocationSchema = Type.Object({
+	city: Type.Optional(Type.String()),
+	region: Type.Optional(Type.String()),
+	country: Type.Optional(Type.String()),
+	timezone: Type.Optional(Type.String()),
+});
+const webSearchSchema = Type.Object({
+	query: Type.String(),
+	instructions: Type.Optional(Type.String()),
+	model: Type.Optional(Type.String()),
+	searchContextSize: Type.Optional(searchContextSizeSchema),
+	search_context_size: Type.Optional(searchContextSizeSchema),
+	allowedDomains: Type.Optional(Type.Array(Type.String())),
+	allowed_domains: Type.Optional(Type.Array(Type.String())),
+	blockedDomains: Type.Optional(Type.Array(Type.String())),
+	blocked_domains: Type.Optional(Type.Array(Type.String())),
+	externalWebAccess: Type.Optional(Type.Boolean()),
+	external_web_access: Type.Optional(Type.Boolean()),
+	returnTokenBudget: Type.Optional(returnTokenBudgetSchema),
+	return_token_budget: Type.Optional(returnTokenBudgetSchema),
+	reasoningEffort: Type.Optional(reasoningEffortSchema),
+	reasoning_effort: Type.Optional(reasoningEffortSchema),
+	userLocation: Type.Optional(approximateUserLocationSchema),
+	user_location: Type.Optional(approximateUserLocationSchema),
+});
+
 export type ScheduleCronToolInput = Static<typeof scheduleCronSchema>;
 export type LinearCreateIssueToolInput = Static<typeof linearCreateIssueSchema>;
 export type LinearLinkToolInput = Static<typeof linearLinkSchema>;
@@ -153,6 +188,7 @@ export type TaskCreateToolInput = Static<typeof taskCreateSchema>;
 export type MemoryRememberToolInput = Static<typeof memoryRememberSchema>;
 export type MemorySearchToolInput = Static<typeof memorySearchSchema>;
 export type MemoryForgetToolInput = Static<typeof memoryForgetSchema>;
+export type WebSearchToolInput = Static<typeof webSearchSchema>;
 
 export interface ClankyBeforeProviderRequestInput {
 	sessionId: string;
@@ -179,9 +215,12 @@ export interface ClankyAgentToolHandlers {
 	listSkills?: () => Promise<unknown>;
 	createSkill?: (input: CreateClankySkillInput) => Promise<unknown>;
 	profileStatus?: () => Promise<unknown>;
+	webSearch?: (input: OpenAiWebSearchInput, signal?: AbortSignal) => Promise<unknown>;
+	webBackendStatus?: () => Promise<unknown>;
 }
 
 const CLANKY_MEMORY_PACKET_MESSAGE = "clanky.memory_packet";
+const WEB_OPERATOR_SKILL_NAME = "clanky-web-operator";
 
 export function createClankyExtensionFactories(handlers: ClankyAgentToolHandlers): ExtensionFactory[] {
 	const indexMessage = handlers.indexMessage;
@@ -198,13 +237,20 @@ export function createClankyExtensionFactories(handlers: ClankyAgentToolHandlers
 		handlers.memoryExport !== undefined ||
 		handlers.memoryConsent !== undefined ||
 		handlers.selfMemory !== undefined ||
-		handlers.profileStatus !== undefined;
+		handlers.profileStatus !== undefined ||
+		handlers.webBackendStatus !== undefined;
 	if (indexMessage === undefined && beforeProviderRequest === undefined && memoryPacket === undefined && !hasCommands) {
 		return [];
 	}
 	return [
 		(pi) => {
 			registerClankyCommands(pi, handlers);
+			pi.on("input", async (event) => {
+				const transformed = maybeInjectWebOperatorSkill(event.text);
+				if (transformed === event.text) return { action: "continue" };
+				if (event.images !== undefined) return { action: "transform", text: transformed, images: event.images };
+				return { action: "transform", text: transformed };
+			});
 			if (indexMessage !== undefined) {
 				pi.on("message_end", async (event, ctx) => {
 					const input = buildMessageIndexInput(event, ctx);
@@ -324,6 +370,14 @@ function registerClankyCommands(pi: Parameters<ExtensionFactory>[0], handlers: C
 			description: "Show Clanky profile paths",
 			handler: async (_args, ctx) => {
 				ctx.ui.notify(formatCommandResult("Profile", await handlers.profileStatus?.()));
+			},
+		});
+	}
+	if (handlers.webBackendStatus !== undefined) {
+		pi.registerCommand("web", {
+			description: "Show Clanky web operator backend status",
+			handler: async (_args, ctx) => {
+				ctx.ui.notify(formatCommandResult("Web Operator", await handlers.webBackendStatus?.()));
 			},
 		});
 	}
@@ -642,7 +696,75 @@ export function createClankyToolDefinitions(handlers: ClankyAgentToolHandlers): 
 			}),
 		);
 	}
+	const webSearch = handlers.webSearch;
+	if (webSearch !== undefined) {
+		tools.push(
+			defineTool({
+				name: "web_search",
+				label: "Web Search",
+				description:
+					"Use OpenAI hosted web search for current public information, prices, recent facts, documentation, and source-backed lookup answers.",
+				promptSnippet:
+					"web_search: use OpenAI hosted web search for current facts, pricing, documentation lookup, and source-backed answers.",
+				promptGuidelines: [
+					"When a user asks to look up, search, verify, price, or get current public information, call web_search instead of hand-rolling search scraping.",
+					"Use allowed_domains or blocked_domains when the user asks for specific sources or domains.",
+					"For visual layout, login, screenshots, or interaction, use the web operator skill and browser CLIs instead of forcing web_search.",
+				],
+				parameters: webSearchSchema,
+				async execute(_toolCallId, params, signal) {
+					return toolResult(await webSearch(params, signal));
+				},
+			}),
+		);
+	}
+	const webBackendStatus = handlers.webBackendStatus;
+	if (webBackendStatus !== undefined) {
+		tools.push(
+			defineTool({
+				name: "web_backend_status",
+				label: "Web Backend Status",
+				description:
+					"Inspect which Clanky web operator backends are available: OpenAI web search, agent-browser, Playwright CLI, Chrome CDP, and Node fetch.",
+				promptSnippet:
+					"web_backend_status: check available web operator backends before choosing agent-browser, Playwright, Chrome CDP, or OpenAI web search.",
+				parameters: Type.Object({}),
+				async execute() {
+					return toolResult(await webBackendStatus());
+				},
+			}),
+		);
+	}
 	return tools;
+}
+
+export function maybeInjectWebOperatorSkill(text: string, env: NodeJS.ProcessEnv = process.env): string {
+	if (env.CLANKY_WEB_OPERATOR_AUTO_SKILL === "0" || env.CLANKY_WEB_OPERATOR_AUTO_SKILL === "false") return text;
+	const trimmed = text.trimStart();
+	if (trimmed.length === 0) return text;
+	if (trimmed.startsWith("/")) return text;
+	if (trimmed.includes(`<skill name="${WEB_OPERATOR_SKILL_NAME}"`)) return text;
+	if (!shouldUseWebOperatorSkill(trimmed)) return text;
+	return `/skill:${WEB_OPERATOR_SKILL_NAME} ${text}`;
+}
+
+export function shouldUseWebOperatorSkill(text: string): boolean {
+	const normalized = text.toLowerCase();
+	if (/\bhttps?:\/\/|\bwww\./i.test(text)) return true;
+	if (/\b(look\s*up|lookup|google|browse|navigate|visit|screenshot|screen\s*shot)\b/i.test(text)) return true;
+	if (/\b(open|inspect|read|extract)\b.{0,40}\b(site|page|website|webpage|url)\b/i.test(text)) return true;
+	if (
+		/\b(search|find)\b.{0,30}\b(web|internet|online|site|page|price|pricing|cost|subscription|docs?|documentation)\b/i.test(
+			text,
+		)
+	) {
+		return true;
+	}
+	if (/\b(latest|current|up[- ]to[- ]date|today|recent|newest|pricing|price|cost|subscription)\b/i.test(text)) {
+		return true;
+	}
+	if (normalized.includes("what does") && /\b(cost|price)\b/i.test(text)) return true;
+	return false;
 }
 
 function appendMemoryToSystemPrompt(systemPrompt: string, packet: MemoryPacket): string {

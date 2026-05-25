@@ -1,0 +1,369 @@
+import { constants, existsSync } from "node:fs";
+import { access, readFile } from "node:fs/promises";
+import { delimiter, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+export type SearchContextSize = "low" | "medium" | "high";
+export type ReturnTokenBudget = "default" | "unlimited";
+export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
+
+export interface OpenAiWebSearchInput {
+	query: string;
+	instructions?: string;
+	model?: string;
+	searchContextSize?: SearchContextSize;
+	search_context_size?: SearchContextSize;
+	allowedDomains?: string[];
+	allowed_domains?: string[];
+	blockedDomains?: string[];
+	blocked_domains?: string[];
+	externalWebAccess?: boolean;
+	external_web_access?: boolean;
+	returnTokenBudget?: ReturnTokenBudget;
+	return_token_budget?: ReturnTokenBudget;
+	reasoningEffort?: ReasoningEffort;
+	reasoning_effort?: ReasoningEffort;
+	userLocation?: ApproximateUserLocation;
+	user_location?: ApproximateUserLocation;
+}
+
+export interface ApproximateUserLocation {
+	city?: string;
+	region?: string;
+	country?: string;
+	timezone?: string;
+}
+
+export interface OpenAiWebSearchOptions {
+	env?: NodeJS.ProcessEnv;
+	fetchImpl?: typeof fetch;
+	signal?: AbortSignal;
+}
+
+export interface OpenAiWebCitation {
+	url: string;
+	title?: string;
+	startIndex?: number;
+	endIndex?: number;
+}
+
+export interface OpenAiWebSearchResult {
+	provider: "openai";
+	model: string;
+	responseId?: string;
+	status?: string;
+	answer: string;
+	citations: OpenAiWebCitation[];
+	sources: unknown[];
+	actions: unknown[];
+	usage?: unknown;
+}
+
+export interface WebBackendStatusOptions {
+	cwd?: string;
+	env?: NodeJS.ProcessEnv;
+}
+
+interface ResolvedApiKey {
+	value: string;
+	source: string;
+}
+
+interface PackageJson {
+	scripts?: Record<string, string>;
+	dependencies?: Record<string, string>;
+	devDependencies?: Record<string, string>;
+}
+
+const DEFAULT_WEB_SEARCH_MODEL = "gpt-5.5";
+
+export async function runOpenAiWebSearch(
+	input: OpenAiWebSearchInput,
+	options: OpenAiWebSearchOptions = {},
+): Promise<OpenAiWebSearchResult> {
+	const env = options.env ?? process.env;
+	const fetchImpl = options.fetchImpl ?? fetch;
+	const apiKey = resolveOpenAiApiKey(env);
+	if (apiKey === undefined) {
+		throw new Error("OPENAI_API_KEY or CLANKY_OPENAI_API_KEY is required for web_search.");
+	}
+
+	const query = input.query.trim();
+	if (query.length === 0) throw new Error("web_search query must not be empty.");
+
+	const model = input.model?.trim() || env.CLANKY_WEB_SEARCH_MODEL || DEFAULT_WEB_SEARCH_MODEL;
+	const requestBody = buildOpenAiWebSearchRequest(input, query, model);
+	const requestInit: RequestInit = {
+		method: "POST",
+		headers: {
+			authorization: `Bearer ${apiKey.value}`,
+			"content-type": "application/json",
+		},
+		body: JSON.stringify(requestBody),
+	};
+	if (options.signal !== undefined) requestInit.signal = options.signal;
+	const response = await fetchImpl("https://api.openai.com/v1/responses", requestInit);
+
+	const rawText = await response.text();
+	let payload: unknown;
+	try {
+		payload = rawText.length > 0 ? JSON.parse(rawText) : {};
+	} catch {
+		payload = { raw: rawText };
+	}
+
+	if (!response.ok) {
+		throw new Error(`OpenAI web_search failed (${response.status}): ${summarizeOpenAiError(payload)}`);
+	}
+
+	return parseOpenAiWebSearchResponse(payload, model);
+}
+
+export async function getWebBackendStatus(options: WebBackendStatusOptions = {}): Promise<unknown> {
+	const env = options.env ?? process.env;
+	const cwd = options.cwd ?? process.cwd();
+	const clankyRoot = resolveClankyRoot();
+	const packageJson = await readPackageJson(join(clankyRoot, "package.json"));
+	const pnpm = await resolveExecutable("pnpm", env);
+	const node = await resolveExecutable("node", env);
+	const agentBrowser = await resolveExecutable("agent-browser", env);
+	const openAiApiKey = resolveOpenAiApiKey(env);
+
+	return {
+		cwd,
+		clankyRoot,
+		openaiWebSearch: {
+			available: openAiApiKey !== undefined,
+			model: env.CLANKY_WEB_SEARCH_MODEL || DEFAULT_WEB_SEARCH_MODEL,
+			apiKeyEnv: openAiApiKey?.source,
+			acceptedApiKeyEnv: ["OPENAI_API_KEY", "CLANKY_OPENAI_API_KEY"],
+			access: openAiApiKey === undefined ? "missing_credentials" : "not_checked_until_tool_call",
+		},
+		backends: {
+			agentBrowser: {
+				available: agentBrowser !== undefined,
+				command: "agent-browser",
+				path: agentBrowser,
+				bestFor: ["persistent browser sessions", "headed browsing", "authenticated browser profiles"],
+			},
+			playwrightCli: {
+				available: pnpm !== undefined && hasScript(packageJson, "browser:playwright"),
+				command: "pnpm browser:playwright",
+				installCommand: hasScript(packageJson, "browser:install") ? "pnpm browser:install" : undefined,
+				bestFor: ["fresh browser contexts", "JavaScript-rendered pages", "screenshots", "repeatable automation"],
+			},
+			chromeCdp: {
+				available: pnpm !== undefined && hasScript(packageJson, "browser:cdp"),
+				command: "pnpm browser:cdp",
+				launchCommand: hasScript(packageJson, "browser:chrome-debug") ? "pnpm browser:chrome-debug" : undefined,
+				bestFor: ["attaching to an existing Chrome DevTools Protocol session"],
+			},
+			nodeFetch: {
+				available: node !== undefined,
+				command: "node",
+				bestFor: ["known public URLs", "plain HTTP/HTML/JSON fetches"],
+			},
+		},
+		tools: {
+			pnpm: { available: pnpm !== undefined, path: pnpm },
+			node: { available: node !== undefined, path: node },
+		},
+	};
+}
+
+function resolveOpenAiApiKey(env: NodeJS.ProcessEnv): ResolvedApiKey | undefined {
+	const candidates = [
+		["OPENAI_API_KEY", env.OPENAI_API_KEY],
+		["CLANKY_OPENAI_API_KEY", env.CLANKY_OPENAI_API_KEY],
+	] as const;
+	for (const [source, value] of candidates) {
+		const trimmed = value?.trim();
+		if (trimmed !== undefined && trimmed.length > 0) return { value: trimmed, source };
+	}
+	return undefined;
+}
+
+function buildOpenAiWebSearchRequest(
+	input: OpenAiWebSearchInput,
+	query: string,
+	model: string,
+): Record<string, unknown> {
+	const searchContextSize = input.searchContextSize ?? input.search_context_size ?? "medium";
+	const tool: Record<string, unknown> = {
+		type: "web_search",
+		search_context_size: searchContextSize,
+	};
+
+	const allowedDomains = normalizeDomainList(input.allowedDomains ?? input.allowed_domains);
+	const blockedDomains = normalizeDomainList(input.blockedDomains ?? input.blocked_domains);
+	if (allowedDomains.length > 0) {
+		tool.filters = { allowed_domains: allowedDomains };
+	} else if (blockedDomains.length > 0) {
+		tool.filters = { blocked_domains: blockedDomains };
+	}
+
+	const externalWebAccess = input.externalWebAccess ?? input.external_web_access;
+	if (externalWebAccess !== undefined) tool.external_web_access = externalWebAccess;
+
+	const returnTokenBudget = input.returnTokenBudget ?? input.return_token_budget;
+	if (returnTokenBudget !== undefined) tool.return_token_budget = returnTokenBudget;
+
+	const userLocation = input.userLocation ?? input.user_location;
+	if (userLocation !== undefined) {
+		tool.user_location = {
+			type: "approximate",
+			...dropUndefined({
+				city: userLocation.city,
+				region: userLocation.region,
+				country: userLocation.country,
+				timezone: userLocation.timezone,
+			}),
+		};
+	}
+
+	const instructions =
+		input.instructions?.trim() ||
+		"Use hosted web search for current public information. Answer concisely, preserve inline citations, and include enough source detail for the caller to verify the result.";
+	const body: Record<string, unknown> = {
+		model,
+		instructions,
+		input: query,
+		tools: [tool],
+		tool_choice: "required",
+		store: false,
+	};
+	const reasoningEffort = input.reasoningEffort ?? input.reasoning_effort;
+	if (reasoningEffort !== undefined) body.reasoning = { effort: reasoningEffort };
+	return body;
+}
+
+function parseOpenAiWebSearchResponse(payload: unknown, fallbackModel: string): OpenAiWebSearchResult {
+	const record = isRecord(payload) ? payload : {};
+	const output = Array.isArray(record.output) ? record.output : [];
+	const textParts: string[] = [];
+	const citations: OpenAiWebCitation[] = [];
+	const actions: unknown[] = [];
+
+	for (const item of output) {
+		if (!isRecord(item)) continue;
+		if (item.type === "web_search_call") {
+			actions.push({ id: item.id, status: item.status, action: item.action });
+			continue;
+		}
+		if (item.type !== "message" || !Array.isArray(item.content)) continue;
+		for (const content of item.content) {
+			if (!isRecord(content)) continue;
+			if (typeof content.text === "string") textParts.push(content.text);
+			if (!Array.isArray(content.annotations)) continue;
+			for (const annotation of content.annotations) {
+				if (!isRecord(annotation) || annotation.type !== "url_citation" || typeof annotation.url !== "string") continue;
+				const citation: OpenAiWebCitation = {
+					url: annotation.url,
+				};
+				if (typeof annotation.title === "string") citation.title = annotation.title;
+				if (typeof annotation.start_index === "number") citation.startIndex = annotation.start_index;
+				if (typeof annotation.end_index === "number") citation.endIndex = annotation.end_index;
+				citations.push(citation);
+			}
+		}
+	}
+
+	const sources = Array.isArray(record.sources) ? record.sources : [];
+	const result: OpenAiWebSearchResult = {
+		provider: "openai",
+		model: typeof record.model === "string" ? record.model : fallbackModel,
+		answer: textParts.join("\n\n").trim(),
+		citations: dedupeCitations(citations),
+		sources,
+		actions,
+	};
+	if (typeof record.id === "string") result.responseId = record.id;
+	if (typeof record.status === "string") result.status = record.status;
+	if (record.usage !== undefined) result.usage = record.usage;
+	return result;
+}
+
+function summarizeOpenAiError(payload: unknown): string {
+	if (isRecord(payload)) {
+		const error = payload.error;
+		if (isRecord(error)) {
+			const message = typeof error.message === "string" ? error.message : JSON.stringify(error);
+			const code = typeof error.code === "string" ? ` code=${error.code}` : "";
+			return `${message}${code}`;
+		}
+	}
+	return typeof payload === "string" ? payload : JSON.stringify(payload);
+}
+
+function normalizeDomainList(domains: string[] | undefined): string[] {
+	if (domains === undefined) return [];
+	const seen = new Set<string>();
+	for (const domain of domains) {
+		const normalized = domain
+			.trim()
+			.replace(/^https?:\/\//i, "")
+			.replace(/\/.*$/, "")
+			.toLowerCase();
+		if (normalized.length > 0) seen.add(normalized);
+	}
+	return [...seen].slice(0, 100);
+}
+
+function dedupeCitations(citations: OpenAiWebCitation[]): OpenAiWebCitation[] {
+	const byUrl = new Map<string, OpenAiWebCitation>();
+	for (const citation of citations) {
+		if (!byUrl.has(citation.url)) byUrl.set(citation.url, citation);
+	}
+	return [...byUrl.values()];
+}
+
+async function readPackageJson(path: string): Promise<PackageJson> {
+	try {
+		const raw = await readFile(path, "utf8");
+		const parsed = JSON.parse(raw) as unknown;
+		return isRecord(parsed) ? (parsed as PackageJson) : {};
+	} catch {
+		return {};
+	}
+}
+
+function hasScript(packageJson: PackageJson, name: string): boolean {
+	return typeof packageJson.scripts?.[name] === "string";
+}
+
+function resolveClankyRoot(): string {
+	return fileURLToPath(new URL("../../../..", import.meta.url));
+}
+
+async function resolveExecutable(name: string, env: NodeJS.ProcessEnv): Promise<string | undefined> {
+	const pathValue = env.PATH;
+	if (pathValue === undefined) return undefined;
+	const extensions =
+		process.platform === "win32"
+			? (env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";").filter((entry) => entry.length > 0)
+			: [""];
+	for (const dir of pathValue.split(delimiter)) {
+		if (dir.length === 0) continue;
+		for (const extension of extensions) {
+			const candidate = join(dir, `${name}${extension}`);
+			if (!existsSync(candidate)) continue;
+			try {
+				await access(candidate, constants.X_OK);
+				return candidate;
+			} catch {}
+		}
+	}
+	return undefined;
+}
+
+function dropUndefined<T extends Record<string, unknown>>(value: T): Partial<T> {
+	const output: Partial<T> = {};
+	for (const [key, entry] of Object.entries(value)) {
+		if (entry !== undefined && entry !== "") output[key as keyof T] = entry as T[keyof T];
+	}
+	return output;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}

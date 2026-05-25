@@ -11,6 +11,7 @@ export {
 	type MemorySearchToolInput,
 	type ScheduleCronToolInput,
 	type TaskCreateToolInput,
+	type WebSearchToolInput,
 } from "./agent-tools.ts";
 export {
 	type ClankyChatGatewayOwner,
@@ -120,3 +121,10 @@ export {
 	type SessionSearchResult,
 	type UpdateClankyTaskInput,
 } from "./state/index-db.ts";
+export {
+	getWebBackendStatus,
+	type OpenAiWebSearchInput,
+	type OpenAiWebSearchResult,
+	runOpenAiWebSearch,
+	type WebBackendStatusOptions,
+} from "./web/operator.ts";

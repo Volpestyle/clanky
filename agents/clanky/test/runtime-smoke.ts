@@ -72,7 +72,7 @@ async function main(): Promise<void> {
 		} else {
 			console.log(`smoke: loaded ${skillNames.length} skills: ${skillNames.join(", ")}`);
 		}
-		for (const expectedSkill of ["clanky-chrome-cdp", "clanky-playwright-browser"]) {
+		for (const expectedSkill of ["clanky-chrome-cdp", "clanky-playwright-browser", "clanky-web-operator"]) {
 			if (!skillNames.includes(expectedSkill)) {
 				throw new Error(`smoke: bundled browser skill ${expectedSkill} was not loaded`);
 			}

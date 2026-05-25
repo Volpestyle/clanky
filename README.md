@@ -132,11 +132,19 @@ or startup-failure validation JSON, see
 
 Bundled browser skills use local project CLIs, not global installs:
 
+- `clanky-web-operator`: broad routing policy for live web lookup and browser
+  work. It can choose OpenAI hosted `web_search`, direct HTTP, Playwright,
+  Chrome CDP, or `agent-browser` depending on the task.
 - `clanky-playwright-browser`: general browsing, extraction, and screenshots through
   `pnpm browser:playwright ...` or short `pnpm exec tsx` Playwright scripts.
 - `clanky-chrome-cdp`: attach to Chrome DevTools Protocol sessions through
   `pnpm browser:cdp ...`; launch a temporary-profile debug Chrome with
   `pnpm browser:chrome-debug ...`.
+
+`web_search` requires `OPENAI_API_KEY` or `CLANKY_OPENAI_API_KEY` and defaults
+to `CLANKY_WEB_SEARCH_MODEL` or `gpt-5.5`. Set
+`CLANKY_WEB_OPERATOR_AUTO_SKILL=0` to disable automatic `clanky-web-operator`
+skill injection for lookup/browser-like prompts.
 
 Install Playwright's Chromium binary once with `pnpm browser:install` if the
 host does not already have it.
