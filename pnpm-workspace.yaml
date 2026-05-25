@@ -1,5 +1,6 @@
 packages:
   - "packages/*"
+  - "agents/*"
 
 minimumReleaseAge: 1440
 strictPeerDependencies: true
