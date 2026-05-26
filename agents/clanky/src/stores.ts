@@ -1,9 +1,10 @@
-import { type ClankyPaths, LinearLinkStore, LinearOutboxStore, MemoryStore } from "@clanky/core";
+import { type ClankyPaths, DiscordSubagentStore, LinearLinkStore, LinearOutboxStore, MemoryStore } from "@clanky/core";
 
 export interface ClankyStores {
 	memory: MemoryStore;
 	linearLinks: LinearLinkStore;
 	linearOutbox: LinearOutboxStore;
+	subagents: DiscordSubagentStore;
 }
 
 /**
@@ -19,5 +20,6 @@ export function createClankyStores(paths: ClankyPaths): ClankyStores {
 		memory: new MemoryStore(paths),
 		linearLinks: new LinearLinkStore(paths),
 		linearOutbox: new LinearOutboxStore(paths),
+		subagents: new DiscordSubagentStore(paths),
 	};
 }

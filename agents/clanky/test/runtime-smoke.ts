@@ -20,6 +20,7 @@ import {
 	DEFAULT_CLANKY_DISCORD_PROVIDER_ID,
 	DEFAULT_OPENAI_PROVIDER_ID,
 	DEFAULT_XAI_PROVIDER_ID,
+	resolveClankyPaths,
 	saveStoredDiscordCredential,
 	saveStoredOpenAiApiKey,
 	saveStoredXAiApiKey,
@@ -28,6 +29,7 @@ import { AuthStorage } from "@earendil-works/pi-coding-agent";
 import type { CreateAgentDiscordClientOptions } from "../src/agentDiscordClient.ts";
 import {
 	evaluateDiscordMessageAcceptance,
+	formatDiscordUserMessage,
 	isDiscordSkipReplyText,
 	resolveAgentDiscordCredentialConfig,
 	resolveAgentDiscordGatewayConfig,
@@ -315,6 +317,27 @@ function assertAgentDiscordGatewayAcceptance(): void {
 	if (!isDiscordSkipReplyText("[SKIP]") || isDiscordSkipReplyText("[SKIP] actually answer")) {
 		throw new Error("smoke: Discord [SKIP] sentinel parsing mismatch");
 	}
+
+	const prompt = formatDiscordUserMessage(
+		{
+			...baseMessage,
+			externalMessageId: "msg-2",
+			text: "can u send it here",
+		},
+		"recent_engagement",
+		[
+			{ author: "vuhlp", text: "suprise me", attachmentLabels: [], messageId: "msg-0" },
+			{ author: "Clanky", text: "Generated it at /tmp/clanky-media/grok-surprise-1.jpg", attachmentLabels: [] },
+		],
+	);
+	if (
+		!prompt.includes("Recent chat before the newest message") ||
+		!prompt.includes("Newest Discord message") ||
+		!prompt.includes("If you use a Discord send/upload tool for the current channel") ||
+		!prompt.includes("output exactly [SKIP] as your final response instead of posting a duplicate confirmation")
+	) {
+		throw new Error("smoke: Discord prompt should frame replies as conversation-level decisions");
+	}
 }
 
 function assertStoredDiscordCredentialPath(): void {
@@ -596,6 +619,10 @@ interface RegisteredCommand {
 	handler(args: unknown, ctx: unknown): unknown | Promise<unknown>;
 }
 
+function testControllerPaths() {
+	return resolveClankyPaths({ homeDir: join(tmpdir(), "clanky-controller-smoke") });
+}
+
 async function assertDiscordGatewayControllerStartup(): Promise<void> {
 	await assertControllerSharedChatAndVoiceStartup();
 	await assertControllerVoiceOnlyStartup();
@@ -608,6 +635,7 @@ async function assertControllerSharedChatAndVoiceStartup(): Promise<void> {
 	const calls = createControllerCallRecorder();
 	const controller = new ClankyDiscordGatewayController({
 		authStorage,
+		paths: testControllerPaths(),
 		env: {
 			CLANKY_DISCORD_TOKEN: "discord-token",
 			CLANKY_DISCORD_VOICE_ENABLED: "1",
@@ -675,6 +703,7 @@ async function assertControllerVoiceOnlyStartup(): Promise<void> {
 	const calls = createControllerCallRecorder();
 	const controller = new ClankyDiscordGatewayController({
 		authStorage,
+		paths: testControllerPaths(),
 		env: {
 			CLANKY_CHAT_GATEWAY_OWNER: "room",
 			CLANKY_DISCORD_TOKEN: "discord-token",
@@ -735,6 +764,7 @@ async function assertControllerSharedVoiceFailureCleanup(): Promise<void> {
 	const calls = createControllerCallRecorder();
 	const controller = new ClankyDiscordGatewayController({
 		authStorage,
+		paths: testControllerPaths(),
 		env: {
 			CLANKY_DISCORD_TOKEN: "discord-token",
 			CLANKY_DISCORD_VOICE_ENABLED: "1",
@@ -781,6 +811,7 @@ async function assertControllerVoiceOnlyFailureCleanup(): Promise<void> {
 	const calls = createControllerCallRecorder();
 	const controller = new ClankyDiscordGatewayController({
 		authStorage,
+		paths: testControllerPaths(),
 		env: {
 			CLANKY_CHAT_GATEWAY_OWNER: "room",
 			CLANKY_DISCORD_TOKEN: "discord-token",

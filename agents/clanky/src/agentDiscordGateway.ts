@@ -3,16 +3,23 @@ import { DiscordChatGatewayProvider, type DiscordGatewayClient } from "@agentroo
 import {
 	type ClankyDiscordCredentialKind,
 	DEFAULT_CLANKY_DISCORD_PROVIDER_ID,
+	type DiscordSubagentStore,
 	loadStoredDiscordCredential,
 	shouldStartAgentChatGateway,
 } from "@clanky/core";
-import type { AgentSessionEvent, AgentSessionRuntime, AuthStorage } from "@earendil-works/pi-coding-agent";
+import type {
+	AgentSessionEvent,
+	AgentSessionRuntime,
+	AuthStorage,
+	CreateAgentSessionRuntimeFactory,
+} from "@earendil-works/pi-coding-agent";
 import { createAgentDiscordClient } from "./agentDiscordClient.ts";
+import { DiscordSubagentCoordinator } from "./discordSubagentCoordinator.ts";
 import { type RuntimeTurnQueue, SerialRuntimeTurnQueue } from "./runtimeTurnQueue.ts";
 
 type DiscordCredentialKind = ClankyDiscordCredentialKind;
 
-interface DiscordInboundConversation {
+export interface DiscordInboundConversation {
 	id: string;
 	kind: "dm" | "channel" | "group" | "thread" | "custom";
 	threadId?: string;
@@ -21,19 +28,19 @@ interface DiscordInboundConversation {
 	displayName?: string;
 }
 
-interface DiscordInboundSender {
+export interface DiscordInboundSender {
 	id: string;
 	username?: string;
 	displayName?: string;
 	isBot?: boolean;
 }
 
-interface DiscordInboundAttachment {
+export interface DiscordInboundAttachment {
 	url?: string;
 	filename?: string;
 }
 
-interface DiscordInboundMessage {
+export interface DiscordInboundMessage {
 	externalMessageId: string;
 	conversation: DiscordInboundConversation;
 	sender: DiscordInboundSender;
@@ -61,9 +68,17 @@ interface PendingDiscordReply {
 	acceptanceReason: DiscordAcceptanceReason;
 }
 
+export interface DiscordConversationHistoryEntry {
+	author: string;
+	text: string;
+	attachmentLabels: string[];
+	messageId?: string;
+}
+
 const DEFAULT_ENGAGEMENT_WINDOW_MS = 5 * 60 * 1000;
 const DEFAULT_DISCORD_WAKE_NAMES = ["clanky", "clank"];
 const MAX_TRACKED_SELF_MESSAGES = 200;
+const MAX_CONVERSATION_HISTORY_MESSAGES = 8;
 const PRIMARY_WAKE_TOKEN_MIN_LEN = 4;
 const EN_WAKE_PRIMARY_GENERIC_TOKENS = new Set(["bot", "ai", "assistant"]);
 const LEADING_WAKE_PREFIX_TOKENS = new Set([
@@ -186,8 +201,12 @@ export interface StartAgentDiscordGatewayInput {
 	config?: ClankyAgentDiscordGatewayConfig;
 	client?: DiscordGatewayClient;
 	runtimeTurnQueue?: RuntimeTurnQueue;
+	createSubagentRuntime?: CreateAgentSessionRuntimeFactory;
 	/** Append-only log of inbound/outbound timing — pass `<profileDir>/discord-bridge.log` from runClanky. */
 	bridgeLogPath?: string;
+	subagentStore?: DiscordSubagentStore;
+	subagentSessionDir?: string;
+	subagentCwd?: string;
 	/** Override default 5-minute engagement window. 0 disables. */
 	engagementWindowMs?: number;
 	/** Natural-language names that count as mentioning Clanky in unbound Discord channels. */
@@ -208,11 +227,27 @@ export async function startAgentDiscordGateway(
 		ignoreBotMessages: true,
 		client,
 	});
+	const subagents =
+		input.createSubagentRuntime !== undefined &&
+		input.subagentStore !== undefined &&
+		input.subagentSessionDir !== undefined
+			? new DiscordSubagentCoordinator({
+					provider,
+					store: input.subagentStore,
+					mainRuntime: input.runtime,
+					createRuntime: input.createSubagentRuntime,
+					agentDir: input.runtime.services.agentDir,
+					cwd: input.subagentCwd ?? input.runtime.cwd,
+					sessionDir: input.subagentSessionDir,
+					...(input.bridgeLogPath === undefined ? {} : { bridgeLogPath: input.bridgeLogPath }),
+				})
+			: undefined;
 	const engagementWindowMs = input.engagementWindowMs ?? resolveEngagementWindowMs(process.env);
 	const bridge = new AgentDiscordBridge(input.runtime, provider, config, client, {
 		engagementWindowMs,
 		wakeNames: input.wakeNames ?? resolveDiscordWakeNames(process.env),
 		runtimeTurnQueue: input.runtimeTurnQueue ?? new SerialRuntimeTurnQueue(),
+		...(subagents === undefined ? {} : { subagents }),
 		...(input.bridgeLogPath !== undefined ? { bridgeLogPath: input.bridgeLogPath } : {}),
 	});
 	await bridge.start();
@@ -223,6 +258,7 @@ interface AgentDiscordBridgeOptions {
 	engagementWindowMs: number;
 	wakeNames: string[];
 	runtimeTurnQueue: RuntimeTurnQueue;
+	subagents?: DiscordSubagentCoordinator;
 	bridgeLogPath?: string;
 }
 
@@ -255,12 +291,14 @@ class AgentDiscordBridge implements ClankyAgentDiscordGatewayHandle {
 	private readonly config: ClankyAgentDiscordGatewayConfig;
 	private readonly options: AgentDiscordBridgeOptions;
 	private readonly runtimeTurnQueue: RuntimeTurnQueue;
+	private readonly subagents: DiscordSubagentCoordinator | undefined;
 	private unsubscribe: (() => void) | undefined;
 	private subscribedSession: AgentSessionRuntime["session"];
 	private readonly pendingReplies: PendingDiscordReply[] = [];
 	/** Per (channelId, userId) most-recent engagement timestamp (ms). */
 	private readonly engagements = new Map<string, number>();
 	private readonly inboundReceivedAt = new Map<string, number>();
+	private readonly recentConversationMessages = new Map<string, DiscordConversationHistoryEntry[]>();
 	private readonly selfMessageIds = new Set<string>();
 	private readonly selfMessageIdOrder: string[] = [];
 
@@ -277,6 +315,7 @@ class AgentDiscordBridge implements ClankyAgentDiscordGatewayHandle {
 		this.client = client;
 		this.options = options;
 		this.runtimeTurnQueue = options.runtimeTurnQueue;
+		this.subagents = options.subagents;
 		this.subscribedSession = runtime.session;
 	}
 
@@ -303,6 +342,11 @@ class AgentDiscordBridge implements ClankyAgentDiscordGatewayHandle {
 			this.logBridge(
 				`inbound accepted ext=${message.externalMessageId} channel=${channelId} from=${senderId} reason=${decision.reason}`,
 			);
+			if (this.subagents !== undefined) {
+				await this.subagents.enqueue(message, decision.reason);
+				this.logBridge(`queued-for-subagent ext=${message.externalMessageId} channel=${channelId}`);
+				return;
+			}
 			const pending: PendingDiscordReply = {
 				conversation: message.conversation,
 				replyToExternalMessageId: message.externalMessageId,
@@ -312,9 +356,11 @@ class AgentDiscordBridge implements ClankyAgentDiscordGatewayHandle {
 			};
 			await this.runtimeTurnQueue.enqueue(async () => {
 				this.subscribeToCurrentSession();
+				const userPrompt = this.formatDiscordUserMessage(message, decision.reason);
+				this.recordInboundMessage(message);
 				this.pendingReplies.push(pending);
 				try {
-					await this.runtime.session.sendUserMessage(formatDiscordUserMessage(message, decision.reason));
+					await this.runtime.session.sendUserMessage(userPrompt);
 				} catch (error) {
 					this.removePendingReply(pending);
 					this.inboundReceivedAt.delete(message.externalMessageId);
@@ -323,11 +369,13 @@ class AgentDiscordBridge implements ClankyAgentDiscordGatewayHandle {
 				this.logBridge(`forwarded-to-pi ext=${message.externalMessageId} dt=${Date.now() - t1}ms`);
 			});
 		});
+		await this.subagents?.start();
 	}
 
 	async stop(): Promise<void> {
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;
+		await this.subagents?.stop();
 		await this.provider.stop();
 	}
 
@@ -372,6 +420,7 @@ class AgentDiscordBridge implements ClankyAgentDiscordGatewayHandle {
 			text,
 		});
 		this.rememberSelfMessageId(sent.externalMessageId);
+		this.recordAssistantMessage(pending.channelId, sent.externalMessageId, text);
 		this.recordEngagement(pending.channelId, pending.senderId);
 		this.logBridge(
 			`discord-sent ext=${pending.replyToExternalMessageId} reply-id=${sent.externalMessageId} send-dt=${
@@ -414,6 +463,39 @@ class AgentDiscordBridge implements ClankyAgentDiscordGatewayHandle {
 			(value): value is string => value !== undefined && value.trim().length > 0,
 		);
 		return dedupeWakeNames([...clientNames, ...this.options.wakeNames]);
+	}
+
+	private formatDiscordUserMessage(message: DiscordInboundMessage, reason: DiscordAcceptanceReason): string {
+		const history = this.recentConversationMessages.get(message.conversation.id) ?? [];
+		return formatDiscordUserMessage(message, reason, history);
+	}
+
+	private recordInboundMessage(message: DiscordInboundMessage): void {
+		const author = message.sender.displayName ?? message.sender.username ?? message.sender.id;
+		this.recordConversationMessage(message.conversation.id, {
+			author,
+			text: message.text.trim() || "(no text)",
+			attachmentLabels: message.attachments
+				.map((attachment) => attachment.filename ?? attachment.url)
+				.filter((value): value is string => value !== undefined && value.trim().length > 0),
+			messageId: message.externalMessageId,
+		});
+	}
+
+	private recordAssistantMessage(channelId: string, messageId: string, text: string): void {
+		this.recordConversationMessage(channelId, {
+			author: "Clanky",
+			text,
+			attachmentLabels: [],
+			messageId,
+		});
+	}
+
+	private recordConversationMessage(channelId: string, entry: DiscordConversationHistoryEntry): void {
+		const entries = this.recentConversationMessages.get(channelId) ?? [];
+		entries.push(entry);
+		while (entries.length > MAX_CONVERSATION_HISTORY_MESSAGES) entries.shift();
+		this.recentConversationMessages.set(channelId, entries);
 	}
 
 	private logBridge(line: string): void {
@@ -491,15 +573,47 @@ export function evaluateDiscordMessageAcceptance(
 	return { accepted: false, reason: "not_engaged_no_mention" };
 }
 
-function formatDiscordUserMessage(message: DiscordInboundMessage, reason: DiscordAcceptanceReason): string {
+export function formatDiscordUserMessage(
+	message: DiscordInboundMessage,
+	reason: DiscordAcceptanceReason,
+	history: DiscordConversationHistoryEntry[] = [],
+): string {
 	const sender = message.sender.displayName ?? message.sender.username ?? message.sender.id;
 	const attachmentLines = message.attachments
 		.map((attachment) => attachment.url ?? attachment.filename)
 		.filter((value): value is string => value !== undefined && value.trim().length > 0)
 		.map((value) => `- ${value}`);
-	const attachments = attachmentLines.length > 0 ? `\n\nAttachments:\n${attachmentLines.join("\n")}` : "";
+	const attachments = attachmentLines.length > 0 ? `\nAttachments:\n${attachmentLines.join("\n")}` : "";
 	const text = message.text.trim() || "(no text)";
-	return `Discord message from ${sender}:\n\nDiscord bridge context: ${formatAcceptanceReasonForPrompt(reason)} If you should stay silent, output exactly [SKIP].\n\n${text}${attachments}`;
+	const historyBlock = formatDiscordConversationHistory(history);
+	return [
+		"Discord conversation update:",
+		"",
+		"You are participating in an ongoing Discord chat. Zoom out before replying: use the recent context, the newest message, and any tool actions you perform in this turn to decide whether the channel needs another visible message from you.",
+		"",
+		`Bridge context: ${formatAcceptanceReasonForPrompt(reason)}`,
+		"If no additional visible Discord response is needed, output exactly [SKIP].",
+		"If you use a Discord send/upload tool for the current channel and that action already satisfies the user, output exactly [SKIP] as your final response instead of posting a duplicate confirmation.",
+		"Only reply with text when it adds something useful beyond actions already taken.",
+		"",
+		...(historyBlock.length > 0 ? ["Recent chat before the newest message:", historyBlock, ""] : []),
+		"Newest Discord message:",
+		`From: ${sender}`,
+		`Text: ${text}`,
+		attachments,
+	]
+		.filter((line) => line.length > 0)
+		.join("\n");
+}
+
+function formatDiscordConversationHistory(history: DiscordConversationHistoryEntry[]): string {
+	return history
+		.slice(-MAX_CONVERSATION_HISTORY_MESSAGES)
+		.map((entry) => {
+			const suffix = entry.attachmentLabels.length > 0 ? ` [attachments: ${entry.attachmentLabels.join(", ")}]` : "";
+			return `- ${entry.author}: ${entry.text}${suffix}`;
+		})
+		.join("\n");
 }
 
 function formatAcceptanceReasonForPrompt(reason: DiscordAcceptanceReason): string {
@@ -667,7 +781,7 @@ function escapeRegex(value = ""): string {
 	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function extractAssistantText(event: AgentSessionEvent): string | undefined {
+export function extractAssistantText(event: AgentSessionEvent): string | undefined {
 	if (event.type !== "message_end" || event.message.role !== "assistant") return undefined;
 	if (event.message.stopReason === "toolUse") return undefined;
 	const text = event.message.content

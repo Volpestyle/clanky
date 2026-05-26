@@ -7,7 +7,13 @@
  * since the controller has to be constructed earlier (the discord-auth
  * extension factory captures it).
  */
-import type { AgentSessionRuntime, AuthStorage } from "@earendil-works/pi-coding-agent";
+
+import { type ClankyPaths, DiscordSubagentStore } from "@clanky/core";
+import type {
+	AgentSessionRuntime,
+	AuthStorage,
+	CreateAgentSessionRuntimeFactory,
+} from "@earendil-works/pi-coding-agent";
 import { createAgentDiscordClient, loginAgentDiscordClient } from "./agentDiscordClient.ts";
 import {
 	type ClankyAgentDiscordGatewayHandle,
@@ -40,26 +46,33 @@ interface ResolvedClankyDiscordGatewayControllerDependencies {
 
 export class ClankyDiscordGatewayController {
 	private readonly authStorage: AuthStorage;
+	private readonly paths: ClankyPaths;
 	private readonly bridgeLogPath: string | undefined;
 	private readonly env: NodeJS.ProcessEnv;
 	private readonly dependencies: ResolvedClankyDiscordGatewayControllerDependencies;
 	private readonly runtimeTurnQueue: RuntimeTurnQueue;
+	private readonly subagentStore: DiscordSubagentStore;
 	private runtime: AgentSessionRuntime | undefined;
+	private createRuntime: CreateAgentSessionRuntimeFactory | undefined;
+	private cwd: string | undefined;
 	private handle: ClankyAgentDiscordGatewayHandle | undefined;
 	private voiceHandle: ClankyAgentDiscordVoiceHandle | undefined;
 	private voiceOnlyClient: ClankyAgentDiscordGatewayHandle["client"] | undefined;
 
 	constructor(input: {
 		authStorage: AuthStorage;
+		paths: ClankyPaths;
 		bridgeLogPath?: string;
 		env?: NodeJS.ProcessEnv;
 		runtimeTurnQueue?: RuntimeTurnQueue;
 		dependencies?: ClankyDiscordGatewayControllerDependencies;
 	}) {
 		this.authStorage = input.authStorage;
+		this.paths = input.paths;
 		this.bridgeLogPath = input.bridgeLogPath;
 		this.env = input.env ?? process.env;
 		this.runtimeTurnQueue = input.runtimeTurnQueue ?? new SerialRuntimeTurnQueue();
+		this.subagentStore = new DiscordSubagentStore(input.paths);
 		this.dependencies = {
 			createClient: input.dependencies?.createClient ?? createAgentDiscordClient,
 			loginClient: input.dependencies?.loginClient ?? loginAgentDiscordClient,
@@ -70,6 +83,11 @@ export class ClankyDiscordGatewayController {
 
 	bindRuntime(runtime: AgentSessionRuntime): void {
 		this.runtime = runtime;
+	}
+
+	bindSubagentRuntimeFactory(createRuntime: CreateAgentSessionRuntimeFactory, cwd: string): void {
+		this.createRuntime = createRuntime;
+		this.cwd = cwd;
 	}
 
 	async start(): Promise<void> {
@@ -89,6 +107,12 @@ export class ClankyDiscordGatewayController {
 			authStorage: this.authStorage,
 			runtimeTurnQueue: this.runtimeTurnQueue,
 		};
+		if (this.createRuntime !== undefined) {
+			startInput.createSubagentRuntime = this.createRuntime;
+			startInput.subagentStore = this.subagentStore;
+			startInput.subagentSessionDir = this.paths.subagentSessionsDir;
+			startInput.subagentCwd = this.cwd ?? this.runtime.cwd;
+		}
 		if (discordConfig !== undefined) startInput.config = discordConfig;
 		if (client !== undefined) startInput.client = client;
 		if (this.bridgeLogPath !== undefined) startInput.bridgeLogPath = this.bridgeLogPath;

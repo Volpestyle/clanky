@@ -1,0 +1,176 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+import { DiscordSubagentStore, resolveClankyPaths } from "@clanky/core";
+import type {
+	AgentSessionEvent,
+	AgentSessionRuntime,
+	CreateAgentSessionRuntimeFactory,
+	CreateAgentSessionRuntimeResult,
+} from "@earendil-works/pi-coding-agent";
+import type { DiscordInboundConversation, DiscordInboundMessage } from "../src/agentDiscordGateway.ts";
+import { DiscordSubagentCoordinator } from "../src/discordSubagentCoordinator.ts";
+
+interface SentDiscordMessage {
+	conversation: DiscordInboundConversation;
+	replyToExternalMessageId: string;
+	text: string;
+	externalMessageId: string;
+}
+
+const tmpRoot = await mkdtemp(join(tmpdir(), "clanky-discord-subagent-coordinator-"));
+const paths = resolveClankyPaths({ homeDir: join(tmpRoot, "home") });
+const store = new DiscordSubagentStore(paths);
+let coordinator: DiscordSubagentCoordinator | undefined;
+
+try {
+	const sentMessages: SentDiscordMessage[] = [];
+	const prompts: string[] = [];
+	const replies = ["first reply", "second reply", "[SKIP]"];
+	let runtimeCreateCount = 0;
+	let disposedSessionCount = 0;
+	const cwd = join(tmpRoot, "work");
+	const agentDir = join(tmpRoot, "agent");
+	const provider = {
+		async sendMessage(input: {
+			conversation: DiscordInboundConversation;
+			replyToExternalMessageId: string;
+			text: string;
+		}): Promise<{ externalMessageId: string }> {
+			const externalMessageId = `reply-${sentMessages.length + 1}`;
+			sentMessages.push({ ...input, externalMessageId });
+			return { externalMessageId };
+		},
+	};
+	const createRuntime: CreateAgentSessionRuntimeFactory = async (options): Promise<CreateAgentSessionRuntimeResult> => {
+		runtimeCreateCount += 1;
+		const listeners = new Set<(event: AgentSessionEvent) => void>();
+		const fakeSession = {
+			isStreaming: false,
+			sessionId: options.sessionManager.getSessionId(),
+			sessionFile: options.sessionManager.getSessionFile(),
+			sessionManager: options.sessionManager,
+			extensionRunner: {
+				hasHandlers: () => false,
+				emit: async () => undefined,
+			},
+			subscribe(listener: (event: AgentSessionEvent) => void): () => void {
+				listeners.add(listener);
+				return () => listeners.delete(listener);
+			},
+			async sendUserMessage(prompt: string): Promise<void> {
+				prompts.push(prompt);
+				const text = replies.shift() ?? "fallback reply";
+				const event = {
+					type: "message_end",
+					message: {
+						role: "assistant",
+						stopReason: "end_turn",
+						content: [{ type: "text", text }],
+					},
+				} as unknown as AgentSessionEvent;
+				for (const listener of listeners) listener(event);
+			},
+			dispose(): void {
+				disposedSessionCount += 1;
+			},
+		};
+		return {
+			session: fakeSession as unknown as CreateAgentSessionRuntimeResult["session"],
+			extensionsResult: { extensions: [], errors: [], runtime: {} } as unknown as CreateAgentSessionRuntimeResult["extensionsResult"],
+			services: { cwd: options.cwd, agentDir: options.agentDir } as unknown as CreateAgentSessionRuntimeResult["services"],
+			diagnostics: [],
+		};
+	};
+	const mainRuntime = {
+		cwd,
+		session: {
+			isStreaming: false,
+			sessionId: "main-session",
+			sessionFile: undefined,
+			sessionManager: { getLeafEntry: () => undefined },
+		},
+	} as unknown as AgentSessionRuntime;
+
+	coordinator = new DiscordSubagentCoordinator({
+		provider,
+		store,
+		mainRuntime,
+		createRuntime,
+		agentDir,
+		cwd,
+		sessionDir: paths.subagentSessionsDir,
+	});
+
+	let injectedWakeup = false;
+	const originalSetSubagentState = store.setSubagentState.bind(store);
+	store.setSubagentState = async (...args: Parameters<DiscordSubagentStore["setSubagentState"]>): Promise<void> => {
+		if (args[1] === "idle" && !injectedWakeup) {
+			injectedWakeup = true;
+			await coordinator?.enqueue(makeMessage("message-2", "second message"), "platform_mention");
+		}
+		return originalSetSubagentState(...args);
+	};
+
+	await coordinator.start();
+	await coordinator.enqueue(makeMessage("message-1", "first message"), "platform_mention");
+	await waitFor(() => sentMessages.length === 2, "coordinator to process wakeup message");
+
+	if (runtimeCreateCount !== 1) {
+		throw new Error(`coordinator smoke: expected one runtime, created ${runtimeCreateCount}`);
+	}
+	const second = sentMessages[1];
+	if (
+		second?.conversation.kind !== "thread" ||
+		second.conversation.id !== "channel-1" ||
+		second.conversation.threadId !== "thread-1" ||
+		second.conversation.parentId !== "channel-1"
+	) {
+		throw new Error(`coordinator smoke: thread conversation was not restored ${JSON.stringify(second)}`);
+	}
+
+	await coordinator.enqueue(makeMessage("message-3", "skip me"), "platform_mention");
+	await waitFor(() => prompts.length === 3, "coordinator to process skip message");
+	if (sentMessages.length !== 2) {
+		throw new Error(`coordinator smoke: [SKIP] should not send a Discord reply ${JSON.stringify(sentMessages)}`);
+	}
+
+	await coordinator.stop();
+	if (disposedSessionCount !== 1) {
+		throw new Error(`coordinator smoke: expected one disposed runtime, got ${disposedSessionCount}`);
+	}
+
+	console.log(JSON.stringify({ sent: sentMessages.length, prompts: prompts.length, runtimeCreateCount }));
+} finally {
+	await coordinator?.stop();
+	store.close();
+	await rm(tmpRoot, { recursive: true, force: true });
+}
+
+function makeMessage(externalMessageId: string, text: string): DiscordInboundMessage {
+	return {
+		externalMessageId,
+		conversation: {
+			id: "channel-1",
+			kind: "thread",
+			threadId: "thread-1",
+			parentId: "channel-1",
+			guildId: "guild-1",
+			displayName: "thread-one",
+		},
+		sender: { id: "user-1", username: "user-one" },
+		text,
+		attachments: [],
+		mentionsSelf: true,
+	};
+}
+
+async function waitFor(condition: () => boolean | Promise<boolean>, label: string): Promise<void> {
+	const deadline = Date.now() + 3000;
+	while (Date.now() < deadline) {
+		if (await condition()) return;
+		await delay(10);
+	}
+	throw new Error(`Timed out waiting for ${label}`);
+}

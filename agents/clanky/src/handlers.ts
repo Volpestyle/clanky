@@ -114,6 +114,7 @@ export function createClankyHandlers(
 			getMediaBackendStatus({
 				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
 			}),
+		listSubagents: async () => stores.subagents.listSubagents(),
 		discordListGuilds: async () =>
 			listDiscordGuilds({
 				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),

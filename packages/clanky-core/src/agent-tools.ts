@@ -32,6 +32,7 @@ import type {
 } from "./memory/store.ts";
 import type { CreateClankySkillInput } from "./skills/loader.ts";
 import { extractIndexableMessageText, type SessionIndexMessageInput } from "./state/index-db.ts";
+import type { ClankySubagentState, ClankySubagentSummary } from "./subagents/store.ts";
 import type { OpenAiWebSearchInput } from "./web/operator.ts";
 
 type ClankyMessageEndEvent = {
@@ -370,6 +371,7 @@ export interface ClankyAgentToolHandlers {
 	xaiImageGenerate?: (input: XAiImageGenerateInput, signal?: AbortSignal) => Promise<unknown>;
 	xaiVideoGenerate?: (input: XAiVideoGenerateInput, signal?: AbortSignal) => Promise<unknown>;
 	mediaBackendStatus?: () => Promise<unknown>;
+	listSubagents?: () => Promise<ClankySubagentSummary[]>;
 	discordListGuilds?: () => Promise<unknown>;
 	discordListChannels?: (input: DiscordListChannelsInput) => Promise<unknown>;
 	discordReadMessages?: (input: DiscordReadMessagesInput) => Promise<unknown>;
@@ -382,6 +384,9 @@ export interface ClankyAgentToolHandlers {
 const CLANKY_MEMORY_PACKET_MESSAGE = "clanky.memory_packet";
 const WEB_OPERATOR_SKILL_NAME = "clanky-web-operator";
 const MEDIA_OPERATOR_SKILL_NAME = "clanky-media-operator";
+const SUBAGENT_PANEL_WIDGET_KEY = "clanky-subagents";
+const SUBAGENT_PANEL_STATUS_KEY = "clanky-subagents";
+const SUBAGENT_PANEL_REFRESH_MS = 2000;
 
 export function createClankyExtensionFactories(handlers: ClankyAgentToolHandlers): ExtensionFactory[] {
 	const indexMessage = handlers.indexMessage;
@@ -400,13 +405,17 @@ export function createClankyExtensionFactories(handlers: ClankyAgentToolHandlers
 		handlers.selfMemory !== undefined ||
 		handlers.profileStatus !== undefined ||
 		handlers.webBackendStatus !== undefined ||
-		handlers.mediaBackendStatus !== undefined;
+		handlers.mediaBackendStatus !== undefined ||
+		handlers.listSubagents !== undefined;
 	if (indexMessage === undefined && beforeProviderRequest === undefined && memoryPacket === undefined && !hasCommands) {
 		return [];
 	}
 	return [
 		(pi) => {
-			registerClankyCommands(pi, handlers);
+			const subagentPanel =
+				handlers.listSubagents === undefined ? undefined : new SubagentPanelController(handlers.listSubagents);
+			registerClankyCommands(pi, handlers, subagentPanel);
+			subagentPanel?.registerLifecycle(pi);
 			pi.on("input", async (event) => {
 				const transformed = maybeInjectWebOperatorSkill(maybeInjectMediaOperatorSkill(event.text));
 				if (transformed === event.text) return { action: "continue" };
@@ -460,7 +469,100 @@ export function createClankyExtensionFactories(handlers: ClankyAgentToolHandlers
 	];
 }
 
-function registerClankyCommands(pi: Parameters<ExtensionFactory>[0], handlers: ClankyAgentToolHandlers): void {
+class SubagentPanelController {
+	private visible = false;
+	private timer: ReturnType<typeof setInterval> | undefined;
+	private refreshRunning = false;
+	private readonly listSubagents: () => Promise<ClankySubagentSummary[]>;
+
+	constructor(listSubagents: () => Promise<ClankySubagentSummary[]>) {
+		this.listSubagents = listSubagents;
+	}
+
+	registerLifecycle(pi: Parameters<ExtensionFactory>[0]): void {
+		pi.on("session_start", async (_event, ctx) => {
+			if (!ctx.hasUI) return;
+			this.start(ctx);
+			await this.refresh(ctx);
+		});
+		pi.on("session_shutdown", (_event, ctx) => {
+			this.stop(ctx);
+		});
+	}
+
+	async handleCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
+		const command = args.trim().toLowerCase();
+		if (command === "json") {
+			ctx.ui.notify(formatCommandResult("Subagents", await this.listSubagents()));
+			return;
+		}
+		if (command === "status" || command === "once") {
+			ctx.ui.notify(formatSubagentPanelLines(await this.listSubagents(), ctx, { includeEmpty: true }).join("\n"));
+			return;
+		}
+		if (command === "hide" || command === "off") {
+			this.visible = false;
+			ctx.ui.setWidget(SUBAGENT_PANEL_WIDGET_KEY, undefined);
+			await this.refresh(ctx);
+			return;
+		}
+		if (command === "" || command === "show" || command === "on" || command === "toggle") {
+			this.visible = command === "toggle" ? !this.visible : command === "" ? !this.visible : true;
+			this.start(ctx);
+			await this.refresh(ctx);
+			return;
+		}
+		ctx.ui.notify("Subagents\nUsage: /subagents [show|hide|toggle|status|json]", "warning");
+	}
+
+	private start(ctx: ExtensionContext): void {
+		if (this.timer !== undefined) return;
+		this.timer = setInterval(() => {
+			void this.refresh(ctx);
+		}, SUBAGENT_PANEL_REFRESH_MS);
+		this.timer.unref?.();
+	}
+
+	private stop(ctx: ExtensionContext): void {
+		if (this.timer !== undefined) {
+			clearInterval(this.timer);
+			this.timer = undefined;
+		}
+		ctx.ui.setWidget(SUBAGENT_PANEL_WIDGET_KEY, undefined);
+		ctx.ui.setStatus(SUBAGENT_PANEL_STATUS_KEY, undefined);
+	}
+
+	private async refresh(ctx: ExtensionContext): Promise<void> {
+		if (this.refreshRunning) return;
+		this.refreshRunning = true;
+		try {
+			const summaries = await this.listSubagents();
+			ctx.ui.setStatus(SUBAGENT_PANEL_STATUS_KEY, formatSubagentFooterStatus(summaries, ctx));
+			if (this.visible) {
+				ctx.ui.setWidget(SUBAGENT_PANEL_WIDGET_KEY, formatSubagentPanelLines(summaries, ctx, { includeEmpty: true }));
+			} else {
+				ctx.ui.setWidget(SUBAGENT_PANEL_WIDGET_KEY, undefined);
+			}
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			ctx.ui.setStatus(SUBAGENT_PANEL_STATUS_KEY, ctx.ui.theme.fg("error", "subagents error"));
+			if (this.visible) {
+				ctx.ui.setWidget(SUBAGENT_PANEL_WIDGET_KEY, [
+					ctx.ui.theme.bold("Subagents"),
+					ctx.ui.theme.fg("error", `failed to refresh: ${message}`),
+				]);
+			}
+		} finally {
+			this.refreshRunning = false;
+		}
+	}
+}
+
+function registerClankyCommands(
+	pi: Parameters<ExtensionFactory>[0],
+	handlers: ClankyAgentToolHandlers,
+	subagentPanel: SubagentPanelController | undefined,
+): void {
 	if (handlers.listCron !== undefined) {
 		pi.registerCommand("cron", {
 			description: "Show Clanky cron jobs",
@@ -551,6 +653,131 @@ function registerClankyCommands(pi: Parameters<ExtensionFactory>[0], handlers: C
 			},
 		});
 	}
+	if (handlers.listSubagents !== undefined) {
+		pi.registerCommand("subagents", {
+			description: "Toggle the live Clanky subagent panel",
+			handler: async (args, ctx) => {
+				await subagentPanel?.handleCommand(args, ctx);
+			},
+		});
+	}
+}
+
+function formatSubagentFooterStatus(
+	summaries: readonly ClankySubagentSummary[],
+	ctx: ExtensionContext,
+): string | undefined {
+	if (summaries.length === 0) return undefined;
+	const counts = subagentCounts(summaries);
+	if (counts.running === 0 && counts.queued === 0 && counts.failed === 0) {
+		return ctx.ui.theme.fg("dim", `subagents ${summaries.length} idle`);
+	}
+	const parts = [
+		counts.running > 0 ? ctx.ui.theme.fg("accent", `${counts.running} running`) : undefined,
+		counts.queued > 0 ? ctx.ui.theme.fg("warning", `${counts.queued} queued`) : undefined,
+		counts.failed > 0 ? ctx.ui.theme.fg("error", `${counts.failed} failed`) : undefined,
+	].filter((part): part is string => part !== undefined);
+	return `subagents ${parts.join(" ")}`;
+}
+
+function formatSubagentPanelLines(
+	summaries: readonly ClankySubagentSummary[],
+	ctx: ExtensionContext,
+	options: { includeEmpty?: boolean } = {},
+): string[] {
+	if (summaries.length === 0) {
+		return options.includeEmpty === true
+			? [ctx.ui.theme.bold("Subagents"), ctx.ui.theme.fg("dim", "No Discord subagents yet.")]
+			: [];
+	}
+	const counts = subagentCounts(summaries);
+	const ordered = [...summaries].sort(compareSubagentsForPanel);
+	const lines = [
+		[
+			ctx.ui.theme.bold("Subagents"),
+			counts.running > 0 ? ctx.ui.theme.fg("accent", `${counts.running} running`) : ctx.ui.theme.fg("dim", "0 running"),
+			counts.queued > 0 ? ctx.ui.theme.fg("warning", `${counts.queued} queued`) : ctx.ui.theme.fg("dim", "0 queued"),
+			counts.failed > 0 ? ctx.ui.theme.fg("error", `${counts.failed} failed`) : undefined,
+		]
+			.filter((part): part is string => part !== undefined)
+			.join("  "),
+		ctx.ui.theme.fg("dim", "state     queue  scope / active work"),
+	];
+	for (const subagent of ordered.slice(0, 7)) {
+		lines.push(formatSubagentPanelRow(subagent, ctx));
+	}
+	if (ordered.length > 7) {
+		lines.push(ctx.ui.theme.fg("dim", `... ${ordered.length - 7} more`));
+	}
+	return lines;
+}
+
+function formatSubagentPanelRow(subagent: ClankySubagentSummary, ctx: ExtensionContext): string {
+	const marker = subagent.state === "running" ? ">" : " ";
+	const state = formatSubagentState(subagent.state, ctx);
+	const queue = subagent.queueDepth > 0 ? String(subagent.queueDepth).padStart(5) : ctx.ui.theme.fg("dim", "    -");
+	const scope = truncatePlain(subagent.scopeName ?? subagent.scopeId, 28);
+	const summary = truncatePlain(subagent.activeSummary ?? "idle", 44);
+	const age = ctx.ui.theme.fg("dim", formatRelativeAge(subagent.updatedAt));
+	return `${marker} ${state} ${queue}  ${scope} - ${summary} ${age}`;
+}
+
+function formatSubagentState(state: ClankySubagentState, ctx: ExtensionContext): string {
+	const label = state.padEnd(8);
+	if (state === "running") return ctx.ui.theme.fg("accent", label);
+	if (state === "queued") return ctx.ui.theme.fg("warning", label);
+	if (state === "failed") return ctx.ui.theme.fg("error", label);
+	return ctx.ui.theme.fg("dim", label);
+}
+
+function compareSubagentsForPanel(a: ClankySubagentSummary, b: ClankySubagentSummary): number {
+	const priorityDelta = subagentStatePriority(b.state) - subagentStatePriority(a.state);
+	if (priorityDelta !== 0) return priorityDelta;
+	const queueDelta = b.queueDepth - a.queueDepth;
+	if (queueDelta !== 0) return queueDelta;
+	return Date.parse(b.updatedAt) - Date.parse(a.updatedAt);
+}
+
+function subagentStatePriority(state: ClankySubagentState): number {
+	if (state === "running") return 5;
+	if (state === "queued") return 4;
+	if (state === "failed") return 3;
+	if (state === "stale") return 2;
+	return 1;
+}
+
+function subagentCounts(summaries: readonly ClankySubagentSummary[]): {
+	running: number;
+	queued: number;
+	failed: number;
+} {
+	let running = 0;
+	let queued = 0;
+	let failed = 0;
+	for (const summary of summaries) {
+		if (summary.state === "running") running += 1;
+		else if (summary.state === "queued") queued += 1;
+		else if (summary.state === "failed") failed += 1;
+	}
+	return { running, queued, failed };
+}
+
+function formatRelativeAge(timestamp: string): string {
+	const ageMs = Math.max(0, Date.now() - Date.parse(timestamp));
+	const seconds = Math.floor(ageMs / 1000);
+	if (seconds < 60) return `${seconds}s`;
+	const minutes = Math.floor(seconds / 60);
+	if (minutes < 60) return `${minutes}m`;
+	const hours = Math.floor(minutes / 60);
+	if (hours < 48) return `${hours}h`;
+	return `${Math.floor(hours / 24)}d`;
+}
+
+function truncatePlain(value: string, maxLength: number): string {
+	const normalized = value.replace(/\s+/g, " ").trim();
+	if (normalized.length <= maxLength) return normalized;
+	if (maxLength <= 3) return normalized.slice(0, maxLength);
+	return `${normalized.slice(0, maxLength - 3)}...`;
 }
 
 function registerMemoryCommands(pi: Parameters<ExtensionFactory>[0], handlers: ClankyAgentToolHandlers): void {
@@ -811,6 +1038,27 @@ export function createClankyToolDefinitions(handlers: ClankyAgentToolHandlers): 
 				async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 					const input = normalizeTaskCreateToolInput(params, ctx.sessionManager.getSessionId());
 					return toolResult(await taskCreate(input));
+				},
+			}),
+		);
+	}
+	const listSubagents = handlers.listSubagents;
+	if (listSubagents !== undefined) {
+		tools.push(
+			defineTool({
+				name: "subagent_status",
+				label: "Subagent Status",
+				description:
+					"Inspect Clanky's Discord subagent workers, including queue depth, active work, session files, and errors.",
+				promptSnippet:
+					"subagent_status: check Clanky's Discord subagent workers before reading sqlite files or shelling out.",
+				promptGuidelines: [
+					"Use when the user asks what a subagent is doing, whether Discord workers are healthy, or if a queue is stuck.",
+					"Summarize state, queue depth, active work, age, and lastError if present.",
+				],
+				parameters: Type.Object({}),
+				async execute() {
+					return toolResult(await listSubagents());
 				},
 			}),
 		);

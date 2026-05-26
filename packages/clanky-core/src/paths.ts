@@ -21,6 +21,9 @@ export interface ClankyPaths {
 	linearDir: string;
 	linearLinksFile: string;
 	linearOutboxFile: string;
+	subagentsDir: string;
+	subagentsDbFile: string;
+	subagentSessionsDir: string;
 	indexDbFile: string;
 	cronDir: string;
 	cronJobsFile: string;
@@ -54,6 +57,9 @@ export function resolveClankyPaths(options: ResolveClankyPathsOptions = {}): Cla
 		linearDir: join(profileDir, "linear"),
 		linearLinksFile: join(profileDir, "linear", "links.json"),
 		linearOutboxFile: join(profileDir, "linear", "outbox.json"),
+		subagentsDir: join(profileDir, "subagents"),
+		subagentsDbFile: join(profileDir, "subagents", "subagents.db"),
+		subagentSessionsDir: join(profileDir, "subagents", "sessions"),
 		indexDbFile: join(profileDir, "index.db"),
 		cronDir: join(profileDir, "cron"),
 		cronJobsFile: join(profileDir, "cron", "jobs.json"),

@@ -1,0 +1,360 @@
+import { appendFile } from "node:fs/promises";
+import type {
+	ClankySubagentKind,
+	DiscordInboxAttachment,
+	DiscordInboxMessage,
+	DiscordSubagentStore,
+} from "@clanky/core";
+import {
+	type AgentSessionEvent,
+	type AgentSessionRuntime,
+	type CreateAgentSessionRuntimeFactory,
+	createAgentSessionRuntime,
+	SessionManager,
+} from "@earendil-works/pi-coding-agent";
+import type {
+	DiscordAcceptanceReason,
+	DiscordInboundConversation,
+	DiscordInboundMessage,
+} from "./agentDiscordGateway.ts";
+
+interface DiscordMessageSender {
+	sendMessage(input: {
+		conversation: DiscordInboundConversation;
+		replyToExternalMessageId: string;
+		text: string;
+	}): Promise<{ externalMessageId: string }>;
+}
+
+interface DiscordWorkerTarget {
+	workerId: string;
+	kind: ClankySubagentKind;
+	scopeId: string;
+	scopeName?: string;
+}
+
+interface DiscordSubagentRuntimeEntry {
+	runtime: AgentSessionRuntime;
+	workerId: string;
+}
+
+export interface DiscordSubagentCoordinatorOptions {
+	provider: DiscordMessageSender;
+	store: DiscordSubagentStore;
+	mainRuntime: AgentSessionRuntime;
+	createRuntime: CreateAgentSessionRuntimeFactory;
+	agentDir: string;
+	cwd: string;
+	sessionDir: string;
+	bridgeLogPath?: string;
+}
+
+export class DiscordSubagentCoordinator {
+	private readonly provider: DiscordMessageSender;
+	private readonly store: DiscordSubagentStore;
+	private readonly mainRuntime: AgentSessionRuntime;
+	private readonly createRuntime: CreateAgentSessionRuntimeFactory;
+	private readonly agentDir: string;
+	private readonly cwd: string;
+	private readonly sessionDir: string;
+	private readonly bridgeLogPath: string | undefined;
+	private readonly runtimes = new Map<string, DiscordSubagentRuntimeEntry>();
+	private readonly pumpPromises = new Map<string, Promise<void>>();
+	private readonly pumpWakeups = new Set<string>();
+	private stopped = false;
+
+	constructor(options: DiscordSubagentCoordinatorOptions) {
+		this.provider = options.provider;
+		this.store = options.store;
+		this.mainRuntime = options.mainRuntime;
+		this.createRuntime = options.createRuntime;
+		this.agentDir = options.agentDir;
+		this.cwd = options.cwd;
+		this.sessionDir = options.sessionDir;
+		this.bridgeLogPath = options.bridgeLogPath;
+	}
+
+	async start(): Promise<void> {
+		this.stopped = false;
+		const queuedWorkerIds = await this.store.listDiscordWorkersWithQueuedMessages();
+		for (const workerId of queuedWorkerIds) this.schedulePump(workerId);
+	}
+
+	async stop(): Promise<void> {
+		this.stopped = true;
+		await Promise.allSettled([...this.pumpPromises.values()]);
+		await Promise.all([...this.runtimes.values()].map((entry) => entry.runtime.dispose()));
+		this.runtimes.clear();
+		this.pumpWakeups.clear();
+	}
+
+	async enqueue(message: DiscordInboundMessage, acceptanceReason: DiscordAcceptanceReason): Promise<void> {
+		const target = resolveDiscordWorkerTarget(message);
+		await this.store.enqueueDiscordMessage({
+			workerId: target.workerId,
+			kind: target.kind,
+			scopeId: target.scopeId,
+			...(target.scopeName === undefined ? {} : { scopeName: target.scopeName }),
+			...(message.conversation.guildId === undefined ? {} : { guildId: message.conversation.guildId }),
+			conversationId: message.conversation.id,
+			...(message.conversation.displayName === undefined ? {} : { conversationName: message.conversation.displayName }),
+			conversationKind: message.conversation.kind,
+			...(message.conversation.threadId === undefined ? {} : { conversationThreadId: message.conversation.threadId }),
+			...(message.conversation.parentId === undefined ? {} : { conversationParentId: message.conversation.parentId }),
+			senderId: message.sender.id,
+			...(message.sender.displayName === undefined && message.sender.username === undefined
+				? {}
+				: { senderName: message.sender.displayName ?? message.sender.username }),
+			externalMessageId: message.externalMessageId,
+			...(message.replyToExternalMessageId === undefined
+				? {}
+				: { replyToExternalMessageId: message.replyToExternalMessageId }),
+			acceptanceReason,
+			text: message.text,
+			attachments: message.attachments,
+			priority: priorityForAcceptanceReason(acceptanceReason),
+		});
+		this.schedulePump(target.workerId);
+	}
+
+	private schedulePump(workerId: string): void {
+		if (this.stopped) return;
+		if (this.pumpPromises.has(workerId)) {
+			this.pumpWakeups.add(workerId);
+			return;
+		}
+		const promise = this.pump(workerId)
+			.catch((error: unknown) => {
+				this.log(`subagent-pump-error worker=${workerId} error=${errorMessage(error)}`);
+			})
+			.finally(() => {
+				this.pumpPromises.delete(workerId);
+				if (this.pumpWakeups.delete(workerId) && !this.stopped) this.schedulePump(workerId);
+			});
+		this.pumpPromises.set(workerId, promise);
+	}
+
+	private async pump(workerId: string): Promise<void> {
+		while (!this.stopped) {
+			const message = await this.store.claimNextDiscordMessage(workerId);
+			if (message === undefined) {
+				const depth = await this.store.discordQueueDepth(workerId);
+				if (depth === 0) await this.store.setSubagentState(workerId, "idle", { activeSummary: "idle" });
+				if (this.pumpWakeups.delete(workerId)) continue;
+				break;
+			}
+			this.pumpWakeups.delete(workerId);
+			await this.processMessage(message);
+		}
+	}
+
+	private async processMessage(message: DiscordInboxMessage): Promise<void> {
+		const runtime = await this.ensureRuntime(message);
+		const activeSummary = `replying to ${message.senderName ?? message.senderId} in ${message.conversationName ?? message.conversationId}`;
+		await this.store.setSubagentState(message.workerId, "running", {
+			activeConversationId: message.conversationId,
+			activeSummary,
+			...(runtime.session.sessionFile === undefined ? {} : { sessionFile: runtime.session.sessionFile }),
+		});
+		try {
+			const replyText = await runSubagentTurn(runtime, buildDiscordSubagentPrompt(message, this.mainStatusText()));
+			if (replyText === undefined || isDiscordSkipReplyText(replyText)) {
+				await this.store.completeDiscordMessage(message.id, undefined);
+				return;
+			}
+			const sent = await this.provider.sendMessage({
+				conversation: inboxConversation(message),
+				replyToExternalMessageId: message.externalMessageId,
+				text: replyText,
+			});
+			await this.store.completeDiscordMessage(message.id, sent.externalMessageId);
+		} catch (error) {
+			const messageText = errorMessage(error);
+			await this.store.failDiscordMessage(message.id, messageText);
+			await this.store.setSubagentState(message.workerId, "failed", {
+				activeConversationId: message.conversationId,
+				activeSummary: "failed while replying to Discord",
+				...(runtime.session.sessionFile === undefined ? {} : { sessionFile: runtime.session.sessionFile }),
+				lastError: messageText,
+			});
+		}
+	}
+
+	private async ensureRuntime(message: DiscordInboxMessage): Promise<AgentSessionRuntime> {
+		const existing = this.runtimes.get(message.workerId);
+		if (existing !== undefined) return existing.runtime;
+		const sessionManager = SessionManager.create(this.cwd, this.sessionDir);
+		const runtime = await createAgentSessionRuntime(this.createRuntime, {
+			cwd: this.cwd,
+			agentDir: this.agentDir,
+			sessionManager,
+		});
+		this.runtimes.set(message.workerId, { runtime, workerId: message.workerId });
+		await this.store.upsertSubagent({
+			id: message.workerId,
+			kind: message.kind,
+			scopeId: message.scopeId,
+			...(message.scopeName === undefined ? {} : { scopeName: message.scopeName }),
+			state: "queued",
+			...(runtime.session.sessionFile === undefined ? {} : { sessionFile: runtime.session.sessionFile }),
+			pid: process.pid,
+			activeSummary: "worker runtime ready",
+		});
+		return runtime;
+	}
+
+	private mainStatusText(): string {
+		const session = this.mainRuntime.session;
+		const leaf = session.sessionManager.getLeafEntry();
+		const leafText = leafMessageText(leaf);
+		return [
+			"Main Clanky status:",
+			`- busy: ${session.isStreaming ? "yes" : "no"}`,
+			`- cwd: ${this.mainRuntime.cwd}`,
+			`- sessionId: ${session.sessionId}`,
+			...(session.sessionFile === undefined ? [] : [`- sessionFile: ${session.sessionFile}`]),
+			...(leafText === undefined ? [] : [`- latest visible session text: ${leafText.slice(0, 500)}`]),
+		].join("\n");
+	}
+
+	private log(line: string): void {
+		if (this.bridgeLogPath === undefined) return;
+		appendFile(this.bridgeLogPath, `${new Date().toISOString()} ${line}\n`).catch((error: unknown) => {
+			console.error(`discord-subagent log failed: ${errorMessage(error)}`);
+		});
+	}
+}
+
+async function runSubagentTurn(runtime: AgentSessionRuntime, prompt: string): Promise<string | undefined> {
+	let finalText: string | undefined;
+	const unsubscribe = runtime.session.subscribe((event: AgentSessionEvent) => {
+		const text = extractAssistantText(event);
+		if (text !== undefined) finalText = text;
+	});
+	try {
+		await runtime.session.sendUserMessage(prompt);
+		return finalText;
+	} finally {
+		unsubscribe();
+	}
+}
+
+function resolveDiscordWorkerTarget(message: DiscordInboundMessage): DiscordWorkerTarget {
+	const guildId = message.conversation.guildId?.trim();
+	if (guildId !== undefined && guildId.length > 0) {
+		return {
+			workerId: `discord-guild:${guildId}`,
+			kind: "discord-guild",
+			scopeId: guildId,
+			scopeName: guildId,
+		};
+	}
+	return {
+		workerId: `discord-dm:${message.conversation.id}`,
+		kind: "discord-dm",
+		scopeId: message.conversation.id,
+		scopeName: message.conversation.displayName ?? "Discord DM",
+	};
+}
+
+function priorityForAcceptanceReason(reason: DiscordAcceptanceReason): number {
+	if (reason === "dm" || reason === "platform_mention" || reason === "bound_conversation") return 10;
+	if (reason === "reply_to_self" || reason === "name_address") return 5;
+	return 0;
+}
+
+function buildDiscordSubagentPrompt(message: DiscordInboxMessage, mainStatus: string): string {
+	const sender = message.senderName ?? message.senderId;
+	const channel = message.conversationName ?? message.conversationId;
+	const attachments = renderAttachments(message.attachments);
+	return [
+		"You are a Discord-facing Clanky subagent. Handle this Discord message as one real person for this server/DM.",
+		"Answer directly and briefly unless the user asks for detail.",
+		"Do not claim the main Clanky stopped or changed work unless the status below says so.",
+		"If the message does not actually need a reply, output exactly [SKIP].",
+		"If you use a Discord send/upload tool for this conversation and that action already satisfies the user, output exactly [SKIP] as your final response instead of posting a duplicate confirmation.",
+		"",
+		mainStatus,
+		"",
+		`Discord scope: ${message.kind} ${message.scopeName ?? message.scopeId}`,
+		`Discord channel/conversation: ${channel} (${message.conversationKind})`,
+		`Acceptance reason: ${message.acceptanceReason}`,
+		`Message from ${sender}:`,
+		"",
+		message.text,
+		attachments,
+	]
+		.filter((part) => part.length > 0)
+		.join("\n");
+}
+
+function inboxConversation(message: DiscordInboxMessage): DiscordInboundConversation {
+	const conversation: DiscordInboundConversation = {
+		id: message.conversationId,
+		kind: readConversationKind(message.conversationKind),
+	};
+	if (message.guildId !== undefined) conversation.guildId = message.guildId;
+	if (message.conversationName !== undefined) conversation.displayName = message.conversationName;
+	if (message.conversationThreadId !== undefined) conversation.threadId = message.conversationThreadId;
+	if (message.conversationParentId !== undefined) conversation.parentId = message.conversationParentId;
+	return conversation;
+}
+
+function readConversationKind(value: string): DiscordInboundConversation["kind"] {
+	if (value === "dm" || value === "channel" || value === "group" || value === "thread" || value === "custom")
+		return value;
+	return "custom";
+}
+
+function renderAttachments(attachments: readonly DiscordInboxAttachment[]): string {
+	if (attachments.length === 0) return "";
+	return [
+		"Attachments:",
+		...attachments.map((attachment) => `- ${attachment.url ?? attachment.filename ?? "(unnamed attachment)"}`),
+	].join("\n");
+}
+
+function leafMessageText(entry: unknown): string | undefined {
+	if (typeof entry !== "object" || entry === null || !("type" in entry)) return undefined;
+	const record = entry as Record<string, unknown>;
+	if (record.type !== "message") return undefined;
+	const message = record.message;
+	if (typeof message !== "object" || message === null) return undefined;
+	const content = (message as Record<string, unknown>).content;
+	return contentText(content).trim() || undefined;
+}
+
+function contentText(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.flatMap((part) => {
+			if (typeof part !== "object" || part === null) return [];
+			const record = part as Record<string, unknown>;
+			return record.type === "text" && typeof record.text === "string" ? [record.text] : [];
+		})
+		.join("\n");
+}
+
+function extractAssistantText(event: AgentSessionEvent): string | undefined {
+	if (event.type !== "message_end" || event.message.role !== "assistant") return undefined;
+	if (event.message.stopReason === "toolUse") return undefined;
+	const text = event.message.content
+		.filter((part) => part.type === "text")
+		.map((part) => part.text)
+		.join("\n")
+		.trim();
+	if (text.length > 0) return text;
+	if (event.message.stopReason === "error" && event.message.errorMessage !== undefined) {
+		return `I hit an error: ${event.message.errorMessage}`;
+	}
+	return undefined;
+}
+
+function isDiscordSkipReplyText(text: string): boolean {
+	return /^\[SKIP\]$/i.test(text.trim());
+}
+
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? (error.stack ?? error.message) : String(error);
+}

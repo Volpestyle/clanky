@@ -184,6 +184,17 @@ export {
 	type UpdateClankyTaskInput,
 } from "./state/index-db.ts";
 export {
+	type ClankySubagentKind,
+	type ClankySubagentState,
+	type ClankySubagentSummary,
+	type DiscordInboxAttachment,
+	type DiscordInboxMessage,
+	type DiscordInboxStatus,
+	DiscordSubagentStore,
+	type EnqueueDiscordInboxMessageInput,
+	type UpsertSubagentInput,
+} from "./subagents/store.ts";
+export {
 	getWebBackendStatus,
 	type OpenAiWebSearchInput,
 	type OpenAiWebSearchResult,

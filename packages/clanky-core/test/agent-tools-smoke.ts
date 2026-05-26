@@ -1,5 +1,6 @@
 import {
 	type ClankyAgentToolHandlers,
+	createClankyExtensionFactories,
 	createClankyToolDefinitions,
 	type ExternalMcpCallToolInput,
 	type LinearCreateIssueToolInput,
@@ -19,7 +20,12 @@ import {
 	type XAiImageGenerateToolInput,
 	type XAiVideoGenerateToolInput,
 } from "@clanky/core";
-import { AuthStorage, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import {
+	AuthStorage,
+	type ExtensionCommandContext,
+	type ExtensionFactory,
+	type ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 
 const calls: string[] = [];
 
@@ -43,6 +49,22 @@ const handlers: ClankyAgentToolHandlers = {
 	taskCreate: async (input) => {
 		calls.push(`task:${input.title}:${input.sessionId ?? "none"}`);
 		return { task: { id: "task-created", ...input } };
+	},
+	listSubagents: async () => {
+		calls.push("subagent-status");
+		return [
+			{
+				id: "discord-guild:guild-tool",
+				kind: "discord-guild",
+				scopeId: "guild-tool",
+				scopeName: "Tool Guild",
+				state: "idle",
+				queueDepth: 0,
+				activeSummary: "idle",
+				createdAt: "2026-01-01T00:00:00.000Z",
+				updatedAt: "2026-01-01T00:01:00.000Z",
+			},
+		];
 	},
 	memoryRemember: async (input) => {
 		calls.push(`memory-remember:${input.claim}:${input.confirmed === true}`);
@@ -102,12 +124,14 @@ const handlers: ClankyAgentToolHandlers = {
 
 const tools = createClankyToolDefinitions(handlers);
 assertChatModeHelpers();
+await assertSubagentPanelCommand();
 const expectedNames = [
 	"schedule_cron",
 	"mcp_call",
 	"linear_create_issue",
 	"linear_link",
 	"task_create",
+	"subagent_status",
 	"memory_remember",
 	"memory_search",
 	"memory_forget",
@@ -151,6 +175,8 @@ await executeTool(tools, "task_create", {
 	title: "Task smoke",
 	priority: "high",
 } satisfies TaskCreateToolInput);
+
+await executeTool(tools, "subagent_status", {});
 
 await executeTool(tools, "memory_remember", {
 	claim: "Project uses source-grounded memory atoms.",
@@ -207,6 +233,7 @@ const expectedCallPrefixes = [
 	"linear:",
 	"mcp-call:",
 	"task:",
+	"subagent-status",
 	"memory-remember:",
 	"memory-search:",
 	"memory-forget:",
@@ -299,6 +326,70 @@ async function assertOpenAiWebSearchUsesStoredCredential(): Promise<void> {
 	);
 	if (result.answer !== "stored credential ok") {
 		throw new Error(`smoke: web_search did not parse fake response: ${result.answer}`);
+	}
+}
+
+async function assertSubagentPanelCommand(): Promise<void> {
+	const commands = new Map<string, Parameters<Parameters<ExtensionFactory>[0]["registerCommand"]>[1]>();
+	const factories = createClankyExtensionFactories({
+		listSubagents: async () => [
+			{
+				id: "discord-guild:guild-smoke",
+				kind: "discord-guild",
+				scopeId: "guild-smoke",
+				scopeName: "Smoke Guild",
+				state: "running",
+				queueDepth: 2,
+				activeSummary: "replying to Smoke User in general",
+				createdAt: "2026-01-01T00:00:00.000Z",
+				updatedAt: "2026-01-01T00:01:00.000Z",
+			},
+		],
+	});
+	const pi = {
+		registerCommand(name: string, options: Parameters<Parameters<ExtensionFactory>[0]["registerCommand"]>[1]) {
+			commands.set(name, options);
+		},
+		on() {
+			return;
+		},
+	} as unknown as Parameters<ExtensionFactory>[0];
+	for (const factory of factories) await factory(pi);
+
+	const widgets = new Map<string, string[] | undefined>();
+	const notifications: string[] = [];
+	const ctx = {
+		hasUI: true,
+		ui: {
+			notify(message: string) {
+				notifications.push(message);
+			},
+			setWidget(key: string, content: string[] | undefined) {
+				widgets.set(key, content);
+			},
+			setStatus() {
+				return;
+			},
+			theme: {
+				fg: (_color: string, text: string) => text,
+				bold: (text: string) => text,
+			},
+		},
+	} as unknown as ExtensionCommandContext;
+	const subagents = commands.get("subagents");
+	if (subagents === undefined) throw new Error("smoke: /subagents command was not registered");
+	await subagents.handler("show", ctx);
+	const panelLines = widgets.get("clanky-subagents");
+	if (panelLines === undefined || !panelLines.join("\n").includes("Smoke Guild")) {
+		throw new Error(`smoke: /subagents show did not render live panel: ${JSON.stringify(panelLines)}`);
+	}
+	await subagents.handler("hide", ctx);
+	if (widgets.get("clanky-subagents") !== undefined) {
+		throw new Error("smoke: /subagents hide did not clear live panel");
+	}
+	await subagents.handler("json", ctx);
+	if (!notifications.some((message) => message.includes("discord-guild:guild-smoke"))) {
+		throw new Error(`smoke: /subagents json did not show raw data: ${JSON.stringify(notifications)}`);
 	}
 }
 

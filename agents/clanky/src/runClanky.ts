@@ -165,6 +165,7 @@ export async function createClankyRuntime(options: RunClankyOptions = {}) {
 	const discordProviderId = resolveDefaultDiscordProviderId();
 	const gatewayController = new ClankyDiscordGatewayController({
 		authStorage,
+		paths,
 		bridgeLogPath: `${paths.profileDir}/discord-bridge.log`,
 	});
 	const createRuntime = buildRuntimeFactory({
@@ -174,6 +175,7 @@ export async function createClankyRuntime(options: RunClankyOptions = {}) {
 		discordProviderId,
 		gatewayController,
 	});
+	gatewayController.bindSubagentRuntimeFactory(createRuntime, cwd);
 
 	const runtime = await createAgentSessionRuntime(createRuntime, {
 		cwd,
