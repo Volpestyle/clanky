@@ -498,12 +498,14 @@ export function createClankyExtensionFactories(handlers: ClankyAgentToolHandlers
 }
 
 class SubagentPanelController {
-	private visible = true;
-	private focused = false;
+	private visible = false;
+	private selectionActive = false;
 	private summaries: ClankySubagentSummary[] = [];
 	private selectedIndex = 0;
 	private listScroll = 0;
 	private timer: ReturnType<typeof setInterval> | undefined;
+	private pendingMetaEscapeTimer: ReturnType<typeof setTimeout> | undefined;
+	private pendingMetaEscape = false;
 	private unsubscribeInput: (() => void) | undefined;
 	private refreshRunning = false;
 	private readonly listSubagents: () => Promise<ClankySubagentSummary[]>;
@@ -525,9 +527,29 @@ class SubagentPanelController {
 
 	async handleCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
 		const command = args.trim().toLowerCase();
-		if (command === "" || command === "focus" || command === "list") {
+		if (command === "" || command === "toggle") {
+			this.visible = !this.visible;
+			if (!this.visible) {
+				this.selectionActive = false;
+				ctx.ui.setWidget(SUBAGENT_PANEL_WIDGET_KEY, undefined);
+				await this.refresh(ctx);
+				return;
+			}
+			this.selectionActive = false;
+			this.start(ctx);
+			await this.refresh(ctx);
+			return;
+		}
+		if (command === "focus") {
 			this.visible = true;
-			this.focused = true;
+			this.selectionActive = true;
+			this.start(ctx);
+			await this.refresh(ctx);
+			return;
+		}
+		if (command === "list") {
+			this.visible = true;
+			this.selectionActive = false;
 			this.start(ctx);
 			await this.refresh(ctx);
 			return;
@@ -556,19 +578,19 @@ class SubagentPanelController {
 		}
 		if (command === "hide" || command === "off") {
 			this.visible = false;
-			this.focused = false;
+			this.selectionActive = false;
 			ctx.ui.setWidget(SUBAGENT_PANEL_WIDGET_KEY, undefined);
 			await this.refresh(ctx);
 			return;
 		}
-		if (command === "panel" || command === "show" || command === "on" || command === "toggle") {
-			this.visible = command === "toggle" ? !this.visible : true;
-			this.focused = false;
+		if (command === "panel" || command === "show" || command === "on") {
+			this.visible = true;
+			this.selectionActive = false;
 			this.start(ctx);
 			await this.refresh(ctx);
 			return;
 		}
-		ctx.ui.notify("Subagents\nUsage: /subagents [focus|chat|modal|panel|hide|toggle|status|json]", "warning");
+		ctx.ui.notify("Subagents\nUsage: /subagents [focus|chat|modal|panel|hide|status|json]", "warning");
 	}
 
 	private async openBrowser(ctx: ExtensionCommandContext): Promise<void> {
@@ -641,6 +663,7 @@ class SubagentPanelController {
 			clearInterval(this.timer);
 			this.timer = undefined;
 		}
+		this.clearPendingMetaEscape();
 		this.unsubscribeInput?.();
 		this.unsubscribeInput = undefined;
 		ctx.ui.setWidget(SUBAGENT_PANEL_WIDGET_KEY, undefined);
@@ -648,34 +671,73 @@ class SubagentPanelController {
 	}
 
 	private handleTerminalInput(data: string, ctx: ExtensionContext): { consume?: boolean; data?: string } | undefined {
-		if (!this.focused) return undefined;
-		if (isEscapeKey(data) || data === "q") {
-			this.focused = false;
+		if (!this.visible) return undefined;
+		if (isEscapeKey(data) && this.selectionActive) {
+			this.selectionActive = false;
+			this.clearPendingMetaEscape();
 			this.renderPanel(ctx);
 			return { consume: true };
 		}
-		if (data === "r") {
-			void this.refresh(ctx);
-			return { consume: true };
-		}
-		if (isUpKey(data) || data === "k") {
+		const pendingMetaEscape = this.pendingMetaEscape;
+		if (pendingMetaEscape) this.clearPendingMetaEscape();
+		if (
+			isSubagentPreviousKey(data) ||
+			(pendingMetaEscape && isUpKey(data)) ||
+			(this.selectionActive && (isUpKey(data) || data === "k"))
+		) {
+			this.selectionActive = true;
 			this.selectedIndex = Math.max(0, this.selectedIndex - 1);
 			this.ensureSelectedVisible(SUBAGENT_PANEL_MAX_ROWS);
 			this.renderPanel(ctx);
 			return { consume: true };
 		}
-		if (isDownKey(data) || data === "j") {
+		if (
+			isSubagentNextKey(data) ||
+			(pendingMetaEscape && isDownKey(data)) ||
+			(this.selectionActive && (isDownKey(data) || data === "j"))
+		) {
+			this.selectionActive = true;
 			this.selectedIndex = Math.min(Math.max(0, this.summaries.length - 1), this.selectedIndex + 1);
 			this.ensureSelectedVisible(SUBAGENT_PANEL_MAX_ROWS);
 			this.renderPanel(ctx);
 			return { consume: true };
 		}
-		if (isEnterKey(data)) {
+		if (isEnterKey(data) && this.selectionActive) {
 			const selected = this.selectedSummary();
 			if (selected !== undefined) void this.openTranscript(ctx, selected.id);
 			return { consume: true };
 		}
-		return { consume: true };
+		if (data === "r" && this.selectionActive) {
+			void this.refresh(ctx);
+			return { consume: true };
+		}
+		if (isEscapeKey(data)) {
+			this.setPendingMetaEscape();
+			return undefined;
+		}
+		if (this.selectionActive) {
+			this.selectionActive = false;
+			this.renderPanel(ctx);
+		}
+		return undefined;
+	}
+
+	private setPendingMetaEscape(): void {
+		this.clearPendingMetaEscape();
+		this.pendingMetaEscape = true;
+		this.pendingMetaEscapeTimer = setTimeout(() => {
+			this.pendingMetaEscape = false;
+			this.pendingMetaEscapeTimer = undefined;
+		}, 50);
+		this.pendingMetaEscapeTimer.unref?.();
+	}
+
+	private clearPendingMetaEscape(): void {
+		if (this.pendingMetaEscapeTimer !== undefined) {
+			clearTimeout(this.pendingMetaEscapeTimer);
+			this.pendingMetaEscapeTimer = undefined;
+		}
+		this.pendingMetaEscape = false;
 	}
 
 	private async refresh(ctx: ExtensionContext): Promise<void> {
@@ -692,10 +754,11 @@ class SubagentPanelController {
 			const message = error instanceof Error ? error.message : String(error);
 			ctx.ui.setStatus(SUBAGENT_PANEL_STATUS_KEY, ctx.ui.theme.fg("error", "subagents error"));
 			if (this.visible) {
-				ctx.ui.setWidget(SUBAGENT_PANEL_WIDGET_KEY, [
-					ctx.ui.theme.bold("Subagents"),
-					ctx.ui.theme.fg("error", `failed to refresh: ${message}`),
-				]);
+				ctx.ui.setWidget(
+					SUBAGENT_PANEL_WIDGET_KEY,
+					[ctx.ui.theme.bold("Subagents"), ctx.ui.theme.fg("error", `failed to refresh: ${message}`)],
+					{ placement: "belowEditor" },
+				);
 			}
 		} finally {
 			this.refreshRunning = false;
@@ -708,12 +771,14 @@ class SubagentPanelController {
 			return;
 		}
 		const lines = formatSubagentPanelLines(this.summaries, ctx, {
-			includeEmpty: this.focused,
-			focused: this.focused,
+			includeEmpty: this.selectionActive,
+			selectionActive: this.selectionActive,
 			selectedIndex: this.selectedIndex,
 			scroll: this.listScroll,
 		});
-		ctx.ui.setWidget(SUBAGENT_PANEL_WIDGET_KEY, lines.length === 0 ? undefined : lines);
+		ctx.ui.setWidget(SUBAGENT_PANEL_WIDGET_KEY, lines.length === 0 ? undefined : lines, {
+			placement: "belowEditor",
+		});
 	}
 
 	private selectedSummary(): ClankySubagentSummary | undefined {
@@ -1139,13 +1204,18 @@ function formatSubagentFooterStatus(
 function formatSubagentPanelLines(
 	summaries: readonly ClankySubagentSummary[],
 	ctx: ExtensionContext,
-	options: { includeEmpty?: boolean; focused?: boolean; selectedIndex?: number; scroll?: number } = {},
+	options: { includeEmpty?: boolean; selectionActive?: boolean; selectedIndex?: number; scroll?: number } = {},
 ): string[] {
 	if (summaries.length === 0) {
 		return options.includeEmpty === true
 			? [
-					ctx.ui.theme.bold(options.focused === true ? "Subagents focused" : "Subagents"),
-					ctx.ui.theme.fg("dim", "No Discord subagents yet. Esc exits focus."),
+					ctx.ui.theme.bold(options.selectionActive === true ? "Subagents selecting" : "Subagents"),
+					ctx.ui.theme.fg(
+						"dim",
+						options.selectionActive === true
+							? "No Discord subagents yet. Esc releases selection."
+							: "No Discord subagents yet.",
+					),
 				]
 			: [];
 	}
@@ -1162,9 +1232,9 @@ function formatSubagentPanelLines(
 			.join("  "),
 		ctx.ui.theme.fg(
 			"dim",
-			options.focused === true
-				? "Up/Down select  Enter chat  Esc done"
-				: "/subagents to focus  /subagents chat to open selected",
+			options.selectionActive === true
+				? "Up/Down select  Enter modal  Esc release"
+				: "/subagents focus selects  /subagents hides  /subagents modal opens browser",
 		),
 		ctx.ui.theme.fg("dim", "state     queue  scope / active work"),
 	];
@@ -1173,7 +1243,7 @@ function formatSubagentPanelLines(
 	const visible = ordered.slice(scroll, scroll + SUBAGENT_PANEL_MAX_ROWS);
 	for (const [visibleIndex, subagent] of visible.entries()) {
 		lines.push(
-			formatSubagentPanelRow(subagent, ctx, scroll + visibleIndex === selectedIndex, options.focused === true),
+			formatSubagentPanelRow(subagent, ctx, scroll + visibleIndex === selectedIndex, options.selectionActive === true),
 		);
 	}
 	if (ordered.length > SUBAGENT_PANEL_MAX_ROWS) {
@@ -1421,6 +1491,34 @@ function isUpKey(data: string): boolean {
 
 function isDownKey(data: string): boolean {
 	return data === "\u001b[B";
+}
+
+function isSubagentPreviousKey(data: string): boolean {
+	return (
+		data === "\u001b\u001b[A" ||
+		data === "\u001bp" ||
+		data === "\u001bOa" ||
+		isModifiedArrowKey(data, "A") ||
+		isModifiedKittyArrowKey(data, "57419")
+	);
+}
+
+function isSubagentNextKey(data: string): boolean {
+	return (
+		data === "\u001b\u001b[B" ||
+		data === "\u001bn" ||
+		data === "\u001bOb" ||
+		isModifiedArrowKey(data, "B") ||
+		isModifiedKittyArrowKey(data, "57420")
+	);
+}
+
+function isModifiedArrowKey(data: string, arrowCode: "A" | "B"): boolean {
+	return new RegExp(`^\\u001b\\[1;(?:3|5)(?::[123])?${arrowCode}$`).test(data);
+}
+
+function isModifiedKittyArrowKey(data: string, codepoint: "57419" | "57420"): boolean {
+	return new RegExp(`^\\u001b\\[${codepoint};(?:3|5)(?::[123])?u$`).test(data);
 }
 
 function isPageUpKey(data: string): boolean {
