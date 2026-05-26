@@ -15,6 +15,25 @@ pnpm voice:native:check
 pnpm voice:build
 ```
 
+Enable voice from the Clanky TUI with:
+
+```text
+/discord-voice enable <guild-id> <voice-channel-id>
+```
+
+Use `/discord-voice status` to see the stored profile setting and active bridge
+state. Use `/discord-voice disable` to stop the voice bridge. These settings are
+stored in the active Clanky profile and hot-restart the Discord bridge when
+changed.
+
+Env config still works and overrides the TUI profile setting when present:
+
+```bash
+CLANKY_DISCORD_VOICE_ENABLED=1
+CLANKY_DISCORD_VOICE_GUILD_ID=...
+CLANKY_DISCORD_VOICE_CHANNEL_ID=...
+```
+
 Credentials can come from `CLANKY_DISCORD_TOKEN` or from a stored
 `/discord-login` credential in the active Clanky profile. Bot tokens are enough
 for normal voice audio. Native Discord Go Live watching requires a user-token
@@ -29,6 +48,28 @@ OpenAI recommends WebRTC for browser or mobile clients where the client owns a
 microphone track. Here, `clankvox` already terminates Discord RTP and exposes
 PCM frames to Node, so WebSocket audio-buffer events map directly onto Discord
 input/output without adding another media peer connection.
+
+## Music And Video Media
+
+Realtime is the live voice front-end, but Pi remains the reasoning/tool/skill
+layer. The Realtime voice bridge exposes small URL-first media controls:
+
+- `play_music_url`: play a resolved http(s) URL into Discord voice audio.
+- `play_video_url`: start Discord Go Live for a resolved http(s) video URL and,
+  by default, play the audio into voice too.
+- `start_music_visualizer`: publish a Go Live visualizer for current music or a
+  resolved music URL.
+- `media_pause`, `media_resume`, `media_stop`, `media_status`: live playback
+  controls.
+
+For search-like requests such as "play Minecraft music" or "put on this video",
+Realtime should call `ask_pi` first and let Pi use skills/tools to resolve the
+playable URL. The media tools intentionally do not carry the old search,
+queueing, and disambiguation stack.
+
+`play_music_url` works with bot-token voice because it is normal Discord voice
+audio. `play_video_url` and `start_music_visualizer` need a user-token
+credential because they use Discord Go Live publish.
 
 ## Bot-Token Audio And Tool Check
 

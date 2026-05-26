@@ -24,6 +24,7 @@ import {
 } from "@clanky/core";
 import type { AuthStorage, ExtensionCommandContext, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import type { ClankyDiscordGatewayController } from "./discordGatewayController.ts";
+import type { DiscordVoiceSettingsAccessor, StoredDiscordVoiceSettings } from "./discordVoiceSettings.ts";
 import { promptForSecret } from "./secretPrompt.ts";
 
 const DEV_PORTAL_URL = "https://discord.com/developers/applications";
@@ -157,6 +158,7 @@ export interface DiscordAuthCommandDeps {
 	providerId: string;
 	authFilePath: string;
 	gatewayController?: ClankyDiscordGatewayController;
+	voiceSettings?: DiscordVoiceSettingsAccessor;
 }
 
 function loginInstructions(): string {
@@ -321,6 +323,9 @@ function formatDiscordBridgeStatus(status: unknown): string {
 		`Voice bridge: ${voiceBridgeActive ? "active" : "inactive"}.`,
 		`Voice-only client: ${voiceOnlyClientActive ? "active" : "inactive"}.`,
 	];
+	if (typeof status.voiceConfigError === "string" && status.voiceConfigError.length > 0) {
+		lines.push(`Voice config error: ${status.voiceConfigError}`);
+	}
 	const voice = isRecord(status.voice) ? status.voice : undefined;
 	if (voice !== undefined) {
 		if (typeof voice.guildId === "string" && typeof voice.channelId === "string") {
@@ -333,10 +338,26 @@ function formatDiscordBridgeStatus(status: unknown): string {
 		if (typeof voice.nativeScreenWatchSupported === "boolean") {
 			lines.push(`Native screen watch: ${voice.nativeScreenWatchSupported ? "supported" : "requires user-token"}.`);
 		}
+		if (typeof voice.nativeStreamPublishSupported === "boolean") {
+			lines.push(`Native stream publish: ${voice.nativeStreamPublishSupported ? "supported" : "requires user-token"}.`);
+		}
 		if (typeof voice.discoveredStreams === "number")
 			lines.push(`Discovered screen shares: ${voice.discoveredStreams}.`);
 		if (voice.activeStreamWatchKey !== undefined) {
 			lines.push(`Active screen watch: ${String(voice.activeStreamWatchKey)}.`);
+		}
+		const media = isRecord(voice.media) ? voice.media : undefined;
+		if (media !== undefined) {
+			const music = isRecord(media.music) ? media.music : undefined;
+			const streamPublish = isRecord(media.streamPublish) ? media.streamPublish : undefined;
+			if (music !== undefined && typeof music.status === "string") {
+				lines.push(`Voice music: ${music.status}${typeof music.url === "string" ? ` (${music.url})` : ""}.`);
+			}
+			if (streamPublish !== undefined && typeof streamPublish.status === "string") {
+				lines.push(
+					`Go Live publish: ${streamPublish.status}${streamPublish.streamKey ? ` (${String(streamPublish.streamKey)})` : ""}.`,
+				);
+			}
 		}
 		const stats = isRecord(voice.stats) ? voice.stats : undefined;
 		if (stats !== undefined) {
@@ -370,6 +391,274 @@ function runDiscordStatus(deps: DiscordAuthCommandDeps, ctx: ExtensionCommandCon
 		return;
 	}
 	ctx.ui.notify(formatDiscordBridgeStatus(deps.gatewayController.status()));
+}
+
+function discordVoiceUsage(path: string | undefined): string {
+	const lines = [
+		"Discord voice",
+		"Usage:",
+		"  /discord-voice status",
+		"  /discord-voice setup",
+		"  /discord-voice enable <guild-id> <voice-channel-id>",
+		"  /discord-voice disable",
+		"  /discord-voice set guild <guild-id>",
+		"  /discord-voice set channel <voice-channel-id>",
+		"  /discord-voice set model <realtime-model>",
+		"  /discord-voice set voice <realtime-voice>",
+		"  /discord-voice set reasoning <minimal|low|medium|high|xhigh|clear>",
+		"  /discord-voice set frame-interval <milliseconds>",
+		"  /discord-voice clear",
+	];
+	if (path !== undefined) lines.push("", `Profile settings file: ${path}`);
+	lines.push("", "Env vars still work and override profile voice settings when present.");
+	return lines.join("\n");
+}
+
+function formatDiscordVoiceSettings(settings: StoredDiscordVoiceSettings | undefined, path: string): string[] {
+	const lines = [`Profile settings file: ${path}`];
+	if (settings === undefined) {
+		lines.push("Profile voice setting: not configured.");
+		return lines;
+	}
+	lines.push(`Profile voice setting: ${settings.enabled ? "enabled" : "disabled"}.`);
+	if (settings.guildId !== undefined) lines.push(`Stored guild id: ${settings.guildId}.`);
+	if (settings.channelId !== undefined) lines.push(`Stored voice channel id: ${settings.channelId}.`);
+	if (settings.openAiRealtimeModel !== undefined) lines.push(`Stored Realtime model: ${settings.openAiRealtimeModel}.`);
+	if (settings.openAiRealtimeVoice !== undefined) lines.push(`Stored Realtime voice: ${settings.openAiRealtimeVoice}.`);
+	if (settings.openAiRealtimeReasoningEffort !== undefined) {
+		lines.push(`Stored Realtime reasoning effort: ${settings.openAiRealtimeReasoningEffort}.`);
+	}
+	if (settings.videoFrameAutoAttachIntervalMs !== undefined) {
+		lines.push(`Stored video frame auto-attach interval: ${settings.videoFrameAutoAttachIntervalMs} ms.`);
+	}
+	return lines;
+}
+
+function formatDiscordVoiceEnvOverrides(): string[] {
+	const lines: string[] = [];
+	const enabled = process.env.CLANKY_DISCORD_VOICE_ENABLED ?? process.env.CLANKY_DISCORD_VOICE;
+	if (cleanArg(enabled) !== undefined) lines.push(`Env voice enable override: ${enabled}.`);
+	const guildId = cleanArg(process.env.CLANKY_DISCORD_VOICE_GUILD_ID);
+	if (guildId !== undefined) lines.push(`Env guild id override: ${guildId}.`);
+	const channelId = cleanArg(process.env.CLANKY_DISCORD_VOICE_CHANNEL_ID);
+	if (channelId !== undefined) lines.push(`Env voice channel id override: ${channelId}.`);
+	const model = cleanArg(process.env.CLANKY_OPENAI_REALTIME_MODEL);
+	if (model !== undefined) lines.push(`Env Realtime model override: ${model}.`);
+	const voice = cleanArg(process.env.CLANKY_OPENAI_REALTIME_VOICE);
+	if (voice !== undefined) lines.push(`Env Realtime voice override: ${voice}.`);
+	return lines;
+}
+
+function formatDiscordVoiceCommandStatus(deps: DiscordAuthCommandDeps): string {
+	const lines = ["Discord voice"];
+	if (deps.voiceSettings === undefined) {
+		lines.push("Profile voice settings are not available in this session.");
+	} else {
+		lines.push(...formatDiscordVoiceSettings(deps.voiceSettings.read(), deps.voiceSettings.path));
+	}
+	const envLines = formatDiscordVoiceEnvOverrides();
+	if (envLines.length > 0) lines.push("", ...envLines);
+	if (deps.gatewayController !== undefined) {
+		lines.push("", formatDiscordBridgeStatus(deps.gatewayController.status()));
+	}
+	return lines.join("\n");
+}
+
+async function runDiscordVoiceCommand(
+	deps: DiscordAuthCommandDeps,
+	args: string,
+	ctx: ExtensionCommandContext,
+): Promise<void> {
+	if (deps.voiceSettings === undefined) {
+		ctx.ui.notify("Discord voice settings are not available in this session.", "error");
+		return;
+	}
+	const parts = parseCommandArgs(args);
+	const subcommand = parts[0]?.toLowerCase() ?? "status";
+	if (subcommand === "status") {
+		ctx.ui.notify(formatDiscordVoiceCommandStatus(deps));
+		return;
+	}
+	if (subcommand === "enable" || subcommand === "setup" || subcommand === "configure") {
+		await runDiscordVoiceEnable(deps, parts.slice(1), ctx);
+		return;
+	}
+	if (subcommand === "disable") {
+		await runDiscordVoiceDisable(deps, ctx);
+		return;
+	}
+	if (subcommand === "set") {
+		await runDiscordVoiceSet(deps, parts.slice(1), ctx);
+		return;
+	}
+	if (subcommand === "clear") {
+		await runDiscordVoiceClear(deps, ctx);
+		return;
+	}
+	ctx.ui.notify(discordVoiceUsage(deps.voiceSettings.path), "warning");
+}
+
+async function runDiscordVoiceEnable(
+	deps: DiscordAuthCommandDeps,
+	args: string[],
+	ctx: ExtensionCommandContext,
+): Promise<void> {
+	const current = deps.voiceSettings?.read() ?? { enabled: false };
+	const guildId = await readDiscordVoiceValue(ctx, args[0], "Discord guild id:", current.guildId);
+	if (guildId === undefined) {
+		ctx.ui.notify(discordVoiceUsage(deps.voiceSettings?.path), "warning");
+		return;
+	}
+	const channelId = await readDiscordVoiceValue(ctx, args[1], "Discord voice channel id:", current.channelId);
+	if (channelId === undefined) {
+		ctx.ui.notify(discordVoiceUsage(deps.voiceSettings?.path), "warning");
+		return;
+	}
+	const next = { ...current, enabled: true, guildId, channelId };
+	deps.voiceSettings?.write(next);
+	const lines = [`Discord voice enabled for guild ${guildId}, channel ${channelId}.`];
+	await restartDiscordBridgeAfterVoiceSettingsChange(deps, lines);
+	ctx.ui.notify(lines.join("\n"));
+}
+
+async function runDiscordVoiceDisable(deps: DiscordAuthCommandDeps, ctx: ExtensionCommandContext): Promise<void> {
+	const current = deps.voiceSettings?.read() ?? { enabled: false };
+	deps.voiceSettings?.write({ ...current, enabled: false });
+	const lines = ["Discord voice disabled in profile settings."];
+	await restartDiscordBridgeAfterVoiceSettingsChange(deps, lines);
+	ctx.ui.notify(lines.join("\n"));
+}
+
+async function runDiscordVoiceSet(
+	deps: DiscordAuthCommandDeps,
+	args: string[],
+	ctx: ExtensionCommandContext,
+): Promise<void> {
+	const field = args[0]?.toLowerCase();
+	const rawValue = cleanArg(args[1]);
+	const current = deps.voiceSettings?.read() ?? { enabled: false };
+	const next: StoredDiscordVoiceSettings = { ...current };
+	let line: string | undefined;
+	if (field === "guild") {
+		const value = await readDiscordVoiceValue(ctx, rawValue, "Discord guild id:", current.guildId);
+		if (value === undefined) return ctx.ui.notify(discordVoiceUsage(deps.voiceSettings?.path), "warning");
+		next.guildId = value;
+		line = `Discord voice guild id set to ${value}.`;
+	} else if (field === "channel") {
+		const value = await readDiscordVoiceValue(ctx, rawValue, "Discord voice channel id:", current.channelId);
+		if (value === undefined) return ctx.ui.notify(discordVoiceUsage(deps.voiceSettings?.path), "warning");
+		next.channelId = value;
+		line = `Discord voice channel id set to ${value}.`;
+	} else if (field === "model") {
+		const value = await readDiscordVoiceValue(ctx, rawValue, "OpenAI Realtime model:", current.openAiRealtimeModel);
+		if (value === undefined) return ctx.ui.notify(discordVoiceUsage(deps.voiceSettings?.path), "warning");
+		next.openAiRealtimeModel = value;
+		line = `Realtime model set to ${value}.`;
+	} else if (field === "voice") {
+		const value = await readDiscordVoiceValue(ctx, rawValue, "OpenAI Realtime voice:", current.openAiRealtimeVoice);
+		if (value === undefined) return ctx.ui.notify(discordVoiceUsage(deps.voiceSettings?.path), "warning");
+		next.openAiRealtimeVoice = value;
+		line = `Realtime voice set to ${value}.`;
+	} else if (field === "reasoning") {
+		if (rawValue === "clear" || rawValue === "default") {
+			delete next.openAiRealtimeReasoningEffort;
+			line = "Realtime reasoning effort cleared.";
+		} else if (isRealtimeReasoningEffort(rawValue)) {
+			next.openAiRealtimeReasoningEffort = rawValue;
+			line = `Realtime reasoning effort set to ${rawValue}.`;
+		}
+	} else if (field === "frame-interval" || field === "frame_interval") {
+		const value = parseNonNegativeIntegerArg(rawValue);
+		if (value !== undefined) {
+			next.videoFrameAutoAttachIntervalMs = value;
+			line = `Video frame auto-attach interval set to ${value} ms.`;
+		}
+	}
+	if (line === undefined) {
+		ctx.ui.notify(discordVoiceUsage(deps.voiceSettings?.path), "warning");
+		return;
+	}
+	deps.voiceSettings?.write(next);
+	const lines = [line];
+	await restartDiscordBridgeAfterVoiceSettingsChange(deps, lines);
+	ctx.ui.notify(lines.join("\n"));
+}
+
+async function runDiscordVoiceClear(deps: DiscordAuthCommandDeps, ctx: ExtensionCommandContext): Promise<void> {
+	const confirmed = await ctx.ui.confirm(
+		"Clear stored Discord voice settings?",
+		"Discord voice env vars, if set, are unchanged and still take precedence.",
+	);
+	if (!confirmed) {
+		ctx.ui.notify("Discord voice settings clear cancelled.");
+		return;
+	}
+	const removed = deps.voiceSettings?.clear() === true;
+	const lines = [removed ? "Stored Discord voice settings cleared." : "No stored Discord voice settings to clear."];
+	await restartDiscordBridgeAfterVoiceSettingsChange(deps, lines);
+	ctx.ui.notify(lines.join("\n"));
+}
+
+async function readDiscordVoiceValue(
+	ctx: ExtensionCommandContext,
+	argValue: string | undefined,
+	prompt: string,
+	currentValue: string | undefined,
+): Promise<string | undefined> {
+	if (argValue !== undefined) return argValue;
+	const suffix = currentValue !== undefined ? `current: ${currentValue}` : "leave blank to cancel";
+	const input = (await ctx.ui.input(prompt, suffix))?.trim();
+	return input !== undefined && input.length > 0 ? input : undefined;
+}
+
+async function restartDiscordBridgeAfterVoiceSettingsChange(
+	deps: DiscordAuthCommandDeps,
+	lines: string[],
+): Promise<void> {
+	if (deps.gatewayController === undefined) {
+		lines.push("Restart Clanky to apply the voice setting.");
+		return;
+	}
+	try {
+		await deps.gatewayController.restart();
+		const status = deps.gatewayController.status();
+		const voiceConfigError = readStatusString(status, "voiceConfigError");
+		if (voiceConfigError === undefined) {
+			lines.push("Discord bridge restarted with the updated voice setting.");
+		} else {
+			lines.push(`Discord bridge restarted, but voice is inactive: ${voiceConfigError}`);
+		}
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		lines.push(`Failed to restart Discord bridge: ${message}. Fix the setting or restart Clanky to recover.`);
+	}
+}
+
+function cleanArg(value: string | undefined): string | undefined {
+	const trimmed = value?.trim();
+	return trimmed !== undefined && trimmed.length > 0 ? trimmed : undefined;
+}
+
+function parseCommandArgs(args: string): string[] {
+	return args.trim().split(/\s+/).filter(Boolean);
+}
+
+function parseNonNegativeIntegerArg(value: string | undefined): number | undefined {
+	if (value === undefined) return undefined;
+	const parsed = Number.parseInt(value, 10);
+	return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function isRealtimeReasoningEffort(
+	value: string | undefined,
+): value is NonNullable<StoredDiscordVoiceSettings["openAiRealtimeReasoningEffort"]> {
+	return value === "minimal" || value === "low" || value === "medium" || value === "high" || value === "xhigh";
+}
+
+function readStatusString(status: unknown, key: string): string | undefined {
+	if (!isRecord(status)) return undefined;
+	const value = status[key];
+	return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 /**
@@ -419,6 +708,17 @@ export function createDiscordAuthExtensionFactory(deps: DiscordAuthCommandDeps):
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
 					ctx.ui.notify(`Discord status error: ${message}`, "error");
+				}
+			},
+		});
+		pi.registerCommand("discord-voice", {
+			description: "Show or set Clanky's Discord voice bridge target from the TUI",
+			handler: async (args, ctx) => {
+				try {
+					await runDiscordVoiceCommand(deps, args, ctx);
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					ctx.ui.notify(`Discord voice settings error: ${message}`, "error");
 				}
 			},
 		});

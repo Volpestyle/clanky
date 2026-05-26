@@ -45,11 +45,19 @@ export interface ClankvoxDecodedVideoFrame {
 	rid: string | null;
 }
 
+export interface ClankvoxTransportState {
+	role: string;
+	status: string;
+	reason: string | null;
+}
+
 type ClankvoxCommand =
 	| { type: "join"; guildId: string; channelId: string; selfDeaf: boolean; selfMute: boolean }
 	| { type: "voice_server"; data: JsonRecord }
 	| { type: "voice_state"; data: JsonRecord }
 	| { type: "audio"; pcmBase64: string; sampleRate: number }
+	| { type: "stop_playback" }
+	| { type: "stop_tts_playback" }
 	| { type: "subscribe_user"; userId: string; silenceDurationMs: number; sampleRate: number }
 	| { type: "unsubscribe_user"; userId: string }
 	| {
@@ -72,6 +80,26 @@ type ClankvoxCommand =
 			daveChannelId: string;
 	  }
 	| { type: "stream_watch_disconnect"; reason: string | null }
+	| {
+			type: "stream_publish_connect";
+			endpoint: string;
+			token: string;
+			serverId: string;
+			sessionId: string;
+			userId: string;
+			daveChannelId: string;
+	  }
+	| { type: "stream_publish_disconnect"; reason: string | null }
+	| { type: "music_play"; url: string; resolvedDirectUrl: boolean }
+	| { type: "music_stop" }
+	| { type: "music_pause" }
+	| { type: "music_resume" }
+	| { type: "music_set_gain"; target: number; fadeMs: number }
+	| { type: "stream_publish_play"; url: string; resolvedDirectUrl: boolean }
+	| { type: "stream_publish_play_visualizer"; url: string; resolvedDirectUrl: boolean; visualizerMode: string }
+	| { type: "stream_publish_stop" }
+	| { type: "stream_publish_pause" }
+	| { type: "stream_publish_resume" }
 	| { type: "destroy" };
 
 export class ClankvoxIpcClient extends EventEmitter {
@@ -121,6 +149,14 @@ export class ClankvoxIpcClient extends EventEmitter {
 		const normalizedPcm = pcmBase64.trim();
 		if (normalizedPcm.length === 0) return;
 		this.send({ type: "audio", pcmBase64: normalizedPcm, sampleRate: normalizeSampleRate(sampleRate) });
+	}
+
+	stopPlayback(): void {
+		this.send({ type: "stop_playback" });
+	}
+
+	stopTtsPlayback(): void {
+		this.send({ type: "stop_tts_playback" });
 	}
 
 	subscribeUser(userId: string, silenceDurationMs = 700, sampleRate = 24_000): void {
@@ -194,6 +230,84 @@ export class ClankvoxIpcClient extends EventEmitter {
 
 	streamWatchDisconnect(reason: string | null = null): void {
 		this.send({ type: "stream_watch_disconnect", reason });
+	}
+
+	streamPublishConnect(input: {
+		endpoint: string;
+		token: string;
+		serverId: string;
+		sessionId: string;
+		userId: string;
+		daveChannelId: string;
+	}): void {
+		this.send({
+			type: "stream_publish_connect",
+			endpoint: input.endpoint.trim(),
+			token: input.token.trim(),
+			serverId: input.serverId.trim(),
+			sessionId: input.sessionId.trim(),
+			userId: input.userId.trim(),
+			daveChannelId: input.daveChannelId.trim(),
+		});
+	}
+
+	streamPublishDisconnect(reason: string | null = null): void {
+		this.send({ type: "stream_publish_disconnect", reason });
+	}
+
+	musicPlay(url: string, resolvedDirectUrl = false): void {
+		const normalizedUrl = url.trim();
+		if (normalizedUrl.length === 0) return;
+		this.send({ type: "music_play", url: normalizedUrl, resolvedDirectUrl });
+	}
+
+	musicStop(): void {
+		this.send({ type: "music_stop" });
+	}
+
+	musicPause(): void {
+		this.send({ type: "music_pause" });
+	}
+
+	musicResume(): void {
+		this.send({ type: "music_resume" });
+	}
+
+	musicSetGain(target: number, fadeMs: number): void {
+		this.send({
+			type: "music_set_gain",
+			target: Math.max(0, Math.min(1, Number(target) || 0)),
+			fadeMs: Math.max(0, Math.floor(Number(fadeMs) || 0)),
+		});
+	}
+
+	streamPublishPlay(url: string, resolvedDirectUrl = false): void {
+		const normalizedUrl = url.trim();
+		if (normalizedUrl.length === 0) return;
+		this.send({ type: "stream_publish_play", url: normalizedUrl, resolvedDirectUrl });
+	}
+
+	streamPublishPlayVisualizer(url: string, resolvedDirectUrl = false, visualizerMode = "cqt"): void {
+		const normalizedUrl = url.trim();
+		if (normalizedUrl.length === 0) return;
+		this.send({
+			type: "stream_publish_play_visualizer",
+			url: normalizedUrl,
+			resolvedDirectUrl,
+			visualizerMode: normalizeVisualizerMode(visualizerMode),
+		});
+	}
+
+	streamPublishStop(): void {
+		this.send({ type: "stream_publish_stop" });
+	}
+
+	streamPublishPause(): void {
+		this.send({ type: "stream_publish_pause" });
+	}
+
+	streamPublishResume(): void {
+		this.send({ type: "stream_publish_resume" });
 	}
 
 	async destroy(): Promise<void> {
@@ -333,6 +447,33 @@ export class ClankvoxIpcClient extends EventEmitter {
 			if (frame !== undefined) this.emit("decodedVideoFrame", frame);
 			return;
 		}
+		if (type === "transport_state") {
+			const state = parseTransportState(msg);
+			if (state !== undefined) this.emit("transportState", state);
+			return;
+		}
+		if (type === "player_state") {
+			const status = stringValue(msg.status).trim();
+			if (status.length > 0) this.emit("playerState", status);
+			return;
+		}
+		if (type === "music_idle") {
+			this.emit("musicIdle");
+			return;
+		}
+		if (type === "music_error") {
+			this.emit("musicError", stringValue(msg.message).trim());
+			return;
+		}
+		if (type === "music_gain_reached") {
+			const gain = numberValue(msg.gain);
+			if (gain !== undefined) this.emit("musicGainReached", gain);
+			return;
+		}
+		if (type === "buffer_depth") {
+			this.emit("bufferDepth", numberValue(msg.ttsSamples) ?? 0, numberValue(msg.musicSamples) ?? 0);
+			return;
+		}
 		if (type === "error") {
 			this.emit("ipcError", msg);
 		}
@@ -417,6 +558,12 @@ function nullableCommandString(value: string | null | undefined): string | null 
 	return normalized !== undefined && normalized.length > 0 ? normalized : null;
 }
 
+function normalizeVisualizerMode(value: string): string {
+	const normalized = value.trim().toLowerCase();
+	if (normalized === "spectrum" || normalized === "waves" || normalized === "vectorscope") return normalized;
+	return "cqt";
+}
+
 function parseJsonRecord(payload: Buffer): JsonRecord | undefined {
 	try {
 		const value = JSON.parse(payload.toString("utf8"));
@@ -445,6 +592,17 @@ function parseDecodedVideoFrame(value: JsonRecord): ClankvoxDecodedVideoFrame | 
 		rtpTimestamp,
 		streamType: nullableString(value.streamType),
 		rid: nullableString(value.rid),
+	};
+}
+
+function parseTransportState(value: JsonRecord): ClankvoxTransportState | undefined {
+	const role = stringValue(value.role).trim();
+	const status = stringValue(value.status).trim();
+	if (role.length === 0 || status.length === 0) return undefined;
+	return {
+		role,
+		status,
+		reason: nullableString(value.reason),
 	};
 }
 

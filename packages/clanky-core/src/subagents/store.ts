@@ -5,7 +5,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { ClankyPaths } from "../paths.ts";
 import { loadDatabaseSync } from "../sqlite.ts";
 
-export type ClankySubagentKind = "discord-guild" | "discord-dm";
+export type ClankySubagentKind = string;
 export type ClankySubagentState = "idle" | "queued" | "running" | "failed" | "stale";
 export type DiscordInboxStatus = "queued" | "claimed" | "answered" | "failed";
 
@@ -697,8 +697,7 @@ function normalizedTimestamp(value: string, label: string): string {
 }
 
 function normalizeKind(value: ClankySubagentKind): ClankySubagentKind {
-	if (value === "discord-guild" || value === "discord-dm") return value;
-	throw new Error(`Invalid subagent kind: ${String(value)}`);
+	return requiredString(value, "kind");
 }
 
 function readString(row: Record<string, unknown>, key: string): string | undefined {
@@ -712,7 +711,7 @@ function readNumber(row: Record<string, unknown>, key: string): number | undefin
 }
 
 function readKind(value: unknown): ClankySubagentKind | undefined {
-	return value === "discord-guild" || value === "discord-dm" ? value : undefined;
+	return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
 function readSubagentState(value: unknown): ClankySubagentState | undefined {

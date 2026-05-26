@@ -32,6 +32,7 @@ export interface ClankyPaths {
 	cronTickLockFile: string;
 	httpTokenFile: string;
 	authFile: string;
+	discordVoiceSettingsFile: string;
 	modelsFile: string;
 	socketFile: string;
 	daemonLockFile: string;
@@ -68,6 +69,7 @@ export function resolveClankyPaths(options: ResolveClankyPathsOptions = {}): Cla
 		cronTickLockFile: join(profileDir, "cron", ".tick.lock"),
 		httpTokenFile: join(homeDir, ".token"),
 		authFile: join(profileDir, "auth.json"),
+		discordVoiceSettingsFile: join(profileDir, "discord-voice.json"),
 		modelsFile: join(profileDir, "models.json"),
 		socketFile: join(profileDir, ".sock"),
 		daemonLockFile: join(profileDir, ".daemon.lock"),

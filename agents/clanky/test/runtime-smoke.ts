@@ -46,6 +46,7 @@ import {
 import { DEFAULT_REALTIME_MODEL, resolveAgentDiscordVoiceConfig } from "../src/agentDiscordVoice.ts";
 import { createDiscordAuthExtensionFactory } from "../src/discordAuth.ts";
 import { ClankyDiscordGatewayController } from "../src/discordGatewayController.ts";
+import type { StoredDiscordVoiceSettings } from "../src/discordVoiceSettings.ts";
 import { delegateToMainWorker } from "../src/mainWorkerDelegation.ts";
 import { createOpenAiAuthExtensionFactory } from "../src/openAiAuth.ts";
 import {
@@ -742,10 +743,27 @@ async function assertDiscordAuthExtensionCommands(): Promise<void> {
 	let restarts = 0;
 	const notifications: string[] = [];
 	const commands: Record<string, RegisteredCommand> = {};
+	let voiceSettingsState: StoredDiscordVoiceSettings | undefined;
+	const getRestarts = () => restarts;
+	const getVoiceSettings = () => voiceSettingsState;
 	const factory = createDiscordAuthExtensionFactory({
 		authStorage,
 		providerId: DEFAULT_CLANKY_DISCORD_PROVIDER_ID,
 		authFilePath: "/tmp/clanky-auth.json",
+		voiceSettings: {
+			path: "/tmp/clanky-discord-voice.json",
+			read() {
+				return voiceSettingsState;
+			},
+			write(settings: StoredDiscordVoiceSettings) {
+				voiceSettingsState = settings;
+			},
+			clear() {
+				const hadSettings = voiceSettingsState !== undefined;
+				voiceSettingsState = undefined;
+				return hadSettings;
+			},
+		},
 		gatewayController: {
 			async restart() {
 				restarts += 1;
@@ -809,10 +827,39 @@ async function assertDiscordAuthExtensionCommands(): Promise<void> {
 		throw new Error(`smoke: /discord-status did not report voice bridge status: ${notifications.join("\n---\n")}`);
 	}
 
+	const voiceCommand = commands["discord-voice"];
+	if (voiceCommand === undefined) throw new Error("smoke: /discord-voice command was not registered");
+	await voiceCommand.handler("enable guild-2 voice-2", ctx);
+	if (getRestarts() !== 1) {
+		throw new Error(`smoke: /discord-voice enable should hot-restart bridge once, got ${restarts}`);
+	}
+	const enabledVoiceSettings = getVoiceSettings();
+	if (
+		enabledVoiceSettings?.enabled !== true ||
+		enabledVoiceSettings.guildId !== "guild-2" ||
+		enabledVoiceSettings.channelId !== "voice-2"
+	) {
+		throw new Error(`smoke: /discord-voice enable wrote wrong settings ${JSON.stringify(enabledVoiceSettings)}`);
+	}
+	if (!notifications.some((message) => message.includes("Discord voice enabled for guild guild-2, channel voice-2."))) {
+		throw new Error("smoke: /discord-voice enable did not report saved setting");
+	}
+
+	await voiceCommand.handler("disable", ctx);
+	if (getRestarts() !== 2) {
+		throw new Error(`smoke: /discord-voice disable should hot-restart bridge again, got ${restarts}`);
+	}
+	const disabledVoiceSettings = getVoiceSettings();
+	if (disabledVoiceSettings?.enabled !== false) {
+		throw new Error(`smoke: /discord-voice disable wrote wrong settings ${JSON.stringify(disabledVoiceSettings)}`);
+	}
+
 	const logoutCommand = commands["discord-logout"];
 	if (logoutCommand === undefined) throw new Error("smoke: /discord-logout command was not registered");
 	await logoutCommand.handler([], ctx);
-	if (restarts !== 1) throw new Error(`smoke: /discord-logout should hot-restart bridge once, got ${restarts}`);
+	if (getRestarts() !== 3) {
+		throw new Error(`smoke: /discord-logout should hot-restart bridge after logout, got ${restarts}`);
+	}
 	if (resolveAgentDiscordGatewayConfig({}, authStorage) !== undefined) {
 		throw new Error("smoke: /discord-logout should remove stored Discord credentials");
 	}
@@ -1016,6 +1063,8 @@ function testControllerPaths() {
 async function assertDiscordGatewayControllerStartup(): Promise<void> {
 	await assertControllerSharedChatAndVoiceStartup();
 	await assertControllerVoiceOnlyStartup();
+	await assertControllerStoredVoiceConfigErrorDoesNotBlockTextBridge();
+	await assertControllerEnvVoiceConfigErrorStillFailsFast();
 	await assertControllerSharedVoiceFailureCleanup();
 	await assertControllerVoiceOnlyFailureCleanup();
 }
@@ -1148,6 +1197,66 @@ async function assertControllerVoiceOnlyStartup(): Promise<void> {
 	if (calls.voiceStops !== 1 || calls.textStops !== 0 || calls.sharedClient.destroyCalls !== 1) {
 		throw new Error("smoke: voice-only path stop should stop voice and destroy voice-only client");
 	}
+}
+
+async function assertControllerStoredVoiceConfigErrorDoesNotBlockTextBridge(): Promise<void> {
+	const authStorage = AuthStorage.inMemory();
+	const calls = createControllerCallRecorder();
+	const controller = new ClankyDiscordGatewayController({
+		authStorage,
+		paths: testControllerPaths(),
+		env: {
+			CLANKY_DISCORD_TOKEN: "discord-token",
+		},
+		readVoiceSettings: () => ({ enabled: true, guildId: "guild-1", channelId: "voice-1" }),
+		dependencies: {
+			async startGateway() {
+				calls.startGatewayCalls += 1;
+				return {
+					client: calls.sharedClient as never,
+					setSubagentThinkingLevel: () => 0,
+					async stop() {
+						calls.textStops += 1;
+					},
+				};
+			},
+			async startVoice() {
+				calls.startVoiceCalls += 1;
+				throw new Error("smoke: stored voice config error should skip voice startup");
+			},
+		},
+	});
+	controller.bindRuntime({} as never);
+	await controller.start();
+	const status = controller.status();
+	if (calls.startGatewayCalls !== 1 || calls.startVoiceCalls !== 0) {
+		throw new Error("smoke: stored voice config error should keep text bridge and skip voice");
+	}
+	if (
+		status.textBridgeActive !== true ||
+		status.voiceBridgeActive !== false ||
+		typeof status.voiceConfigError !== "string" ||
+		!status.voiceConfigError.includes("OpenAI credentials")
+	) {
+		throw new Error(`smoke: stored voice config error status mismatch: ${JSON.stringify(status)}`);
+	}
+	await controller.stop();
+}
+
+async function assertControllerEnvVoiceConfigErrorStillFailsFast(): Promise<void> {
+	const authStorage = AuthStorage.inMemory();
+	const controller = new ClankyDiscordGatewayController({
+		authStorage,
+		paths: testControllerPaths(),
+		env: {
+			CLANKY_DISCORD_TOKEN: "discord-token",
+			CLANKY_DISCORD_VOICE_ENABLED: "1",
+			CLANKY_DISCORD_VOICE_GUILD_ID: "guild-1",
+			CLANKY_DISCORD_VOICE_CHANNEL_ID: "voice-1",
+		},
+	});
+	controller.bindRuntime({} as never);
+	await assertRejects(() => controller.start(), "OpenAI credentials");
 }
 
 async function assertControllerSharedVoiceFailureCleanup(): Promise<void> {

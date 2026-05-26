@@ -40,6 +40,9 @@ export interface DiscordStreamDiscovery {
 	listStreams(): DiscoveredDiscordStream[];
 	findStream(target?: string, scope?: DiscordStreamScope): DiscoveredDiscordStream | undefined;
 	requestWatch(streamKey: string): void;
+	requestPublish(input: { guildId: string; channelId: string; preferredRegion?: string | null }): void;
+	requestPublishStop(streamKey: string): void;
+	setPublishPaused(streamKey: string, paused: boolean): void;
 }
 
 export interface DiscordStreamScope {
@@ -89,6 +92,30 @@ export function createDiscordStreamDiscovery(
 		},
 		requestWatch(streamKey: string) {
 			sendGatewayPayload(client, { op: 20, d: { stream_key: streamKey } });
+		},
+		requestPublish(input) {
+			const guildId = input.guildId.trim();
+			const channelId = input.channelId.trim();
+			if (guildId.length === 0 || channelId.length === 0) return;
+			sendGatewayPayload(client, {
+				op: 18,
+				d: {
+					type: "guild",
+					guild_id: guildId,
+					channel_id: channelId,
+					preferred_region: input.preferredRegion?.trim() || null,
+				},
+			});
+		},
+		requestPublishStop(streamKey: string) {
+			const normalizedStreamKey = streamKey.trim();
+			if (normalizedStreamKey.length === 0) return;
+			sendGatewayPayload(client, { op: 19, d: { stream_key: normalizedStreamKey } });
+		},
+		setPublishPaused(streamKey: string, paused: boolean) {
+			const normalizedStreamKey = streamKey.trim();
+			if (normalizedStreamKey.length === 0) return;
+			sendGatewayPayload(client, { op: 22, d: { stream_key: normalizedStreamKey, paused } });
 		},
 	};
 }

@@ -74,20 +74,24 @@ Release build on this repo normally uses static opus:
 OPUS_STATIC=1 OPUS_NO_PKG=1 cargo build --release
 ```
 
-From the repo root, the Bun wrapper uses:
+From the repo root, the package wrapper uses:
 
 ```sh
-bun run build:voice
+pnpm voice:build
 ```
 
 ## Current Product Boundaries
 
-The Go Live sender path exists, but current rollout is intentionally narrow:
+The Go Live sender path is exposed through a narrow URL-first voice media
+surface:
 
-- outbound publish is driven by Bun orchestration, currently through music video relay or explicit browser-session share
-- current source gate is YouTube-backed music URLs plus browser-session PNG frames
+- normal music playback is voice audio only and works with bot-token voice
+- outbound publish is driven by TypeScript orchestration through `stream_publish_*` IPC and Discord gateway OP18/OP19/OP22
+- current Realtime-facing source gate is resolved http(s) URLs; search and disambiguation should go through Pi/skills before media playback
+- video URL publish can optionally start a parallel music/audio pipeline so the voice channel hears the video while Go Live shows it
+- visualizer publish can show active music over Go Live
 - sender transport is H264-only
-- live sender validation on Discord is still a separate follow-up from the code and test coverage already in place
+- live sender validation on Discord is still separate from the non-live smoke coverage already in place
 
 Inbound native screen watch is already integrated end to end through `stream_watch`.
 

@@ -23,6 +23,14 @@ export interface OpenAiRealtimeConnectOptions {
 }
 
 export type OpenAiRealtimeReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
+export type OpenAiRealtimeTranscriptionDelay = "minimal" | "low" | "medium" | "high" | "xhigh";
+
+export interface OpenAiRealtimeTranscriptionConnectOptions {
+	model: string;
+	sampleRate?: number;
+	language?: string;
+	delay?: OpenAiRealtimeTranscriptionDelay;
+}
 
 export interface OpenAiRealtimeClientOptions {
 	apiKey: string;
@@ -34,6 +42,7 @@ export interface OpenAiRealtimeClientOptions {
 export interface OpenAiRealtimeTranscript {
 	text: string;
 	eventType: string;
+	itemId?: string;
 }
 
 const DEFAULT_BASE_URL = "https://api.openai.com/v1";
@@ -169,11 +178,7 @@ export class OpenAiRealtimeClient extends EventEmitter {
 	}
 
 	private buildRealtimeUrl(model: string): string {
-		const url = new URL(this.baseUrl);
-		url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
-		url.pathname = `${url.pathname.replace(/\/+$/, "")}/realtime`;
-		url.searchParams.set("model", model);
-		return url.toString();
+		return buildRealtimeUrl(this.baseUrl, model);
 	}
 
 	private async openSocket(url: string): Promise<WebSocket> {
@@ -225,7 +230,12 @@ export class OpenAiRealtimeClient extends EventEmitter {
 		if (TRANSCRIPT_EVENTS.has(stringValue(event.type))) {
 			const text = stringValue(event.transcript) || stringValue(event.text) || stringValue(event.delta);
 			if (text.length > 0) {
-				const transcript: OpenAiRealtimeTranscript = { text, eventType: stringValue(event.type) };
+				const itemId = stringValue(event.item_id) || stringValue(event.itemId);
+				const transcript: OpenAiRealtimeTranscript = {
+					text,
+					eventType: stringValue(event.type),
+				};
+				if (itemId.length > 0) transcript.itemId = itemId;
 				this.emit("transcript", transcript);
 			}
 			return;
@@ -235,6 +245,142 @@ export class OpenAiRealtimeClient extends EventEmitter {
 			this.logger?.("warn", "openai_realtime_error_event", event);
 		}
 	}
+}
+
+export class OpenAiRealtimeTranscriptionClient extends EventEmitter {
+	private readonly apiKey: string;
+	private readonly baseUrl: string;
+	private readonly safetyIdentifier: string | undefined;
+	private readonly logger: OpenAiRealtimeClientOptions["logger"];
+	private ws: WebSocket | undefined;
+	private session: OpenAiRealtimeTranscriptionConnectOptions | undefined;
+	private inputAudioRemainder: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+
+	constructor(options: OpenAiRealtimeClientOptions) {
+		super();
+		this.apiKey = options.apiKey.trim();
+		this.baseUrl = (options.baseUrl ?? DEFAULT_BASE_URL).trim() || DEFAULT_BASE_URL;
+		this.safetyIdentifier = options.safetyIdentifier?.trim() || undefined;
+		this.logger = options.logger;
+	}
+
+	async connect(options: OpenAiRealtimeTranscriptionConnectOptions): Promise<void> {
+		if (this.apiKey.length === 0) throw new Error("OPENAI_API_KEY is required for Discord voice transcription.");
+		if (options.model.trim().length === 0) throw new Error("A realtime transcription model is required.");
+		if (this.ws?.readyState === WebSocket.OPEN) return;
+
+		this.session = {
+			...options,
+			sampleRate: normalizeSampleRate(options.sampleRate),
+		};
+		const ws = await this.openSocket(buildRealtimeUrl(this.baseUrl, options.model));
+		this.ws = ws;
+		ws.on("message", (data) => this.handleIncoming(data));
+		ws.on("error", (error) => {
+			this.logger?.("error", "openai_realtime_transcription_ws_error", { error: error.message });
+			this.emit("socket_error", error);
+		});
+		ws.on("close", (code, reason) => {
+			this.logger?.("warn", "openai_realtime_transcription_ws_closed", { code, reason: reason.toString("utf8") });
+			this.emit("socket_closed", { code, reason: reason.toString("utf8") });
+			if (this.ws === ws) this.ws = undefined;
+		});
+		this.sendSessionUpdate();
+	}
+
+	appendInputAudioPcm(audio: Buffer): void {
+		const { event, remainder } = splitRealtimeInputAudioChunk(audio, this.inputAudioRemainder);
+		this.inputAudioRemainder = remainder;
+		if (event !== undefined) this.send(event);
+	}
+
+	commitInputAudioBuffer(): void {
+		this.inputAudioRemainder = Buffer.alloc(0);
+		this.send({ type: "input_audio_buffer.commit" });
+	}
+
+	async close(): Promise<void> {
+		this.inputAudioRemainder = Buffer.alloc(0);
+		const ws = this.ws;
+		this.ws = undefined;
+		if (ws === undefined || ws.readyState === WebSocket.CLOSED) return;
+		await new Promise<void>((resolve) => {
+			const timer = setTimeout(resolve, 1_000);
+			ws.once("close", () => {
+				clearTimeout(timer);
+				resolve();
+			});
+			ws.close();
+		});
+	}
+
+	private async openSocket(url: string): Promise<WebSocket> {
+		return await new Promise<WebSocket>((resolve, reject) => {
+			const headers: Record<string, string> = {
+				Authorization: `Bearer ${this.apiKey}`,
+			};
+			if (this.safetyIdentifier !== undefined) headers["OpenAI-Safety-Identifier"] = this.safetyIdentifier;
+			const ws = new WebSocket(url, {
+				headers,
+			});
+			const timer = setTimeout(() => {
+				ws.close();
+				reject(new Error("Timed out connecting to OpenAI realtime transcription after 10000ms."));
+			}, 10_000);
+			ws.once("open", () => {
+				clearTimeout(timer);
+				resolve(ws);
+			});
+			ws.once("error", (error) => {
+				clearTimeout(timer);
+				reject(error);
+			});
+		});
+	}
+
+	private sendSessionUpdate(): void {
+		const session = this.session;
+		if (session === undefined) return;
+		this.send(buildRealtimeTranscriptionSessionUpdateEvent(session));
+	}
+
+	private send(payload: JsonRecord): void {
+		if (this.ws === undefined || this.ws.readyState !== WebSocket.OPEN) {
+			throw new Error("OpenAI realtime transcription socket is not open.");
+		}
+		this.ws.send(JSON.stringify(payload));
+	}
+
+	private handleIncoming(data: WebSocket.RawData): void {
+		const event = parseJsonRecord(data);
+		if (event === undefined) return;
+		this.emit("event", event);
+		if (TRANSCRIPT_EVENTS.has(stringValue(event.type))) {
+			const text = stringValue(event.transcript) || stringValue(event.text) || stringValue(event.delta);
+			if (text.length > 0) {
+				const itemId = stringValue(event.item_id) || stringValue(event.itemId);
+				const transcript: OpenAiRealtimeTranscript = {
+					text,
+					eventType: stringValue(event.type),
+				};
+				if (itemId.length > 0) transcript.itemId = itemId;
+				this.emit("transcript", transcript);
+			}
+			return;
+		}
+		if (stringValue(event.type) === "error") {
+			this.emit("error_event", event);
+			this.logger?.("warn", "openai_realtime_transcription_error_event", event);
+		}
+	}
+}
+
+function buildRealtimeUrl(baseUrl: string, model: string): string {
+	const url = new URL(baseUrl);
+	url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
+	url.pathname = `${url.pathname.replace(/\/+$/, "")}/realtime`;
+	url.searchParams.set("model", model);
+	return url.toString();
 }
 
 function parseJsonRecord(data: WebSocket.RawData): JsonRecord | undefined {
@@ -277,6 +423,31 @@ export function buildRealtimeSessionUpdateEvent(session: OpenAiRealtimeConnectOp
 	};
 }
 
+export function buildRealtimeTranscriptionSessionUpdateEvent(
+	session: OpenAiRealtimeTranscriptionConnectOptions,
+): JsonRecord {
+	const transcription: JsonRecord = { model: session.model };
+	const language = session.language?.trim();
+	if (language !== undefined && language.length > 0) transcription.language = language;
+	if (session.delay !== undefined) transcription.delay = session.delay;
+	return {
+		type: "session.update",
+		session: {
+			type: "transcription",
+			audio: {
+				input: {
+					format: {
+						type: "audio/pcm",
+						rate: normalizeSampleRate(session.sampleRate),
+					},
+					transcription,
+					turn_detection: null,
+				},
+			},
+		},
+	};
+}
+
 export function buildInputAudioAppendEvent(audio: Buffer): JsonRecord | undefined {
 	if (audio.length === 0) return undefined;
 	return { type: "input_audio_buffer.append", audio: audio.toString("base64") };
@@ -308,4 +479,8 @@ export function stringifyRealtimeFunctionOutput(output: unknown): string {
 			detail: error instanceof Error ? error.message : String(error),
 		});
 	}
+}
+
+function normalizeSampleRate(value: number | undefined): number {
+	return Math.max(8_000, Math.min(48_000, Math.floor(Number(value) || 24_000)));
 }

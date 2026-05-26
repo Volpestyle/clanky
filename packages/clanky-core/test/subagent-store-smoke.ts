@@ -143,9 +143,22 @@ try {
 	) {
 		throw new Error(`subagent smoke: unexpected final summary ${JSON.stringify(final)}`);
 	}
+	await store.upsertSubagent({
+		id: "discord-voice:guild-smoke:voice-smoke",
+		kind: "discord-voice",
+		scopeId: "guild-smoke:voice-smoke",
+		scopeName: "Smoke Voice",
+		state: "running",
+		activeSummary: "listening in Discord voice",
+	});
+	const generic = await store.listSubagents();
+	const voiceSubagent = generic.find((entry) => entry.id === "discord-voice:guild-smoke:voice-smoke");
+	if (voiceSubagent?.kind !== "discord-voice" || voiceSubagent.queueDepth !== 0) {
+		throw new Error(`subagent smoke: generic voice subagent was not listed ${JSON.stringify(generic)}`);
+	}
 
 	store.close();
-	console.log(JSON.stringify({ subagents: final.length, workerId }));
+	console.log(JSON.stringify({ subagents: generic.length, workerId }));
 } finally {
 	await rm(tmpRoot, { recursive: true, force: true });
 }

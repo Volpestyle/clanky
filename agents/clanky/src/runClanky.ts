@@ -31,6 +31,7 @@ import {
 } from "./clankyDefaults.ts";
 import { createDiscordAuthExtensionFactory, resolveDefaultDiscordProviderId } from "./discordAuth.ts";
 import { ClankyDiscordGatewayController } from "./discordGatewayController.ts";
+import { DiscordVoiceSettingsStore } from "./discordVoiceSettings.ts";
 import { createClankyHandlers } from "./handlers.ts";
 import { createOpenAiAuthExtensionFactory } from "./openAiAuth.ts";
 import { loadPersona } from "./persona.ts";
@@ -100,6 +101,7 @@ function buildRuntimeFactory(opts: {
 	authStorage: AuthStorage;
 	discordProviderId: string;
 	gatewayController: ClankyDiscordGatewayController;
+	discordVoiceSettings: DiscordVoiceSettingsStore;
 	defaultThinkingLevel: () => ClankyThinkingLevel;
 	additionalExtensionFactories?: ExtensionFactory[];
 }): CreateAgentSessionRuntimeFactory {
@@ -110,6 +112,7 @@ function buildRuntimeFactory(opts: {
 		authStorage,
 		discordProviderId,
 		gatewayController,
+		discordVoiceSettings,
 		defaultThinkingLevel,
 		additionalExtensionFactories = [],
 	} = opts;
@@ -123,6 +126,7 @@ function buildRuntimeFactory(opts: {
 		providerId: discordProviderId,
 		authFilePath: paths.authFile,
 		gatewayController,
+		voiceSettings: discordVoiceSettings,
 	});
 	const openAiAuthFactory = createOpenAiAuthExtensionFactory({
 		authStorage,
@@ -308,6 +312,7 @@ export async function createClankyRuntime(options: RunClankyOptions = {}) {
 	const basePersona = await loadPersona(resolvePackageRoot());
 	const authStorage = AuthStorage.create(paths.authFile);
 	const discordProviderId = resolveDefaultDiscordProviderId();
+	const discordVoiceSettings = new DiscordVoiceSettingsStore(paths.discordVoiceSettingsFile);
 	const stores = createClankyStores(paths);
 	const runtimeDefaults: ClankyRuntimeDefaults = {
 		mainThinkingLevel: DEFAULT_CLANKY_MAIN_THINKING_LEVEL,
@@ -317,6 +322,7 @@ export async function createClankyRuntime(options: RunClankyOptions = {}) {
 		authStorage,
 		paths,
 		bridgeLogPath: `${paths.profileDir}/discord-bridge.log`,
+		readVoiceSettings: () => discordVoiceSettings.read(),
 	});
 	const runtimeFactoryOptions = {
 		paths,
@@ -325,6 +331,7 @@ export async function createClankyRuntime(options: RunClankyOptions = {}) {
 		authStorage,
 		discordProviderId,
 		gatewayController,
+		discordVoiceSettings,
 	};
 	const createRuntime = buildRuntimeFactory({
 		...runtimeFactoryOptions,
@@ -348,7 +355,7 @@ export async function createClankyRuntime(options: RunClankyOptions = {}) {
 	});
 	gatewayController.bindRuntime(runtime);
 
-	return { runtime, paths, authStorage, gatewayController, createRuntime, createSubagentRuntime };
+	return { runtime, paths, authStorage, gatewayController, discordVoiceSettings, createRuntime, createSubagentRuntime };
 }
 
 /**

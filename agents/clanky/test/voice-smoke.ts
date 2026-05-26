@@ -1,5 +1,14 @@
 import { EventEmitter } from "node:events";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { DiscordSubagentStore, resolveClankyPaths } from "@clanky/core";
+import type {
+	AgentSessionEvent,
+	CreateAgentSessionRuntimeFactory,
+	CreateAgentSessionRuntimeResult,
+} from "@earendil-works/pi-coding-agent";
 import {
 	DEFAULT_REALTIME_MODEL,
 	extractRealtimeFunctionCallEnvelopes,
@@ -54,6 +63,8 @@ async function main(): Promise<void> {
 	assertVoiceLiveValidation();
 	assertVoiceLiveValidationResult();
 	await assertFakeVoiceBridgeRealtimeTools();
+	await assertFakeVoiceBridgeSubagents();
+	await assertFakeVoiceBridgeRealtimeMediaTools();
 	await assertFakeVoiceBridgeRealtimeBatchToolResponse();
 	await assertFakeVoiceBridgeBotTokenScreenWatchGuard();
 	await assertFakeVoiceBridgeScreenWatchSwitchCleanup();
@@ -144,6 +155,58 @@ function assertVoiceConfig(): void {
 	);
 	if (unthrottled?.videoFrameAutoAttachIntervalMs !== 0) {
 		throw new Error("voice-smoke: screen frame auto-attach interval override did not parse");
+	}
+	const storedConfig = resolveAgentDiscordVoiceConfig(
+		{
+			OPENAI_API_KEY: "openai-key",
+		},
+		{
+			providerId: "clanky-discord",
+			token: "discord-token",
+			credentialKind: "bot-token",
+			source: "env",
+		},
+		undefined,
+		{
+			enabled: true,
+			guildId: "stored-guild",
+			channelId: "stored-channel",
+			openAiRealtimeModel: "gpt-realtime-1.5",
+			openAiRealtimeVoice: "cedar",
+			openAiRealtimeReasoningEffort: "medium",
+			videoFrameAutoAttachIntervalMs: 250,
+		},
+	);
+	if (
+		storedConfig?.guildId !== "stored-guild" ||
+		storedConfig.channelId !== "stored-channel" ||
+		storedConfig.openAiRealtimeModel !== "gpt-realtime-1.5" ||
+		storedConfig.openAiRealtimeVoice !== "cedar" ||
+		storedConfig.openAiRealtimeReasoningEffort !== "medium" ||
+		storedConfig.videoFrameAutoAttachIntervalMs !== 250
+	) {
+		throw new Error(`voice-smoke: stored voice settings did not resolve ${JSON.stringify(storedConfig)}`);
+	}
+	const envDisabledStored = resolveAgentDiscordVoiceConfig(
+		{
+			CLANKY_DISCORD_VOICE_ENABLED: "0",
+			OPENAI_API_KEY: "openai-key",
+		},
+		{
+			providerId: "clanky-discord",
+			token: "discord-token",
+			credentialKind: "bot-token",
+			source: "env",
+		},
+		undefined,
+		{
+			enabled: true,
+			guildId: "stored-guild",
+			channelId: "stored-channel",
+		},
+	);
+	if (envDisabledStored !== undefined) {
+		throw new Error("voice-smoke: explicit env voice disable should override stored enabled setting");
 	}
 }
 
@@ -515,6 +578,12 @@ function assertDiscordStreamDiscovery(): void {
 	}
 	discovery.requestWatch("guild:guild-1:voice-1:user-1");
 	if (client.sent[0]?.payload.op !== 20) throw new Error("voice-smoke: stream watch did not send OP20");
+	discovery.requestPublish({ guildId: "guild-1", channelId: "voice-1" });
+	if (client.sent[1]?.payload.op !== 18) throw new Error("voice-smoke: stream publish did not send OP18");
+	discovery.setPublishPaused("guild:guild-1:voice-1:clanky-user", true);
+	if (client.sent[2]?.payload.op !== 22) throw new Error("voice-smoke: stream publish pause did not send OP22");
+	discovery.requestPublishStop("guild:guild-1:voice-1:clanky-user");
+	if (client.sent[3]?.payload.op !== 19) throw new Error("voice-smoke: stream publish stop did not send OP19");
 	client.emitRaw({
 		t: "VOICE_STATE_UPDATE",
 		d: {
@@ -756,7 +825,10 @@ async function assertFakeVoiceBridgeRealtimeTools(): Promise<void> {
 		?.map((tool) => tool.name)
 		.sort()
 		.join(",");
-	if (tools !== "ask_pi,list_screen_shares,see_screenshare_snapshot,start_screen_watch,stop_screen_watch") {
+	if (
+		tools !==
+		"ask_pi,list_screen_shares,media_pause,media_resume,media_status,media_stop,play_music_url,play_video_url,see_screenshare_snapshot,start_music_visualizer,start_screen_watch,stop_screen_watch"
+	) {
 		throw new Error(`voice-smoke: fake voice bridge realtime tools mismatch: ${tools}`);
 	}
 	realtime.emit("audio_delta", "AQIDBA==");
@@ -1035,6 +1107,345 @@ async function assertFakeVoiceBridgeRealtimeTools(): Promise<void> {
 	if (vox.streamWatchDisconnects[0] !== "tool_stop_screen_watch" || vox.streamWatchDisconnects.length !== 1) {
 		throw new Error("voice-smoke: stop_screen_watch did not disconnect stream_watch exactly once");
 	}
+}
+
+async function assertFakeVoiceBridgeSubagents(): Promise<void> {
+	const tmpRoot = await mkdtemp(join(tmpdir(), "clanky-voice-subagents-"));
+	const paths = resolveClankyPaths({ homeDir: join(tmpRoot, "home") });
+	const store = new DiscordSubagentStore(paths);
+	try {
+		const realtime = new FakeBridgeRealtime();
+		const vox = new FakeBridgeClankvox();
+		const workDir = join(tmpRoot, "work");
+		const agentDir = join(tmpRoot, "agent");
+		await mkdir(workDir, { recursive: true });
+		await mkdir(agentDir, { recursive: true });
+		const mainSession = new FakeVoiceRuntimeSession();
+		const mainRuntime = {
+			cwd: workDir,
+			services: { agentDir },
+			session: mainSession,
+		};
+		const workerPrompts: string[] = [];
+		let workerRuntimeCreateCount = 0;
+		let workerDisposedCount = 0;
+		const createSubagentRuntime: CreateAgentSessionRuntimeFactory = async (
+			options,
+		): Promise<CreateAgentSessionRuntimeResult> => {
+			workerRuntimeCreateCount += 1;
+			const listeners = new Set<(event: AgentSessionEvent) => void>();
+			const fakeSession = {
+				isStreaming: false,
+				sessionId: options.sessionManager.getSessionId(),
+				sessionFile: options.sessionManager.getSessionFile(),
+				sessionManager: options.sessionManager,
+				extensionRunner: {
+					hasHandlers: () => false,
+					emit: async () => undefined,
+				},
+				subscribe(listener: (event: AgentSessionEvent) => void): () => void {
+					listeners.add(listener);
+					return () => listeners.delete(listener);
+				},
+				async sendUserMessage(message: string): Promise<void> {
+					workerPrompts.push(message);
+					options.sessionManager.appendMessage({
+						role: "user",
+						content: [{ type: "text", text: message }],
+					} as never);
+					queueMicrotask(() => {
+						const assistantMessage = {
+							role: "assistant",
+							stopReason: "endTurn",
+							content: [{ type: "text", text: "Worker voice answer." }],
+						};
+						const event = {
+							type: "message_end",
+							message: assistantMessage,
+						} as unknown as AgentSessionEvent;
+						options.sessionManager.appendMessage(assistantMessage as never);
+						for (const listener of listeners) listener(event);
+					});
+				},
+				dispose(): void {
+					workerDisposedCount += 1;
+				},
+			};
+			return {
+				session: fakeSession as unknown as CreateAgentSessionRuntimeResult["session"],
+				extensionsResult: {
+					extensions: [],
+					errors: [],
+					runtime: {},
+				} as unknown as CreateAgentSessionRuntimeResult["extensionsResult"],
+				services: {
+					cwd: options.cwd,
+					agentDir: options.agentDir,
+				} as unknown as CreateAgentSessionRuntimeResult["services"],
+				diagnostics: [],
+			};
+		};
+		const handle = await startAgentDiscordVoiceBridge({
+			runtime: mainRuntime as never,
+			client: new FakeVoiceDiscordClient() as never,
+			discordConfig: {
+				providerId: "clanky-discord",
+				token: "discord-token",
+				credentialKind: "bot-token",
+				source: "env",
+			},
+			config: {
+				enabled: true,
+				guildId: "guild-1",
+				channelId: "voice-1",
+				openAiApiKey: "openai-key",
+				openAiRealtimeModel: DEFAULT_REALTIME_MODEL,
+				openAiRealtimeVoice: "marin",
+			},
+			createSubagentRuntime,
+			subagentStore: store,
+			subagentSessionDir: paths.subagentSessionsDir,
+			subagentCwd: workDir,
+			dependencies: {
+				createRealtime() {
+					return realtime;
+				},
+				async spawnVox() {
+					return vox;
+				},
+			},
+		});
+		if (handle === undefined) throw new Error("voice-smoke: subagent voice bridge did not start");
+		let summaries = await store.listSubagents();
+		const voiceSubagent = summaries.find((summary) => summary.id === "discord-voice:guild-1:voice-1");
+		if (
+			voiceSubagent === undefined ||
+			voiceSubagent.kind !== "discord-voice" ||
+			voiceSubagent.sessionFile === undefined ||
+			voiceSubagent.state !== "running"
+		) {
+			throw new Error(`voice-smoke: voice subagent was not registered ${JSON.stringify(summaries)}`);
+		}
+		const voiceSessionFile = voiceSubagent.sessionFile;
+		realtime.emit("transcript", {
+			eventType: "conversation.item.input_audio_transcription.completed",
+			text: "can you check the queue",
+		});
+		realtime.emit("transcript", {
+			eventType: "response.output_audio_transcript.done",
+			text: "I'll check that.",
+		});
+		await waitUntil(async () => {
+			const transcript = await readFile(voiceSessionFile, "utf8");
+			return transcript.includes("can you check the queue") && transcript.includes("I'll check that.");
+		}, "voice transcript session file");
+		realtime.emit("event", {
+			type: "response.done",
+			response: {
+				output: [
+					{
+						type: "function_call",
+						name: "ask_pi",
+						call_id: "call-worker",
+						arguments: '{"prompt":"check durable project state"}',
+					},
+				],
+			},
+		});
+		await waitUntil(() => realtime.functionOutputs.some((output) => output.callId === "call-worker"), "worker output");
+		const output = realtime.functionOutputs.find((candidate) => candidate.callId === "call-worker")?.output;
+		if (JSON.stringify(output) !== JSON.stringify({ text: "Worker voice answer." })) {
+			throw new Error(`voice-smoke: ask_pi did not return worker answer ${JSON.stringify(output)}`);
+		}
+		if (mainSession.messages.length !== 0) {
+			throw new Error(
+				`voice-smoke: ask_pi used main runtime instead of worker ${JSON.stringify(mainSession.messages)}`,
+			);
+		}
+		if (workerRuntimeCreateCount !== 1 || !workerPrompts[0]?.includes("check durable project state")) {
+			throw new Error(`voice-smoke: worker runtime was not prompted ${JSON.stringify(workerPrompts)}`);
+		}
+		summaries = await store.listSubagents();
+		const workerSubagent = summaries.find((summary) => summary.id === "voice-worker:guild-1:voice-1");
+		if (
+			workerSubagent?.kind !== "voice-worker" ||
+			workerSubagent.sessionFile === undefined ||
+			workerSubagent.state !== "idle"
+		) {
+			throw new Error(`voice-smoke: worker subagent was not tracked ${JSON.stringify(summaries)}`);
+		}
+		const workerTranscript = await readFile(workerSubagent.sessionFile, "utf8");
+		if (
+			!workerTranscript.includes("check durable project state") ||
+			!workerTranscript.includes("Worker voice answer.")
+		) {
+			throw new Error("voice-smoke: worker session transcript was not persisted");
+		}
+		await handle.stop();
+		if (workerDisposedCount !== 1) {
+			throw new Error(`voice-smoke: worker runtime was not disposed ${workerDisposedCount}`);
+		}
+		summaries = await store.listSubagents();
+		const stoppedVoiceSubagent = summaries.find((summary) => summary.id === "discord-voice:guild-1:voice-1");
+		const stoppedWorkerSubagent = summaries.find((summary) => summary.id === "voice-worker:guild-1:voice-1");
+		if (stoppedVoiceSubagent?.state !== "stale" || stoppedWorkerSubagent?.state !== "stale") {
+			throw new Error(`voice-smoke: stopped voice subagents were not stale ${JSON.stringify(summaries)}`);
+		}
+	} finally {
+		store.close();
+		await rm(tmpRoot, { recursive: true, force: true });
+	}
+}
+
+async function assertFakeVoiceBridgeRealtimeMediaTools(): Promise<void> {
+	const realtime = new FakeBridgeRealtime();
+	const vox = new FakeBridgeClankvox();
+	const discovery = new FakeVoiceStreamDiscovery({
+		streamKey: "guild:guild-1:voice-1:clanky-user",
+		guildId: "guild-1",
+		channelId: "voice-1",
+		userId: "clanky-user",
+		endpoint: "publish.example",
+		token: "publish-token",
+		rtcServerId: "9102",
+		updatedAt: Date.now(),
+	});
+	const handle = await startAgentDiscordVoiceBridge({
+		runtime: new FakeVoiceRuntime() as never,
+		client: new FakeVoiceDiscordClient() as never,
+		discordConfig: {
+			providerId: "clanky-discord",
+			token: "discord-token",
+			credentialKind: "user-token",
+			source: "env",
+		},
+		config: {
+			enabled: true,
+			guildId: "guild-1",
+			channelId: "voice-1",
+			openAiApiKey: "openai-key",
+			openAiRealtimeModel: DEFAULT_REALTIME_MODEL,
+			openAiRealtimeVoice: "marin",
+		},
+		dependencies: {
+			createRealtime() {
+				return realtime;
+			},
+			async spawnVox() {
+				return vox;
+			},
+			createStreamDiscovery() {
+				return discovery;
+			},
+		},
+	});
+	if (handle === undefined) throw new Error("voice-smoke: media voice bridge did not start");
+
+	realtime.emit("event", {
+		type: "response.done",
+		response: {
+			output: [
+				{
+					type: "function_call",
+					name: "play_music_url",
+					call_id: "call-music",
+					arguments: '{"url":"https://example.com/song.mp3","resolvedDirectUrl":true}',
+				},
+			],
+		},
+	});
+	await waitUntil(() => realtime.functionOutputs.some((output) => output.callId === "call-music"), "music output");
+	if (vox.musicPlays[0]?.url !== "https://example.com/song.mp3" || vox.musicPlays[0].resolvedDirectUrl !== true) {
+		throw new Error("voice-smoke: play_music_url did not send music_play to clankvox");
+	}
+
+	realtime.emit("event", {
+		type: "response.done",
+		response: {
+			output: [
+				{
+					type: "function_call",
+					name: "play_video_url",
+					call_id: "call-video",
+					arguments: '{"url":"https://www.youtube.com/watch?v=abc123"}',
+				},
+			],
+		},
+	});
+	await waitUntil(() => realtime.functionOutputs.some((output) => output.callId === "call-video"), "video output");
+	if (vox.musicPlays[1]?.url !== "https://www.youtube.com/watch?v=abc123") {
+		throw new Error("voice-smoke: play_video_url did not start voice audio by default");
+	}
+	if (vox.streamPublishPlays[0]?.url !== "https://www.youtube.com/watch?v=abc123") {
+		throw new Error("voice-smoke: play_video_url did not start stream_publish_play");
+	}
+	if (
+		vox.streamPublishConnections[0]?.sessionId !== "voice-session-1" ||
+		vox.streamPublishConnections[0]?.daveChannelId !== "9101"
+	) {
+		throw new Error("voice-smoke: play_video_url did not connect stream_publish with credentials");
+	}
+	if (discovery.publishRequests.length !== 0) {
+		throw new Error("voice-smoke: play_video_url should not send OP18 when self stream credentials already exist");
+	}
+
+	realtime.emit("event", {
+		type: "response.done",
+		response: {
+			output: [
+				{
+					type: "function_call",
+					name: "start_music_visualizer",
+					call_id: "call-visualizer",
+					arguments: '{"visualizerMode":"waves"}',
+				},
+			],
+		},
+	});
+	await waitUntil(
+		() => realtime.functionOutputs.some((output) => output.callId === "call-visualizer"),
+		"visualizer output",
+	);
+	if (vox.streamPublishVisualizers[0]?.visualizerMode !== "waves") {
+		throw new Error("voice-smoke: start_music_visualizer did not start requested visualizer mode");
+	}
+
+	realtime.emit("event", {
+		type: "response.done",
+		response: {
+			output: [
+				{ type: "function_call", name: "media_pause", call_id: "call-media-pause", arguments: "{}" },
+				{ type: "function_call", name: "media_resume", call_id: "call-media-resume", arguments: "{}" },
+				{ type: "function_call", name: "media_status", call_id: "call-media-status", arguments: "{}" },
+				{ type: "function_call", name: "media_stop", call_id: "call-media-stop", arguments: "{}" },
+			],
+		},
+	});
+	await waitUntil(
+		() => realtime.functionOutputs.some((output) => output.callId === "call-media-stop"),
+		"media control outputs",
+	);
+	if (vox.musicPauses !== 1 || vox.musicResumes !== 1 || vox.musicStops !== 1) {
+		throw new Error("voice-smoke: media pause/resume/stop did not control music playback");
+	}
+	if (vox.streamPublishPauses !== 1 || vox.streamPublishResumes !== 1 || vox.streamPublishStops < 1) {
+		throw new Error("voice-smoke: media pause/resume/stop did not control stream publish");
+	}
+	if (discovery.publishPaused.length !== 2 || discovery.publishStops[0] !== "guild:guild-1:voice-1:clanky-user") {
+		throw new Error("voice-smoke: media controls did not send Go Live pause/delete gateway requests");
+	}
+	const stats = expectRecord(handle.status().stats, "media stats");
+	if (
+		stats.musicPlayRequestCount !== 2 ||
+		stats.streamPublishRequestCount !== 2 ||
+		stats.streamPublishConnectCount !== 2 ||
+		stats.musicPauseRequestCount !== 1 ||
+		stats.musicResumeRequestCount !== 1 ||
+		stats.musicStopRequestCount !== 1
+	) {
+		throw new Error("voice-smoke: media tool stats did not increment");
+	}
+	await handle.stop();
 }
 
 async function assertFakeVoiceBridgeRealtimeBatchToolResponse(): Promise<void> {
@@ -1694,7 +2105,26 @@ class FakeBridgeClankvox extends EventEmitter {
 		daveChannelId: string;
 	}[] = [];
 	readonly streamWatchDisconnects: (string | null | undefined)[] = [];
+	readonly streamPublishConnections: {
+		endpoint: string;
+		token: string;
+		serverId: string;
+		sessionId: string;
+		userId: string;
+		daveChannelId: string;
+	}[] = [];
+	readonly streamPublishDisconnects: (string | null | undefined)[] = [];
+	readonly musicPlays: { url: string; resolvedDirectUrl?: boolean }[] = [];
+	readonly streamPublishPlays: { url: string; resolvedDirectUrl?: boolean }[] = [];
+	readonly streamPublishVisualizers: { url: string; resolvedDirectUrl?: boolean; visualizerMode?: string }[] = [];
 	readonly audioSends: { pcmBase64: string; sampleRate?: number }[] = [];
+	musicStops = 0;
+	musicPauses = 0;
+	musicResumes = 0;
+	musicGainSets: { target: number; fadeMs: number }[] = [];
+	streamPublishStops = 0;
+	streamPublishPauses = 0;
+	streamPublishResumes = 0;
 	destroyed = false;
 	voiceSessionId: string | undefined = "voice-session-1";
 
@@ -1703,6 +2133,10 @@ class FakeBridgeClankvox extends EventEmitter {
 		if (sampleRate !== undefined) send.sampleRate = sampleRate;
 		this.audioSends.push(send);
 	}
+
+	stopPlayback(): void {}
+
+	stopTtsPlayback(): void {}
 
 	subscribeUser(): void {}
 
@@ -1729,6 +2163,68 @@ class FakeBridgeClankvox extends EventEmitter {
 		this.streamWatchDisconnects.push(reason);
 	}
 
+	streamPublishConnect(input: {
+		endpoint: string;
+		token: string;
+		serverId: string;
+		sessionId: string;
+		userId: string;
+		daveChannelId: string;
+	}): void {
+		this.streamPublishConnections.push(input);
+	}
+
+	streamPublishDisconnect(reason?: string | null): void {
+		this.streamPublishDisconnects.push(reason);
+	}
+
+	musicPlay(url: string, resolvedDirectUrl?: boolean): void {
+		const entry: { url: string; resolvedDirectUrl?: boolean } = { url };
+		if (resolvedDirectUrl !== undefined) entry.resolvedDirectUrl = resolvedDirectUrl;
+		this.musicPlays.push(entry);
+	}
+
+	musicStop(): void {
+		this.musicStops += 1;
+	}
+
+	musicPause(): void {
+		this.musicPauses += 1;
+	}
+
+	musicResume(): void {
+		this.musicResumes += 1;
+	}
+
+	musicSetGain(target: number, fadeMs: number): void {
+		this.musicGainSets.push({ target, fadeMs });
+	}
+
+	streamPublishPlay(url: string, resolvedDirectUrl?: boolean): void {
+		const entry: { url: string; resolvedDirectUrl?: boolean } = { url };
+		if (resolvedDirectUrl !== undefined) entry.resolvedDirectUrl = resolvedDirectUrl;
+		this.streamPublishPlays.push(entry);
+	}
+
+	streamPublishPlayVisualizer(url: string, resolvedDirectUrl?: boolean, visualizerMode?: string): void {
+		const entry: { url: string; resolvedDirectUrl?: boolean; visualizerMode?: string } = { url };
+		if (resolvedDirectUrl !== undefined) entry.resolvedDirectUrl = resolvedDirectUrl;
+		if (visualizerMode !== undefined) entry.visualizerMode = visualizerMode;
+		this.streamPublishVisualizers.push(entry);
+	}
+
+	streamPublishStop(): void {
+		this.streamPublishStops += 1;
+	}
+
+	streamPublishPause(): void {
+		this.streamPublishPauses += 1;
+	}
+
+	streamPublishResume(): void {
+		this.streamPublishResumes += 1;
+	}
+
 	getLastVoiceSessionId(): string | undefined {
 		return this.voiceSessionId;
 	}
@@ -1740,6 +2236,9 @@ class FakeBridgeClankvox extends EventEmitter {
 
 class FakeVoiceStreamDiscovery implements DiscordStreamDiscovery {
 	readonly requestedWatchKeys: string[] = [];
+	readonly publishRequests: { guildId: string; channelId: string; preferredRegion?: string | null }[] = [];
+	readonly publishStops: string[] = [];
+	readonly publishPaused: { streamKey: string; paused: boolean }[] = [];
 	stopped = false;
 
 	constructor(private readonly stream: DiscoveredDiscordStream) {}
@@ -1768,10 +2267,25 @@ class FakeVoiceStreamDiscovery implements DiscordStreamDiscovery {
 	requestWatch(streamKey: string): void {
 		this.requestedWatchKeys.push(streamKey);
 	}
+
+	requestPublish(input: { guildId: string; channelId: string; preferredRegion?: string | null }): void {
+		this.publishRequests.push(input);
+	}
+
+	requestPublishStop(streamKey: string): void {
+		this.publishStops.push(streamKey);
+	}
+
+	setPublishPaused(streamKey: string, paused: boolean): void {
+		this.publishPaused.push({ streamKey, paused });
+	}
 }
 
 class FakeVoiceMultiStreamDiscovery implements DiscordStreamDiscovery {
 	readonly requestedWatchKeys: string[] = [];
+	readonly publishRequests: { guildId: string; channelId: string; preferredRegion?: string | null }[] = [];
+	readonly publishStops: string[] = [];
+	readonly publishPaused: { streamKey: string; paused: boolean }[] = [];
 	stopped = false;
 
 	constructor(private readonly streams: DiscoveredDiscordStream[]) {}
@@ -1802,11 +2316,23 @@ class FakeVoiceMultiStreamDiscovery implements DiscordStreamDiscovery {
 	requestWatch(streamKey: string): void {
 		this.requestedWatchKeys.push(streamKey);
 	}
+
+	requestPublish(input: { guildId: string; channelId: string; preferredRegion?: string | null }): void {
+		this.publishRequests.push(input);
+	}
+
+	requestPublishStop(streamKey: string): void {
+		this.publishStops.push(streamKey);
+	}
+
+	setPublishPaused(streamKey: string, paused: boolean): void {
+		this.publishPaused.push({ streamKey, paused });
+	}
 }
 
-async function waitUntil(predicate: () => boolean, label: string): Promise<void> {
+async function waitUntil(predicate: () => boolean | Promise<boolean>, label: string): Promise<void> {
 	for (let attempt = 0; attempt < 50; attempt += 1) {
-		if (predicate()) return;
+		if (await predicate()) return;
 		await sleep(5);
 	}
 	throw new Error(`voice-smoke: timed out waiting for ${label}`);

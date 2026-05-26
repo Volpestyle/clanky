@@ -1077,7 +1077,7 @@ class SubagentBrowserComponent {
 			"",
 		];
 		if (this.summaries.length === 0) {
-			lines.push("No Discord subagents yet.");
+			lines.push("No Clanky subagents yet.");
 		} else {
 			lines.push("  state     queue  scope / active work");
 			const visibleSummaries = this.summaries.slice(this.listScroll, this.listScroll + SUBAGENT_BROWSER_MAX_ROWS);
@@ -1260,8 +1260,8 @@ function formatSubagentPanelLines(
 					ctx.ui.theme.fg(
 						"dim",
 						options.selectionActive === true
-							? "No Discord subagents yet. Esc releases selection."
-							: "No Discord subagents yet.",
+							? "No Clanky subagents yet. Esc releases selection."
+							: "No Clanky subagents yet.",
 					),
 				]
 			: [];
@@ -1949,12 +1949,12 @@ export function createClankyToolDefinitions(handlers: ClankyAgentToolHandlers): 
 				name: "main_session_context",
 				label: "Main Session Context",
 				description:
-					"Read bounded recent history from the main Clanky session so a Discord subagent can understand what the foreground agent has been doing.",
+					"Read bounded recent history from the main Clanky session so a Clanky subagent can understand what the foreground agent has been doing.",
 				promptSnippet:
-					"main_session_context: read the main Clanky session history when the Discord subagent needs more than the startup status snapshot.",
+					"main_session_context: read the main Clanky session history when a subagent needs more than the startup status snapshot.",
 				promptGuidelines: [
-					"Use when the user asks what the main agent has been doing or when the Discord answer depends on deeper main-session context.",
-					"Do not reveal unrelated private main-session details into Discord; use the context to stay accurate and concise.",
+					"Use when the user asks what the main agent has been doing or when a subagent answer depends on deeper main-session context.",
+					"Do not reveal unrelated private main-session details into external channels; use the context to stay accurate and concise.",
 					"Increase limit or include_tool_results only when the first result is not enough.",
 				],
 				parameters: mainSessionContextSchema,
@@ -1971,13 +1971,13 @@ export function createClankyToolDefinitions(handlers: ClankyAgentToolHandlers): 
 				name: "delegate_to_main_worker",
 				label: "Delegate To Main Worker",
 				description:
-					"Hand off durable or long-running work from a Discord subagent to the main Clanky worker without blocking the Discord reply loop.",
+					"Hand off durable or long-running work from a Clanky subagent to the main Clanky worker without blocking the external reply loop.",
 				promptSnippet:
-					"delegate_to_main_worker: hand off work likely to take more than a minute or two, then reply briefly in Discord.",
+					"delegate_to_main_worker: hand off work likely to take more than a minute or two, then reply briefly in the external channel.",
 				promptGuidelines: [
-					"Use when a Discord request needs coding, deep research, multi-step operations, or other work likely to take more than 1-2 minutes.",
-					"Include enough context in prompt for the main worker to proceed without rereading the Discord conversation.",
-					"After delegating, tell the Discord user that the main worker has picked it up; do not also do the long task yourself.",
+					"Use when an external request needs coding, deep research, multi-step operations, or other work likely to take more than 1-2 minutes.",
+					"Include enough context in prompt for the main worker to proceed without rereading the external conversation.",
+					"After delegating, tell the user that the main worker has picked it up; do not also do the long task yourself.",
 				],
 				parameters: delegateToMainWorkerSchema,
 				async execute(_toolCallId, params) {
@@ -1992,12 +1992,10 @@ export function createClankyToolDefinitions(handlers: ClankyAgentToolHandlers): 
 			defineTool({
 				name: "subagent_status",
 				label: "Subagent Status",
-				description:
-					"Inspect Clanky's Discord subagent workers, including queue depth, active work, session files, and errors.",
-				promptSnippet:
-					"subagent_status: check Clanky's Discord subagent workers before reading sqlite files or shelling out.",
+				description: "Inspect Clanky subagents, including queue depth, active work, session files, and errors.",
+				promptSnippet: "subagent_status: check Clanky's subagents before reading sqlite files or shelling out.",
 				promptGuidelines: [
-					"Use when the user asks what a subagent is doing, whether Discord workers are healthy, or if a queue is stuck.",
+					"Use when the user asks what a subagent is doing, whether workers are healthy, or if a queue is stuck.",
 					"Summarize state, queue depth, active work, age, and lastError if present.",
 				],
 				parameters: Type.Object({}),

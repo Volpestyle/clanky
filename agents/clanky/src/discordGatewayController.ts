@@ -33,6 +33,7 @@ import {
 	startAgentDiscordVoiceBridge,
 } from "./agentDiscordVoice.ts";
 import type { ClankyThinkingLevel } from "./clankyDefaults.ts";
+import type { StoredDiscordVoiceSettings } from "./discordVoiceSettings.ts";
 import { readMainSessionContext } from "./mainSessionContext.ts";
 import { delegateToMainWorker } from "./mainWorkerDelegation.ts";
 import { type RuntimeTurnQueue, SerialRuntimeTurnQueue } from "./runtimeTurnQueue.ts";
@@ -58,6 +59,7 @@ export class ClankyDiscordGatewayController {
 	private readonly paths: ClankyPaths;
 	private readonly bridgeLogPath: string | undefined;
 	private readonly env: NodeJS.ProcessEnv;
+	private readonly readVoiceSettings: (() => StoredDiscordVoiceSettings | undefined) | undefined;
 	private readonly dependencies: ResolvedClankyDiscordGatewayControllerDependencies;
 	private readonly runtimeTurnQueue: RuntimeTurnQueue;
 	private readonly subagentStore: DiscordSubagentStore;
@@ -67,12 +69,14 @@ export class ClankyDiscordGatewayController {
 	private handle: ClankyAgentDiscordGatewayHandle | undefined;
 	private voiceHandle: ClankyAgentDiscordVoiceHandle | undefined;
 	private voiceOnlyClient: ClankyAgentDiscordGatewayHandle["client"] | undefined;
+	private voiceConfigError: string | undefined;
 
 	constructor(input: {
 		authStorage: AuthStorage;
 		paths: ClankyPaths;
 		bridgeLogPath?: string;
 		env?: NodeJS.ProcessEnv;
+		readVoiceSettings?: () => StoredDiscordVoiceSettings | undefined;
 		runtimeTurnQueue?: RuntimeTurnQueue;
 		dependencies?: ClankyDiscordGatewayControllerDependencies;
 	}) {
@@ -80,6 +84,7 @@ export class ClankyDiscordGatewayController {
 		this.paths = input.paths;
 		this.bridgeLogPath = input.bridgeLogPath;
 		this.env = input.env ?? process.env;
+		this.readVoiceSettings = input.readVoiceSettings;
 		this.runtimeTurnQueue = input.runtimeTurnQueue ?? new SerialRuntimeTurnQueue();
 		this.subagentStore = new DiscordSubagentStore(input.paths);
 		this.dependencies = {
@@ -104,9 +109,20 @@ export class ClankyDiscordGatewayController {
 		if (this.runtime === undefined) {
 			throw new Error("ClankyDiscordGatewayController.start: runtime not bound");
 		}
+		this.voiceConfigError = undefined;
 		const discordCredentials = resolveAgentDiscordCredentialConfig(this.env, this.authStorage);
 		const discordConfig = resolveAgentDiscordGatewayConfig(this.env, this.authStorage);
-		const voiceConfig = resolveAgentDiscordVoiceConfig(this.env, discordCredentials, this.authStorage);
+		const storedVoiceSettings = this.readVoiceSettings?.();
+		let voiceConfig: ReturnType<typeof resolveAgentDiscordVoiceConfig>;
+		try {
+			voiceConfig = resolveAgentDiscordVoiceConfig(this.env, discordCredentials, this.authStorage, storedVoiceSettings);
+		} catch (error) {
+			if (isDiscordVoiceExplicitlyEnabledByEnv(this.env)) throw error;
+			const message = error instanceof Error ? error.message : String(error);
+			this.voiceConfigError = message;
+			this.logBridge(`voice-config-skipped error=${message}`);
+			voiceConfig = undefined;
+		}
 		const client =
 			discordCredentials !== undefined && voiceConfig !== undefined
 				? this.dependencies.createClient({ voice: true, chat: discordConfig !== undefined })
@@ -150,6 +166,15 @@ export class ClankyDiscordGatewayController {
 					authStorage: this.authStorage,
 					config: voiceConfig,
 					runtimeTurnQueue: this.runtimeTurnQueue,
+					...(this.createRuntime === undefined
+						? {}
+						: {
+								createSubagentRuntime: this.createRuntime,
+								subagentStore: this.subagentStore,
+								subagentSessionDir: this.paths.subagentSessionsDir,
+								subagentCwd: this.cwd ?? this.runtime.cwd,
+							}),
+					...(this.bridgeLogPath === undefined ? {} : { bridgeLogPath: this.bridgeLogPath }),
 				});
 			} catch (error) {
 				await this.stop();
@@ -204,12 +229,14 @@ export class ClankyDiscordGatewayController {
 	}
 
 	status(): JsonRecord {
-		return {
+		const status: JsonRecord = {
 			textBridgeActive: this.handle !== undefined,
 			voiceBridgeActive: this.voiceHandle !== undefined,
 			voiceOnlyClientActive: this.voiceOnlyClient !== undefined,
 			voice: this.voiceHandle?.status(),
 		};
+		if (this.voiceConfigError !== undefined) status.voiceConfigError = this.voiceConfigError;
+		return status;
 	}
 
 	private logBridge(line: string): void {
@@ -218,4 +245,10 @@ export class ClankyDiscordGatewayController {
 			console.error(`discord-controller log failed: ${error instanceof Error ? error.message : String(error)}`);
 		});
 	}
+}
+
+function isDiscordVoiceExplicitlyEnabledByEnv(env: NodeJS.ProcessEnv): boolean {
+	const value = env.CLANKY_DISCORD_VOICE_ENABLED ?? env.CLANKY_DISCORD_VOICE;
+	const normalized = value?.trim().toLowerCase();
+	return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
