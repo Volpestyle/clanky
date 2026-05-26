@@ -271,9 +271,10 @@ export class OpenAiRealtimeTranscriptionClient extends EventEmitter {
 
 		this.session = {
 			...options,
+			model: options.model.trim(),
 			sampleRate: normalizeSampleRate(options.sampleRate),
 		};
-		const ws = await this.openSocket(buildRealtimeUrl(this.baseUrl, options.model));
+		const ws = await this.openSocket(buildRealtimeUrl(this.baseUrl, this.session.model));
 		this.ws = ws;
 		ws.on("message", (data) => this.handleIncoming(data));
 		ws.on("error", (error) => {

@@ -106,8 +106,9 @@ Discord voice is opt-in and uses the same Discord credential as the text
 gateway. When text chat is agent-owned, Clanky shares one Discord client for
 chat and voice. When text chat is suppressed by `CLANKY_CHAT_GATEWAY_OWNER`,
 Clanky can still create a voice-only Discord client with voice-state intents,
-join one configured voice channel through `clankvox`, and bridge Discord PCM to
-OpenAI Realtime.
+join one configured voice channel through `clankvox`, transcribe each active
+Discord speaker through an individual OpenAI Realtime transcription session, and
+send labeled transcript turns into the main Realtime voice response session.
 
 Required runtime env:
 
@@ -125,6 +126,17 @@ Optional env:
 - `CLANKY_OPENAI_REALTIME_REASONING_EFFORT` (default `low` with
   `gpt-realtime-2`; supported values: `minimal`, `low`, `medium`, `high`,
   `xhigh`)
+- `CLANKY_OPENAI_REALTIME_TRANSCRIPTION_MODEL` (default
+  `gpt-realtime-whisper`)
+- `CLANKY_OPENAI_REALTIME_TRANSCRIPTION_DELAY` (default `low`; supported
+  values: `minimal`, `low`, `medium`, `high`, `xhigh`)
+- `CLANKY_OPENAI_REALTIME_TRANSCRIPTION_LANGUAGE` to provide a language hint
+  such as `en`
+- `CLANKY_DISCORD_VOICE_SPEAKER_TRANSCRIPTION_IDLE_CLOSE_MS` (default `120000`)
+  closes inactive per-speaker transcription sessions
+- `CLANKY_DISCORD_VOICE_TRANSCRIPT_RESPONSE_BATCH_DELAY_MS` (default `350`)
+  batches near-simultaneous speaker transcripts before asking the voice model to
+  respond
 - `CLANKY_OPENAI_BASE_URL`
 - `CLANKY_DISCORD_VOICE_VIDEO_FRAME_INTERVAL_MS` (default `2000`) throttles
   automatic Realtime attachment of decoded screen-share frames; the snapshot

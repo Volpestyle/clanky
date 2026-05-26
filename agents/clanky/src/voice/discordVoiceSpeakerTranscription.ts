@@ -50,6 +50,7 @@ interface SpeakerSession {
 	userId: string;
 	realtime: DiscordVoiceSpeakerTranscriptionRealtime;
 	connecting: Promise<void>;
+	connected: boolean;
 	pendingAudio: Buffer[];
 	draining: Promise<void> | undefined;
 	commitRequested: boolean;
@@ -150,7 +151,7 @@ export class DiscordVoiceSpeakerTranscriptionManager {
 		let bufferedAudioBytes = 0;
 		let pendingCommitCount = 0;
 		for (const session of this.sessions.values()) {
-			if (session.draining !== undefined) connectingSessionCount += 1;
+			if (!session.connected) connectingSessionCount += 1;
 			bufferedAudioBytes += session.pendingAudio.reduce((total, audio) => total + audio.length, 0);
 			if (session.commitRequested) pendingCommitCount += 1;
 		}
@@ -171,10 +172,12 @@ export class DiscordVoiceSpeakerTranscriptionManager {
 		if (existing !== undefined) return existing;
 
 		const realtime = this.createRealtime(this.realtimeOptions);
+		const connecting = realtime.connect(this.connectOptions);
 		const session: SpeakerSession = {
 			userId,
 			realtime,
-			connecting: realtime.connect(this.connectOptions),
+			connecting,
+			connected: false,
 			pendingAudio: [],
 			draining: undefined,
 			commitRequested: false,
@@ -196,6 +199,7 @@ export class DiscordVoiceSpeakerTranscriptionManager {
 		});
 		session.realtime.on("error_event", (event) => {
 			this.onEvent?.(session.userId, event);
+			this.onError?.(session.userId, event);
 		});
 		session.realtime.on("socket_error", (error) => {
 			this.onError?.(session.userId, error);
@@ -219,6 +223,7 @@ export class DiscordVoiceSpeakerTranscriptionManager {
 	private async drain(session: SpeakerSession): Promise<void> {
 		try {
 			await session.connecting;
+			session.connected = true;
 			while (!session.closed && session.pendingAudio.length > 0) {
 				const audio = session.pendingAudio.shift();
 				if (audio !== undefined) session.realtime.appendInputAudioPcm(audio);

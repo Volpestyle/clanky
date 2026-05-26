@@ -43,6 +43,8 @@ import { buildVoiceLiveValidationResult } from "../src/voice/liveValidationResul
 import {
 	buildInputAudioAppendEvent,
 	buildRealtimeSessionUpdateEvent,
+	buildRealtimeTranscriptionSessionUpdateEvent,
+	type OpenAiRealtimeTranscriptionConnectOptions,
 	splitRealtimeInputAudioChunk,
 	stringifyRealtimeFunctionOutput,
 } from "../src/voice/openAiRealtimeClient.ts";
@@ -52,6 +54,7 @@ type JsonRecord = Record<string, unknown>;
 async function main(): Promise<void> {
 	assertVoiceConfig();
 	assertRealtimeSessionUpdateShape();
+	assertRealtimeTranscriptionSessionUpdateShape();
 	assertRealtimeAudioAppendShape();
 	assertRealtimeFunctionOutputSerialization();
 	assertRealtimeFunctionCallParsing();
@@ -96,8 +99,43 @@ function assertVoiceConfig(): void {
 	if (config.openAiRealtimeReasoningEffort !== "low") {
 		throw new Error("voice-smoke: default realtime reasoning effort should be low for gpt-realtime-2");
 	}
+	if (config.openAiRealtimeTranscriptionModel !== "gpt-realtime-whisper") {
+		throw new Error("voice-smoke: default realtime transcription model mismatch");
+	}
+	if (config.openAiRealtimeTranscriptionDelay !== "low") {
+		throw new Error("voice-smoke: default realtime transcription delay mismatch");
+	}
 	if (config.videoFrameAutoAttachIntervalMs !== 2_000) {
 		throw new Error("voice-smoke: default screen frame auto-attach interval mismatch");
+	}
+	const transcriptionOverride = resolveAgentDiscordVoiceConfig(
+		{
+			CLANKY_DISCORD_VOICE_ENABLED: "1",
+			CLANKY_DISCORD_TOKEN: "discord-token",
+			CLANKY_DISCORD_VOICE_GUILD_ID: "guild-1",
+			CLANKY_DISCORD_VOICE_CHANNEL_ID: "channel-1",
+			OPENAI_API_KEY: "openai-key",
+			CLANKY_OPENAI_REALTIME_TRANSCRIPTION_MODEL: "gpt-realtime-whisper",
+			CLANKY_OPENAI_REALTIME_TRANSCRIPTION_DELAY: "medium",
+			CLANKY_OPENAI_REALTIME_TRANSCRIPTION_LANGUAGE: "en",
+			CLANKY_DISCORD_VOICE_SPEAKER_TRANSCRIPTION_IDLE_CLOSE_MS: "90000",
+			CLANKY_DISCORD_VOICE_TRANSCRIPT_RESPONSE_BATCH_DELAY_MS: "0",
+		},
+		{
+			providerId: "clanky-discord",
+			token: "discord-token",
+			credentialKind: "bot-token",
+			source: "env",
+		},
+	);
+	if (
+		transcriptionOverride === undefined ||
+		transcriptionOverride.openAiRealtimeTranscriptionDelay !== "medium" ||
+		transcriptionOverride.openAiRealtimeTranscriptionLanguage !== "en" ||
+		transcriptionOverride.speakerTranscriptionIdleCloseMs !== 90_000 ||
+		transcriptionOverride.transcriptResponseBatchDelayMs !== 0
+	) {
+		throw new Error("voice-smoke: realtime transcription env overrides did not parse");
 	}
 	const nonReasoningOverride = resolveAgentDiscordVoiceConfig(
 		{
@@ -247,6 +285,35 @@ function assertRealtimeSessionUpdateShape(): void {
 	if (reasoning.effort !== "low") throw new Error("voice-smoke: realtime reasoning effort missing");
 	const tools = session.tools;
 	if (!Array.isArray(tools) || tools.length !== 1) throw new Error("voice-smoke: session tools missing");
+}
+
+function assertRealtimeTranscriptionSessionUpdateShape(): void {
+	const event = buildRealtimeTranscriptionSessionUpdateEvent({
+		model: "gpt-realtime-whisper",
+		sampleRate: 24_000,
+		language: "en",
+		delay: "low",
+	});
+	const session = expectRecord(event.session, "transcription session");
+	if (event.type !== "session.update") throw new Error("voice-smoke: expected transcription session.update");
+	if (session.type !== "transcription") throw new Error("voice-smoke: transcription session.type missing");
+	const audio = expectRecord(session.audio, "transcription session.audio");
+	const audioInput = expectRecord(audio.input, "transcription session.audio.input");
+	const format = expectRecord(audioInput.format, "transcription input format");
+	if (format.type !== "audio/pcm" || format.rate !== 24_000) {
+		throw new Error("voice-smoke: realtime transcription should use 24 kHz PCM input");
+	}
+	const transcription = expectRecord(audioInput.transcription, "transcription model config");
+	if (
+		transcription.model !== "gpt-realtime-whisper" ||
+		transcription.language !== "en" ||
+		transcription.delay !== "low"
+	) {
+		throw new Error("voice-smoke: realtime transcription model options missing");
+	}
+	if (audioInput.turn_detection !== null) {
+		throw new Error("voice-smoke: realtime transcription should use manual commits");
+	}
 }
 
 function assertRealtimeAudioAppendShape(): void {
@@ -778,6 +845,7 @@ function assertVoiceLiveValidationResult(): void {
 
 async function assertFakeVoiceBridgeRealtimeTools(): Promise<void> {
 	const realtime = new FakeBridgeRealtime();
+	const speakerTranscriptions: FakeSpeakerTranscriptionRealtime[] = [];
 	const vox = new FakeBridgeClankvox();
 	const runtime = new FakeVoiceRuntime();
 	const discovery = new FakeVoiceStreamDiscovery({
@@ -806,10 +874,16 @@ async function assertFakeVoiceBridgeRealtimeTools(): Promise<void> {
 			openAiApiKey: "openai-key",
 			openAiRealtimeModel: DEFAULT_REALTIME_MODEL,
 			openAiRealtimeVoice: "marin",
+			transcriptResponseBatchDelayMs: 0,
 		},
 		dependencies: {
 			createRealtime() {
 				return realtime;
+			},
+			createTranscriptionRealtime() {
+				const client = new FakeSpeakerTranscriptionRealtime(`speaker transcript ${speakerTranscriptions.length + 1}`);
+				speakerTranscriptions.push(client);
+				return client;
 			},
 			async spawnVox() {
 				return vox;
@@ -856,6 +930,37 @@ async function assertFakeVoiceBridgeRealtimeTools(): Promise<void> {
 	vox.emit("userAudio", "speaker-2", Buffer.from([7, 8, 9, 10]));
 	vox.emit("userAudioEnd", "speaker-1");
 	vox.emit("userAudioEnd", "speaker-2");
+	await waitUntil(
+		() =>
+			realtime.textUtterances.some(
+				(text) =>
+					text.includes("Discord voice transcript with speaker attribution") &&
+					text.includes("Speaker One (speaker-1): speaker transcript 1") &&
+					text.includes("Speaker Two (speaker-2): speaker transcript 2"),
+			),
+		"speaker-attributed realtime transcript",
+	);
+	if (realtime.audioAppends !== 0 || realtime.commits !== 0) {
+		throw new Error("voice-smoke: speaker audio should not be mixed into the main realtime response session");
+	}
+	if (
+		speakerTranscriptions.length !== 2 ||
+		speakerTranscriptions.some((client) => client.audioAppends.length !== 1 || client.commits !== 1)
+	) {
+		throw new Error("voice-smoke: per-speaker transcription sessions did not receive isolated audio");
+	}
+	const firstSubscription = vox.userSubscriptions[0];
+	const secondSubscription = vox.userSubscriptions[1];
+	if (
+		firstSubscription === undefined ||
+		secondSubscription === undefined ||
+		firstSubscription.userId !== "speaker-1" ||
+		firstSubscription.sampleRate !== 24_000 ||
+		secondSubscription.userId !== "speaker-2" ||
+		secondSubscription.silenceDurationMs !== 700
+	) {
+		throw new Error("voice-smoke: per-speaker transcription did not subscribe individual users");
+	}
 
 	realtime.emit("event", {
 		type: "response.done",
@@ -1052,7 +1157,7 @@ async function assertFakeVoiceBridgeRealtimeTools(): Promise<void> {
 		stats.discordOutputAudioDropCount !== 0 ||
 		stats.realtimeSessionCreatedCount !== 1 ||
 		stats.realtimeSessionUpdatedCount !== 1 ||
-		stats.realtimeTranscriptCount !== 1 ||
+		stats.realtimeTranscriptCount !== 3 ||
 		stats.realtimeErrorEventCount !== 1 ||
 		stats.realtimeSocketErrorCount !== 1 ||
 		stats.realtimeSocketCloseCount !== 1
@@ -1068,6 +1173,9 @@ async function assertFakeVoiceBridgeRealtimeTools(): Promise<void> {
 		stats.discordInputAudioBytes !== 10
 	) {
 		throw new Error("voice-smoke: voice bridge did not count Discord input audio");
+	}
+	if (stats.speakerTranscriptFinalCount !== 2 || stats.speakerTranscriptForwardCount !== 2) {
+		throw new Error("voice-smoke: voice bridge did not count speaker-attributed transcripts");
 	}
 	if (
 		stats.realtimeFunctionCallCount !== 6 ||
@@ -1973,6 +2081,15 @@ class FakeRealtime {
 
 class FakeVoiceDiscordClient extends EventEmitter {
 	readonly user = { id: "clanky-user", username: "clanky" };
+	readonly users = {
+		cache: {
+			get: (id: string) => {
+				if (id === "speaker-1") return { username: "Speaker One" };
+				if (id === "speaker-2") return { username: "Speaker Two" };
+				return undefined;
+			},
+		},
+	};
 	readonly guild: JsonRecord;
 	readonly guilds = {
 		cache: {
@@ -2092,8 +2209,44 @@ class FakeBridgeRealtime extends EventEmitter {
 	}
 }
 
+class FakeSpeakerTranscriptionRealtime extends EventEmitter {
+	connected = false;
+	closed = false;
+	connectOptions: OpenAiRealtimeTranscriptionConnectOptions | undefined;
+	readonly audioAppends: Buffer[] = [];
+	private readonly transcriptText: string;
+	commits = 0;
+
+	constructor(transcriptText: string) {
+		super();
+		this.transcriptText = transcriptText;
+	}
+
+	async connect(options: OpenAiRealtimeTranscriptionConnectOptions): Promise<void> {
+		this.connected = true;
+		this.connectOptions = options;
+	}
+
+	appendInputAudioPcm(audio: Buffer): void {
+		this.audioAppends.push(audio);
+	}
+
+	commitInputAudioBuffer(): void {
+		this.commits += 1;
+		this.emit("transcript", {
+			eventType: "conversation.item.input_audio_transcription.completed",
+			text: this.transcriptText,
+		});
+	}
+
+	async close(): Promise<void> {
+		this.closed = true;
+	}
+}
+
 class FakeBridgeClankvox extends EventEmitter {
 	readonly isAlive = true;
+	readonly userSubscriptions: { userId: string; silenceDurationMs?: number; sampleRate?: number }[] = [];
 	readonly videoSubscriptions: { userId: string }[] = [];
 	readonly videoUnsubscriptions: string[] = [];
 	readonly streamWatchConnections: {
@@ -2138,7 +2291,12 @@ class FakeBridgeClankvox extends EventEmitter {
 
 	stopTtsPlayback(): void {}
 
-	subscribeUser(): void {}
+	subscribeUser(userId: string, silenceDurationMs?: number, sampleRate?: number): void {
+		const subscription: { userId: string; silenceDurationMs?: number; sampleRate?: number } = { userId };
+		if (silenceDurationMs !== undefined) subscription.silenceDurationMs = silenceDurationMs;
+		if (sampleRate !== undefined) subscription.sampleRate = sampleRate;
+		this.userSubscriptions.push(subscription);
+	}
 
 	subscribeUserVideo(input: { userId: string }): void {
 		this.videoSubscriptions.push(input);

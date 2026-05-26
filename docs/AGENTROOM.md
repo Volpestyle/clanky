@@ -166,6 +166,17 @@ Agent-owned Discord voice env:
 - `CLANKY_DISCORD_VOICE_GUILD_ID`
 - `CLANKY_DISCORD_VOICE_CHANNEL_ID`
 - `OPENAI_API_KEY` or `CLANKY_OPENAI_API_KEY`
+- `CLANKY_OPENAI_REALTIME_TRANSCRIPTION_MODEL` (default
+  `gpt-realtime-whisper`)
+- `CLANKY_OPENAI_REALTIME_TRANSCRIPTION_DELAY` (default `low`; supported
+  values: `minimal`, `low`, `medium`, `high`, `xhigh`)
+- `CLANKY_OPENAI_REALTIME_TRANSCRIPTION_LANGUAGE` to provide a language hint
+  such as `en`
+- `CLANKY_DISCORD_VOICE_SPEAKER_TRANSCRIPTION_IDLE_CLOSE_MS` (default `120000`)
+  closes inactive per-speaker transcription sessions
+- `CLANKY_DISCORD_VOICE_TRANSCRIPT_RESPONSE_BATCH_DELAY_MS` (default `350`)
+  batches near-simultaneous speaker transcripts before asking the voice model to
+  respond
 - `CLANKY_DISCORD_VOICE_VIDEO_FRAME_INTERVAL_MS` (default `2000`) throttles
   automatic Realtime attachment of decoded screen-share frames; snapshot
   requests still attach the latest decoded frame immediately.
@@ -177,8 +188,10 @@ agent-owned. If room-owned text chat suppresses the text bridge, voice can still
 log in with the same Discord credential using a voice-only client. Native
 Discord Go Live screen watching depends on user-token/selfbot gateway behavior;
 room-owned Discord connectors remain text/chat owner only. The Realtime voice
-tool surface includes `ask_pi`, `list_screen_shares`, `start_screen_watch`,
-`stop_screen_watch`, and `see_screenshare_snapshot`.
+bridge transcribes each active Discord speaker through a separate streaming
+transcription session, then sends labeled transcript turns into the main voice
+response session. The tool surface includes `ask_pi`, `list_screen_shares`,
+`start_screen_watch`, `stop_screen_watch`, and `see_screenshare_snapshot`.
 
 The bundled native helper can be validated or prebuilt with `pnpm
 voice:native:test` and `pnpm voice:build`. If no release binary exists, the
