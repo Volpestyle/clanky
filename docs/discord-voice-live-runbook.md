@@ -44,9 +44,11 @@ for reasoning, use the `/discord-voice` advanced settings or the shortcut
 commands:
 
 ```text
+/elevenlabs-login
 /discord-voice set tts-provider elevenlabs
 /discord-voice set elevenlabs-voice <voice-id>
 /discord-voice set elevenlabs-model eleven_flash_v2_5
+/discord-voice set elevenlabs-output-format pcm_24000
 ```
 
 Env config still works and overrides the TUI profile setting when present:
@@ -71,7 +73,9 @@ CLANKY_ELEVENLABS_OUTPUT_FORMAT=pcm_24000
 
 Supported ElevenLabs PCM output formats are `pcm_16000`, `pcm_22050`,
 `pcm_24000`, and `pcm_44100`. `CLANKY_ELEVENLABS_BASE_URL` or
-`ELEVENLABS_BASE_URL` can override the API base URL.
+`ELEVENLABS_BASE_URL` can override the API base URL. The `/discord-voice`
+advanced settings can store the ElevenLabs voice id, model, output format, and
+base URL in the active profile; `/elevenlabs-login` stores the API key.
 
 Credentials can come from `CLANKY_DISCORD_TOKEN` or from a stored
 `/discord-login` credential in the active Clanky profile. Bot tokens are enough
@@ -82,7 +86,8 @@ OpenAI credentials are still required for the Realtime model and can come from
 `OPENAI_API_KEY`, `CLANKY_OPENAI_API_KEY`, or a stored `/openai-login` API key.
 The examples below show `OPENAI_API_KEY`; omit that line if the active profile
 already has a stored OpenAI key. ElevenLabs speech additionally requires
-`ELEVENLABS_API_KEY` or `CLANKY_ELEVENLABS_API_KEY`.
+`ELEVENLABS_API_KEY`, `CLANKY_ELEVENLABS_API_KEY`, or a stored
+`/elevenlabs-login` API key.
 
 This bridge uses the OpenAI Realtime WebSocket/event transport intentionally.
 OpenAI recommends WebRTC for browser or mobile clients where the client owns a

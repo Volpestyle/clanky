@@ -18,6 +18,8 @@ import {
 	type ClankyDiscordCredentialKind,
 	type ClankyDiscordCredentialPayload,
 	DEFAULT_CLANKY_DISCORD_PROVIDER_ID,
+	DEFAULT_ELEVENLABS_PROVIDER_ID,
+	getElevenLabsCredentialStatus,
 	loadStoredDiscordCredential,
 	removeStoredDiscordCredential,
 	saveStoredDiscordCredential,
@@ -29,10 +31,22 @@ import type {
 	DiscordVoiceTtsProvider,
 	StoredDiscordVoiceSettings,
 } from "./discordVoiceSettings.ts";
+import { runElevenLabsLogin } from "./elevenLabsAuth.ts";
 import { promptForSecret } from "./secretPrompt.ts";
+import {
+	DEFAULT_ELEVENLABS_OUTPUT_FORMAT,
+	type ElevenLabsPcmOutputFormat,
+	parseElevenLabsPcmOutputFormat,
+} from "./voice/elevenLabsTtsClient.ts";
 
 const DEV_PORTAL_URL = "https://discord.com/developers/applications";
 const DISCORD_API_BASE = "https://discord.com/api/v10";
+const ELEVENLABS_OUTPUT_FORMAT_OPTIONS: ElevenLabsPcmOutputFormat[] = [
+	"pcm_16000",
+	"pcm_22050",
+	"pcm_24000",
+	"pcm_44100",
+];
 
 interface DiscordIdentity {
 	id: string;
@@ -354,6 +368,9 @@ function formatDiscordBridgeStatus(status: unknown): string {
 		if (typeof voice.ttsProvider === "string") lines.push(`Speech provider: ${voice.ttsProvider}.`);
 		if (typeof voice.elevenLabsVoiceId === "string") lines.push(`ElevenLabs voice id: ${voice.elevenLabsVoiceId}.`);
 		if (typeof voice.elevenLabsModel === "string") lines.push(`ElevenLabs model: ${voice.elevenLabsModel}.`);
+		if (typeof voice.elevenLabsOutputFormat === "string")
+			lines.push(`ElevenLabs output format: ${voice.elevenLabsOutputFormat}.`);
+		if (typeof voice.elevenLabsBaseUrl === "string") lines.push(`ElevenLabs base URL: ${voice.elevenLabsBaseUrl}.`);
 		if (typeof voice.discordCredentialKind === "string") {
 			lines.push(`Discord credential kind: ${voice.discordCredentialKind}.`);
 		}
@@ -427,6 +444,10 @@ function discordVoiceUsage(path: string | undefined): string {
 		"  /discord-voice allow-server <guild-id> [more-guild-ids...]",
 		"  /discord-voice allow-channel <voice-channel-id> [more-channel-ids...]",
 		"  /discord-voice allow <voice-channel-id> [more-channel-ids...]",
+		"  /discord-voice set tts-provider elevenlabs",
+		"  /discord-voice set elevenlabs-voice <voice-id>",
+		"  /discord-voice set elevenlabs-output-format pcm_24000",
+		"  /elevenlabs-login",
 		"  /discord-voice disable",
 	];
 	if (path !== undefined) lines.push("", `Profile settings file: ${path}`);
@@ -462,6 +483,12 @@ function formatDiscordVoiceSettings(settings: StoredDiscordVoiceSettings | undef
 	if (settings.elevenLabsVoiceId !== undefined)
 		lines.push(`Stored ElevenLabs voice id: ${settings.elevenLabsVoiceId}.`);
 	if (settings.elevenLabsModel !== undefined) lines.push(`Stored ElevenLabs model: ${settings.elevenLabsModel}.`);
+	if (settings.elevenLabsOutputFormat !== undefined) {
+		lines.push(`Stored ElevenLabs output format: ${settings.elevenLabsOutputFormat}.`);
+	}
+	if (settings.elevenLabsBaseUrl !== undefined) {
+		lines.push(`Stored ElevenLabs base URL: ${settings.elevenLabsBaseUrl}.`);
+	}
 	if (settings.openAiRealtimeReasoningEffort !== undefined) {
 		lines.push(`Stored Realtime reasoning effort: ${settings.openAiRealtimeReasoningEffort}.`);
 	}
@@ -493,6 +520,13 @@ function formatDiscordVoiceEnvOverrides(): string[] {
 	if (elevenLabsVoice !== undefined) lines.push(`Env ElevenLabs voice override: ${elevenLabsVoice}.`);
 	const elevenLabsModel = cleanArg(process.env.CLANKY_ELEVENLABS_MODEL);
 	if (elevenLabsModel !== undefined) lines.push(`Env ElevenLabs model override: ${elevenLabsModel}.`);
+	const elevenLabsOutputFormat = cleanArg(process.env.CLANKY_ELEVENLABS_OUTPUT_FORMAT);
+	if (elevenLabsOutputFormat !== undefined)
+		lines.push(`Env ElevenLabs output format override: ${elevenLabsOutputFormat}.`);
+	const elevenLabsBaseUrl = cleanArg(process.env.CLANKY_ELEVENLABS_BASE_URL ?? process.env.ELEVENLABS_BASE_URL);
+	if (elevenLabsBaseUrl !== undefined) lines.push(`Env ElevenLabs base URL override: ${elevenLabsBaseUrl}.`);
+	const elevenLabsApiKey = cleanArg(process.env.CLANKY_ELEVENLABS_API_KEY ?? process.env.ELEVENLABS_API_KEY);
+	if (elevenLabsApiKey !== undefined) lines.push("Env ElevenLabs API key override is set.");
 	return lines;
 }
 
@@ -505,7 +539,10 @@ function hasDiscordVoiceEnvConfiguration(): boolean {
 		cleanArg(process.env.CLANKY_DISCORD_VOICE_ALLOWED_CHANNEL_IDS) !== undefined ||
 		cleanArg(process.env.CLANKY_DISCORD_VOICE_TTS_PROVIDER ?? process.env.CLANKY_VOICE_TTS_PROVIDER) !== undefined ||
 		cleanArg(process.env.CLANKY_ELEVENLABS_VOICE_ID) !== undefined ||
-		cleanArg(process.env.CLANKY_ELEVENLABS_MODEL) !== undefined
+		cleanArg(process.env.CLANKY_ELEVENLABS_MODEL) !== undefined ||
+		cleanArg(process.env.CLANKY_ELEVENLABS_OUTPUT_FORMAT) !== undefined ||
+		cleanArg(process.env.CLANKY_ELEVENLABS_BASE_URL ?? process.env.ELEVENLABS_BASE_URL) !== undefined ||
+		cleanArg(process.env.CLANKY_ELEVENLABS_API_KEY ?? process.env.ELEVENLABS_API_KEY) !== undefined
 	);
 }
 
@@ -516,6 +553,7 @@ function formatDiscordVoiceCommandStatus(deps: DiscordAuthCommandDeps): string {
 	} else {
 		lines.push(...formatDiscordVoiceSettings(deps.voiceSettings.read(), deps.voiceSettings.path));
 	}
+	lines.push(`ElevenLabs API key: ${formatElevenLabsCredentialLabel(deps)}.`);
 	const envLines = formatDiscordVoiceEnvOverrides();
 	if (envLines.length > 0) lines.push("", ...envLines);
 	if (deps.gatewayController !== undefined) {
@@ -684,10 +722,13 @@ async function runDiscordVoiceAdvancedWizard(
 	const current = deps.voiceSettings?.read() ?? { enabled: false };
 	const choice = await ctx.ui.select("Discord voice advanced settings", [
 		`Speech provider (${current.ttsProvider ?? "openai"})`,
+		`ElevenLabs API key (${formatElevenLabsCredentialLabel(deps)})`,
 		`Realtime model (${current.openAiRealtimeModel ?? "default"})`,
 		`Realtime voice (${current.openAiRealtimeVoice ?? "default"})`,
 		`ElevenLabs voice id (${current.elevenLabsVoiceId ?? "not set"})`,
 		`ElevenLabs model (${current.elevenLabsModel ?? "default"})`,
+		`ElevenLabs output format (${current.elevenLabsOutputFormat ?? DEFAULT_ELEVENLABS_OUTPUT_FORMAT})`,
+		`ElevenLabs base URL (${current.elevenLabsBaseUrl ?? "default"})`,
 		`Reasoning effort (${current.openAiRealtimeReasoningEffort ?? "default"})`,
 		`Video frame interval (${formatFrameIntervalLabel(current.videoFrameAutoAttachIntervalMs)})`,
 		"Clear advanced overrides",
@@ -697,6 +738,18 @@ async function runDiscordVoiceAdvancedWizard(
 	let next: StoredDiscordVoiceSettings = { ...current };
 	if (choice.startsWith("Speech provider")) {
 		next = await collectDiscordVoiceTtsProvider(ctx, next);
+	} else if (choice.startsWith("ElevenLabs API key")) {
+		await runElevenLabsLogin(
+			{
+				authStorage: deps.authStorage,
+				authFilePath: deps.authFilePath,
+				baseUrl: () => deps.voiceSettings?.read()?.elevenLabsBaseUrl,
+				...(deps.gatewayController === undefined ? {} : { gatewayController: deps.gatewayController }),
+			},
+			ctx,
+			{ reload: false },
+		);
+		return;
 	} else if (choice.startsWith("Realtime model")) {
 		next = await collectDiscordVoiceModel(ctx, next);
 	} else if (choice.startsWith("Realtime voice")) {
@@ -705,6 +758,10 @@ async function runDiscordVoiceAdvancedWizard(
 		next = await collectDiscordVoiceElevenLabsVoice(ctx, next);
 	} else if (choice.startsWith("ElevenLabs model")) {
 		next = await collectDiscordVoiceElevenLabsModel(ctx, next);
+	} else if (choice.startsWith("ElevenLabs output format")) {
+		next = await collectDiscordVoiceElevenLabsOutputFormat(ctx, next);
+	} else if (choice.startsWith("ElevenLabs base URL")) {
+		next = await collectDiscordVoiceElevenLabsBaseUrl(ctx, next);
 	} else if (choice.startsWith("Reasoning effort")) {
 		next = await collectDiscordVoiceReasoning(ctx, next);
 	} else if (choice.startsWith("Video frame interval")) {
@@ -716,6 +773,8 @@ async function runDiscordVoiceAdvancedWizard(
 		delete next.ttsProvider;
 		delete next.elevenLabsVoiceId;
 		delete next.elevenLabsModel;
+		delete next.elevenLabsOutputFormat;
+		delete next.elevenLabsBaseUrl;
 		delete next.videoFrameAutoAttachIntervalMs;
 	}
 	deps.voiceSettings?.write(next);
@@ -1020,6 +1079,37 @@ async function runDiscordVoiceSet(
 			next.elevenLabsModel = value;
 			line = `ElevenLabs model set to ${value}.`;
 		}
+	} else if (field === "elevenlabs-output-format" || field === "elevenlabs-format") {
+		const value = await readDiscordVoiceValue(
+			ctx,
+			rawValue,
+			"ElevenLabs output format:",
+			current.elevenLabsOutputFormat,
+		);
+		if (value === undefined) return ctx.ui.notify(discordVoiceUsage(deps.voiceSettings?.path), "warning");
+		if (value === "clear" || value === "default") {
+			delete next.elevenLabsOutputFormat;
+			line = "ElevenLabs output format override cleared.";
+		} else {
+			const parsed = parseElevenLabsPcmOutputFormat(value);
+			if (parsed !== undefined) {
+				next.elevenLabsOutputFormat = parsed;
+				line = `ElevenLabs output format set to ${parsed}.`;
+			}
+		}
+	} else if (field === "elevenlabs-base-url" || field === "elevenlabs-url") {
+		const value = await readDiscordVoiceValue(ctx, rawValue, "ElevenLabs API base URL:", current.elevenLabsBaseUrl);
+		if (value === undefined) return ctx.ui.notify(discordVoiceUsage(deps.voiceSettings?.path), "warning");
+		if (value === "clear" || value === "default") {
+			delete next.elevenLabsBaseUrl;
+			line = "ElevenLabs base URL override cleared.";
+		} else {
+			const parsed = parseHttpUrl(value);
+			if (parsed !== undefined) {
+				next.elevenLabsBaseUrl = parsed;
+				line = `ElevenLabs base URL set to ${parsed}.`;
+			}
+		}
 	} else if (field === "reasoning") {
 		if (rawValue === "clear" || rawValue === "default") {
 			delete next.openAiRealtimeReasoningEffort;
@@ -1137,6 +1227,46 @@ async function collectDiscordVoiceElevenLabsModel(
 	const next = { ...settings };
 	if (value === "clear" || value === "default") delete next.elevenLabsModel;
 	else next.elevenLabsModel = value;
+	return next;
+}
+
+async function collectDiscordVoiceElevenLabsOutputFormat(
+	ctx: ExtensionCommandContext,
+	settings: StoredDiscordVoiceSettings,
+): Promise<StoredDiscordVoiceSettings> {
+	const value = await ctx.ui.select("ElevenLabs output format:", [
+		"Keep current/default",
+		...ELEVENLABS_OUTPUT_FORMAT_OPTIONS,
+		"Clear override",
+	]);
+	if (value === undefined || value === "Keep current/default") return settings;
+	const next = { ...settings };
+	if (value === "Clear override") delete next.elevenLabsOutputFormat;
+	else {
+		const parsed = parseElevenLabsPcmOutputFormat(value);
+		if (parsed !== undefined) next.elevenLabsOutputFormat = parsed;
+	}
+	return next;
+}
+
+async function collectDiscordVoiceElevenLabsBaseUrl(
+	ctx: ExtensionCommandContext,
+	settings: StoredDiscordVoiceSettings,
+): Promise<StoredDiscordVoiceSettings> {
+	const value = cleanArg(
+		await ctx.ui.input(
+			"ElevenLabs API base URL:",
+			settings.elevenLabsBaseUrl ?? "blank keeps current/default; type clear to remove override",
+		),
+	);
+	if (value === undefined) return settings;
+	const next = { ...settings };
+	if (value === "clear" || value === "default") {
+		delete next.elevenLabsBaseUrl;
+		return next;
+	}
+	const parsed = parseHttpUrl(value);
+	if (parsed !== undefined) next.elevenLabsBaseUrl = parsed;
 	return next;
 }
 
@@ -1265,6 +1395,16 @@ function parseNonNegativeIntegerArg(value: string | undefined): number | undefin
 	return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
+function parseHttpUrl(value: string): string | undefined {
+	try {
+		const url = new URL(value.trim());
+		if (url.protocol !== "https:" && url.protocol !== "http:") return undefined;
+		return url.toString().replace(/\/+$/, "");
+	} catch {
+		return undefined;
+	}
+}
+
 function discordVoiceWizardTitle(settings: StoredDiscordVoiceSettings | undefined): string {
 	const enabled = settings?.enabled === true ? "enabled" : "disabled";
 	const target = hasDiscordVoiceTarget(settings)
@@ -1296,6 +1436,14 @@ function hasDiscordVoiceTarget(
 
 function hasDiscordVoiceConfiguration(settings: StoredDiscordVoiceSettings | undefined): boolean {
 	return settings !== undefined;
+}
+
+function formatElevenLabsCredentialLabel(deps: DiscordAuthCommandDeps): string {
+	const status = getElevenLabsCredentialStatus(process.env, deps.authStorage, DEFAULT_ELEVENLABS_PROVIDER_ID);
+	if (status.env.clankyElevenLabsApiKey) return "env CLANKY_ELEVENLABS_API_KEY";
+	if (status.env.elevenLabsApiKey) return "env ELEVENLABS_API_KEY";
+	if (status.stored !== undefined) return "stored";
+	return "not set";
 }
 
 function isRealtimeReasoningEffort(

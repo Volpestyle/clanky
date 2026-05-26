@@ -69,8 +69,9 @@ Minimum credential set:
 
 - Discord bot token or stored `/discord-login` credential.
 - OpenAI API key or stored `/openai-login` credential.
-- For ElevenLabs speech only: `ELEVENLABS_API_KEY` or
-  `CLANKY_ELEVENLABS_API_KEY`, plus `CLANKY_ELEVENLABS_VOICE_ID`.
+- For ElevenLabs speech only: `ELEVENLABS_API_KEY`,
+  `CLANKY_ELEVENLABS_API_KEY`, or stored `/elevenlabs-login`, plus
+  `CLANKY_ELEVENLABS_VOICE_ID` or the TUI voice setting.
 
 ## Linear
 

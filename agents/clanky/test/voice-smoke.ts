@@ -3,11 +3,12 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { DiscordSubagentStore, resolveClankyPaths } from "@clanky/core";
-import type {
-	AgentSessionEvent,
-	CreateAgentSessionRuntimeFactory,
-	CreateAgentSessionRuntimeResult,
+import { DiscordSubagentStore, resolveClankyPaths, saveStoredElevenLabsApiKey } from "@clanky/core";
+import {
+	type AgentSessionEvent,
+	AuthStorage,
+	type CreateAgentSessionRuntimeFactory,
+	type CreateAgentSessionRuntimeResult,
 } from "@earendil-works/pi-coding-agent";
 import {
 	DEFAULT_REALTIME_MODEL,
@@ -237,10 +238,11 @@ function assertVoiceConfig(): void {
 	if (unthrottled?.videoFrameAutoAttachIntervalMs !== 0) {
 		throw new Error("voice-smoke: screen frame auto-attach interval override did not parse");
 	}
+	const storedAuthStorage = AuthStorage.inMemory();
+	saveStoredElevenLabsApiKey(storedAuthStorage, "stored-elevenlabs-key");
 	const storedConfig = resolveAgentDiscordVoiceConfig(
 		{
 			OPENAI_API_KEY: "openai-key",
-			ELEVENLABS_API_KEY: "stored-elevenlabs-key",
 		},
 		{
 			providerId: "clanky-discord",
@@ -248,7 +250,7 @@ function assertVoiceConfig(): void {
 			credentialKind: "bot-token",
 			source: "env",
 		},
-		undefined,
+		storedAuthStorage,
 		{
 			enabled: true,
 			guildId: "stored-guild",
@@ -258,6 +260,8 @@ function assertVoiceConfig(): void {
 			ttsProvider: "elevenlabs",
 			elevenLabsVoiceId: "stored-eleven-voice",
 			elevenLabsModel: "eleven_turbo_v2_5",
+			elevenLabsOutputFormat: "pcm_16000",
+			elevenLabsBaseUrl: "https://api.example.test",
 			openAiRealtimeModel: "gpt-realtime-1.5",
 			openAiRealtimeVoice: "cedar",
 			openAiRealtimeReasoningEffort: "medium",
@@ -270,8 +274,11 @@ function assertVoiceConfig(): void {
 		storedConfig.allowedGuildIds?.join(",") !== "stored-guild,guild-2" ||
 		storedConfig.allowedChannelIds?.join(",") !== "stored-channel,voice-2" ||
 		storedConfig.ttsProvider !== "elevenlabs" ||
+		storedConfig.elevenLabsApiKey !== "stored-elevenlabs-key" ||
 		storedConfig.elevenLabsVoiceId !== "stored-eleven-voice" ||
 		storedConfig.elevenLabsModel !== "eleven_turbo_v2_5" ||
+		storedConfig.elevenLabsOutputFormat !== "pcm_16000" ||
+		storedConfig.elevenLabsBaseUrl !== "https://api.example.test" ||
 		storedConfig.openAiRealtimeModel !== "gpt-realtime-1.5" ||
 		storedConfig.openAiRealtimeVoice !== "cedar" ||
 		storedConfig.openAiRealtimeReasoningEffort !== "medium" ||

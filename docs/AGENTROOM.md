@@ -165,7 +165,7 @@ Agent-owned Discord voice env:
 - `CLANKY_DISCORD_VOICE_ENABLED=1`
 - `CLANKY_DISCORD_VOICE_GUILD_ID`
 - `CLANKY_DISCORD_VOICE_CHANNEL_ID`
-- `OPENAI_API_KEY` or `CLANKY_OPENAI_API_KEY`
+- `OPENAI_API_KEY`, `CLANKY_OPENAI_API_KEY`, or stored `/openai-login`
 - `CLANKY_DISCORD_VOICE_TTS_PROVIDER` or `CLANKY_VOICE_TTS_PROVIDER`
   (default `openai`; set to `elevenlabs` to use external ElevenLabs speech)
 - `CLANKY_OPENAI_REALTIME_MODEL` (default `gpt-realtime-2`)
@@ -180,9 +180,10 @@ Agent-owned Discord voice env:
   values: `minimal`, `low`, `medium`, `high`, `xhigh`)
 - `CLANKY_OPENAI_REALTIME_TRANSCRIPTION_LANGUAGE` to provide a language hint
   such as `en`
-- `CLANKY_ELEVENLABS_API_KEY` or `ELEVENLABS_API_KEY` when using
-  `CLANKY_DISCORD_VOICE_TTS_PROVIDER=elevenlabs`
-- `CLANKY_ELEVENLABS_VOICE_ID` when using ElevenLabs speech
+- `CLANKY_ELEVENLABS_API_KEY`, `ELEVENLABS_API_KEY`, or stored
+  `/elevenlabs-login` when using `CLANKY_DISCORD_VOICE_TTS_PROVIDER=elevenlabs`
+- `CLANKY_ELEVENLABS_VOICE_ID` when using ElevenLabs speech without the TUI
+  voice setting
 - `CLANKY_ELEVENLABS_MODEL` (default `eleven_flash_v2_5`)
 - `CLANKY_ELEVENLABS_OUTPUT_FORMAT` (default `pcm_24000`; supported values:
   `pcm_16000`, `pcm_22050`, `pcm_24000`, `pcm_44100`)
@@ -210,8 +211,9 @@ response session. The tool surface includes `ask_pi`, `list_screen_shares`,
 OpenAI Realtime is the default speech path; when ElevenLabs speech is selected,
 Realtime returns text and Clanky streams that text through ElevenLabs before
 playing the PCM audio through `clankvox`. The `/discord-voice` advanced
-settings can store the speech provider, ElevenLabs voice id, and ElevenLabs
-model in the active profile; env vars still override profile settings.
+settings can store the speech provider, ElevenLabs voice id, model, output
+format, and base URL in the active profile. `/elevenlabs-login` stores the API
+key in the profile auth store. Env vars still override profile settings.
 
 The bundled native helper can be validated or prebuilt with `pnpm
 voice:native:test` and `pnpm voice:build`. If no release binary exists, the

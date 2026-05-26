@@ -118,6 +118,9 @@ Required runtime env:
 
 OpenAI credentials for voice may come from `OPENAI_API_KEY`,
 `CLANKY_OPENAI_API_KEY`, or a stored `/openai-login` API key.
+ElevenLabs credentials for optional external speech may come from
+`CLANKY_ELEVENLABS_API_KEY`, `ELEVENLABS_API_KEY`, or a stored
+`/elevenlabs-login` API key.
 
 Optional env:
 
@@ -136,8 +139,9 @@ Optional env:
 - `CLANKY_OPENAI_REALTIME_TRANSCRIPTION_LANGUAGE` to provide a language hint
   such as `en`
 - `CLANKY_ELEVENLABS_API_KEY` or `ELEVENLABS_API_KEY` when using
-  `CLANKY_DISCORD_VOICE_TTS_PROVIDER=elevenlabs`
-- `CLANKY_ELEVENLABS_VOICE_ID` when using ElevenLabs speech
+  `CLANKY_DISCORD_VOICE_TTS_PROVIDER=elevenlabs` without `/elevenlabs-login`
+- `CLANKY_ELEVENLABS_VOICE_ID` when using ElevenLabs speech without the TUI
+  voice setting
 - `CLANKY_ELEVENLABS_MODEL` (default `eleven_flash_v2_5`)
 - `CLANKY_ELEVENLABS_OUTPUT_FORMAT` (default `pcm_24000`; supported values:
   `pcm_16000`, `pcm_22050`, `pcm_24000`, `pcm_44100`)
@@ -159,8 +163,9 @@ and `CLANKY_OPENAI_REALTIME_VOICE` selects the output voice. With
 `elevenlabs`, OpenAI Realtime is used for live reasoning, tools, and text
 responses; Clanky streams the response text through ElevenLabs TTS and sends
 the returned PCM audio to Discord. The `/discord-voice` advanced settings can
-store the speech provider, ElevenLabs voice id, and ElevenLabs model in the
-active profile; env vars still override profile settings.
+store the speech provider, ElevenLabs voice id, model, PCM output format, and
+API base URL in the active profile. `/elevenlabs-login` stores the API key in
+the profile auth store. Env vars still override profile settings.
 
 The bundled native helper can be checked or prebuilt before launching voice:
 

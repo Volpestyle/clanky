@@ -33,6 +33,7 @@ import {
 import { createDiscordAuthExtensionFactory, resolveDefaultDiscordProviderId } from "./discordAuth.ts";
 import { ClankyDiscordGatewayController } from "./discordGatewayController.ts";
 import { DiscordVoiceSettingsStore } from "./discordVoiceSettings.ts";
+import { createElevenLabsAuthExtensionFactory } from "./elevenLabsAuth.ts";
 import { createClankyHandlers } from "./handlers.ts";
 import { createOpenAiAuthExtensionFactory } from "./openAiAuth.ts";
 import { loadPersona } from "./persona.ts";
@@ -187,6 +188,12 @@ function buildRuntimeFactory(opts: {
 		authStorage,
 		authFilePath: paths.authFile,
 	});
+	const elevenLabsAuthFactory = createElevenLabsAuthExtensionFactory({
+		authStorage,
+		authFilePath: paths.authFile,
+		gatewayController,
+		baseUrl: () => discordVoiceSettings.read()?.elevenLabsBaseUrl,
+	});
 
 	return async ({ cwd: runtimeCwd, sessionManager, sessionStartEvent }) => {
 		const modelRegistry = ModelRegistry.create(authStorage, paths.modelsFile);
@@ -209,6 +216,7 @@ function buildRuntimeFactory(opts: {
 					discordAuthFactory,
 					openAiAuthFactory,
 					xAiAuthFactory,
+					elevenLabsAuthFactory,
 				],
 				// Recomputed per call so post-`/discord-login` reloads pick up the new identity.
 				systemPromptOverride: (existing: string | undefined): string => {

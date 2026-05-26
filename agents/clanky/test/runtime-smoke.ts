@@ -24,6 +24,7 @@ import {
 	resolveClankyPaths,
 	resolveMcpServerConfigs,
 	saveStoredDiscordCredential,
+	saveStoredElevenLabsApiKey,
 	saveStoredOpenAiApiKey,
 	saveStoredXAiApiKey,
 } from "@clanky/core";
@@ -48,6 +49,7 @@ import { DEFAULT_REALTIME_MODEL, resolveAgentDiscordVoiceConfig } from "../src/a
 import { createDiscordAuthExtensionFactory } from "../src/discordAuth.ts";
 import { ClankyDiscordGatewayController } from "../src/discordGatewayController.ts";
 import type { StoredDiscordVoiceSettings } from "../src/discordVoiceSettings.ts";
+import { DEFAULT_DISCORD_WAKE_NAMES } from "../src/discordWakeNames.ts";
 import { delegateToMainWorker } from "../src/mainWorkerDelegation.ts";
 import { createOpenAiAuthExtensionFactory } from "../src/openAiAuth.ts";
 import {
@@ -273,6 +275,31 @@ function assertAgentDiscordVoiceConfig(): void {
 	if (storedOpenAiVoiceConfig?.openAiApiKey !== "stored-openai-key") {
 		throw new Error("smoke: stored /openai-login API key should configure Discord voice");
 	}
+	saveStoredElevenLabsApiKey(openAiAuthStorage, "stored-elevenlabs-key");
+	const storedElevenLabsVoiceConfig = resolveAgentDiscordVoiceConfig(
+		{
+			CLANKY_DISCORD_VOICE_ENABLED: "1",
+			CLANKY_DISCORD_TOKEN: "token",
+			CLANKY_DISCORD_VOICE_GUILD_ID: "guild-1",
+			CLANKY_DISCORD_VOICE_CHANNEL_ID: "channel-1",
+		},
+		discordConfig,
+		openAiAuthStorage,
+		{
+			enabled: true,
+			ttsProvider: "elevenlabs",
+			elevenLabsVoiceId: "stored-eleven-voice",
+			elevenLabsOutputFormat: "pcm_16000",
+			elevenLabsBaseUrl: "https://api.example.test",
+		},
+	);
+	if (
+		storedElevenLabsVoiceConfig?.elevenLabsApiKey !== "stored-elevenlabs-key" ||
+		storedElevenLabsVoiceConfig.elevenLabsOutputFormat !== "pcm_16000" ||
+		storedElevenLabsVoiceConfig.elevenLabsBaseUrl !== "https://api.example.test"
+	) {
+		throw new Error("smoke: stored /elevenlabs-login API key should configure Discord voice");
+	}
 	const voiceOnlyCredentials = resolveAgentDiscordCredentialConfig({
 		CLANKY_CHAT_GATEWAY_OWNER: "room",
 		CLANKY_DISCORD_TOKEN: "token",
@@ -392,6 +419,24 @@ function assertAgentDiscordGatewayAcceptance(): void {
 		throw new Error(`smoke: natural Clanky mention should be accepted as name_mention, got ${mentioned.reason}`);
 	}
 
+	const voiceAliasAddressed = evaluateDiscordMessageAcceptance(
+		{
+			...baseMessage,
+			text: "hey cranky can you check this?",
+		},
+		config,
+		{
+			isEngaged: () => false,
+			isKnownSelfMessage: () => false,
+			wakeNames: DEFAULT_DISCORD_WAKE_NAMES,
+		},
+	);
+	if (!voiceAliasAddressed.accepted || voiceAliasAddressed.reason !== "name_address") {
+		throw new Error(
+			`smoke: typed voice-style Clanky alias should be accepted as name_address, got ${voiceAliasAddressed.reason}`,
+		);
+	}
+
 	const soundalike = evaluateDiscordMessageAcceptance(
 		{
 			...baseMessage,
@@ -439,6 +484,23 @@ function assertAgentDiscordGatewayAcceptance(): void {
 	);
 	if (!followup.accepted || followup.reason !== "recent_engagement" || followup.recordInboundEngagement) {
 		throw new Error("smoke: engaged same-user follow-up should be accepted without immediate engagement reset");
+	}
+
+	const channelFollowup = evaluateDiscordMessageAcceptance(
+		{
+			...baseMessage,
+			sender: { id: "user-2", username: "ava" },
+			text: "yeah, what about this case?",
+		},
+		config,
+		{
+			isEngaged: (channelId) => channelId === "channel-1",
+			isKnownSelfMessage: () => false,
+			wakeNames: ["clanky", "clank"],
+		},
+	);
+	if (!channelFollowup.accepted || channelFollowup.reason !== "recent_engagement") {
+		throw new Error(`smoke: engaged channel follow-up should be accepted, got ${channelFollowup.reason}`);
 	}
 
 	if (!isDiscordSkipReplyText("[SKIP]") || isDiscordSkipReplyText("[SKIP] actually answer")) {
@@ -986,10 +1048,28 @@ async function assertDiscordAuthExtensionCommands(): Promise<void> {
 		throw new Error(`smoke: /discord-voice disable wrote wrong settings ${JSON.stringify(disabledVoiceSettings)}`);
 	}
 
+	await voiceCommand.handler("set elevenlabs-output-format pcm_16000", ctx);
+	if (getRestarts() !== 6) {
+		throw new Error(`smoke: /discord-voice set output format should hot-restart bridge again, got ${restarts}`);
+	}
+	await voiceCommand.handler("set elevenlabs-base-url https://api.example.test", ctx);
+	if (getRestarts() !== 7) {
+		throw new Error(`smoke: /discord-voice set base URL should hot-restart bridge again, got ${restarts}`);
+	}
+	const elevenLabsVoiceSettings = getVoiceSettings();
+	if (
+		elevenLabsVoiceSettings?.elevenLabsOutputFormat !== "pcm_16000" ||
+		elevenLabsVoiceSettings.elevenLabsBaseUrl !== "https://api.example.test"
+	) {
+		throw new Error(
+			`smoke: /discord-voice ElevenLabs settings did not persist ${JSON.stringify(elevenLabsVoiceSettings)}`,
+		);
+	}
+
 	const logoutCommand = commands["discord-logout"];
 	if (logoutCommand === undefined) throw new Error("smoke: /discord-logout command was not registered");
 	await logoutCommand.handler([], ctx);
-	if (getRestarts() !== 6) {
+	if (getRestarts() !== 8) {
 		throw new Error(`smoke: /discord-logout should hot-restart bridge after logout, got ${restarts}`);
 	}
 	if (resolveAgentDiscordGatewayConfig({}, authStorage) !== undefined) {

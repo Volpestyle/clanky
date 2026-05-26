@@ -1,5 +1,5 @@
 import type { DiscordGatewayClient } from "@agentroom/chat-discord";
-import { type DiscordSubagentStore, resolveOpenAiApiKeySync } from "@clanky/core";
+import { type DiscordSubagentStore, resolveElevenLabsApiKeySync, resolveOpenAiApiKeySync } from "@clanky/core";
 import type {
 	AgentSessionEvent,
 	AgentSessionRuntime,
@@ -9,6 +9,7 @@ import type {
 import { type ClankyAgentDiscordGatewayConfig, resolveAgentDiscordCredentialConfig } from "./agentDiscordGateway.ts";
 import type { DiscordVoiceTtsProvider, StoredDiscordVoiceSettings } from "./discordVoiceSettings.ts";
 import { DiscordVoiceSubagentCoordinator } from "./discordVoiceSubagentCoordinator.ts";
+import { DEFAULT_DISCORD_WAKE_NAMES, dedupeWakeNames, parseDiscordWakeNamesFromEnv } from "./discordWakeNames.ts";
 import { type RuntimeTurnQueue, SerialRuntimeTurnQueue } from "./runtimeTurnQueue.ts";
 import {
 	type ClankvoxDecodedVideoFrame,
@@ -327,74 +328,7 @@ const DEFAULT_VIDEO_FRAME_AUTO_ATTACH_INTERVAL_MS = 2_000;
 const DEFAULT_SPEAKER_TRANSCRIPTION_IDLE_CLOSE_MS = 120_000;
 const DEFAULT_TRANSCRIPT_RESPONSE_BATCH_DELAY_MS = 350;
 const PI_TOOL_TIMEOUT_MS = 120_000;
-const DEFAULT_VOICE_BARGE_IN_WAKE_WORDS = [
-	"blankie",
-	"clank",
-	"clanka",
-	"clanker",
-	"clankerconk",
-	"clankie",
-	"clanky",
-	"clay",
-	"clayton",
-	"clenk",
-	"clenka",
-	"clenker",
-	"click",
-	"clickink",
-	"clink",
-	"clinka",
-	"clinker",
-	"clinkeroni",
-	"clinkerton",
-	"clinkie",
-	"clinky",
-	"clint",
-	"clinic",
-	"clonk",
-	"clonker",
-	"clonky",
-	"clunk",
-	"clunka",
-	"clunky",
-	"coinker",
-	"crank",
-	"craigey",
-	"craigy",
-	"cranker",
-	"crankey",
-	"flakey",
-	"flanker",
-	"flankey",
-	"frankie",
-	"hank",
-	"hanker",
-	"hankie",
-	"hanky",
-	"kanky",
-	"klanker",
-	"klang",
-	"klien",
-	"klink",
-	"klinker",
-	"klinkie",
-	"klinky",
-	"klinky conk",
-	"link",
-	"plank",
-	"planker",
-	"planka",
-	"plinker",
-	"plinky",
-	"plakey",
-	"plakie",
-	"oinky",
-	"plankey",
-	"planky",
-	"plonka",
-	"quaker",
-	"quakie",
-];
+const DEFAULT_VOICE_BARGE_IN_WAKE_WORDS = DEFAULT_DISCORD_WAKE_NAMES;
 const PRIMARY_WAKE_TOKEN_MIN_LEN = 4;
 const EN_WAKE_PRIMARY_GENERIC_TOKENS = new Set(["bot", "ai", "assistant"]);
 const LEADING_WAKE_PREFIX_TOKENS = new Set(["yo", "hey", "hi", "hello", "ok", "okay", "uh", "um", "uhh", "umm"]);
@@ -480,7 +414,9 @@ function createDefaultSpeechSynthesizer(
 	config: FixedClankyAgentDiscordVoiceConfig,
 ): VoiceSpeechSynthesizerLike | undefined {
 	if ((config.ttsProvider ?? "openai") !== "elevenlabs") return undefined;
-	if (config.elevenLabsApiKey === undefined) throw new Error("ELEVENLABS_API_KEY is required for ElevenLabs speech.");
+	if (config.elevenLabsApiKey === undefined) {
+		throw new Error("Run /elevenlabs-login or set ELEVENLABS_API_KEY for ElevenLabs speech.");
+	}
 	if (config.elevenLabsVoiceId === undefined)
 		throw new Error("An ElevenLabs voice id is required for ElevenLabs speech.");
 	const options: ConstructorParameters<typeof ElevenLabsTtsClient>[0] = {
@@ -514,7 +450,7 @@ export function resolveAgentDiscordVoiceConfig(
 		parseOptionalStringList(env.CLANKY_DISCORD_VOICE_ALLOWED_GUILD_IDS) ?? storedSettings?.allowedGuildIds;
 	const allowedChannelIds =
 		parseOptionalStringList(env.CLANKY_DISCORD_VOICE_ALLOWED_CHANNEL_IDS) ?? storedSettings?.allowedChannelIds;
-	const wakeNames = parseOptionalStringList(env.CLANKY_DISCORD_VOICE_WAKE_NAMES ?? env.CLANKY_DISCORD_WAKE_NAMES);
+	const wakeNames = parseDiscordWakeNamesFromEnv(env);
 	const ttsProvider =
 		parseDiscordVoiceTtsProvider(env.CLANKY_DISCORD_VOICE_TTS_PROVIDER ?? env.CLANKY_VOICE_TTS_PROVIDER) ??
 		storedSettings?.ttsProvider ??
@@ -556,14 +492,15 @@ export function resolveAgentDiscordVoiceConfig(
 	if (allowedChannelIds !== undefined && allowedChannelIds.length > 0) {
 		voiceConfig.allowedChannelIds = dedupeNonEmptyStrings(allowedChannelIds);
 	}
-	if (wakeNames !== undefined && wakeNames.length > 0) {
-		voiceConfig.wakeNames = dedupeNonEmptyStrings(wakeNames);
+	if (wakeNames.length > 0) {
+		voiceConfig.wakeNames = wakeNames;
 	}
 	if (ttsProvider === "elevenlabs") {
-		const elevenLabsApiKey =
-			cleanOptionalString(env.CLANKY_ELEVENLABS_API_KEY) ?? cleanOptionalString(env.ELEVENLABS_API_KEY);
+		const elevenLabsApiKey = resolveElevenLabsApiKeySync(env, authStorage);
 		if (elevenLabsApiKey === undefined) {
-			throw new Error("ElevenLabs credentials are required for ElevenLabs Discord voice. Set ELEVENLABS_API_KEY.");
+			throw new Error(
+				"ElevenLabs credentials are required for ElevenLabs Discord voice. Run /elevenlabs-login or set ELEVENLABS_API_KEY/CLANKY_ELEVENLABS_API_KEY.",
+			);
 		}
 		const elevenLabsVoiceId = cleanOptionalString(env.CLANKY_ELEVENLABS_VOICE_ID) ?? storedSettings?.elevenLabsVoiceId;
 		if (elevenLabsVoiceId === undefined) {
@@ -571,16 +508,20 @@ export function resolveAgentDiscordVoiceConfig(
 				"An ElevenLabs voice id is required for ElevenLabs Discord voice. Set CLANKY_ELEVENLABS_VOICE_ID or configure /discord-voice advanced settings.",
 			);
 		}
-		voiceConfig.elevenLabsApiKey = elevenLabsApiKey;
+		voiceConfig.elevenLabsApiKey = elevenLabsApiKey.value;
 		voiceConfig.elevenLabsVoiceId = elevenLabsVoiceId;
 		voiceConfig.elevenLabsModel =
 			cleanOptionalString(env.CLANKY_ELEVENLABS_MODEL) ??
 			storedSettings?.elevenLabsModel ??
 			DEFAULT_ELEVENLABS_TTS_MODEL;
 		voiceConfig.elevenLabsOutputFormat =
-			parseElevenLabsPcmOutputFormat(env.CLANKY_ELEVENLABS_OUTPUT_FORMAT) ?? DEFAULT_ELEVENLABS_OUTPUT_FORMAT;
+			parseElevenLabsPcmOutputFormat(env.CLANKY_ELEVENLABS_OUTPUT_FORMAT) ??
+			storedSettings?.elevenLabsOutputFormat ??
+			DEFAULT_ELEVENLABS_OUTPUT_FORMAT;
 		const elevenLabsBaseUrl =
-			cleanOptionalString(env.CLANKY_ELEVENLABS_BASE_URL) ?? cleanOptionalString(env.ELEVENLABS_BASE_URL);
+			cleanOptionalString(env.CLANKY_ELEVENLABS_BASE_URL) ??
+			cleanOptionalString(env.ELEVENLABS_BASE_URL) ??
+			storedSettings?.elevenLabsBaseUrl;
 		if (elevenLabsBaseUrl !== undefined) voiceConfig.elevenLabsBaseUrl = elevenLabsBaseUrl;
 	}
 	const transcriptionLanguage = cleanOptionalString(env.CLANKY_OPENAI_REALTIME_TRANSCRIPTION_LANGUAGE);
@@ -709,6 +650,7 @@ class AgentDiscordVoiceDynamicHandle implements ClankyAgentDiscordVoiceHandle {
 			elevenLabsVoiceId: this.config.elevenLabsVoiceId,
 			elevenLabsModel: this.config.elevenLabsModel,
 			elevenLabsOutputFormat: this.config.elevenLabsOutputFormat,
+			elevenLabsBaseUrl: this.config.elevenLabsBaseUrl,
 			reasoningEffort: this.config.openAiRealtimeReasoningEffort,
 			interruptionPolicy: "while-speaking-requires-clanky",
 			transcriptionModel: this.config.openAiRealtimeTranscriptionModel ?? DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
@@ -906,6 +848,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			elevenLabsVoiceId: this.config.elevenLabsVoiceId,
 			elevenLabsModel: this.config.elevenLabsModel,
 			elevenLabsOutputFormat: this.config.elevenLabsOutputFormat,
+			elevenLabsBaseUrl: this.config.elevenLabsBaseUrl,
 			reasoningEffort: this.config.openAiRealtimeReasoningEffort,
 			interruptionPolicy: "while-speaking-requires-clanky",
 			transcriptionModel: this.config.openAiRealtimeTranscriptionModel ?? DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
@@ -2319,7 +2262,7 @@ function resolveVoiceBargeInWakeWords(
 	config: Pick<ClankyAgentDiscordVoiceConfig, "wakeNames">,
 	username?: string,
 ): string[] {
-	return dedupeNonEmptyStrings([...DEFAULT_VOICE_BARGE_IN_WAKE_WORDS, ...(config.wakeNames ?? []), username ?? ""]);
+	return dedupeWakeNames([...DEFAULT_VOICE_BARGE_IN_WAKE_WORDS, ...(config.wakeNames ?? []), username ?? ""]);
 }
 
 function transcriptAddressesAssistant(text: string, wakeWords: readonly string[]): boolean {

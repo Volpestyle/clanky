@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { type ElevenLabsPcmOutputFormat, parseElevenLabsPcmOutputFormat } from "./voice/elevenLabsTtsClient.ts";
 import type { OpenAiRealtimeReasoningEffort } from "./voice/openAiRealtimeClient.ts";
 
 export type DiscordVoiceTtsProvider = "openai" | "elevenlabs";
@@ -16,6 +17,8 @@ export interface StoredDiscordVoiceSettings {
 	openAiRealtimeReasoningEffort?: OpenAiRealtimeReasoningEffort;
 	elevenLabsVoiceId?: string;
 	elevenLabsModel?: string;
+	elevenLabsOutputFormat?: ElevenLabsPcmOutputFormat;
+	elevenLabsBaseUrl?: string;
 	videoFrameAutoAttachIntervalMs?: number;
 }
 
@@ -75,6 +78,10 @@ export function sanitizeStoredDiscordVoiceSettings(settings: StoredDiscordVoiceS
 	if (elevenLabsVoiceId !== undefined) sanitized.elevenLabsVoiceId = elevenLabsVoiceId;
 	const elevenLabsModel = cleanString(settings.elevenLabsModel);
 	if (elevenLabsModel !== undefined) sanitized.elevenLabsModel = elevenLabsModel;
+	const elevenLabsOutputFormat = parseElevenLabsPcmOutputFormat(settings.elevenLabsOutputFormat);
+	if (elevenLabsOutputFormat !== undefined) sanitized.elevenLabsOutputFormat = elevenLabsOutputFormat;
+	const elevenLabsBaseUrl = cleanString(settings.elevenLabsBaseUrl);
+	if (elevenLabsBaseUrl !== undefined) sanitized.elevenLabsBaseUrl = elevenLabsBaseUrl.replace(/\/+$/, "");
 	if (isRealtimeReasoningEffort(settings.openAiRealtimeReasoningEffort)) {
 		sanitized.openAiRealtimeReasoningEffort = settings.openAiRealtimeReasoningEffort;
 	}
@@ -105,6 +112,9 @@ function parseStoredDiscordVoiceSettings(value: unknown): StoredDiscordVoiceSett
 	if (typeof record.openAiRealtimeVoice === "string") settings.openAiRealtimeVoice = record.openAiRealtimeVoice;
 	if (typeof record.elevenLabsVoiceId === "string") settings.elevenLabsVoiceId = record.elevenLabsVoiceId;
 	if (typeof record.elevenLabsModel === "string") settings.elevenLabsModel = record.elevenLabsModel;
+	const elevenLabsOutputFormat = parseElevenLabsPcmOutputFormat(readString(record.elevenLabsOutputFormat));
+	if (elevenLabsOutputFormat !== undefined) settings.elevenLabsOutputFormat = elevenLabsOutputFormat;
+	if (typeof record.elevenLabsBaseUrl === "string") settings.elevenLabsBaseUrl = record.elevenLabsBaseUrl;
 	if (isRealtimeReasoningEffort(record.openAiRealtimeReasoningEffort)) {
 		settings.openAiRealtimeReasoningEffort = record.openAiRealtimeReasoningEffort;
 	}
@@ -117,6 +127,10 @@ function parseStoredDiscordVoiceSettings(value: unknown): StoredDiscordVoiceSett
 function cleanString(value: string | undefined): string | undefined {
 	const trimmed = value?.trim();
 	return trimmed !== undefined && trimmed.length > 0 ? trimmed : undefined;
+}
+
+function readString(value: unknown): string | undefined {
+	return typeof value === "string" ? value : undefined;
 }
 
 function cleanStringList(values: string[] | undefined): string[] {

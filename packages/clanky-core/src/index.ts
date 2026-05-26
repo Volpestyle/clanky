@@ -89,6 +89,15 @@ export {
 	saveStoredDiscordCredential,
 } from "./discord-credentials.ts";
 export {
+	DEFAULT_ELEVENLABS_PROVIDER_ID,
+	type ElevenLabsCredentialStatus,
+	getElevenLabsCredentialStatus,
+	type ResolvedElevenLabsApiKey,
+	removeStoredElevenLabsCredential,
+	resolveElevenLabsApiKeySync,
+	saveStoredElevenLabsApiKey,
+} from "./elevenlabs-credentials.ts";
+export {
 	hasLinearCredentials,
 	LinearClient,
 	type LinearClientOptions,

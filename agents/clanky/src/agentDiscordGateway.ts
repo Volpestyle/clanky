@@ -20,6 +20,7 @@ import type {
 import { createAgentDiscordClient } from "./agentDiscordClient.ts";
 import type { ClankyThinkingLevel } from "./clankyDefaults.ts";
 import { DiscordSubagentCoordinator } from "./discordSubagentCoordinator.ts";
+import { DEFAULT_DISCORD_WAKE_NAMES, dedupeWakeNames, parseDiscordWakeNamesFromEnv } from "./discordWakeNames.ts";
 import { type RuntimeTurnQueue, SerialRuntimeTurnQueue } from "./runtimeTurnQueue.ts";
 
 type DiscordCredentialKind = ClankyDiscordCredentialKind;
@@ -150,7 +151,6 @@ export type DiscordBridgeCommand =
 	  };
 
 const DEFAULT_ENGAGEMENT_WINDOW_MS = 5 * 60 * 1000;
-const DEFAULT_DISCORD_WAKE_NAMES = ["clanky", "clank"];
 const DISCORD_BRIDGE_COMMAND_PREFIXES = ["/clanky", "/clank", "!clanky", "!clank"];
 const MAX_TRACKED_SELF_MESSAGES = 200;
 const MAX_CONVERSATION_HISTORY_MESSAGES = 20;
@@ -183,13 +183,7 @@ function resolveEngagementWindowMs(env: NodeJS.ProcessEnv): number {
 }
 
 function resolveDiscordWakeNames(env: NodeJS.ProcessEnv): string[] {
-	const raw = env.CLANKY_DISCORD_WAKE_NAMES?.trim();
-	if (raw === undefined || raw.length === 0) return DEFAULT_DISCORD_WAKE_NAMES;
-	const configured = raw
-		.split(",")
-		.map((value) => value.trim())
-		.filter((value) => value.length > 0);
-	return configured.length > 0 ? configured : DEFAULT_DISCORD_WAKE_NAMES;
+	return parseDiscordWakeNamesFromEnv(env);
 }
 
 export interface ClankyAgentDiscordGatewayHandle {
@@ -377,7 +371,8 @@ class AgentDiscordBridge implements ClankyAgentDiscordGatewayHandle {
 	private unsubscribe: (() => void) | undefined;
 	private subscribedSession: AgentSessionRuntime["session"];
 	private readonly pendingReplies: PendingDiscordReply[] = [];
-	/** Per (channelId, userId) most-recent engagement timestamp (ms). */
+	/** Per channel and per (channelId, userId) most-recent engagement timestamp (ms). */
+	private readonly conversationEngagements = new Map<string, number>();
 	private readonly engagements = new Map<string, number>();
 	private readonly inboundReceivedAt = new Map<string, number>();
 	private readonly recentConversationMessages = new Map<string, DiscordConversationHistoryEntry[]>();
@@ -558,13 +553,19 @@ class AgentDiscordBridge implements ClankyAgentDiscordGatewayHandle {
 
 	private isEngaged(channelId: string, userId: string): boolean {
 		if (this.options.engagementWindowMs <= 0) return false;
+		if (this.isRecentEngagement(this.conversationEngagements.get(channelId))) return true;
 		const last = this.engagements.get(engagementKey(channelId, userId));
+		return this.isRecentEngagement(last);
+	}
+
+	private isRecentEngagement(last: number | undefined): boolean {
 		if (last === undefined) return false;
 		return Date.now() - last < this.options.engagementWindowMs;
 	}
 
 	private recordEngagement(channelId: string, userId: string): void {
 		if (this.options.engagementWindowMs <= 0) return;
+		this.conversationEngagements.set(channelId, Date.now());
 		this.engagements.set(engagementKey(channelId, userId), Date.now());
 	}
 
@@ -589,7 +590,7 @@ class AgentDiscordBridge implements ClankyAgentDiscordGatewayHandle {
 		const clientNames = [user?.username, user?.tag?.split("#")[0]].filter(
 			(value): value is string => value !== undefined && value.trim().length > 0,
 		);
-		return dedupeWakeNames([...clientNames, ...this.options.wakeNames]);
+		return dedupeWakeNames([...DEFAULT_DISCORD_WAKE_NAMES, ...clientNames, ...this.options.wakeNames]);
 	}
 
 	private formatDiscordUserMessage(
@@ -1041,7 +1042,7 @@ export function evaluateDiscordMessageAcceptance(
 	options: {
 		isEngaged: (channelId: string, userId: string) => boolean;
 		isKnownSelfMessage: (messageId: string) => boolean;
-		wakeNames?: string[];
+		wakeNames?: readonly string[];
 	},
 ): DiscordAcceptanceDecision {
 	if (config.conversationId !== undefined) {
@@ -1068,8 +1069,8 @@ export function evaluateDiscordMessageAcceptance(
 		return { accepted: true, reason: "name_mention", recordInboundEngagement: true };
 	}
 
-	// Engagement window: after a real engagement in this channel, listen to
-	// same-user follow-ups without requiring another @mention. A follow-up only
+	// Engagement window: after a real engagement in this channel/thread, listen
+	// to short follow-ups without requiring another @mention. A follow-up only
 	// extends the window again if Clanky actually replies.
 	if (options.isEngaged(message.conversation.id, message.sender.id)) {
 		return { accepted: true, reason: "recent_engagement", recordInboundEngagement: false };
@@ -1169,26 +1170,13 @@ export function isDiscordSkipReplyText(text: string): boolean {
 	return /^\[SKIP\]$/i.test(text.trim());
 }
 
-function resolveWakeNameMatch(text: string, wakeNames: string[]): { addressed: boolean; mentioned: boolean } {
+function resolveWakeNameMatch(text: string, wakeNames: readonly string[]): { addressed: boolean; mentioned: boolean } {
 	const names = dedupeWakeNames(wakeNames);
 	for (const name of names) {
 		if (isBotNameAddressed({ transcript: text, botName: name })) return { addressed: true, mentioned: true };
 		if (containsWakeNameMention({ transcript: text, botName: name })) return { addressed: false, mentioned: true };
 	}
 	return { addressed: false, mentioned: false };
-}
-
-function dedupeWakeNames(values: string[]): string[] {
-	const out: string[] = [];
-	const seen = new Set<string>();
-	for (const value of values) {
-		const normalized = value.replace(/\s+/g, " ").trim();
-		const key = normalizeWakeText(normalized);
-		if (normalized.length === 0 || key.length === 0 || seen.has(key)) continue;
-		seen.add(key);
-		out.push(normalized);
-	}
-	return out;
 }
 
 function isBotNameAddressed({ transcript, botName = "" }: { transcript: string; botName?: string }): boolean {
