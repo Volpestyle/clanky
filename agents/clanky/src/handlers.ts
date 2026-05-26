@@ -1,5 +1,4 @@
 import {
-	addDiscordReaction,
 	type ClankyAgentToolHandlers,
 	type ClankyPaths,
 	callExternalMcpTool,
@@ -12,19 +11,12 @@ import {
 	getWebBackendStatus,
 	hasLinearCredentials,
 	LinearClient,
-	listDiscordChannels,
-	listDiscordEmojis,
-	listDiscordGuilds,
 	listExternalMcpTools,
 	loadClankySkills,
 	type MainSessionContextToolInput,
-	readDiscordMessages,
-	recentDiscordActivity,
-	recentDiscordAttachments,
 	resolveClankyChatGatewayOwner,
 	resolveClankyChatMode,
 	runOpenAiWebSearch,
-	sendDiscordMessage,
 	shouldStartAgentChatGateway,
 } from "@clanky/core";
 import type { AuthStorage } from "@earendil-works/pi-coding-agent";
@@ -130,38 +122,5 @@ export function createClankyHandlers(
 		externalMcpStatus: async () => getExternalMcpStatus({ cwd: process.cwd() }),
 		externalMcpListTools: async (input) => listExternalMcpTools(input, { cwd: process.cwd() }),
 		externalMcpCall: async (input) => callExternalMcpTool(input, { cwd: process.cwd() }),
-		discordListGuilds: async () =>
-			listDiscordGuilds({
-				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
-			}),
-		discordListChannels: async (input) =>
-			listDiscordChannels(input, {
-				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
-			}),
-		discordReadMessages: async (input) =>
-			readDiscordMessages(input, {
-				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
-			}),
-		discordRecentActivity: async (input) =>
-			recentDiscordActivity(input, {
-				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
-			}),
-		discordRecentAttachments: async (input, signal) =>
-			recentDiscordAttachments(input, {
-				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
-				...(signal === undefined ? {} : { signal }),
-			}),
-		discordSendMessage: async (input) =>
-			sendDiscordMessage(input, {
-				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
-			}),
-		discordListEmojis: async (input) =>
-			listDiscordEmojis(input, {
-				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
-			}),
-		discordAddReaction: async (input) =>
-			addDiscordReaction(input, {
-				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
-			}),
 	};
 }

@@ -6,7 +6,6 @@ import {
 	createClankyExtensionFactories,
 	createClankyToolDefinitions,
 	type DelegateToMainWorkerToolInput,
-	type DiscordRecentAttachmentsToolInput,
 	type ExternalMcpCallToolInput,
 	type ExternalMcpListToolsInput,
 	type LinearCreateIssueToolInput,
@@ -132,60 +131,6 @@ const handlers: ClankyAgentToolHandlers = {
 		calls.push("media-status");
 		return { openaiImages: { available: true }, xaiImagineImages: { available: true } };
 	},
-	discordRecentActivity: async (input) => {
-		calls.push(`discord-recent:${input.guildId ?? input.guild_id ?? "auto"}:${input.since ?? "default"}`);
-		return {
-			guildId: input.guildId ?? input.guild_id ?? "guild-tool",
-			sinceTimestamp: "2026-01-01T00:00:00.000Z",
-			generatedAt: "2026-01-01T00:05:00.000Z",
-			activeChannelCount: 1,
-			channels: [
-				{
-					channelId: "channel-tool",
-					channelName: "general",
-					type: 0,
-					messageCount: 2,
-					topParticipants: [{ authorId: "user-tool", authorUsername: "tester", messageCount: 2 }],
-				},
-			],
-		};
-	},
-	discordRecentAttachments: async (input) => {
-		calls.push(`discord-attachments:${input.channelId ?? input.channel_id ?? "none"}`);
-		return {
-			channelId: input.channelId ?? input.channel_id ?? "channel-tool",
-			generatedAt: "2026-01-01T00:05:00.000Z",
-			scannedMessageCount: 1,
-			mediaCount: 1,
-			loadedImageCount: 1,
-			media: [
-				{
-					mediaIndex: 1,
-					messageId: "message-tool",
-					channelId: input.channelId ?? input.channel_id ?? "channel-tool",
-					kind: "image",
-					source: "attachment",
-					url: "https://cdn.example/tool.png",
-					contentType: "image/png",
-					status: "loaded",
-				},
-			],
-			loadedImages: [
-				{
-					imageIndex: 1,
-					mediaIndex: 1,
-					messageId: "message-tool",
-					channelId: input.channelId ?? input.channel_id ?? "channel-tool",
-					url: "https://cdn.example/tool.png",
-					source: "attachment",
-					kind: "image",
-					mimeType: "image/png",
-				},
-			],
-			failures: [],
-			imageContents: [{ type: "image", mimeType: "image/png", data: "ZmFrZQ==" }],
-		};
-	},
 };
 
 const tools = createClankyToolDefinitions(handlers);
@@ -204,8 +149,6 @@ const expectedNames = [
 	"memory_remember",
 	"memory_search",
 	"memory_forget",
-	"discord_recent_attachments",
-	"discord_recent_activity",
 	"media_backend_status",
 	"openai_image_generate",
 	"web_backend_status",
@@ -302,15 +245,6 @@ await executeTool(tools, "xai_video_generate", {
 } satisfies XAiVideoGenerateToolInput);
 
 await executeTool(tools, "media_backend_status", {});
-
-await executeTool(tools, "discord_recent_activity", {
-	guild_id: "guild-smoke",
-	since: "24h",
-	limit_channels: 3,
-	message_limit: 5,
-	include_messages: false,
-});
-await executeDiscordRecentAttachmentsTool();
 await assertRecentDiscordAttachmentsLoadsMediaSources();
 
 const expectedCallPrefixes = [
@@ -332,8 +266,6 @@ const expectedCallPrefixes = [
 	"xai-image:",
 	"xai-video:",
 	"media-status",
-	"discord-recent:",
-	"discord-attachments:",
 ];
 for (const prefix of expectedCallPrefixes) {
 	if (!calls.some((entry) => entry.startsWith(prefix))) {
@@ -416,28 +348,6 @@ async function assertOpenAiWebSearchUsesStoredCredential(): Promise<void> {
 	);
 	if (result.answer !== "stored credential ok") {
 		throw new Error(`smoke: web_search did not parse fake response: ${result.answer}`);
-	}
-}
-
-async function executeDiscordRecentAttachmentsTool(): Promise<void> {
-	const tool = tools.find((candidate) => candidate.name === "discord_recent_attachments");
-	if (tool === undefined) throw new Error("Tool discord_recent_attachments is not registered");
-	const ctx = {
-		sessionManager: { getSessionId: () => "session-smoke" },
-		cwd: "/tmp/clanky-agent-tools-smoke",
-	} as unknown as Parameters<typeof tool.execute>[4];
-	const result = await tool.execute(
-		"call-id",
-		{ channel_id: "channel-smoke", media_limit: 1 } satisfies DiscordRecentAttachmentsToolInput,
-		new AbortController().signal,
-		() => undefined,
-		ctx,
-	);
-	if (result.content.filter((entry) => entry.type === "image").length !== 1) {
-		throw new Error(`discord_recent_attachments did not attach image content: ${JSON.stringify(result.content)}`);
-	}
-	if (!("details" in result) || JSON.stringify(result.details).includes("ZmFrZQ==")) {
-		throw new Error("discord_recent_attachments leaked image base64 into details");
 	}
 }
 

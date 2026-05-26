@@ -14,6 +14,7 @@
 		"@earendil-works/pi-coding-agent": "^0.75.4",
 		"@modelcontextprotocol/sdk": "^1.29.0",
 		"chokidar": "^5.0.0",
+		"discord-mcp": "file:../../../discord_mcp",
 		"typebox": "^1.1.38"
 	}
 }
