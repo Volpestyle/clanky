@@ -440,8 +440,8 @@ function assertDiscordSubagentRouting(): void {
 		mainSessionStreaming: false,
 		mainQueueBusy: false,
 	});
-	if (idleMain) {
-		throw new Error("smoke: idle main Clanky should handle Discord directly instead of routing to a subagent");
+	if (!idleMain) {
+		throw new Error("smoke: accepted Discord messages should route to the dedicated Discord subagent");
 	}
 	const streamingMain = shouldRouteDiscordMessageToSubagent({
 		subagentsAvailable: true,

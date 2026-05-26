@@ -2,10 +2,12 @@ import {
 	addDiscordReaction,
 	type ClankyAgentToolHandlers,
 	type ClankyPaths,
+	callExternalMcpTool,
 	type DelegateToMainWorkerToolInput,
 	generateOpenAiImage,
 	generateXAiImage,
 	generateXAiVideo,
+	getExternalMcpStatus,
 	getMediaBackendStatus,
 	getWebBackendStatus,
 	hasLinearCredentials,
@@ -13,10 +15,12 @@ import {
 	listDiscordChannels,
 	listDiscordEmojis,
 	listDiscordGuilds,
+	listExternalMcpTools,
 	loadClankySkills,
 	type MainSessionContextToolInput,
 	readDiscordMessages,
 	recentDiscordActivity,
+	recentDiscordAttachments,
 	resolveClankyChatGatewayOwner,
 	resolveClankyChatMode,
 	runOpenAiWebSearch,
@@ -123,6 +127,9 @@ export function createClankyHandlers(
 				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
 			}),
 		listSubagents: async () => stores.subagents.listSubagents(),
+		externalMcpStatus: async () => getExternalMcpStatus({ cwd: process.cwd() }),
+		externalMcpListTools: async (input) => listExternalMcpTools(input, { cwd: process.cwd() }),
+		externalMcpCall: async (input) => callExternalMcpTool(input, { cwd: process.cwd() }),
 		discordListGuilds: async () =>
 			listDiscordGuilds({
 				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
@@ -138,6 +145,11 @@ export function createClankyHandlers(
 		discordRecentActivity: async (input) =>
 			recentDiscordActivity(input, {
 				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
+			}),
+		discordRecentAttachments: async (input, signal) =>
+			recentDiscordAttachments(input, {
+				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
+				...(signal === undefined ? {} : { signal }),
 			}),
 		discordSendMessage: async (input) =>
 			sendDiscordMessage(input, {

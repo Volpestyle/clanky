@@ -3,6 +3,7 @@ export {
 	createClankyExtensionFactories,
 	createClankyToolDefinitions,
 	type ExternalMcpCallToolInput,
+	type ExternalMcpListToolsInput,
 	type LinearCreateIssueToolInput,
 	type LinearLinkToolInput,
 	type MemoryForgetToolInput,

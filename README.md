@@ -52,10 +52,17 @@ Agent-owned Discord starts when a token is resolvable (env or stored) and
 ### Discord Subagents
 
 Clanky-owned Discord subagents are a local multitasking aid, not an AgentRoom
-worker system. Normal accepted Discord chat goes to main Clanky when the main
-session is idle. A Discord subagent only takes the chat turn while main Clanky
-is streaming or already has queued main-session work, so Clanky can keep a
-short Discord reply loop open without interrupting foreground work.
+worker system. Accepted Discord chat goes to a dedicated Discord subagent when
+the subagent coordinator is available, giving Discord its own Pi session and
+context window instead of reinjecting Discord history into the main session on
+each turn. That subagent can inspect Discord through the bundled
+`clanky-discord-operator` skill, ask main Clanky for main-session context, and
+delegate longer work back to the main worker.
+
+Subagent sessions are profile-local and resumed from the stored subagent session
+file when Clanky restarts. Pi compaction applies normally to those sessions.
+Use `/clanky direct <message>` from Discord only when you explicitly want to
+bypass the Discord subagent and send a turn straight to main Clanky.
 
 Use AgentRoom for multi-agent development work, room tasks, audited worker
 coordination, and shared room-owned chat connectors. Use Clanky subagents only

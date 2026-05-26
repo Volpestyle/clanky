@@ -17,6 +17,8 @@ import type {
 	DiscordListEmojisInput,
 	DiscordReadMessagesInput,
 	DiscordRecentActivityInput,
+	DiscordRecentAttachmentsInput,
+	DiscordRecentAttachmentsResult,
 	DiscordSendMessageInput,
 } from "./discord/operator.ts";
 import type { LinearCreateIssueInput } from "./linear/client.ts";
@@ -86,6 +88,9 @@ const externalMcpCallSchema = Type.Object({
 	server: Type.String(),
 	tool: Type.String(),
 	arguments: Type.Optional(Type.Unknown()),
+});
+const externalMcpListToolsSchema = Type.Object({
+	server: Type.Optional(Type.String()),
 });
 
 const mainSessionContextSchema = Type.Object({
@@ -320,6 +325,35 @@ const discordRecentActivitySchema = Type.Object({
 	includeMessages: Type.Optional(Type.Boolean()),
 	include_messages: Type.Optional(Type.Boolean()),
 });
+const discordRecentAttachmentsSchema = Type.Object({
+	channelId: Type.Optional(Type.String()),
+	channel_id: Type.Optional(Type.String()),
+	messageId: Type.Optional(Type.String()),
+	message_id: Type.Optional(Type.String()),
+	limit: Type.Optional(Type.Number()),
+	messageLimit: Type.Optional(Type.Number()),
+	message_limit: Type.Optional(Type.Number()),
+	mediaLimit: Type.Optional(Type.Number()),
+	media_limit: Type.Optional(Type.Number()),
+	before: Type.Optional(Type.String()),
+	after: Type.Optional(Type.String()),
+	around: Type.Optional(Type.String()),
+	since: Type.Optional(Type.String()),
+	sinceTimestamp: Type.Optional(Type.String()),
+	since_timestamp: Type.Optional(Type.String()),
+	until: Type.Optional(Type.String()),
+	untilTimestamp: Type.Optional(Type.String()),
+	until_timestamp: Type.Optional(Type.String()),
+	load: Type.Optional(Type.Boolean()),
+	loadImages: Type.Optional(Type.Boolean()),
+	load_images: Type.Optional(Type.Boolean()),
+	includeVideoKeyframes: Type.Optional(Type.Boolean()),
+	include_video_keyframes: Type.Optional(Type.Boolean()),
+	maxBytes: Type.Optional(Type.Number()),
+	max_bytes: Type.Optional(Type.Number()),
+	maxVideoBytes: Type.Optional(Type.Number()),
+	max_video_bytes: Type.Optional(Type.Number()),
+});
 const discordSendMessageSchema = Type.Object({
 	channelId: Type.Optional(Type.String()),
 	channel_id: Type.Optional(Type.String()),
@@ -345,6 +379,7 @@ export type ScheduleCronToolInput = Static<typeof scheduleCronSchema>;
 export type LinearCreateIssueToolInput = Static<typeof linearCreateIssueSchema>;
 export type LinearLinkToolInput = Static<typeof linearLinkSchema>;
 export type ExternalMcpCallToolInput = Static<typeof externalMcpCallSchema>;
+export type ExternalMcpListToolsInput = Static<typeof externalMcpListToolsSchema>;
 export type MainSessionContextToolInput = Static<typeof mainSessionContextSchema>;
 export type DelegateToMainWorkerToolInput = Static<typeof delegateToMainWorkerSchema>;
 export type TaskCreateToolInput = Static<typeof taskCreateSchema>;
@@ -358,6 +393,7 @@ export type XAiVideoGenerateToolInput = Static<typeof xaiVideoGenerateSchema>;
 export type DiscordListChannelsToolInput = Static<typeof discordListChannelsSchema>;
 export type DiscordReadMessagesToolInput = Static<typeof discordReadMessagesSchema>;
 export type DiscordRecentActivityToolInput = Static<typeof discordRecentActivitySchema>;
+export type DiscordRecentAttachmentsToolInput = Static<typeof discordRecentAttachmentsSchema>;
 export type DiscordSendMessageToolInput = Static<typeof discordSendMessageSchema>;
 export type DiscordListEmojisToolInput = Static<typeof discordListEmojisSchema>;
 export type DiscordAddReactionToolInput = Static<typeof discordAddReactionSchema>;
@@ -372,6 +408,7 @@ export interface ClankyAgentToolHandlers {
 	linearCreateIssue?: (input: LinearCreateIssueInput) => Promise<unknown>;
 	linearLink?: (input: CreateLinearLinkInput) => Promise<unknown>;
 	externalMcpCall?: (input: ExternalMcpCallToolInput) => Promise<unknown>;
+	externalMcpListTools?: (input: ExternalMcpListToolsInput) => Promise<unknown>;
 	mainSessionContext?: (input: MainSessionContextToolInput) => Promise<unknown>;
 	delegateToMainWorker?: (input: DelegateToMainWorkerToolInput) => Promise<unknown>;
 	taskCreate?: (input: TaskCreateToolInput) => Promise<unknown>;
@@ -400,6 +437,10 @@ export interface ClankyAgentToolHandlers {
 	discordListChannels?: (input: DiscordListChannelsInput) => Promise<unknown>;
 	discordReadMessages?: (input: DiscordReadMessagesInput) => Promise<unknown>;
 	discordRecentActivity?: (input: DiscordRecentActivityInput) => Promise<unknown>;
+	discordRecentAttachments?: (
+		input: DiscordRecentAttachmentsInput,
+		signal?: AbortSignal,
+	) => Promise<DiscordRecentAttachmentsResult>;
 	discordSendMessage?: (input: DiscordSendMessageInput) => Promise<unknown>;
 	discordListEmojis?: (input: DiscordListEmojisInput) => Promise<unknown>;
 	discordAddReaction?: (input: DiscordAddReactionInput) => Promise<unknown>;
@@ -408,6 +449,7 @@ export interface ClankyAgentToolHandlers {
 const CLANKY_MEMORY_PACKET_MESSAGE = "clanky.memory_packet";
 const WEB_OPERATOR_SKILL_NAME = "clanky-web-operator";
 const MEDIA_OPERATOR_SKILL_NAME = "clanky-media-operator";
+const AGENTROOM_OPERATOR_SKILL_NAME = "clanky-agentroom-operator";
 const SUBAGENT_PANEL_WIDGET_KEY = "clanky-subagents";
 const SUBAGENT_PANEL_STATUS_KEY = "clanky-subagents";
 const SUBAGENT_PANEL_REFRESH_MS = 2000;
@@ -445,7 +487,9 @@ export function createClankyExtensionFactories(handlers: ClankyAgentToolHandlers
 			registerClankyCommands(pi, handlers, subagentPanel);
 			subagentPanel?.registerLifecycle(pi);
 			pi.on("input", async (event) => {
-				const transformed = maybeInjectWebOperatorSkill(maybeInjectMediaOperatorSkill(event.text));
+				const transformed = maybeInjectAgentRoomOperatorSkill(
+					maybeInjectWebOperatorSkill(maybeInjectMediaOperatorSkill(event.text)),
+				);
 				if (transformed === event.text) return { action: "continue" };
 				if (event.images !== undefined) return { action: "transform", text: transformed, images: event.images };
 				return { action: "transform", text: transformed };
@@ -1811,6 +1855,25 @@ export function createClankyToolDefinitions(handlers: ClankyAgentToolHandlers): 
 	}
 	const linearLink = handlers.linearLink;
 	const linearCreateIssue = handlers.linearCreateIssue;
+	const externalMcpListTools = handlers.externalMcpListTools;
+	if (externalMcpListTools !== undefined) {
+		tools.push(
+			defineTool({
+				name: "mcp_list_tools",
+				label: "MCP Tools",
+				description: "List tools exposed by configured Clanky MCP servers, optionally filtered to one server.",
+				promptSnippet: "mcp_list_tools: discover tools from configured MCP servers before using mcp_call.",
+				promptGuidelines: [
+					"Use mcp_list_tools when a skill or user mentions an MCP server but you need exact tool names or schemas.",
+					"Prefer server-specific filtering to keep output small.",
+				],
+				parameters: externalMcpListToolsSchema,
+				async execute(_toolCallId, params) {
+					return toolResult(await externalMcpListTools(params));
+				},
+			}),
+		);
+	}
 	const externalMcpCall = handlers.externalMcpCall;
 	if (externalMcpCall !== undefined) {
 		tools.push(
@@ -1822,6 +1885,7 @@ export function createClankyToolDefinitions(handlers: ClankyAgentToolHandlers): 
 				promptGuidelines: [
 					"Use mcp_call only for MCP servers listed in Clanky status or the /mcp command.",
 					"Pass arguments as a JSON object matching the target tool schema.",
+					"Use skills and mcp_list_tools for server-specific policy; do not guess action tools for sensitive operations.",
 				],
 				parameters: externalMcpCallSchema,
 				async execute(_toolCallId, params) {
@@ -2184,6 +2248,29 @@ export function createClankyToolDefinitions(handlers: ClankyAgentToolHandlers): 
 			}),
 		);
 	}
+	const discordRecentAttachments = handlers.discordRecentAttachments;
+	if (discordRecentAttachments !== undefined) {
+		tools.push(
+			defineTool({
+				name: "discord_recent_attachments",
+				label: "Discord Recent Attachments",
+				description:
+					"Find recent Discord media in a channel and, when possible, return image pixels to the model for visual inspection.",
+				promptSnippet:
+					"discord_recent_attachments: find and visually load recent Discord images, GIF previews, image links, embeds, and video keyframes from a channel.",
+				promptGuidelines: [
+					"Use when the conversation context calls for inspecting Discord media that is not already attached to the current model request.",
+					"Pass channelOrThreadId from the Discord prompt as channelId; pass messageId when you need one specific Discord message.",
+					"Only claim visual inspection for entries listed in loadedImages or returned as image blocks; otherwise say you found media metadata only.",
+					"Prefer a small mediaLimit and bounded messageLimit unless the user asks for a broader search.",
+				],
+				parameters: discordRecentAttachmentsSchema,
+				async execute(_toolCallId, params, signal) {
+					return discordRecentAttachmentsToolResult(await discordRecentAttachments(params, signal));
+				},
+			}),
+		);
+	}
 	const discordSendMessage = handlers.discordSendMessage;
 	if (discordSendMessage !== undefined) {
 		tools.push(
@@ -2257,6 +2344,18 @@ export function maybeInjectMediaOperatorSkill(text: string, env: NodeJS.ProcessE
 	return `/skill:${MEDIA_OPERATOR_SKILL_NAME} ${text}`;
 }
 
+export function maybeInjectAgentRoomOperatorSkill(text: string, env: NodeJS.ProcessEnv = process.env): string {
+	if (env.CLANKY_AGENTROOM_OPERATOR_AUTO_SKILL === "0" || env.CLANKY_AGENTROOM_OPERATOR_AUTO_SKILL === "false") {
+		return text;
+	}
+	const trimmed = text.trimStart();
+	if (trimmed.length === 0) return text;
+	if (trimmed.startsWith("/")) return text;
+	if (trimmed.includes(`<skill name="${AGENTROOM_OPERATOR_SKILL_NAME}"`)) return text;
+	if (!shouldUseAgentRoomOperatorSkill(trimmed)) return text;
+	return `/skill:${AGENTROOM_OPERATOR_SKILL_NAME} ${text}`;
+}
+
 export function shouldUseWebOperatorSkill(text: string): boolean {
 	const normalized = text.toLowerCase();
 	if (/\bhttps?:\/\/|\bwww\./i.test(text)) return true;
@@ -2299,6 +2398,17 @@ export function shouldUseMediaOperatorSkill(text: string): boolean {
 	) {
 		return true;
 	}
+	return false;
+}
+
+export function shouldUseAgentRoomOperatorSkill(text: string): boolean {
+	if (/\bagent[- ]?room\b/i.test(text)) return true;
+	if (/\bagent-room\b/i.test(text)) return true;
+	if (/\bAGENTROOM_[A-Z_]+\b/.test(text)) return true;
+	if (/\b(room|agentroom)\b.{0,40}\b(messages?|tasks?|workers?|agents?|runtime|coordination|dm)\b/i.test(text)) {
+		return true;
+	}
+	if (/\b(read|send|nudge|launch|stop)\b.{0,40}\b(room )?(worker|agent)\b/i.test(text)) return true;
 	return false;
 }
 
@@ -2447,6 +2557,29 @@ function normalizeMemoryForgetToolInput(input: MemoryForgetToolInput): ForgetMem
 function toolResult(details: unknown): AgentToolResult<unknown> {
 	return {
 		content: [{ type: "text", text: JSON.stringify(details ?? null, null, "\t") }],
+		details,
+	};
+}
+
+function discordRecentAttachmentsToolResult(
+	result: DiscordRecentAttachmentsResult,
+): AgentToolResult<Omit<DiscordRecentAttachmentsResult, "imageContents">> {
+	const { imageContents, ...details } = result;
+	return {
+		content: [
+			{
+				type: "text",
+				text: JSON.stringify(
+					{
+						...details,
+						imageBlocksAttachedToToolResult: imageContents.length,
+					},
+					null,
+					"\t",
+				),
+			},
+			...imageContents,
+		],
 		details,
 	};
 }

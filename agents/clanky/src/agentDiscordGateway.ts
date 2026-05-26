@@ -3,6 +3,7 @@ import { DiscordChatGatewayProvider, type DiscordGatewayClient } from "@agentroo
 import {
 	type ClankyDiscordCredentialKind,
 	DEFAULT_CLANKY_DISCORD_PROVIDER_ID,
+	type DiscordInboxMessage,
 	type DiscordMessageSummary,
 	type DiscordSubagentStore,
 	loadStoredDiscordCredential,
@@ -397,6 +398,7 @@ class AgentDiscordBridge implements ClankyAgentDiscordGatewayHandle {
 		this.options = options;
 		this.runtimeTurnQueue = options.runtimeTurnQueue;
 		this.subagents = options.subagents;
+		this.subagents?.setResponseObserver((event) => this.handleSubagentResponseSent(event));
 		this.subscribedSession = runtime.session;
 	}
 
@@ -435,6 +437,7 @@ class AgentDiscordBridge implements ClankyAgentDiscordGatewayHandle {
 			);
 			const subagents = this.subagents;
 			if (subagents !== undefined && this.shouldRouteToSubagent()) {
+				this.recordInboundMessage(message);
 				await subagents.enqueue(message, decision.reason);
 				this.logBridge(
 					`queued-for-subagent ext=${message.externalMessageId} channel=${channelId} mainStreaming=${
@@ -668,6 +671,20 @@ class AgentDiscordBridge implements ClankyAgentDiscordGatewayHandle {
 		this.inboundReceivedAt.delete(message.externalMessageId);
 	}
 
+	private handleSubagentResponseSent(event: {
+		message: DiscordInboxMessage;
+		sentExternalMessageId: string;
+		text: string;
+	}): void {
+		this.rememberSelfMessageId(event.sentExternalMessageId);
+		this.recordAssistantMessage(
+			event.message.conversationThreadId ?? event.message.conversationId,
+			event.sentExternalMessageId,
+			event.text,
+		);
+		this.recordEngagement(event.message.conversationId, event.message.senderId);
+	}
+
 	private clearPendingMainReplies(): void {
 		for (const pending of this.pendingReplies) this.inboundReceivedAt.delete(pending.replyToExternalMessageId);
 		this.pendingReplies.length = 0;
@@ -752,7 +769,7 @@ function engagementKey(channelId: string, userId: string): string {
 }
 
 export function shouldRouteDiscordMessageToSubagent(state: DiscordSubagentRoutingState): boolean {
-	return state.subagentsAvailable && (state.mainSessionStreaming || state.mainQueueBusy);
+	return state.subagentsAvailable;
 }
 
 function conversationHistoryKey(conversation: DiscordInboundConversation): string {
@@ -1010,23 +1027,12 @@ export function parseDiscordBridgeCommand(text: string): DiscordBridgeCommand | 
 function discordBridgeCommandHelpText(): string {
 	return [
 		"Discord Clanky commands:",
+		"- Normal accepted Discord chat goes to the dedicated Discord subagent.",
 		"- /clanky <message> or /clanky direct <message>: send this turn straight to main Clanky.",
 		"- /clanky new: start a new main Clanky session.",
 		"- /clanky compact [focus]: compact the main Clanky context.",
 		"Aliases: /clank, !clanky, !clank, /new, /compact.",
 	].join("\n");
-}
-
-export function shouldAcceptDiscordMessage(
-	message: DiscordInboundMessage,
-	config: ClankyAgentDiscordGatewayConfig,
-	isEngaged: (channelId: string, userId: string) => boolean,
-): boolean {
-	return evaluateDiscordMessageAcceptance(message, config, {
-		isEngaged,
-		isKnownSelfMessage: () => false,
-		wakeNames: DEFAULT_DISCORD_WAKE_NAMES,
-	}).accepted;
 }
 
 export function evaluateDiscordMessageAcceptance(
@@ -1107,6 +1113,7 @@ export function formatDiscordUserMessage(
 		...(metadata.displayName === undefined ? [] : [`- displayName: ${metadata.displayName}`]),
 		`- newestMessageId: ${metadata.messageId}`,
 		"If the user asks about Discord history beyond the messages shown here, use discord_read_messages with channelOrThreadId before answering.",
+		"If the conversation calls for inspecting Discord media that is not already listed as visual input, use discord_recent_attachments with channelOrThreadId and messageId when targeting a specific message; only claim visual inspection when it returns loadedImages/image blocks.",
 		"",
 		...(imageReferences.length > 0
 			? [

@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
-import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { ClankyPaths } from "../paths.ts";
+import { loadDatabaseSync } from "../sqlite.ts";
 
 export type ClankySubagentKind = "discord-guild" | "discord-dm";
 export type ClankySubagentState = "idle" | "queued" | "running" | "failed" | "stale";
@@ -99,20 +99,9 @@ export interface ClankySubagentSummary {
 	lastError?: string;
 }
 
-type DatabaseSyncConstructor = new (path: string) => DatabaseSync;
 interface SqliteRunResult {
 	changes: number;
 }
-type WarningConstructor = NonNullable<NodeJS.EmitWarningOptions["ctor"]>;
-type EmitWarningFunction = (
-	warning: string | Error,
-	optionsOrType?: string | NodeJS.EmitWarningOptions | WarningConstructor,
-	codeOrCtor?: string | WarningConstructor,
-	ctor?: WarningConstructor,
-) => void;
-
-const require = createRequire(import.meta.url);
-let DatabaseSyncClass: DatabaseSyncConstructor | undefined;
 
 export class DiscordSubagentStore {
 	private readonly paths: ClankyPaths;
@@ -366,6 +355,24 @@ export class DiscordSubagentStore {
 				now,
 				id,
 			);
+	}
+
+	async getSubagent(id: string): Promise<ClankySubagentSummary | undefined> {
+		await this.ensure();
+		const row = this.database()
+			.prepare(`
+				SELECT
+					subagents.*,
+					COUNT(discord_inbox.id) AS queue_depth
+				FROM subagents
+				LEFT JOIN discord_inbox
+					ON discord_inbox.worker_id = subagents.id
+					AND discord_inbox.status IN ('queued', 'claimed')
+				WHERE subagents.id = ?
+				GROUP BY subagents.id
+			`)
+			.get(id);
+		return typeof row === "object" && row !== null ? readSubagentRow(row as Record<string, unknown>) : undefined;
 	}
 
 	async listSubagents(): Promise<ClankySubagentSummary[]> {
@@ -636,48 +643,6 @@ function readSubagentRow(row: Record<string, unknown>): ClankySubagentSummary | 
 	const lastError = readString(row, "last_error");
 	if (lastError !== undefined) summary.lastError = lastError;
 	return summary;
-}
-
-function loadDatabaseSync(): DatabaseSyncConstructor {
-	if (DatabaseSyncClass !== undefined) return DatabaseSyncClass;
-	return loadDatabaseSyncWithoutExperimentalWarning();
-}
-
-function loadDatabaseSyncWithoutExperimentalWarning(): DatabaseSyncConstructor {
-	const originalEmitWarning = process.emitWarning as EmitWarningFunction;
-	const filteredEmitWarning: EmitWarningFunction = (warning, optionsOrType, codeOrCtor, ctor) => {
-		const message = typeof warning === "string" ? warning : warning.message;
-		const type =
-			typeof optionsOrType === "string"
-				? optionsOrType
-				: typeof optionsOrType === "object" && optionsOrType !== null
-					? optionsOrType.type
-					: undefined;
-		if (message.includes("SQLite is an experimental feature") && type === "ExperimentalWarning") return;
-		if (typeof optionsOrType === "function") {
-			originalEmitWarning.call(process, warning, optionsOrType);
-		} else if (typeof optionsOrType === "object") {
-			originalEmitWarning.call(process, warning, optionsOrType);
-		} else if (typeof codeOrCtor === "function") {
-			originalEmitWarning.call(process, warning, optionsOrType, codeOrCtor);
-		} else if (ctor !== undefined) {
-			originalEmitWarning.call(process, warning, optionsOrType, codeOrCtor, ctor);
-		} else if (codeOrCtor !== undefined) {
-			originalEmitWarning.call(process, warning, optionsOrType, codeOrCtor);
-		} else if (optionsOrType !== undefined) {
-			originalEmitWarning.call(process, warning, optionsOrType);
-		} else {
-			originalEmitWarning.call(process, warning);
-		}
-	};
-	process.emitWarning = filteredEmitWarning as typeof process.emitWarning;
-	try {
-		const sqlite = require("node:sqlite") as { DatabaseSync: DatabaseSyncConstructor };
-		DatabaseSyncClass = sqlite.DatabaseSync;
-		return DatabaseSyncClass;
-	} finally {
-		process.emitWarning = originalEmitWarning as typeof process.emitWarning;
-	}
 }
 
 function ensureColumn(db: DatabaseSync, table: string, column: string, type: string): void {

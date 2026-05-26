@@ -1,4 +1,4 @@
-import { appendFile } from "node:fs/promises";
+import { access, appendFile } from "node:fs/promises";
 import type {
 	ClankySubagentKind,
 	DiscordInboxAttachment,
@@ -39,6 +39,14 @@ interface DiscordSubagentRuntimeEntry {
 	workerId: string;
 }
 
+export interface DiscordSubagentResponseSentEvent {
+	message: DiscordInboxMessage;
+	sentExternalMessageId: string;
+	text: string;
+}
+
+type DiscordSubagentResponseObserver = (event: DiscordSubagentResponseSentEvent) => void;
+
 const DISCORD_OPERATOR_SKILL_NAME = "clanky-discord-operator";
 
 export interface DiscordSubagentCoordinatorOptions {
@@ -64,6 +72,7 @@ export class DiscordSubagentCoordinator {
 	private readonly runtimes = new Map<string, DiscordSubagentRuntimeEntry>();
 	private readonly pumpPromises = new Map<string, Promise<void>>();
 	private readonly pumpWakeups = new Set<string>();
+	private responseObserver: DiscordSubagentResponseObserver | undefined;
 	private stopped = false;
 
 	constructor(options: DiscordSubagentCoordinatorOptions) {
@@ -75,6 +84,10 @@ export class DiscordSubagentCoordinator {
 		this.cwd = options.cwd;
 		this.sessionDir = options.sessionDir;
 		this.bridgeLogPath = options.bridgeLogPath;
+	}
+
+	setResponseObserver(observer: DiscordSubagentResponseObserver | undefined): void {
+		this.responseObserver = observer;
 	}
 
 	async start(): Promise<void> {
@@ -151,7 +164,13 @@ export class DiscordSubagentCoordinator {
 			const message = await this.store.claimNextDiscordMessage(workerId);
 			if (message === undefined) {
 				const depth = await this.store.discordQueueDepth(workerId);
-				if (depth === 0) await this.store.setSubagentState(workerId, "idle", { activeSummary: "idle" });
+				if (depth === 0) {
+					const runtime = this.runtimes.get(workerId)?.runtime;
+					await this.store.setSubagentState(workerId, "idle", {
+						activeSummary: "idle",
+						...sessionFileDetails(runtime),
+					});
+				}
 				if (this.pumpWakeups.delete(workerId)) continue;
 				break;
 			}
@@ -170,6 +189,11 @@ export class DiscordSubagentCoordinator {
 		});
 		try {
 			const replyText = await runSubagentTurn(runtime, buildDiscordSubagentPrompt(message, this.mainStatusText()));
+			await this.store.setSubagentState(message.workerId, "running", {
+				activeConversationId: message.conversationId,
+				activeSummary,
+				...sessionFileDetails(runtime),
+			});
 			if (replyText === undefined || isDiscordSkipReplyText(replyText)) {
 				await this.store.completeDiscordMessage(message.id, undefined);
 				return;
@@ -179,6 +203,7 @@ export class DiscordSubagentCoordinator {
 				replyToExternalMessageId: message.externalMessageId,
 				text: replyText,
 			});
+			this.responseObserver?.({ message, sentExternalMessageId: sent.externalMessageId, text: replyText });
 			await this.store.completeDiscordMessage(message.id, sent.externalMessageId);
 		} catch (error) {
 			const messageText = errorMessage(error);
@@ -195,7 +220,7 @@ export class DiscordSubagentCoordinator {
 	private async ensureRuntime(message: DiscordInboxMessage): Promise<AgentSessionRuntime> {
 		const existing = this.runtimes.get(message.workerId);
 		if (existing !== undefined) return existing.runtime;
-		const sessionManager = SessionManager.create(this.cwd, this.sessionDir);
+		const sessionManager = await this.createWorkerSessionManager(message.workerId);
 		const runtime = await createAgentSessionRuntime(this.createRuntime, {
 			cwd: this.cwd,
 			agentDir: this.agentDir,
@@ -213,6 +238,19 @@ export class DiscordSubagentCoordinator {
 			activeSummary: "worker runtime ready",
 		});
 		return runtime;
+	}
+
+	private async createWorkerSessionManager(workerId: string): Promise<SessionManager> {
+		const existing = await this.store.getSubagent(workerId);
+		const sessionFile = existing?.sessionFile;
+		if (sessionFile !== undefined && (await isReadableFile(sessionFile))) {
+			try {
+				return SessionManager.open(sessionFile, this.sessionDir, this.cwd);
+			} catch (error) {
+				this.log(`subagent-session-resume-failed worker=${workerId} file=${sessionFile} error=${errorMessage(error)}`);
+			}
+		}
+		return SessionManager.create(this.cwd, this.sessionDir);
 	}
 
 	private mainStatusText(): string {
@@ -284,8 +322,10 @@ function buildDiscordSubagentPrompt(message: DiscordInboxMessage, mainStatus: st
 	const channel = message.conversationName ?? message.conversationId;
 	const attachments = renderAttachments(message.attachments);
 	return [
-		"You are a Discord-facing Clanky subagent, used only while main Clanky is busy.",
-		"Handle this Discord message as one real person for this server/DM.",
+		"You are Clanky's dedicated Discord-facing subagent for this server/DM.",
+		"Keep continuity in your own Pi session instead of requiring main Clanky to carry Discord history.",
+		"Use Discord tools to read recent channel activity when the user references context you do not have.",
+		"Handle this Discord message as one real person in the conversation.",
 		"Answer directly and briefly unless the user asks for detail.",
 		"Keep Discord turns short. If work is likely to take more than 1-2 minutes, call delegate_to_main_worker and then give a brief handoff reply.",
 		"Do not claim the main Clanky stopped or changed work unless the status below says so.",
@@ -372,6 +412,20 @@ function extractAssistantText(event: AgentSessionEvent): string | undefined {
 
 function isDiscordSkipReplyText(text: string): boolean {
 	return /^\[SKIP\]$/i.test(text.trim());
+}
+
+function sessionFileDetails(runtime: AgentSessionRuntime | undefined): { sessionFile?: string } {
+	const sessionFile = runtime?.session.sessionFile;
+	return sessionFile === undefined ? {} : { sessionFile };
+}
+
+async function isReadableFile(path: string): Promise<boolean> {
+	try {
+		await access(path);
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 function errorMessage(error: unknown): string {

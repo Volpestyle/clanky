@@ -1,5 +1,7 @@
-import { readFile } from "node:fs/promises";
-import { basename } from "node:path";
+import { spawn } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { basename, join } from "node:path";
 import type { AuthStorage } from "@earendil-works/pi-coding-agent";
 import {
 	type ClankyDiscordCredentialKind,
@@ -13,11 +15,21 @@ const DISCORD_EPOCH_MS = 1_420_070_400_000n;
 const DEFAULT_RECENT_ACTIVITY_SINCE = "7d";
 const DEFAULT_RECENT_ACTIVITY_CHANNEL_LIMIT = 5;
 const DEFAULT_RECENT_ACTIVITY_MESSAGE_LIMIT = 10;
+const DEFAULT_RECENT_ATTACHMENTS_MESSAGE_LIMIT = 30;
+const DEFAULT_RECENT_ATTACHMENTS_MEDIA_LIMIT = 4;
+const DEFAULT_RECENT_ATTACHMENTS_MAX_BYTES = 8 * 1024 * 1024;
+const DEFAULT_RECENT_ATTACHMENTS_MAX_VIDEO_BYTES = 25 * 1024 * 1024;
+const MAX_RECENT_ATTACHMENTS_MEDIA_LIMIT = 10;
+const MAX_RECENT_ATTACHMENTS_MAX_BYTES = 25 * 1024 * 1024;
+const MAX_RECENT_ATTACHMENTS_MAX_VIDEO_BYTES = 50 * 1024 * 1024;
+const DISCORD_MEDIA_FETCH_TIMEOUT_MS = 10_000;
+const DISCORD_VIDEO_KEYFRAME_TIMEOUT_MS = 15_000;
 const TEXT_CHANNEL_TYPES = new Set([0, 5, 10, 11, 12]);
 
 export interface DiscordOperatorOptions {
 	authStorage?: AuthStorage;
 	env?: NodeJS.ProcessEnv;
+	fetchImpl?: typeof fetch;
 	signal?: AbortSignal;
 }
 
@@ -54,6 +66,8 @@ export interface DiscordMessageSummary {
 	timestamp?: string;
 	attachments: DiscordMessageAttachmentSummary[];
 	attachmentUrls: string[];
+	media: DiscordMessageMediaSummary[];
+	mediaUrls: string[];
 }
 
 export interface DiscordMessageAttachmentSummary {
@@ -62,6 +76,26 @@ export interface DiscordMessageAttachmentSummary {
 	filename?: string;
 	contentType?: string;
 	size?: number;
+}
+
+export type DiscordMessageMediaKind = "image" | "gif" | "video";
+export type DiscordMessageMediaSource = "attachment" | "embed" | "link";
+
+export interface DiscordMessageMediaSummary {
+	kind: DiscordMessageMediaKind;
+	source: DiscordMessageMediaSource;
+	url: string;
+	originalUrl?: string;
+	proxyUrl?: string;
+	filename?: string;
+	contentType?: string;
+	size?: number;
+	width?: number;
+	height?: number;
+	sourceDetail?: string;
+	embedType?: string;
+	providerName?: string;
+	title?: string;
 }
 
 export interface DiscordEmojiSummary {
@@ -149,6 +183,36 @@ export interface DiscordRecentActivityInput {
 	include_messages?: boolean;
 }
 
+export interface DiscordRecentAttachmentsInput {
+	channelId?: string;
+	channel_id?: string;
+	messageId?: string;
+	message_id?: string;
+	limit?: number;
+	messageLimit?: number;
+	message_limit?: number;
+	mediaLimit?: number;
+	media_limit?: number;
+	before?: string;
+	after?: string;
+	around?: string;
+	since?: string;
+	sinceTimestamp?: string;
+	since_timestamp?: string;
+	until?: string;
+	untilTimestamp?: string;
+	until_timestamp?: string;
+	load?: boolean;
+	loadImages?: boolean;
+	load_images?: boolean;
+	includeVideoKeyframes?: boolean;
+	include_video_keyframes?: boolean;
+	maxBytes?: number;
+	max_bytes?: number;
+	maxVideoBytes?: number;
+	max_video_bytes?: number;
+}
+
 export interface DiscordListEmojisInput {
 	guildId?: string;
 	guild_id?: string;
@@ -173,6 +237,61 @@ export interface DiscordAddReactionResult {
 	channelId: string;
 	messageId: string;
 	emoji: string;
+}
+
+export type DiscordRecentAttachmentStatus = "loaded" | "metadata_only" | "failed";
+
+export interface DiscordRecentAttachmentMediaResult extends DiscordMessageMediaSummary {
+	mediaIndex: number;
+	messageId: string;
+	channelId: string;
+	authorId?: string;
+	authorUsername?: string;
+	timestamp?: string;
+	status: DiscordRecentAttachmentStatus;
+	statusReason?: string;
+}
+
+export interface DiscordRecentAttachmentLoadedImageSummary {
+	imageIndex: number;
+	mediaIndex: number;
+	messageId: string;
+	channelId: string;
+	url: string;
+	source: DiscordMessageMediaSource;
+	kind: DiscordMessageMediaKind;
+	mimeType: string;
+	authorId?: string;
+	authorUsername?: string;
+	timestamp?: string;
+	generatedFromVideo?: boolean;
+}
+
+export interface DiscordRecentAttachmentFailure {
+	mediaIndex: number;
+	messageId: string;
+	url: string;
+	reason: string;
+}
+
+export interface DiscordLoadedImageContent {
+	type: "image";
+	data: string;
+	mimeType: string;
+}
+
+export interface DiscordRecentAttachmentsResult {
+	channelId: string;
+	targetMessageId?: string;
+	targetMessageFound?: boolean;
+	generatedAt: string;
+	scannedMessageCount: number;
+	mediaCount: number;
+	loadedImageCount: number;
+	media: DiscordRecentAttachmentMediaResult[];
+	loadedImages: DiscordRecentAttachmentLoadedImageSummary[];
+	failures: DiscordRecentAttachmentFailure[];
+	imageContents: DiscordLoadedImageContent[];
 }
 
 export function resolveDiscordOperatorCredential(options: DiscordOperatorOptions = {}): ResolvedDiscordCredential {
@@ -355,6 +474,118 @@ export async function recentDiscordActivity(
 	};
 }
 
+export async function recentDiscordAttachments(
+	input: DiscordRecentAttachmentsInput,
+	options: DiscordOperatorOptions = {},
+): Promise<DiscordRecentAttachmentsResult> {
+	const channelId = required(input.channelId ?? input.channel_id, "channelId");
+	const targetMessageId = trimToUndefined(input.messageId ?? input.message_id);
+	const messageLimit = clampMessageLimit(
+		input.messageLimit ?? input.message_limit ?? input.limit ?? DEFAULT_RECENT_ATTACHMENTS_MESSAGE_LIMIT,
+	);
+	const mediaLimit = clampPositiveInt(
+		input.mediaLimit ?? input.media_limit,
+		DEFAULT_RECENT_ATTACHMENTS_MEDIA_LIMIT,
+		MAX_RECENT_ATTACHMENTS_MEDIA_LIMIT,
+	);
+	const maxBytes = clampByteLimit(
+		input.maxBytes ?? input.max_bytes,
+		DEFAULT_RECENT_ATTACHMENTS_MAX_BYTES,
+		MAX_RECENT_ATTACHMENTS_MAX_BYTES,
+	);
+	const maxVideoBytes = clampByteLimit(
+		input.maxVideoBytes ?? input.max_video_bytes,
+		DEFAULT_RECENT_ATTACHMENTS_MAX_VIDEO_BYTES,
+		MAX_RECENT_ATTACHMENTS_MAX_VIDEO_BYTES,
+	);
+	const around = input.around ?? targetMessageId;
+	const loadImages = input.loadImages ?? input.load_images ?? input.load ?? true;
+	const includeVideoKeyframes = input.includeVideoKeyframes ?? input.include_video_keyframes ?? true;
+	const messages = await readDiscordMessages(
+		{
+			channelId,
+			limit: messageLimit,
+			...(input.before === undefined ? {} : { before: input.before }),
+			...(input.after === undefined ? {} : { after: input.after }),
+			...(around === undefined ? {} : { around }),
+			...(input.since === undefined ? {} : { since: input.since }),
+			...(input.sinceTimestamp === undefined ? {} : { sinceTimestamp: input.sinceTimestamp }),
+			...(input.since_timestamp === undefined ? {} : { since_timestamp: input.since_timestamp }),
+			...(input.until === undefined ? {} : { until: input.until }),
+			...(input.untilTimestamp === undefined ? {} : { untilTimestamp: input.untilTimestamp }),
+			...(input.until_timestamp === undefined ? {} : { until_timestamp: input.until_timestamp }),
+		},
+		options,
+	);
+	const targetMessage =
+		targetMessageId === undefined ? undefined : messages.find((message) => message.id === targetMessageId);
+	const scannedMessages = targetMessageId === undefined ? messages : targetMessage === undefined ? [] : [targetMessage];
+	const media = collectRecentAttachmentMedia(scannedMessages, mediaLimit);
+	const loadedImages: DiscordRecentAttachmentLoadedImageSummary[] = [];
+	const imageContents: DiscordLoadedImageContent[] = [];
+	const failures: DiscordRecentAttachmentFailure[] = [];
+
+	if (loadImages) {
+		for (const item of media) {
+			try {
+				const loaded = await loadRecentAttachmentImage(
+					item,
+					{ maxBytes, maxVideoBytes, includeVideoKeyframes },
+					options,
+				);
+				if (loaded === undefined) {
+					item.status = "metadata_only";
+					item.statusReason =
+						item.kind === "video" && !includeVideoKeyframes
+							? "video keyframe loading disabled"
+							: "media URL is not directly loadable as an image";
+					continue;
+				}
+				imageContents.push(loaded.content);
+				item.status = "loaded";
+				if (loaded.generatedFromVideo) item.statusReason = "video keyframe extracted";
+				loadedImages.push({
+					imageIndex: imageContents.length,
+					mediaIndex: item.mediaIndex,
+					messageId: item.messageId,
+					channelId: item.channelId,
+					url: item.url,
+					source: item.source,
+					kind: item.kind,
+					mimeType: loaded.content.mimeType,
+					...(item.authorId === undefined ? {} : { authorId: item.authorId }),
+					...(item.authorUsername === undefined ? {} : { authorUsername: item.authorUsername }),
+					...(item.timestamp === undefined ? {} : { timestamp: item.timestamp }),
+					...(loaded.generatedFromVideo ? { generatedFromVideo: true } : {}),
+				});
+			} catch (error) {
+				const reason = error instanceof Error ? error.message : String(error);
+				item.status = "failed";
+				item.statusReason = reason;
+				failures.push({
+					mediaIndex: item.mediaIndex,
+					messageId: item.messageId,
+					url: item.url,
+					reason,
+				});
+			}
+		}
+	}
+
+	return {
+		channelId,
+		...(targetMessageId === undefined ? {} : { targetMessageId, targetMessageFound: targetMessage !== undefined }),
+		generatedAt: new Date().toISOString(),
+		scannedMessageCount: scannedMessages.length,
+		mediaCount: media.length,
+		loadedImageCount: imageContents.length,
+		media,
+		loadedImages,
+		failures,
+		imageContents,
+	};
+}
+
 export async function sendDiscordMessage(
 	input: DiscordSendMessageInput,
 	options: DiscordOperatorOptions = {},
@@ -431,6 +662,47 @@ export async function addDiscordReaction(
 	return { ok: true, channelId, messageId, emoji };
 }
 
+function collectRecentAttachmentMedia(
+	messages: readonly DiscordMessageSummary[],
+	mediaLimit: number,
+): DiscordRecentAttachmentMediaResult[] {
+	const results: DiscordRecentAttachmentMediaResult[] = [];
+	const seen = new Set<string>();
+	for (const message of messages.slice().sort(compareMessagesNewestFirst)) {
+		for (const media of message.media) {
+			const dedupeKey = `${message.id}:${media.url}`;
+			if (seen.has(dedupeKey)) continue;
+			seen.add(dedupeKey);
+			results.push({
+				...media,
+				mediaIndex: results.length + 1,
+				messageId: message.id,
+				channelId: message.channelId,
+				...(message.authorId === undefined ? {} : { authorId: message.authorId }),
+				...(message.authorUsername === undefined ? {} : { authorUsername: message.authorUsername }),
+				...(message.timestamp === undefined ? {} : { timestamp: message.timestamp }),
+				status: "metadata_only",
+			});
+			if (results.length >= mediaLimit) return results;
+		}
+	}
+	return results;
+}
+
+async function loadRecentAttachmentImage(
+	media: DiscordRecentAttachmentMediaResult,
+	limits: { maxBytes: number; maxVideoBytes: number; includeVideoKeyframes: boolean },
+	options: DiscordOperatorOptions,
+): Promise<{ content: DiscordLoadedImageContent; generatedFromVideo: boolean } | undefined> {
+	if (media.kind === "image" || media.kind === "gif") {
+		const content = await fetchDiscordMediaImage(media, limits.maxBytes, options);
+		return { content, generatedFromVideo: false };
+	}
+	if (!limits.includeVideoKeyframes) return undefined;
+	const content = await fetchDiscordVideoKeyframe(media, limits.maxVideoBytes, options);
+	return { content, generatedFromVideo: true };
+}
+
 async function readDiscordMessagesWithinWindow(
 	input: { channelId: string; limit: number; before?: string; after?: string },
 	options: DiscordOperatorOptions,
@@ -485,6 +757,170 @@ async function readDiscordMessagesWithinWindow(
 	return results.slice(0, input.limit);
 }
 
+async function fetchDiscordMediaImage(
+	media: DiscordRecentAttachmentMediaResult,
+	maxBytes: number,
+	options: DiscordOperatorOptions,
+): Promise<DiscordLoadedImageContent> {
+	const fetched = await fetchDiscordMediaBytes(media.url, maxBytes, options);
+	const mimeType =
+		normalizeImageMimeType(fetched.contentType) ??
+		normalizeImageMimeType(media.contentType) ??
+		inferImageMimeType(media.filename) ??
+		inferImageMimeType(media.url);
+	if (mimeType === undefined) throw new Error("response is not a supported image type");
+	return {
+		type: "image",
+		data: fetched.bytes.toString("base64"),
+		mimeType,
+	};
+}
+
+async function fetchDiscordVideoKeyframe(
+	media: DiscordRecentAttachmentMediaResult,
+	maxBytes: number,
+	options: DiscordOperatorOptions,
+): Promise<DiscordLoadedImageContent> {
+	const fetched = await fetchDiscordMediaBytes(media.url, maxBytes, options);
+	const videoType =
+		normalizeVideoMimeType(fetched.contentType) ??
+		normalizeVideoMimeType(media.contentType) ??
+		inferVideoMimeType(media.filename) ??
+		inferVideoMimeType(media.url);
+	if (videoType === undefined) throw new Error("response is not a supported video type");
+	const tempDir = await mkdtemp(join(tmpdir(), "clanky-discord-media-"));
+	try {
+		const inputPath = join(tempDir, `source.${videoExtension(videoType)}`);
+		const outputPath = join(tempDir, "frame.jpg");
+		await writeFile(inputPath, fetched.bytes);
+		try {
+			await runFfmpeg(
+				[
+					"-hide_banner",
+					"-loglevel",
+					"error",
+					"-y",
+					"-ss",
+					"00:00:01",
+					"-i",
+					inputPath,
+					"-frames:v",
+					"1",
+					"-q:v",
+					"3",
+					outputPath,
+				],
+				options.signal,
+			);
+		} catch (error) {
+			if (options.signal?.aborted === true) throw error;
+			await runFfmpeg(
+				["-hide_banner", "-loglevel", "error", "-y", "-i", inputPath, "-frames:v", "1", "-q:v", "3", outputPath],
+				options.signal,
+			);
+		}
+		const frame = await readFile(outputPath);
+		return {
+			type: "image",
+			data: frame.toString("base64"),
+			mimeType: "image/jpeg",
+		};
+	} finally {
+		await rm(tempDir, { recursive: true, force: true });
+	}
+}
+
+async function fetchDiscordMediaBytes(
+	url: string,
+	maxBytes: number,
+	options: DiscordOperatorOptions,
+): Promise<{ bytes: Buffer; contentType?: string }> {
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), DISCORD_MEDIA_FETCH_TIMEOUT_MS);
+	timeout.unref?.();
+	const onAbort = (): void => controller.abort();
+	if (options.signal?.aborted === true) {
+		controller.abort();
+	} else {
+		options.signal?.addEventListener("abort", onAbort, { once: true });
+	}
+	try {
+		const response = await (options.fetchImpl ?? fetch)(url, { signal: controller.signal });
+		if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`);
+		const contentLength = response.headers.get("content-length");
+		if (contentLength !== null) {
+			const bytes = Number.parseInt(contentLength, 10);
+			if (Number.isFinite(bytes) && bytes > maxBytes) {
+				throw new Error(`media is ${bytes} bytes, limit is ${maxBytes}`);
+			}
+		}
+		const bytes = Buffer.from(await response.arrayBuffer());
+		if (bytes.byteLength > maxBytes) {
+			throw new Error(`media is ${bytes.byteLength} bytes, limit is ${maxBytes}`);
+		}
+		const contentType = normalizeContentType(response.headers.get("content-type") ?? undefined);
+		return {
+			bytes,
+			...(contentType === undefined ? {} : { contentType }),
+		};
+	} finally {
+		options.signal?.removeEventListener("abort", onAbort);
+		clearTimeout(timeout);
+	}
+}
+
+function runFfmpeg(args: readonly string[], signal: AbortSignal | undefined): Promise<void> {
+	return new Promise((resolve, reject) => {
+		const child = spawn("ffmpeg", [...args], { stdio: ["ignore", "ignore", "pipe"] });
+		let stderr = "";
+		let timedOut = false;
+		let aborted = false;
+		let settled = false;
+		const timeout = setTimeout(() => {
+			timedOut = true;
+			child.kill("SIGKILL");
+		}, DISCORD_VIDEO_KEYFRAME_TIMEOUT_MS);
+		timeout.unref?.();
+		const finish = (error?: Error): void => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timeout);
+			signal?.removeEventListener("abort", onAbort);
+			if (error === undefined) {
+				resolve();
+			} else {
+				reject(error);
+			}
+		};
+		const onAbort = (): void => {
+			aborted = true;
+			child.kill("SIGKILL");
+		};
+		if (signal?.aborted === true) {
+			onAbort();
+		} else {
+			signal?.addEventListener("abort", onAbort, { once: true });
+		}
+		child.stderr?.on("data", (chunk: Buffer) => {
+			stderr = `${stderr}${chunk.toString("utf8")}`;
+			if (stderr.length > 2_000) stderr = stderr.slice(-2_000);
+		});
+		child.on("error", (error) => finish(error));
+		child.on("close", (code) => {
+			if (code === 0) {
+				finish();
+				return;
+			}
+			const reason = aborted
+				? "ffmpeg aborted"
+				: timedOut
+					? "ffmpeg timed out"
+					: `ffmpeg exited ${code ?? "unknown"}${stderr.trim().length > 0 ? `: ${stderr.trim()}` : ""}`;
+			finish(new Error(reason));
+		});
+	});
+}
+
 async function discordRequest(
 	method: string,
 	path: string,
@@ -494,7 +930,7 @@ async function discordRequest(
 ): Promise<unknown> {
 	const credential = resolveDiscordOperatorCredential(options);
 	const authorization = credential.credentialKind === "bot-token" ? `Bot ${credential.token}` : credential.token;
-	const response = await fetch(`${DISCORD_API_BASE}${path}`, {
+	const response = await (options.fetchImpl ?? fetch)(`${DISCORD_API_BASE}${path}`, {
 		method,
 		headers: {
 			Authorization: authorization,
@@ -541,12 +977,20 @@ function formatDiscordMessage(item: unknown): DiscordMessageSummary {
 			: undefined;
 	const attachments = Array.isArray(record.attachments) ? record.attachments : [];
 	const attachmentSummaries = attachments.flatMap(formatDiscordMessageAttachment);
+	const content = typeof record.content === "string" ? record.content : "";
+	const media = dedupeDiscordMessageMedia([
+		...attachmentSummaries.flatMap(formatDiscordAttachmentMedia),
+		...formatDiscordEmbedMedia(record.embeds),
+		...formatDiscordContentLinkMedia(content),
+	]);
 	return {
 		id: expectString(record.id, "message.id"),
 		channelId: expectString(record.channel_id, "message.channel_id"),
-		content: typeof record.content === "string" ? record.content : "",
+		content,
 		attachments: attachmentSummaries,
 		attachmentUrls: attachmentSummaries.flatMap((attachment) => (attachment.url === undefined ? [] : [attachment.url])),
+		media,
+		mediaUrls: media.map((entry) => entry.url),
 		...(author !== undefined && typeof author.id === "string" ? { authorId: author.id } : {}),
 		...(author !== undefined && typeof author.username === "string" ? { authorUsername: author.username } : {}),
 		...(typeof record.timestamp === "string" ? { timestamp: record.timestamp } : {}),
@@ -563,6 +1007,114 @@ function formatDiscordMessageAttachment(item: unknown): DiscordMessageAttachment
 	if (typeof record.content_type === "string") attachment.contentType = record.content_type;
 	if (typeof record.size === "number") attachment.size = record.size;
 	return [attachment];
+}
+
+function formatDiscordAttachmentMedia(attachment: DiscordMessageAttachmentSummary): DiscordMessageMediaSummary[] {
+	const url = normalizeHttpUrl(attachment.url);
+	if (url === undefined) return [];
+	const kind = classifyMediaKind(attachment.contentType, attachment.filename, url);
+	if (kind === undefined) return [];
+	const contentType = normalizeContentType(attachment.contentType);
+	const media: DiscordMessageMediaSummary = { kind, source: "attachment", url };
+	if (attachment.filename !== undefined) media.filename = attachment.filename;
+	if (contentType !== undefined) media.contentType = contentType;
+	if (attachment.size !== undefined) media.size = attachment.size;
+	return [media];
+}
+
+function formatDiscordEmbedMedia(value: unknown): DiscordMessageMediaSummary[] {
+	if (!Array.isArray(value)) return [];
+	return value.flatMap((item) => {
+		if (typeof item !== "object" || item === null) return [];
+		const record = item as Record<string, unknown>;
+		const embedType = typeof record.type === "string" ? record.type : undefined;
+		const providerName =
+			typeof record.provider === "object" && record.provider !== null
+				? normalizeString((record.provider as Record<string, unknown>).name)
+				: undefined;
+		const title = normalizeString(record.title);
+		const base = {
+			...(embedType === undefined ? {} : { embedType }),
+			...(providerName === undefined ? {} : { providerName }),
+			...(title === undefined ? {} : { title }),
+		};
+		return dedupeDiscordMessageMedia([
+			...formatDiscordEmbedAsset(record.image, "image", base),
+			...formatDiscordEmbedAsset(record.thumbnail, "thumbnail", base),
+			...formatDiscordEmbedAsset(record.video, "video", base),
+			...formatDiscordEmbedUrl(record.url, base),
+		]);
+	});
+}
+
+function formatDiscordEmbedAsset(
+	value: unknown,
+	sourceDetail: string,
+	base: Pick<DiscordMessageMediaSummary, "embedType" | "providerName" | "title">,
+): DiscordMessageMediaSummary[] {
+	if (typeof value !== "object" || value === null) return [];
+	const record = value as Record<string, unknown>;
+	const originalUrl = normalizeHttpUrl(normalizeString(record.url));
+	const proxyUrl = normalizeHttpUrl(normalizeString(record.proxy_url));
+	const url = proxyUrl ?? originalUrl;
+	if (url === undefined) return [];
+	const contentType = normalizeContentType(normalizeString(record.content_type));
+	const kind =
+		sourceDetail === "video"
+			? "video"
+			: (classifyMediaKind(contentType, undefined, url) ?? (base.embedType === "gifv" ? "gif" : "image"));
+	return [
+		{
+			kind,
+			source: "embed",
+			url,
+			sourceDetail,
+			...base,
+			...(originalUrl === undefined ? {} : { originalUrl }),
+			...(proxyUrl === undefined ? {} : { proxyUrl }),
+			...(contentType === undefined ? {} : { contentType }),
+			...(typeof record.width === "number" ? { width: record.width } : {}),
+			...(typeof record.height === "number" ? { height: record.height } : {}),
+		},
+	];
+}
+
+function formatDiscordEmbedUrl(
+	value: unknown,
+	base: Pick<DiscordMessageMediaSummary, "embedType" | "providerName" | "title">,
+): DiscordMessageMediaSummary[] {
+	const url = normalizeHttpUrl(normalizeString(value));
+	if (url === undefined) return [];
+	const kind = classifyMediaKind(undefined, undefined, url);
+	if (kind === undefined) return [];
+	return [
+		{
+			kind,
+			source: "embed",
+			url,
+			sourceDetail: "url",
+			...base,
+		},
+	];
+}
+
+function formatDiscordContentLinkMedia(content: string): DiscordMessageMediaSummary[] {
+	return extractHttpUrls(content).flatMap((url) => {
+		const kind = classifyMediaKind(undefined, undefined, url);
+		if (kind === undefined) return [];
+		return [{ kind, source: "link", url }];
+	});
+}
+
+function dedupeDiscordMessageMedia(media: readonly DiscordMessageMediaSummary[]): DiscordMessageMediaSummary[] {
+	const seen = new Set<string>();
+	const results: DiscordMessageMediaSummary[] = [];
+	for (const item of media) {
+		if (seen.has(item.url)) continue;
+		seen.add(item.url);
+		results.push(item);
+	}
+	return results;
 }
 
 function summarizeParticipants(messages: readonly DiscordMessageSummary[]): DiscordParticipantSummary[] {
@@ -615,6 +1167,114 @@ function expectString(value: unknown, label: string): string {
 function expectNumber(value: unknown, label: string): number {
 	if (typeof value !== "number") throw new Error(`Expected ${label} number.`);
 	return value;
+}
+
+function normalizeString(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const trimmed = value.trim();
+	return trimmed.length === 0 ? undefined : trimmed;
+}
+
+function normalizeHttpUrl(value: string | undefined): string | undefined {
+	const trimmed = value?.trim();
+	if (trimmed === undefined || trimmed.length === 0) return undefined;
+	try {
+		const parsed = new URL(trimmed);
+		if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return undefined;
+		return parsed.toString();
+	} catch {
+		return undefined;
+	}
+}
+
+function extractHttpUrls(text: string): string[] {
+	const matches = text.matchAll(/https?:\/\/[^\s<>"`]+/giu);
+	return [...matches].flatMap((match) => {
+		const raw = match[0]?.replace(/[),.;!?]+$/u, "");
+		const url = normalizeHttpUrl(raw);
+		return url === undefined ? [] : [url];
+	});
+}
+
+function normalizeContentType(value: string | undefined): string | undefined {
+	const type = value?.split(";")[0]?.trim().toLowerCase();
+	return type === undefined || type.length === 0 ? undefined : type;
+}
+
+function normalizeImageMimeType(value: string | undefined): string | undefined {
+	const type = normalizeContentType(value);
+	if (type === "image/png" || type === "image/jpeg" || type === "image/webp" || type === "image/gif") return type;
+	return undefined;
+}
+
+function normalizeVideoMimeType(value: string | undefined): string | undefined {
+	const type = normalizeContentType(value);
+	if (type === "video/mp4" || type === "video/webm" || type === "video/quicktime") return type;
+	return undefined;
+}
+
+function classifyMediaKind(
+	contentType: string | undefined,
+	filename: string | undefined,
+	url: string | undefined,
+): DiscordMessageMediaKind | undefined {
+	const normalized = normalizeContentType(contentType);
+	if (normalized === "image/gif") return "gif";
+	if (normalized?.startsWith("image/") === true)
+		return normalizeImageMimeType(normalized) === undefined ? undefined : "image";
+	if (normalized?.startsWith("video/") === true)
+		return normalizeVideoMimeType(normalized) === undefined ? undefined : "video";
+	const imageMimeType = inferImageMimeType(filename) ?? inferImageMimeType(url);
+	if (imageMimeType === "image/gif") return "gif";
+	if (imageMimeType !== undefined) return "image";
+	if ((inferVideoMimeType(filename) ?? inferVideoMimeType(url)) !== undefined) return "video";
+	return undefined;
+}
+
+function inferImageMimeType(value: string | undefined): string | undefined {
+	const lower = normalizedUrlPath(value);
+	if (lower === undefined) return undefined;
+	if (lower.endsWith(".png")) return "image/png";
+	if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+	if (lower.endsWith(".webp")) return "image/webp";
+	if (lower.endsWith(".gif")) return "image/gif";
+	return undefined;
+}
+
+function inferVideoMimeType(value: string | undefined): string | undefined {
+	const lower = normalizedUrlPath(value);
+	if (lower === undefined) return undefined;
+	if (lower.endsWith(".mp4")) return "video/mp4";
+	if (lower.endsWith(".webm")) return "video/webm";
+	if (lower.endsWith(".mov")) return "video/quicktime";
+	return undefined;
+}
+
+function normalizedUrlPath(value: string | undefined): string | undefined {
+	const trimmed = value?.trim();
+	if (trimmed === undefined || trimmed.length === 0) return undefined;
+	let path = trimmed;
+	try {
+		path = new URL(trimmed).pathname;
+	} catch {
+		path = trimmed;
+	}
+	try {
+		return decodeURIComponent(path).toLowerCase();
+	} catch {
+		return path.toLowerCase();
+	}
+}
+
+function videoExtension(mimeType: string): string {
+	if (mimeType === "video/webm") return "webm";
+	if (mimeType === "video/quicktime") return "mov";
+	return "mp4";
+}
+
+function clampByteLimit(value: number | undefined, fallback: number, maximum: number): number {
+	if (value === undefined || !Number.isFinite(value)) return fallback;
+	return Math.max(1, Math.min(maximum, Math.floor(value)));
 }
 
 function normalizeIdList(values: readonly string[] | undefined): string[] {

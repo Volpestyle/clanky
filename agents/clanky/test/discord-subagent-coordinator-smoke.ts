@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -9,6 +9,7 @@ import type {
 	CreateAgentSessionRuntimeFactory,
 	CreateAgentSessionRuntimeResult,
 } from "@earendil-works/pi-coding-agent";
+import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import type { DiscordInboundConversation, DiscordInboundMessage } from "../src/agentDiscordGateway.ts";
 import { DiscordSubagentCoordinator } from "../src/discordSubagentCoordinator.ts";
 
@@ -30,11 +31,32 @@ try {
 	const replies = ["first reply", "second reply", "[SKIP]"];
 	let runtimeCreateCount = 0;
 	let disposedSessionCount = 0;
+	const openedSessionFiles: (string | undefined)[] = [];
 	const cwd = join(tmpRoot, "work");
 	const agentDir = join(tmpRoot, "agent");
 	const bridgeLogPath = join(tmpRoot, "bridge.log");
+	const resumedSessionFile = join(paths.subagentSessionsDir, "resumed-discord-guild.jsonl");
 	await mkdir(cwd, { recursive: true });
 	await mkdir(agentDir, { recursive: true });
+	await mkdir(paths.subagentSessionsDir, { recursive: true });
+	await writeFile(
+		resumedSessionFile,
+		`${JSON.stringify({
+			type: "session",
+			version: CURRENT_SESSION_VERSION,
+			id: "resumed-discord-guild",
+			timestamp: new Date(0).toISOString(),
+			cwd,
+		})}\n`,
+	);
+	await store.upsertSubagent({
+		id: "discord-guild:guild-1",
+		kind: "discord-guild",
+		scopeId: "guild-1",
+		scopeName: "guild-1",
+		state: "idle",
+		sessionFile: resumedSessionFile,
+	});
 	const provider = {
 		async sendMessage(input: {
 			conversation: DiscordInboundConversation;
@@ -48,6 +70,7 @@ try {
 	};
 	const createRuntime: CreateAgentSessionRuntimeFactory = async (options): Promise<CreateAgentSessionRuntimeResult> => {
 		runtimeCreateCount += 1;
+		openedSessionFiles.push(options.sessionManager.getSessionFile());
 		const listeners = new Set<(event: AgentSessionEvent) => void>();
 		const fakeSession = {
 			isStreaming: false,
@@ -130,6 +153,9 @@ try {
 
 	if (runtimeCreateCount !== 1) {
 		throw new Error(`coordinator smoke: expected one runtime, created ${runtimeCreateCount}`);
+	}
+	if (openedSessionFiles[0] !== resumedSessionFile) {
+		throw new Error(`coordinator smoke: did not resume stored session file ${JSON.stringify(openedSessionFiles)}`);
 	}
 	const second = sentMessages[1];
 	if (

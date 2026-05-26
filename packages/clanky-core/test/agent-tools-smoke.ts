@@ -6,7 +6,9 @@ import {
 	createClankyExtensionFactories,
 	createClankyToolDefinitions,
 	type DelegateToMainWorkerToolInput,
+	type DiscordRecentAttachmentsToolInput,
 	type ExternalMcpCallToolInput,
+	type ExternalMcpListToolsInput,
 	type LinearCreateIssueToolInput,
 	type LinearLinkToolInput,
 	type MainSessionContextToolInput,
@@ -14,6 +16,7 @@ import {
 	type MemoryRememberToolInput,
 	type MemorySearchToolInput,
 	type OpenAiImageGenerateToolInput,
+	recentDiscordAttachments,
 	resolveClankyChatGatewayOwner,
 	resolveClankyChatMode,
 	runOpenAiWebSearch,
@@ -51,6 +54,15 @@ const handlers: ClankyAgentToolHandlers = {
 	externalMcpCall: async (input) => {
 		calls.push(`mcp-call:${input.server}:${input.tool}`);
 		return { result: { ok: true, input } };
+	},
+	externalMcpListTools: async (input) => {
+		calls.push(`mcp-list:${input.server ?? "all"}`);
+		return [
+			{
+				server: input.server ?? "faux",
+				tools: [{ name: "echo", description: "Echo smoke input", inputSchema: { type: "object" } }],
+			},
+		];
 	},
 	taskCreate: async (input) => {
 		calls.push(`task:${input.title}:${input.sessionId ?? "none"}`);
@@ -138,6 +150,42 @@ const handlers: ClankyAgentToolHandlers = {
 			],
 		};
 	},
+	discordRecentAttachments: async (input) => {
+		calls.push(`discord-attachments:${input.channelId ?? input.channel_id ?? "none"}`);
+		return {
+			channelId: input.channelId ?? input.channel_id ?? "channel-tool",
+			generatedAt: "2026-01-01T00:05:00.000Z",
+			scannedMessageCount: 1,
+			mediaCount: 1,
+			loadedImageCount: 1,
+			media: [
+				{
+					mediaIndex: 1,
+					messageId: "message-tool",
+					channelId: input.channelId ?? input.channel_id ?? "channel-tool",
+					kind: "image",
+					source: "attachment",
+					url: "https://cdn.example/tool.png",
+					contentType: "image/png",
+					status: "loaded",
+				},
+			],
+			loadedImages: [
+				{
+					imageIndex: 1,
+					mediaIndex: 1,
+					messageId: "message-tool",
+					channelId: input.channelId ?? input.channel_id ?? "channel-tool",
+					url: "https://cdn.example/tool.png",
+					source: "attachment",
+					kind: "image",
+					mimeType: "image/png",
+				},
+			],
+			failures: [],
+			imageContents: [{ type: "image", mimeType: "image/png", data: "ZmFrZQ==" }],
+		};
+	},
 };
 
 const tools = createClankyToolDefinitions(handlers);
@@ -145,6 +193,7 @@ assertChatModeHelpers();
 await assertSubagentPanelCommand();
 const expectedNames = [
 	"schedule_cron",
+	"mcp_list_tools",
 	"mcp_call",
 	"linear_create_issue",
 	"linear_link",
@@ -155,6 +204,7 @@ const expectedNames = [
 	"memory_remember",
 	"memory_search",
 	"memory_forget",
+	"discord_recent_attachments",
 	"discord_recent_activity",
 	"media_backend_status",
 	"openai_image_generate",
@@ -190,6 +240,10 @@ await executeTool(tools, "mcp_call", {
 	server: "faux",
 	tool: "echo",
 } satisfies ExternalMcpCallToolInput);
+
+await executeTool(tools, "mcp_list_tools", {
+	server: "faux",
+} satisfies ExternalMcpListToolsInput);
 
 await executeTool(tools, "task_create", {
 	title: "Task smoke",
@@ -256,12 +310,15 @@ await executeTool(tools, "discord_recent_activity", {
 	message_limit: 5,
 	include_messages: false,
 });
+await executeDiscordRecentAttachmentsTool();
+await assertRecentDiscordAttachmentsLoadsMediaSources();
 
 const expectedCallPrefixes = [
 	"schedule:",
 	"linear-create:",
 	"linear:",
 	"mcp-call:",
+	"mcp-list:",
 	"task:",
 	"main-session:",
 	"delegate-main:",
@@ -276,6 +333,7 @@ const expectedCallPrefixes = [
 	"xai-video:",
 	"media-status",
 	"discord-recent:",
+	"discord-attachments:",
 ];
 for (const prefix of expectedCallPrefixes) {
 	if (!calls.some((entry) => entry.startsWith(prefix))) {
@@ -359,6 +417,133 @@ async function assertOpenAiWebSearchUsesStoredCredential(): Promise<void> {
 	if (result.answer !== "stored credential ok") {
 		throw new Error(`smoke: web_search did not parse fake response: ${result.answer}`);
 	}
+}
+
+async function executeDiscordRecentAttachmentsTool(): Promise<void> {
+	const tool = tools.find((candidate) => candidate.name === "discord_recent_attachments");
+	if (tool === undefined) throw new Error("Tool discord_recent_attachments is not registered");
+	const ctx = {
+		sessionManager: { getSessionId: () => "session-smoke" },
+		cwd: "/tmp/clanky-agent-tools-smoke",
+	} as unknown as Parameters<typeof tool.execute>[4];
+	const result = await tool.execute(
+		"call-id",
+		{ channel_id: "channel-smoke", media_limit: 1 } satisfies DiscordRecentAttachmentsToolInput,
+		new AbortController().signal,
+		() => undefined,
+		ctx,
+	);
+	if (result.content.filter((entry) => entry.type === "image").length !== 1) {
+		throw new Error(`discord_recent_attachments did not attach image content: ${JSON.stringify(result.content)}`);
+	}
+	if (!("details" in result) || JSON.stringify(result.details).includes("ZmFrZQ==")) {
+		throw new Error("discord_recent_attachments leaked image base64 into details");
+	}
+}
+
+async function assertRecentDiscordAttachmentsLoadsMediaSources(): Promise<void> {
+	const fetchImpl = async (input: string | URL | Request): Promise<Response> => {
+		const url = String(input);
+		if (url.startsWith("https://discord.com/api/v10/channels/channel-media/messages?")) {
+			return new Response(JSON.stringify(discordMessagesFixture()), {
+				status: 200,
+				headers: { "content-type": "application/json" },
+			});
+		}
+		const mimeType = url.endsWith(".webp") ? "image/webp" : url.endsWith(".gif") ? "image/gif" : "image/png";
+		return new Response(new Uint8Array([1, 2, 3]), {
+			status: 200,
+			headers: { "content-type": mimeType, "content-length": "3" },
+		});
+	};
+	const result = await recentDiscordAttachments(
+		{
+			channelId: "channel-media",
+			messageLimit: 3,
+			mediaLimit: 3,
+			load: true,
+		},
+		{
+			env: { CLANKY_DISCORD_TOKEN: "token-smoke" },
+			fetchImpl,
+		},
+	);
+	const sources = result.media.map((entry) => `${entry.source}:${entry.kind}:${entry.url}`).join("\n");
+	if (
+		result.loadedImageCount !== 3 ||
+		!sources.includes("attachment:image:https://cdn.example/direct.png") ||
+		!sources.includes("embed:gif:https://media.tenor.com/preview.gif") ||
+		!sources.includes("link:image:https://cdn.example/from-content.webp")
+	) {
+		throw new Error(`recentDiscordAttachments did not load expected media sources: ${JSON.stringify(result)}`);
+	}
+	if (result.imageContents.length !== 3 || result.loadedImages.some((entry) => entry.mimeType.length === 0)) {
+		throw new Error(`recentDiscordAttachments image blocks missing: ${JSON.stringify(result.loadedImages)}`);
+	}
+	const exact = await recentDiscordAttachments(
+		{
+			channelId: "channel-media",
+			messageId: "1440000000000000001",
+			messageLimit: 3,
+			mediaLimit: 3,
+			load: false,
+		},
+		{
+			env: { CLANKY_DISCORD_TOKEN: "token-smoke" },
+			fetchImpl,
+		},
+	);
+	if (
+		exact.targetMessageFound !== true ||
+		exact.scannedMessageCount !== 1 ||
+		exact.media.length !== 1 ||
+		exact.media[0]?.messageId !== "1440000000000000001" ||
+		exact.media[0].url !== "https://cdn.example/direct.png"
+	) {
+		throw new Error(`recentDiscordAttachments did not pin exact message media: ${JSON.stringify(exact)}`);
+	}
+}
+
+function discordMessagesFixture(): unknown[] {
+	return [
+		{
+			id: "1440000000000000002",
+			channel_id: "channel-media",
+			content: "direct image link https://cdn.example/from-content.webp",
+			author: { id: "user-2", username: "clunkyconk" },
+			timestamp: "2026-01-01T00:02:00.000Z",
+			attachments: [],
+			embeds: [
+				{
+					type: "gifv",
+					provider: { name: "Tenor" },
+					title: "tenor preview",
+					thumbnail: {
+						url: "https://media.tenor.com/preview.gif",
+						width: 320,
+						height: 240,
+					},
+				},
+			],
+		},
+		{
+			id: "1440000000000000001",
+			channel_id: "channel-media",
+			content: "",
+			author: { id: "user-1", username: "tester" },
+			timestamp: "2026-01-01T00:01:00.000Z",
+			attachments: [
+				{
+					id: "attachment-1",
+					url: "https://cdn.example/direct.png",
+					filename: "direct.png",
+					content_type: "image/png",
+					size: 3,
+				},
+			],
+			embeds: [],
+		},
+	];
 }
 
 async function assertSubagentPanelCommand(): Promise<void> {

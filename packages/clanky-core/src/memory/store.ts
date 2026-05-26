@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { ClankyPaths } from "../paths.ts";
+import { loadDatabaseSync } from "../sqlite.ts";
 
 export type MemoryScope = "user" | "dm" | "guild" | "channel" | "project" | "agent";
 export type MemoryAtomType = "preference" | "fact" | "decision" | "commitment" | "lesson" | "skill_hint";
@@ -158,18 +158,6 @@ export interface MemoryPacket {
 	text: string;
 	atoms: MemoryAtom[];
 }
-
-type DatabaseSyncConstructor = new (path: string) => DatabaseSync;
-type WarningConstructor = NonNullable<NodeJS.EmitWarningOptions["ctor"]>;
-type EmitWarningFunction = (
-	warning: string | Error,
-	optionsOrType?: string | NodeJS.EmitWarningOptions | WarningConstructor,
-	codeOrCtor?: string | WarningConstructor,
-	ctor?: WarningConstructor,
-) => void;
-
-const require = createRequire(import.meta.url);
-let DatabaseSyncClass: DatabaseSyncConstructor | undefined;
 
 const DEFAULT_MEMORY_LIMIT = 12;
 const MAX_MEMORY_LIMIT = 50;
@@ -1075,53 +1063,6 @@ function isMemoryEventSource(value: string): value is MemoryEventSource {
 		value === "http" ||
 		value === "agent"
 	);
-}
-
-function loadDatabaseSync(): DatabaseSyncConstructor {
-	if (DatabaseSyncClass !== undefined) return DatabaseSyncClass;
-	return loadDatabaseSyncWithoutExperimentalWarning();
-}
-
-function loadDatabaseSyncWithoutExperimentalWarning(): DatabaseSyncConstructor {
-	const originalEmitWarning = process.emitWarning as EmitWarningFunction;
-	const filteredEmitWarning: EmitWarningFunction = (warning, optionsOrType, codeOrCtor, ctor) => {
-		const message = typeof warning === "string" ? warning : warning.message;
-		const type =
-			typeof optionsOrType === "string"
-				? optionsOrType
-				: typeof optionsOrType === "object" && optionsOrType !== null
-					? optionsOrType.type
-					: undefined;
-		if (message.includes("SQLite is an experimental feature") && type === "ExperimentalWarning") return;
-		if (typeof optionsOrType === "function") {
-			originalEmitWarning.call(process, warning, optionsOrType);
-		} else if (typeof optionsOrType === "object") {
-			originalEmitWarning.call(process, warning, optionsOrType);
-		} else if (typeof codeOrCtor === "function") {
-			originalEmitWarning.call(process, warning, optionsOrType, codeOrCtor);
-		} else if (ctor !== undefined) {
-			originalEmitWarning.call(process, warning, optionsOrType, codeOrCtor, ctor);
-		} else if (codeOrCtor !== undefined) {
-			originalEmitWarning.call(process, warning, optionsOrType, codeOrCtor);
-		} else if (optionsOrType !== undefined) {
-			originalEmitWarning.call(process, warning, optionsOrType);
-		} else {
-			originalEmitWarning.call(process, warning);
-		}
-	};
-	process.emitWarning = filteredEmitWarning as typeof process.emitWarning;
-	try {
-		const sqlite = require("node:sqlite") as { DatabaseSync: DatabaseSyncConstructor };
-		DatabaseSyncClass = sqlite.DatabaseSync;
-		return DatabaseSyncClass;
-	} finally {
-		process.emitWarning = originalEmitWarning as typeof process.emitWarning;
-	}
-}
-
-export function memorySourceFromString(value: string): MemoryEventSource {
-	if (isMemoryEventSource(value)) return value;
-	return "manual";
 }
 
 export function stableMemorySourceId(parts: string[]): string {
