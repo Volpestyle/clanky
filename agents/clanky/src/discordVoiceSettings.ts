@@ -6,6 +6,8 @@ export interface StoredDiscordVoiceSettings {
 	enabled: boolean;
 	guildId?: string;
 	channelId?: string;
+	allowedGuildIds?: string[];
+	allowedChannelIds?: string[];
 	openAiRealtimeModel?: string;
 	openAiRealtimeVoice?: string;
 	openAiRealtimeReasoningEffort?: OpenAiRealtimeReasoningEffort;
@@ -55,6 +57,10 @@ export function sanitizeStoredDiscordVoiceSettings(settings: StoredDiscordVoiceS
 	if (guildId !== undefined) sanitized.guildId = guildId;
 	const channelId = cleanString(settings.channelId);
 	if (channelId !== undefined) sanitized.channelId = channelId;
+	const allowedGuildIds = cleanStringList(settings.allowedGuildIds);
+	if (allowedGuildIds.length > 0) sanitized.allowedGuildIds = allowedGuildIds;
+	const allowedChannelIds = cleanStringList(settings.allowedChannelIds);
+	if (allowedChannelIds.length > 0) sanitized.allowedChannelIds = allowedChannelIds;
 	const model = cleanString(settings.openAiRealtimeModel);
 	if (model !== undefined) sanitized.openAiRealtimeModel = model;
 	const voice = cleanString(settings.openAiRealtimeVoice);
@@ -78,6 +84,12 @@ function parseStoredDiscordVoiceSettings(value: unknown): StoredDiscordVoiceSett
 	const settings: StoredDiscordVoiceSettings = { enabled: record.enabled === true };
 	if (typeof record.guildId === "string") settings.guildId = record.guildId;
 	if (typeof record.channelId === "string") settings.channelId = record.channelId;
+	if (Array.isArray(record.allowedGuildIds)) {
+		settings.allowedGuildIds = record.allowedGuildIds.filter((item): item is string => typeof item === "string");
+	}
+	if (Array.isArray(record.allowedChannelIds)) {
+		settings.allowedChannelIds = record.allowedChannelIds.filter((item): item is string => typeof item === "string");
+	}
 	if (typeof record.openAiRealtimeModel === "string") settings.openAiRealtimeModel = record.openAiRealtimeModel;
 	if (typeof record.openAiRealtimeVoice === "string") settings.openAiRealtimeVoice = record.openAiRealtimeVoice;
 	if (isRealtimeReasoningEffort(record.openAiRealtimeReasoningEffort)) {
@@ -92,6 +104,19 @@ function parseStoredDiscordVoiceSettings(value: unknown): StoredDiscordVoiceSett
 function cleanString(value: string | undefined): string | undefined {
 	const trimmed = value?.trim();
 	return trimmed !== undefined && trimmed.length > 0 ? trimmed : undefined;
+}
+
+function cleanStringList(values: string[] | undefined): string[] {
+	if (values === undefined) return [];
+	const seen = new Set<string>();
+	const cleaned: string[] = [];
+	for (const value of values) {
+		const item = cleanString(value);
+		if (item === undefined || seen.has(item)) continue;
+		seen.add(item);
+		cleaned.push(item);
+	}
+	return cleaned;
 }
 
 function isRealtimeReasoningEffort(value: unknown): value is OpenAiRealtimeReasoningEffort {

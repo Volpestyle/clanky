@@ -11,6 +11,7 @@ export {
 	type DiscordRecentActivityToolInput,
 	type DiscordRecentAttachmentsToolInput,
 	type DiscordSendMessageToolInput,
+	type DiscordVoiceJoinToolInput,
 	type ExternalMcpCallToolInput,
 	type ExternalMcpListToolsInput,
 	type LinearCreateIssueToolInput,

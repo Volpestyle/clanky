@@ -108,6 +108,22 @@ function assertVoiceConfig(): void {
 	if (config.videoFrameAutoAttachIntervalMs !== 2_000) {
 		throw new Error("voice-smoke: default screen frame auto-attach interval mismatch");
 	}
+	const dynamicConfig = resolveAgentDiscordVoiceConfig(
+		{
+			CLANKY_DISCORD_VOICE_ENABLED: "1",
+			CLANKY_DISCORD_TOKEN: "discord-token",
+			OPENAI_API_KEY: "openai-key",
+		},
+		{
+			providerId: "clanky-discord",
+			token: "discord-token",
+			credentialKind: "bot-token",
+			source: "env",
+		},
+	);
+	if (dynamicConfig === undefined || dynamicConfig.guildId !== undefined || dynamicConfig.channelId !== undefined) {
+		throw new Error("voice-smoke: enabled voice config should not require a pinned guild/channel target");
+	}
 	const transcriptionOverride = resolveAgentDiscordVoiceConfig(
 		{
 			CLANKY_DISCORD_VOICE_ENABLED: "1",
@@ -209,6 +225,8 @@ function assertVoiceConfig(): void {
 			enabled: true,
 			guildId: "stored-guild",
 			channelId: "stored-channel",
+			allowedGuildIds: ["stored-guild", "guild-2", "stored-guild"],
+			allowedChannelIds: ["stored-channel", "voice-2", "stored-channel"],
 			openAiRealtimeModel: "gpt-realtime-1.5",
 			openAiRealtimeVoice: "cedar",
 			openAiRealtimeReasoningEffort: "medium",
@@ -218,6 +236,8 @@ function assertVoiceConfig(): void {
 	if (
 		storedConfig?.guildId !== "stored-guild" ||
 		storedConfig.channelId !== "stored-channel" ||
+		storedConfig.allowedGuildIds?.join(",") !== "stored-guild,guild-2" ||
+		storedConfig.allowedChannelIds?.join(",") !== "stored-channel,voice-2" ||
 		storedConfig.openAiRealtimeModel !== "gpt-realtime-1.5" ||
 		storedConfig.openAiRealtimeVoice !== "cedar" ||
 		storedConfig.openAiRealtimeReasoningEffort !== "medium" ||

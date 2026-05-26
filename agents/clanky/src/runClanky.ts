@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import {
 	createClankyExtensionFactories,
 	createClankyToolDefinitions,
+	type DiscordVoiceJoinToolInput,
 	loadClankySkills,
 	loadStoredDiscordCredential,
 	resolveClankyPaths,
@@ -75,6 +76,49 @@ function augmentPersonaWithDiscordIdentity(basePersona: string, authStorage: Aut
 	return `${basePersona}\n\n${block}`;
 }
 
+async function joinDiscordVoiceFromTool(
+	input: DiscordVoiceJoinToolInput,
+	voiceSettings: DiscordVoiceSettingsStore,
+	gatewayController: ClankyDiscordGatewayController,
+): Promise<unknown> {
+	const guildId = cleanRequiredDiscordVoiceToolString(input.guildId ?? input.guild_id, "guild_id");
+	const channelId = cleanRequiredDiscordVoiceToolString(input.channelId ?? input.channel_id, "channel_id");
+	const current = voiceSettings.read() ?? { enabled: false };
+	if (current.allowedGuildIds !== undefined && current.allowedGuildIds.length > 0) {
+		if (!current.allowedGuildIds.includes(guildId)) {
+			throw new Error(`Discord voice guild ${guildId} is not in the configured server allowlist.`);
+		}
+	}
+	if (current.allowedChannelIds !== undefined && current.allowedChannelIds.length > 0) {
+		if (!current.allowedChannelIds.includes(channelId)) {
+			throw new Error(`Discord voice channel ${channelId} is not in the configured voice allowlist.`);
+		}
+	}
+	voiceSettings.write({ ...current, enabled: true, guildId, channelId });
+	await gatewayController.restart();
+	return { settings: voiceSettings.read(), bridge: gatewayController.status() };
+}
+
+async function leaveDiscordVoiceFromTool(
+	voiceSettings: DiscordVoiceSettingsStore,
+	gatewayController: ClankyDiscordGatewayController,
+): Promise<unknown> {
+	const next = { ...(voiceSettings.read() ?? { enabled: false }), enabled: true };
+	delete next.guildId;
+	delete next.channelId;
+	voiceSettings.write(next);
+	await gatewayController.restart();
+	return { settings: voiceSettings.read(), bridge: gatewayController.status() };
+}
+
+function cleanRequiredDiscordVoiceToolString(value: string | undefined, field: string): string {
+	const cleaned = value?.trim();
+	if (cleaned === undefined || cleaned.length === 0) {
+		throw new Error(`discord_voice_join requires ${field}.`);
+	}
+	return cleaned;
+}
+
 /**
  * Resolve the @clanky/agent package root from this file's location.
  *
@@ -121,6 +165,12 @@ function buildRuntimeFactory(opts: {
 		mainSessionContext: async (input) => gatewayController.mainSessionContext(input),
 		delegateToMainWorker: async (input) => gatewayController.delegateToMainWorker(input),
 	});
+	handlers.discordVoiceStatus = async () => ({
+		settings: discordVoiceSettings.read(),
+		bridge: gatewayController.status(),
+	});
+	handlers.discordVoiceJoin = async (input) => joinDiscordVoiceFromTool(input, discordVoiceSettings, gatewayController);
+	handlers.discordVoiceLeave = async () => leaveDiscordVoiceFromTool(discordVoiceSettings, gatewayController);
 	const discordAuthFactory = createDiscordAuthExtensionFactory({
 		authStorage,
 		providerId: discordProviderId,

@@ -224,6 +224,39 @@ function assertAgentDiscordVoiceConfig(): void {
 	if (voiceConfig.guildId !== "guild-1" || voiceConfig.channelId !== "channel-1") {
 		throw new Error("smoke: Discord voice guild/channel config did not round-trip");
 	}
+	const dynamicVoiceConfig = resolveAgentDiscordVoiceConfig(
+		{
+			CLANKY_DISCORD_VOICE_ENABLED: "1",
+			CLANKY_DISCORD_TOKEN: "token",
+			OPENAI_API_KEY: "openai-key",
+		},
+		discordConfig,
+	);
+	if (
+		dynamicVoiceConfig === undefined ||
+		dynamicVoiceConfig.guildId !== undefined ||
+		dynamicVoiceConfig.channelId !== undefined
+	) {
+		throw new Error(
+			`smoke: Discord voice should support enabled access without pinned target ${JSON.stringify(dynamicVoiceConfig)}`,
+		);
+	}
+	const allowedVoiceConfig = resolveAgentDiscordVoiceConfig(
+		{
+			CLANKY_DISCORD_VOICE_ENABLED: "1",
+			CLANKY_DISCORD_TOKEN: "token",
+			OPENAI_API_KEY: "openai-key",
+			CLANKY_DISCORD_VOICE_ALLOWED_GUILD_IDS: "guild-a, guild-b guild-a",
+			CLANKY_DISCORD_VOICE_ALLOWED_CHANNEL_IDS: "voice-a, voice-b voice-a",
+		},
+		discordConfig,
+	);
+	if (
+		allowedVoiceConfig?.allowedGuildIds?.join(",") !== "guild-a,guild-b" ||
+		allowedVoiceConfig.allowedChannelIds?.join(",") !== "voice-a,voice-b"
+	) {
+		throw new Error(`smoke: Discord voice allowlist env did not parse ${JSON.stringify(allowedVoiceConfig)}`);
+	}
 	const openAiAuthStorage = AuthStorage.inMemory();
 	saveStoredOpenAiApiKey(openAiAuthStorage, "stored-openai-key");
 	const storedOpenAiVoiceConfig = resolveAgentDiscordVoiceConfig(
@@ -776,6 +809,8 @@ async function assertDiscordAuthExtensionCommands(): Promise<void> {
 					voice: {
 						guildId: "guild-1",
 						channelId: "voice-1",
+						allowedGuildIds: voiceSettingsState?.allowedGuildIds ?? [],
+						allowedChannelIds: voiceSettingsState?.allowedChannelIds ?? [],
 						model: DEFAULT_REALTIME_MODEL,
 						discordCredentialKind: "user-token",
 						nativeScreenWatchSupported: true,
@@ -805,6 +840,20 @@ async function assertDiscordAuthExtensionCommands(): Promise<void> {
 	} as never);
 	const ctx = {
 		ui: {
+			select(title: string) {
+				if (title.startsWith("Discord voice settings")) return Promise.resolve("Allowed servers");
+				if (title === "Discord voice allowed servers") return Promise.resolve("Add server ids");
+				return Promise.resolve("Keep current/default");
+			},
+			input(title: string) {
+				if (title.includes("server")) return Promise.resolve("guild-ui");
+				if (title.includes("guild")) return Promise.resolve("guild-ui");
+				if (title.includes("channel")) return Promise.resolve("voice-ui");
+				return Promise.resolve(undefined);
+			},
+			confirm() {
+				return Promise.resolve(false);
+			},
 			notify(message: string) {
 				notifications.push(message);
 			},
@@ -829,15 +878,70 @@ async function assertDiscordAuthExtensionCommands(): Promise<void> {
 
 	const voiceCommand = commands["discord-voice"];
 	if (voiceCommand === undefined) throw new Error("smoke: /discord-voice command was not registered");
-	await voiceCommand.handler("enable guild-2 voice-2", ctx);
+	await voiceCommand.handler("", ctx);
 	if (getRestarts() !== 1) {
-		throw new Error(`smoke: /discord-voice enable should hot-restart bridge once, got ${restarts}`);
+		throw new Error(`smoke: /discord-voice wizard should hot-restart bridge once, got ${restarts}`);
+	}
+	const wizardVoiceSettings = getVoiceSettings();
+	if (
+		wizardVoiceSettings?.enabled !== true ||
+		wizardVoiceSettings.guildId !== undefined ||
+		wizardVoiceSettings.channelId !== undefined ||
+		wizardVoiceSettings.allowedGuildIds?.join(",") !== "guild-ui"
+	) {
+		throw new Error(`smoke: /discord-voice wizard wrote wrong settings ${JSON.stringify(wizardVoiceSettings)}`);
+	}
+
+	const statusNotificationCount = notifications.length;
+	await voiceCommand.handler("", ctx);
+	if (getRestarts() !== 1) {
+		throw new Error(`smoke: configured /discord-voice should show status without restart, got ${restarts}`);
+	}
+	const statusNotifications = notifications.slice(statusNotificationCount);
+	if (
+		!statusNotifications.some(
+			(message) =>
+				message.includes("Pinned voice target: none.") &&
+				message.includes("Allowed servers: guild-ui.") &&
+				message.includes("Allowed voice channels: all channels the Discord credential can access."),
+		)
+	) {
+		throw new Error(
+			`smoke: /discord-voice status did not show profile settings ${statusNotifications.join("\n---\n")}`,
+		);
+	}
+
+	await voiceCommand.handler("allow-server guild-2 guild-ui", ctx);
+	if (getRestarts() !== 2) {
+		throw new Error(`smoke: /discord-voice allow-server should hot-restart bridge again, got ${restarts}`);
+	}
+	const serverAllowlistedVoiceSettings = getVoiceSettings();
+	if (serverAllowlistedVoiceSettings?.allowedGuildIds?.join(",") !== "guild-ui,guild-2") {
+		throw new Error(
+			`smoke: /discord-voice allow-server wrote wrong settings ${JSON.stringify(serverAllowlistedVoiceSettings)}`,
+		);
+	}
+
+	await voiceCommand.handler("allow-channel voice-2 voice-3 voice-2", ctx);
+	if (getRestarts() !== 3) {
+		throw new Error(`smoke: /discord-voice allow-channel should hot-restart bridge again, got ${restarts}`);
+	}
+	const allowlistedVoiceSettings = getVoiceSettings();
+	if (allowlistedVoiceSettings?.allowedChannelIds?.join(",") !== "voice-2,voice-3") {
+		throw new Error(`smoke: /discord-voice allow wrote wrong settings ${JSON.stringify(allowlistedVoiceSettings)}`);
+	}
+
+	await voiceCommand.handler("enable guild-2 voice-2", ctx);
+	if (getRestarts() !== 4) {
+		throw new Error(`smoke: /discord-voice enable should hot-restart bridge again, got ${restarts}`);
 	}
 	const enabledVoiceSettings = getVoiceSettings();
 	if (
 		enabledVoiceSettings?.enabled !== true ||
 		enabledVoiceSettings.guildId !== "guild-2" ||
-		enabledVoiceSettings.channelId !== "voice-2"
+		enabledVoiceSettings.channelId !== "voice-2" ||
+		enabledVoiceSettings.allowedGuildIds?.join(",") !== "guild-ui,guild-2" ||
+		enabledVoiceSettings.allowedChannelIds?.join(",") !== "voice-2,voice-3"
 	) {
 		throw new Error(`smoke: /discord-voice enable wrote wrong settings ${JSON.stringify(enabledVoiceSettings)}`);
 	}
@@ -846,7 +950,7 @@ async function assertDiscordAuthExtensionCommands(): Promise<void> {
 	}
 
 	await voiceCommand.handler("disable", ctx);
-	if (getRestarts() !== 2) {
+	if (getRestarts() !== 5) {
 		throw new Error(`smoke: /discord-voice disable should hot-restart bridge again, got ${restarts}`);
 	}
 	const disabledVoiceSettings = getVoiceSettings();
@@ -857,7 +961,7 @@ async function assertDiscordAuthExtensionCommands(): Promise<void> {
 	const logoutCommand = commands["discord-logout"];
 	if (logoutCommand === undefined) throw new Error("smoke: /discord-logout command was not registered");
 	await logoutCommand.handler([], ctx);
-	if (getRestarts() !== 3) {
+	if (getRestarts() !== 6) {
 		throw new Error(`smoke: /discord-logout should hot-restart bridge after logout, got ${restarts}`);
 	}
 	if (resolveAgentDiscordGatewayConfig({}, authStorage) !== undefined) {

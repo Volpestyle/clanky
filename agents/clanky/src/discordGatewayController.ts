@@ -229,11 +229,12 @@ export class ClankyDiscordGatewayController {
 	}
 
 	status(): JsonRecord {
+		const voice = this.voiceHandle?.status();
 		const status: JsonRecord = {
 			textBridgeActive: this.handle !== undefined,
-			voiceBridgeActive: this.voiceHandle !== undefined,
+			voiceBridgeActive: this.voiceHandle !== undefined && (!isRecord(voice) || voice.active !== false),
 			voiceOnlyClientActive: this.voiceOnlyClient !== undefined,
-			voice: this.voiceHandle?.status(),
+			voice,
 		};
 		if (this.voiceConfigError !== undefined) status.voiceConfigError = this.voiceConfigError;
 		return status;
@@ -251,4 +252,8 @@ function isDiscordVoiceExplicitlyEnabledByEnv(env: NodeJS.ProcessEnv): boolean {
 	const value = env.CLANKY_DISCORD_VOICE_ENABLED ?? env.CLANKY_DISCORD_VOICE;
 	const normalized = value?.trim().toLowerCase();
 	return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === "object" && !Array.isArray(value);
 }

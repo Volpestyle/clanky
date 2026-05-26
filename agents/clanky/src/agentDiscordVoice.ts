@@ -47,8 +47,10 @@ type TimerHandle = ReturnType<typeof setTimeout>;
 
 export interface ClankyAgentDiscordVoiceConfig {
 	enabled: boolean;
-	guildId: string;
-	channelId: string;
+	guildId?: string;
+	channelId?: string;
+	allowedGuildIds?: string[];
+	allowedChannelIds?: string[];
 	openAiApiKey: string;
 	openAiBaseUrl?: string;
 	openAiRealtimeModel: string;
@@ -63,6 +65,11 @@ export interface ClankyAgentDiscordVoiceConfig {
 	clankvoxDir?: string;
 	videoFrameAutoAttachIntervalMs?: number;
 }
+
+type FixedClankyAgentDiscordVoiceConfig = ClankyAgentDiscordVoiceConfig & {
+	guildId: string;
+	channelId: string;
+};
 
 export interface StartAgentDiscordVoiceBridgeInput {
 	runtime: AgentSessionRuntime;
@@ -370,16 +377,10 @@ export function resolveAgentDiscordVoiceConfig(
 	}
 	const guildId = cleanOptionalString(env.CLANKY_DISCORD_VOICE_GUILD_ID) ?? storedSettings?.guildId;
 	const channelId = cleanOptionalString(env.CLANKY_DISCORD_VOICE_CHANNEL_ID) ?? storedSettings?.channelId;
-	if (guildId === undefined || guildId.length === 0) {
-		throw new Error(
-			"Discord voice needs a guild id. Run /discord-voice enable <guild-id> <voice-channel-id> or set CLANKY_DISCORD_VOICE_GUILD_ID.",
-		);
-	}
-	if (channelId === undefined || channelId.length === 0) {
-		throw new Error(
-			"Discord voice needs a channel id. Run /discord-voice enable <guild-id> <voice-channel-id> or set CLANKY_DISCORD_VOICE_CHANNEL_ID.",
-		);
-	}
+	const allowedGuildIds =
+		parseOptionalStringList(env.CLANKY_DISCORD_VOICE_ALLOWED_GUILD_IDS) ?? storedSettings?.allowedGuildIds;
+	const allowedChannelIds =
+		parseOptionalStringList(env.CLANKY_DISCORD_VOICE_ALLOWED_CHANNEL_IDS) ?? storedSettings?.allowedChannelIds;
 	const openAiApiKey = resolveOpenAiApiKeySync(env, authStorage);
 	if (openAiApiKey === undefined) {
 		throw new Error(
@@ -392,8 +393,6 @@ export function resolveAgentDiscordVoiceConfig(
 		DEFAULT_REALTIME_MODEL;
 	const voiceConfig: ClankyAgentDiscordVoiceConfig = {
 		enabled: true,
-		guildId,
-		channelId,
 		openAiApiKey: openAiApiKey.value,
 		openAiRealtimeModel: model,
 		openAiRealtimeVoice:
@@ -410,6 +409,14 @@ export function resolveAgentDiscordVoiceConfig(
 			storedSettings?.videoFrameAutoAttachIntervalMs ??
 			DEFAULT_VIDEO_FRAME_AUTO_ATTACH_INTERVAL_MS,
 	};
+	if (guildId !== undefined && guildId.length > 0) voiceConfig.guildId = guildId;
+	if (channelId !== undefined && channelId.length > 0) voiceConfig.channelId = channelId;
+	if (allowedGuildIds !== undefined && allowedGuildIds.length > 0) {
+		voiceConfig.allowedGuildIds = dedupeNonEmptyStrings(allowedGuildIds);
+	}
+	if (allowedChannelIds !== undefined && allowedChannelIds.length > 0) {
+		voiceConfig.allowedChannelIds = dedupeNonEmptyStrings(allowedChannelIds);
+	}
 	const transcriptionLanguage = cleanOptionalString(env.CLANKY_OPENAI_REALTIME_TRANSCRIPTION_LANGUAGE);
 	if (transcriptionLanguage !== undefined) voiceConfig.openAiRealtimeTranscriptionLanguage = transcriptionLanguage;
 	const speakerTranscriptionIdleCloseMs = parseOptionalPositiveInteger(
@@ -446,6 +453,10 @@ export async function startAgentDiscordVoiceBridge(
 ): Promise<ClankyAgentDiscordVoiceHandle | undefined> {
 	const config = input.config ?? resolveAgentDiscordVoiceConfig(process.env, input.discordConfig, input.authStorage);
 	if (config === undefined || !config.enabled) return undefined;
+	if (!hasFixedVoiceTarget(config)) {
+		return new AgentDiscordVoiceDynamicHandle(config, input.discordConfig);
+	}
+	assertVoiceTargetAllowed(config);
 	const subagents =
 		input.createSubagentRuntime !== undefined &&
 		input.subagentStore !== undefined &&
@@ -479,11 +490,71 @@ export async function startAgentDiscordVoiceBridge(
 	return bridge;
 }
 
+function hasFixedVoiceTarget(config: ClankyAgentDiscordVoiceConfig): config is FixedClankyAgentDiscordVoiceConfig {
+	return (
+		typeof config.guildId === "string" &&
+		config.guildId.length > 0 &&
+		typeof config.channelId === "string" &&
+		config.channelId.length > 0
+	);
+}
+
+function assertVoiceTargetAllowed(config: FixedClankyAgentDiscordVoiceConfig): void {
+	if (
+		config.allowedGuildIds !== undefined &&
+		config.allowedGuildIds.length > 0 &&
+		!config.allowedGuildIds.includes(config.guildId)
+	) {
+		throw new Error(`Discord voice guild ${config.guildId} is not in the allowed server list.`);
+	}
+	if (config.allowedChannelIds === undefined || config.allowedChannelIds.length === 0) return;
+	if (config.allowedChannelIds.includes(config.channelId)) return;
+	throw new Error(`Discord voice channel ${config.channelId} is not in the allowed voice channel list.`);
+}
+
+class AgentDiscordVoiceDynamicHandle implements ClankyAgentDiscordVoiceHandle {
+	private readonly config: ClankyAgentDiscordVoiceConfig;
+	private readonly discordConfig: ClankyAgentDiscordGatewayConfig;
+
+	constructor(config: ClankyAgentDiscordVoiceConfig, discordConfig: ClankyAgentDiscordGatewayConfig) {
+		this.config = config;
+		this.discordConfig = discordConfig;
+	}
+
+	async stop(): Promise<void> {}
+
+	requestTextUtterance(_text: string): void {
+		throw new Error("Discord voice is enabled, but Clanky has not joined a voice channel.");
+	}
+
+	status(): JsonRecord {
+		return {
+			active: false,
+			enabled: this.config.enabled,
+			mode: "dynamic",
+			guildId: this.config.guildId,
+			channelId: this.config.channelId,
+			allowedGuildIds: this.config.allowedGuildIds ?? [],
+			allowedChannelIds: this.config.allowedChannelIds ?? [],
+			model: this.config.openAiRealtimeModel,
+			voice: this.config.openAiRealtimeVoice,
+			reasoningEffort: this.config.openAiRealtimeReasoningEffort,
+			transcriptionModel: this.config.openAiRealtimeTranscriptionModel ?? DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
+			transcriptionDelay: this.config.openAiRealtimeTranscriptionDelay,
+			transcriptionLanguage: this.config.openAiRealtimeTranscriptionLanguage,
+			discordCredentialKind: this.discordConfig.credentialKind,
+			nativeScreenWatchSupported: this.discordConfig.credentialKind === "user-token",
+			nativeStreamPublishSupported: this.discordConfig.credentialKind === "user-token",
+			hasVox: false,
+		};
+	}
+}
+
 class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 	private readonly runtime: AgentSessionRuntime;
 	private readonly client: DiscordVoiceClient;
 	private readonly discordConfig: ClankyAgentDiscordGatewayConfig;
-	private readonly config: ClankyAgentDiscordVoiceConfig;
+	private readonly config: FixedClankyAgentDiscordVoiceConfig;
 	private readonly runtimeTurnQueue: RuntimeTurnQueue;
 	private readonly dependencies: ResolvedVoiceDependencies;
 	private readonly subagents: DiscordVoiceSubagentCoordinator | undefined;
@@ -517,7 +588,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		runtime: AgentSessionRuntime,
 		client: DiscordVoiceClient,
 		discordConfig: ClankyAgentDiscordGatewayConfig,
-		config: ClankyAgentDiscordVoiceConfig,
+		config: FixedClankyAgentDiscordVoiceConfig,
 		runtimeTurnQueue: RuntimeTurnQueue,
 		dependencies: ResolvedVoiceDependencies,
 		subagents: DiscordVoiceSubagentCoordinator | undefined,
@@ -630,9 +701,13 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 
 	status(): JsonRecord {
 		return {
+			active: true,
 			enabled: this.config.enabled,
+			mode: "fixed",
 			guildId: this.config.guildId,
 			channelId: this.config.channelId,
+			allowedGuildIds: this.config.allowedGuildIds ?? [],
+			allowedChannelIds: this.config.allowedChannelIds ?? [],
 			model: this.config.openAiRealtimeModel,
 			voice: this.config.openAiRealtimeVoice,
 			reasoningEffort: this.config.openAiRealtimeReasoningEffort,
@@ -1748,6 +1823,24 @@ function parseOptionalEnabled(value: string | undefined): boolean | undefined {
 function cleanOptionalString(value: string | undefined): string | undefined {
 	const normalized = value?.trim();
 	return normalized !== undefined && normalized.length > 0 ? normalized : undefined;
+}
+
+function parseOptionalStringList(value: string | undefined): string[] | undefined {
+	const normalized = value?.trim();
+	if (normalized === undefined || normalized.length === 0) return undefined;
+	return dedupeNonEmptyStrings(normalized.split(/[,\s]+/));
+}
+
+function dedupeNonEmptyStrings(values: readonly string[]): string[] {
+	const seen = new Set<string>();
+	const deduped: string[] = [];
+	for (const value of values) {
+		const normalized = cleanOptionalString(value);
+		if (normalized === undefined || seen.has(normalized)) continue;
+		seen.add(normalized);
+		deduped.push(normalized);
+	}
+	return deduped;
 }
 
 function parseOptionalNonNegativeInteger(value: string | undefined): number | undefined {

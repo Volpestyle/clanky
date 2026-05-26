@@ -6,6 +6,7 @@ import {
 	createClankyExtensionFactories,
 	createClankyToolDefinitions,
 	type DelegateToMainWorkerToolInput,
+	type DiscordVoiceJoinToolInput,
 	type ExternalMcpCallToolInput,
 	type ExternalMcpListToolsInput,
 	type LinearCreateIssueToolInput,
@@ -131,6 +132,18 @@ const handlers: ClankyAgentToolHandlers = {
 		calls.push("media-status");
 		return { openaiImages: { available: true }, xaiImagineImages: { available: true } };
 	},
+	discordVoiceStatus: async () => {
+		calls.push("discord-voice-status");
+		return { enabled: true, active: false };
+	},
+	discordVoiceJoin: async (input) => {
+		calls.push(`discord-voice-join:${input.guildId ?? input.guild_id}:${input.channelId ?? input.channel_id}`);
+		return { joined: true, input };
+	},
+	discordVoiceLeave: async () => {
+		calls.push("discord-voice-leave");
+		return { joined: false };
+	},
 };
 
 const tools = createClankyToolDefinitions(handlers);
@@ -155,6 +168,9 @@ const expectedNames = [
 	"web_search",
 	"xai_image_generate",
 	"xai_video_generate",
+	"discord_voice_status",
+	"discord_voice_join",
+	"discord_voice_leave",
 ];
 assertToolNames(tools, expectedNames);
 await assertOpenAiWebSearchUsesStoredCredential();
@@ -245,6 +261,16 @@ await executeTool(tools, "xai_video_generate", {
 } satisfies XAiVideoGenerateToolInput);
 
 await executeTool(tools, "media_backend_status", {});
+
+await executeTool(tools, "discord_voice_status", {});
+
+await executeTool(tools, "discord_voice_join", {
+	guild_id: "guild-tool",
+	channel_id: "voice-tool",
+} satisfies DiscordVoiceJoinToolInput);
+
+await executeTool(tools, "discord_voice_leave", {});
+
 await assertRecentDiscordAttachmentsLoadsMediaSources();
 
 const expectedCallPrefixes = [
@@ -266,6 +292,9 @@ const expectedCallPrefixes = [
 	"xai-image:",
 	"xai-video:",
 	"media-status",
+	"discord-voice-status",
+	"discord-voice-join:",
+	"discord-voice-leave",
 ];
 for (const prefix of expectedCallPrefixes) {
 	if (!calls.some((entry) => entry.startsWith(prefix))) {

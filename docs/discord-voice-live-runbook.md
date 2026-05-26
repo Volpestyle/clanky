@@ -18,20 +18,35 @@ pnpm voice:build
 Enable voice from the Clanky TUI with:
 
 ```text
-/discord-voice enable <guild-id> <voice-channel-id>
+/discord-voice
 ```
 
-Use `/discord-voice status` to see the stored profile setting and active bridge
-state. Use `/discord-voice disable` to stop the voice bridge. These settings are
-stored in the active Clanky profile and hot-restart the Discord bridge when
-changed.
+On a fresh profile that opens setup. Once voice settings exist, it shows status.
+Setup can enable voice access, add allowed server IDs, optionally restrict voice
+channel IDs, pin a current voice channel target, and adjust Realtime settings.
+Use `/discord-voice enable` to turn dynamic voice access on without pinning a
+channel, `/discord-voice allow-server <guild-id> [...]` to add allowed servers,
+`/discord-voice allow-channel <voice-channel-id> [...]` to add optional channel
+restrictions, `/discord-voice join <guild-id> <voice-channel-id>` to pin one
+active channel, or `/discord-voice status` for a quick text snapshot. These
+settings are stored in the active Clanky profile and hot-restart the Discord
+bridge when changed.
+When voice access is enabled without a pinned target, Clanky can use the
+`discord_voice_status`, `discord_voice_join`, and `discord_voice_leave` tools to
+choose or leave a voice channel at runtime. If an allowlist is configured,
+`discord_voice_join` rejects channels outside it.
 
 Env config still works and overrides the TUI profile setting when present:
 
 ```bash
 CLANKY_DISCORD_VOICE_ENABLED=1
+# Optional fixed target:
 CLANKY_DISCORD_VOICE_GUILD_ID=...
 CLANKY_DISCORD_VOICE_CHANNEL_ID=...
+# Optional comma/space-separated server allowlist:
+CLANKY_DISCORD_VOICE_ALLOWED_GUILD_IDS=...
+# Optional comma/space-separated channel allowlist:
+CLANKY_DISCORD_VOICE_ALLOWED_CHANNEL_IDS=...
 ```
 
 Credentials can come from `CLANKY_DISCORD_TOKEN` or from a stored

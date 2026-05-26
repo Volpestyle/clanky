@@ -328,8 +328,23 @@ function formatDiscordBridgeStatus(status: unknown): string {
 	}
 	const voice = isRecord(status.voice) ? status.voice : undefined;
 	if (voice !== undefined) {
+		if (voice.active === false && voice.mode === "dynamic") {
+			lines.push("Voice access: enabled; no voice channel is joined.");
+		}
 		if (typeof voice.guildId === "string" && typeof voice.channelId === "string") {
 			lines.push(`Voice target: guild ${voice.guildId}, channel ${voice.channelId}.`);
+		}
+		const allowedGuildIds = readStringArray(voice.allowedGuildIds);
+		if (allowedGuildIds.length > 0) {
+			lines.push(`Allowed servers: ${allowedGuildIds.join(", ")}.`);
+		} else if (voice.mode === "dynamic") {
+			lines.push("Allowed servers: all servers the Discord credential can access.");
+		}
+		const allowedChannelIds = readStringArray(voice.allowedChannelIds);
+		if (allowedChannelIds.length > 0) {
+			lines.push(`Allowed voice channels: ${allowedChannelIds.join(", ")}.`);
+		} else if (voice.mode === "dynamic") {
+			lines.push("Allowed voice channels: all channels the Discord credential can access.");
 		}
 		if (typeof voice.model === "string") lines.push(`Realtime model: ${voice.model}.`);
 		if (typeof voice.discordCredentialKind === "string") {
@@ -396,18 +411,16 @@ function runDiscordStatus(deps: DiscordAuthCommandDeps, ctx: ExtensionCommandCon
 function discordVoiceUsage(path: string | undefined): string {
 	const lines = [
 		"Discord voice",
-		"Usage:",
+		"Run /discord-voice to show status once configured, or open setup when unconfigured.",
+		"",
+		"Shortcut commands:",
 		"  /discord-voice status",
-		"  /discord-voice setup",
-		"  /discord-voice enable <guild-id> <voice-channel-id>",
+		"  /discord-voice enable",
+		"  /discord-voice join <guild-id> <voice-channel-id>",
+		"  /discord-voice allow-server <guild-id> [more-guild-ids...]",
+		"  /discord-voice allow-channel <voice-channel-id> [more-channel-ids...]",
+		"  /discord-voice allow <voice-channel-id> [more-channel-ids...]",
 		"  /discord-voice disable",
-		"  /discord-voice set guild <guild-id>",
-		"  /discord-voice set channel <voice-channel-id>",
-		"  /discord-voice set model <realtime-model>",
-		"  /discord-voice set voice <realtime-voice>",
-		"  /discord-voice set reasoning <minimal|low|medium|high|xhigh|clear>",
-		"  /discord-voice set frame-interval <milliseconds>",
-		"  /discord-voice clear",
 	];
 	if (path !== undefined) lines.push("", `Profile settings file: ${path}`);
 	lines.push("", "Env vars still work and override profile voice settings when present.");
@@ -421,8 +434,21 @@ function formatDiscordVoiceSettings(settings: StoredDiscordVoiceSettings | undef
 		return lines;
 	}
 	lines.push(`Profile voice setting: ${settings.enabled ? "enabled" : "disabled"}.`);
-	if (settings.guildId !== undefined) lines.push(`Stored guild id: ${settings.guildId}.`);
-	if (settings.channelId !== undefined) lines.push(`Stored voice channel id: ${settings.channelId}.`);
+	if (settings.guildId !== undefined && settings.channelId !== undefined) {
+		lines.push(`Pinned voice target: guild ${settings.guildId}, channel ${settings.channelId}.`);
+	} else {
+		lines.push("Pinned voice target: none.");
+	}
+	if (settings.allowedGuildIds !== undefined && settings.allowedGuildIds.length > 0) {
+		lines.push(`Allowed servers: ${settings.allowedGuildIds.join(", ")}.`);
+	} else {
+		lines.push("Allowed servers: all servers the Discord credential can access.");
+	}
+	if (settings.allowedChannelIds !== undefined && settings.allowedChannelIds.length > 0) {
+		lines.push(`Allowed voice channels: ${settings.allowedChannelIds.join(", ")}.`);
+	} else {
+		lines.push("Allowed voice channels: all channels the Discord credential can access.");
+	}
 	if (settings.openAiRealtimeModel !== undefined) lines.push(`Stored Realtime model: ${settings.openAiRealtimeModel}.`);
 	if (settings.openAiRealtimeVoice !== undefined) lines.push(`Stored Realtime voice: ${settings.openAiRealtimeVoice}.`);
 	if (settings.openAiRealtimeReasoningEffort !== undefined) {
@@ -442,11 +468,25 @@ function formatDiscordVoiceEnvOverrides(): string[] {
 	if (guildId !== undefined) lines.push(`Env guild id override: ${guildId}.`);
 	const channelId = cleanArg(process.env.CLANKY_DISCORD_VOICE_CHANNEL_ID);
 	if (channelId !== undefined) lines.push(`Env voice channel id override: ${channelId}.`);
+	const allowedGuildIds = cleanArg(process.env.CLANKY_DISCORD_VOICE_ALLOWED_GUILD_IDS);
+	if (allowedGuildIds !== undefined) lines.push(`Env allowed server override: ${allowedGuildIds}.`);
+	const allowedChannelIds = cleanArg(process.env.CLANKY_DISCORD_VOICE_ALLOWED_CHANNEL_IDS);
+	if (allowedChannelIds !== undefined) lines.push(`Env allowed voice channel override: ${allowedChannelIds}.`);
 	const model = cleanArg(process.env.CLANKY_OPENAI_REALTIME_MODEL);
 	if (model !== undefined) lines.push(`Env Realtime model override: ${model}.`);
 	const voice = cleanArg(process.env.CLANKY_OPENAI_REALTIME_VOICE);
 	if (voice !== undefined) lines.push(`Env Realtime voice override: ${voice}.`);
 	return lines;
+}
+
+function hasDiscordVoiceEnvConfiguration(): boolean {
+	return (
+		cleanArg(process.env.CLANKY_DISCORD_VOICE_ENABLED ?? process.env.CLANKY_DISCORD_VOICE) !== undefined ||
+		cleanArg(process.env.CLANKY_DISCORD_VOICE_GUILD_ID) !== undefined ||
+		cleanArg(process.env.CLANKY_DISCORD_VOICE_CHANNEL_ID) !== undefined ||
+		cleanArg(process.env.CLANKY_DISCORD_VOICE_ALLOWED_GUILD_IDS) !== undefined ||
+		cleanArg(process.env.CLANKY_DISCORD_VOICE_ALLOWED_CHANNEL_IDS) !== undefined
+	);
 }
 
 function formatDiscordVoiceCommandStatus(deps: DiscordAuthCommandDeps): string {
@@ -474,13 +514,48 @@ async function runDiscordVoiceCommand(
 		return;
 	}
 	const parts = parseCommandArgs(args);
-	const subcommand = parts[0]?.toLowerCase() ?? "status";
+	const subcommand = parts[0]?.toLowerCase();
+	if (subcommand === undefined) {
+		if (hasDiscordVoiceConfiguration(deps.voiceSettings.read()) || hasDiscordVoiceEnvConfiguration()) {
+			ctx.ui.notify(formatDiscordVoiceCommandStatus(deps));
+			return;
+		}
+		await runDiscordVoiceWizard(deps, ctx);
+		return;
+	}
+	if (subcommand === "setup" || subcommand === "configure" || subcommand === "ui") {
+		await runDiscordVoiceWizard(deps, ctx);
+		return;
+	}
 	if (subcommand === "status") {
 		ctx.ui.notify(formatDiscordVoiceCommandStatus(deps));
 		return;
 	}
-	if (subcommand === "enable" || subcommand === "setup" || subcommand === "configure") {
+	if (subcommand === "enable") {
 		await runDiscordVoiceEnable(deps, parts.slice(1), ctx);
+		return;
+	}
+	if (subcommand === "join" || subcommand === "target") {
+		await runDiscordVoiceJoin(deps, parts.slice(1), ctx);
+		return;
+	}
+	if (
+		subcommand === "allow-server" ||
+		subcommand === "allow-servers" ||
+		subcommand === "server" ||
+		subcommand === "servers" ||
+		subcommand === "guild" ||
+		subcommand === "guilds"
+	) {
+		await runDiscordVoiceAllowGuilds(deps, parts.slice(1), ctx);
+		return;
+	}
+	if (subcommand === "allow-channel" || subcommand === "allow-channels") {
+		await runDiscordVoiceAllowChannels(deps, parts.slice(1), ctx);
+		return;
+	}
+	if (subcommand === "allow" || subcommand === "allowlist") {
+		await runDiscordVoiceAllowChannels(deps, parts.slice(1), ctx);
 		return;
 	}
 	if (subcommand === "disable") {
@@ -498,7 +573,54 @@ async function runDiscordVoiceCommand(
 	ctx.ui.notify(discordVoiceUsage(deps.voiceSettings.path), "warning");
 }
 
-async function runDiscordVoiceEnable(
+async function runDiscordVoiceWizard(deps: DiscordAuthCommandDeps, ctx: ExtensionCommandContext): Promise<void> {
+	const settings = deps.voiceSettings?.read();
+	const toggleOption = settings?.enabled === true ? "Disable voice access" : "Enable voice access";
+	const choice = await ctx.ui.select(discordVoiceWizardTitle(settings), [
+		toggleOption,
+		"Join voice channel target",
+		"Allowed servers",
+		"Allowed channels",
+		"Advanced settings",
+		"Show status",
+		"Clear settings",
+		"Cancel",
+	]);
+	if (choice === undefined || choice === "Cancel") return;
+	if (choice === "Enable voice access") {
+		await runDiscordVoiceEnable(deps, [], ctx);
+		return;
+	}
+	if (choice === "Disable voice access") {
+		await runDiscordVoiceDisable(deps, ctx);
+		return;
+	}
+	if (choice === "Join voice channel target") {
+		await runDiscordVoiceJoin(deps, [], ctx);
+		return;
+	}
+	if (choice === "Allowed servers") {
+		await runDiscordVoiceAllowedGuildsWizard(deps, ctx);
+		return;
+	}
+	if (choice === "Allowed channels") {
+		await runDiscordVoiceAllowedChannelsWizard(deps, ctx);
+		return;
+	}
+	if (choice === "Advanced settings") {
+		await runDiscordVoiceAdvancedWizard(deps, ctx);
+		return;
+	}
+	if (choice === "Show status") {
+		ctx.ui.notify(formatDiscordVoiceCommandStatus(deps));
+		return;
+	}
+	if (choice === "Clear settings") {
+		await runDiscordVoiceClear(deps, ctx);
+	}
+}
+
+async function runDiscordVoiceJoin(
 	deps: DiscordAuthCommandDeps,
 	args: string[],
 	ctx: ExtensionCommandContext,
@@ -514,9 +636,263 @@ async function runDiscordVoiceEnable(
 		ctx.ui.notify(discordVoiceUsage(deps.voiceSettings?.path), "warning");
 		return;
 	}
-	const next = { ...current, enabled: true, guildId, channelId };
+	let next: StoredDiscordVoiceSettings = {
+		...current,
+		enabled: true,
+		guildId,
+		channelId,
+		allowedGuildIds: mergeDiscordIds(current.allowedGuildIds, [guildId]),
+	};
+	if (current.allowedChannelIds !== undefined && current.allowedChannelIds.length > 0) {
+		next.allowedChannelIds = mergeDiscordIds(current.allowedChannelIds, [channelId]);
+	}
+	const configureAdvanced = await ctx.ui.confirm(
+		"Configure advanced Realtime settings?",
+		"Optional: model, voice, reasoning effort, and video frame auto-attach interval.",
+	);
+	if (configureAdvanced) next = await collectDiscordVoiceAdvancedSettings(ctx, next);
 	deps.voiceSettings?.write(next);
 	const lines = [`Discord voice enabled for guild ${guildId}, channel ${channelId}.`];
+	await restartDiscordBridgeAfterVoiceSettingsChange(deps, lines);
+	ctx.ui.notify(lines.join("\n"));
+}
+
+async function runDiscordVoiceAdvancedWizard(
+	deps: DiscordAuthCommandDeps,
+	ctx: ExtensionCommandContext,
+): Promise<void> {
+	const current = deps.voiceSettings?.read() ?? { enabled: false };
+	const choice = await ctx.ui.select("Discord voice advanced settings", [
+		`Realtime model (${current.openAiRealtimeModel ?? "default"})`,
+		`Realtime voice (${current.openAiRealtimeVoice ?? "default"})`,
+		`Reasoning effort (${current.openAiRealtimeReasoningEffort ?? "default"})`,
+		`Video frame interval (${formatFrameIntervalLabel(current.videoFrameAutoAttachIntervalMs)})`,
+		"Clear advanced overrides",
+		"Back",
+	]);
+	if (choice === undefined || choice === "Back") return;
+	let next: StoredDiscordVoiceSettings = { ...current };
+	if (choice.startsWith("Realtime model")) {
+		next = await collectDiscordVoiceModel(ctx, next);
+	} else if (choice.startsWith("Realtime voice")) {
+		next = await collectDiscordVoiceVoice(ctx, next);
+	} else if (choice.startsWith("Reasoning effort")) {
+		next = await collectDiscordVoiceReasoning(ctx, next);
+	} else if (choice.startsWith("Video frame interval")) {
+		next = await collectDiscordVoiceFrameInterval(ctx, next);
+	} else if (choice === "Clear advanced overrides") {
+		delete next.openAiRealtimeModel;
+		delete next.openAiRealtimeVoice;
+		delete next.openAiRealtimeReasoningEffort;
+		delete next.videoFrameAutoAttachIntervalMs;
+	}
+	deps.voiceSettings?.write(next);
+	const lines = ["Discord voice advanced settings updated."];
+	await restartDiscordBridgeAfterVoiceSettingsChange(deps, lines);
+	ctx.ui.notify(lines.join("\n"));
+}
+
+async function runDiscordVoiceAllowedGuildsWizard(
+	deps: DiscordAuthCommandDeps,
+	ctx: ExtensionCommandContext,
+): Promise<void> {
+	const current = deps.voiceSettings?.read() ?? { enabled: false };
+	const label =
+		current.allowedGuildIds !== undefined && current.allowedGuildIds.length > 0
+			? current.allowedGuildIds.join(", ")
+			: "all accessible servers";
+	const choice = await ctx.ui.select("Discord voice allowed servers", [
+		`Current (${label})`,
+		"Allow all servers",
+		"Replace allowlist",
+		"Add server ids",
+		"Remove server ids",
+		"Back",
+	]);
+	if (choice === undefined || choice === "Back" || choice.startsWith("Current")) return;
+	let next: StoredDiscordVoiceSettings = { ...current, enabled: true };
+	let line: string | undefined;
+	if (choice === "Allow all servers") {
+		delete next.allowedGuildIds;
+		line = "Discord voice server allowlist cleared; all accessible servers are allowed.";
+	} else {
+		const raw = await ctx.ui.input(
+			"Discord server ids:",
+			"Separate multiple ids with commas or spaces. Blank cancels.",
+		);
+		const ids = parseDiscordIds(raw);
+		if (ids.length === 0) {
+			ctx.ui.notify("Discord voice allowed-server update cancelled.");
+			return;
+		}
+		if (choice === "Replace allowlist") {
+			next.allowedGuildIds = ids;
+			line = `Discord voice server allowlist set to ${ids.join(", ")}.`;
+		} else if (choice === "Add server ids") {
+			next.allowedGuildIds = mergeDiscordIds(current.allowedGuildIds, ids);
+			line = `Discord voice server allowlist set to ${next.allowedGuildIds.join(", ")}.`;
+		} else if (choice === "Remove server ids") {
+			const remove = new Set(ids);
+			const remaining = (current.allowedGuildIds ?? []).filter((id) => !remove.has(id));
+			next = { ...current, enabled: true };
+			if (remaining.length > 0) {
+				next.allowedGuildIds = remaining;
+				line = `Discord voice server allowlist set to ${remaining.join(", ")}.`;
+			} else {
+				delete next.allowedGuildIds;
+				line = "Discord voice server allowlist cleared; all accessible servers are allowed.";
+			}
+		}
+	}
+	if (line === undefined) return;
+	deps.voiceSettings?.write(next);
+	const lines = [line];
+	await restartDiscordBridgeAfterVoiceSettingsChange(deps, lines);
+	ctx.ui.notify(lines.join("\n"));
+}
+
+async function runDiscordVoiceAllowedChannelsWizard(
+	deps: DiscordAuthCommandDeps,
+	ctx: ExtensionCommandContext,
+): Promise<void> {
+	const current = deps.voiceSettings?.read() ?? { enabled: false };
+	const label =
+		current.allowedChannelIds !== undefined && current.allowedChannelIds.length > 0
+			? current.allowedChannelIds.join(", ")
+			: "all accessible channels";
+	const choice = await ctx.ui.select("Discord voice allowed channels", [
+		`Current (${label})`,
+		"Allow all voice channels",
+		"Replace allowlist",
+		"Add channel ids",
+		"Remove channel ids",
+		"Back",
+	]);
+	if (choice === undefined || choice === "Back" || choice.startsWith("Current")) return;
+	let next: StoredDiscordVoiceSettings = { ...current, enabled: true };
+	let line: string | undefined;
+	if (choice === "Allow all voice channels") {
+		delete next.allowedChannelIds;
+		line = "Discord voice channel allowlist cleared; all accessible voice channels are allowed.";
+	} else {
+		const raw = await ctx.ui.input(
+			"Discord voice channel ids:",
+			"Separate multiple ids with commas or spaces. Blank cancels.",
+		);
+		const ids = parseDiscordIds(raw);
+		if (ids.length === 0) {
+			ctx.ui.notify("Discord voice allowed-channel update cancelled.");
+			return;
+		}
+		if (choice === "Replace allowlist") {
+			next.allowedChannelIds = ids;
+			line = `Discord voice channel allowlist set to ${ids.join(", ")}.`;
+		} else if (choice === "Add channel ids") {
+			next.allowedChannelIds = mergeDiscordIds(current.allowedChannelIds, ids);
+			line = `Discord voice channel allowlist set to ${next.allowedChannelIds.join(", ")}.`;
+		} else if (choice === "Remove channel ids") {
+			const remove = new Set(ids);
+			const remaining = (current.allowedChannelIds ?? []).filter((id) => !remove.has(id));
+			next = { ...current, enabled: true };
+			if (remaining.length > 0) {
+				next.allowedChannelIds = remaining;
+				line = `Discord voice channel allowlist set to ${remaining.join(", ")}.`;
+			} else {
+				delete next.allowedChannelIds;
+				line = "Discord voice channel allowlist cleared; all accessible voice channels are allowed.";
+			}
+		}
+	}
+	if (line === undefined) return;
+	deps.voiceSettings?.write(next);
+	const lines = [line];
+	await restartDiscordBridgeAfterVoiceSettingsChange(deps, lines);
+	ctx.ui.notify(lines.join("\n"));
+}
+
+async function runDiscordVoiceEnable(
+	deps: DiscordAuthCommandDeps,
+	args: string[],
+	ctx: ExtensionCommandContext,
+): Promise<void> {
+	if (args.length === 0) {
+		const current = deps.voiceSettings?.read() ?? { enabled: false };
+		const next: StoredDiscordVoiceSettings = { ...current, enabled: true };
+		delete next.guildId;
+		delete next.channelId;
+		deps.voiceSettings?.write(next);
+		const serverScope =
+			next.allowedGuildIds !== undefined && next.allowedGuildIds.length > 0
+				? `allowed servers (${next.allowedGuildIds.join(", ")})`
+				: "all accessible servers";
+		const channelScope =
+			next.allowedChannelIds !== undefined && next.allowedChannelIds.length > 0
+				? `allowed voice channels (${next.allowedChannelIds.join(", ")})`
+				: "all accessible voice channels";
+		const lines = [`Discord voice access enabled for ${serverScope} and ${channelScope}.`];
+		await restartDiscordBridgeAfterVoiceSettingsChange(deps, lines);
+		ctx.ui.notify(lines.join("\n"));
+		return;
+	}
+	await runDiscordVoiceJoin(deps, args, ctx);
+}
+
+async function runDiscordVoiceAllowGuilds(
+	deps: DiscordAuthCommandDeps,
+	args: string[],
+	ctx: ExtensionCommandContext,
+): Promise<void> {
+	if (args.length === 0) {
+		await runDiscordVoiceAllowedGuildsWizard(deps, ctx);
+		return;
+	}
+	const current = deps.voiceSettings?.read() ?? { enabled: false };
+	const clear = args.length === 1 && ["all", "clear", "none", "off"].includes(args[0]?.toLowerCase() ?? "");
+	const next: StoredDiscordVoiceSettings = { ...current, enabled: true };
+	const lines: string[] = [];
+	if (clear) {
+		delete next.allowedGuildIds;
+		lines.push("Discord voice server allowlist cleared; all accessible servers are allowed.");
+	} else {
+		const allowedGuildIds = parseDiscordIds(args.join(" "));
+		if (allowedGuildIds.length === 0) {
+			ctx.ui.notify(discordVoiceUsage(deps.voiceSettings?.path), "warning");
+			return;
+		}
+		next.allowedGuildIds = mergeDiscordIds(current.allowedGuildIds, allowedGuildIds);
+		lines.push(`Discord voice server allowlist set to ${next.allowedGuildIds.join(", ")}.`);
+	}
+	deps.voiceSettings?.write(next);
+	await restartDiscordBridgeAfterVoiceSettingsChange(deps, lines);
+	ctx.ui.notify(lines.join("\n"));
+}
+
+async function runDiscordVoiceAllowChannels(
+	deps: DiscordAuthCommandDeps,
+	args: string[],
+	ctx: ExtensionCommandContext,
+): Promise<void> {
+	if (args.length === 0) {
+		await runDiscordVoiceAllowedChannelsWizard(deps, ctx);
+		return;
+	}
+	const current = deps.voiceSettings?.read() ?? { enabled: false };
+	const clear = args.length === 1 && ["all", "clear", "none", "off"].includes(args[0]?.toLowerCase() ?? "");
+	const next: StoredDiscordVoiceSettings = { ...current, enabled: true };
+	const lines: string[] = [];
+	if (clear) {
+		delete next.allowedChannelIds;
+		lines.push("Discord voice channel allowlist cleared; all accessible voice channels are allowed.");
+	} else {
+		const allowedChannelIds = parseDiscordIds(args.join(" "));
+		if (allowedChannelIds.length === 0) {
+			ctx.ui.notify(discordVoiceUsage(deps.voiceSettings?.path), "warning");
+			return;
+		}
+		next.allowedChannelIds = mergeDiscordIds(current.allowedChannelIds, allowedChannelIds);
+		lines.push(`Discord voice channel allowlist set to ${next.allowedChannelIds.join(", ")}.`);
+	}
+	deps.voiceSettings?.write(next);
 	await restartDiscordBridgeAfterVoiceSettingsChange(deps, lines);
 	ctx.ui.notify(lines.join("\n"));
 }
@@ -549,6 +925,30 @@ async function runDiscordVoiceSet(
 		if (value === undefined) return ctx.ui.notify(discordVoiceUsage(deps.voiceSettings?.path), "warning");
 		next.channelId = value;
 		line = `Discord voice channel id set to ${value}.`;
+	} else if (field === "allowed-servers" || field === "allowed-guilds" || field === "servers" || field === "guilds") {
+		if (rawValue === "clear" || rawValue === "all" || rawValue === "none") {
+			delete next.allowedGuildIds;
+			line = "Discord voice server allowlist cleared.";
+		} else {
+			const value = parseDiscordIds(args.slice(1).join(" "));
+			if (value.length > 0) {
+				next.allowedGuildIds = value;
+				next.enabled = true;
+				line = `Discord voice server allowlist set to ${value.join(", ")}.`;
+			}
+		}
+	} else if (field === "allowed" || field === "allowlist" || field === "allowed-channels" || field === "channels") {
+		if (rawValue === "clear" || rawValue === "all" || rawValue === "none") {
+			delete next.allowedChannelIds;
+			line = "Discord voice channel allowlist cleared.";
+		} else {
+			const value = parseDiscordIds(args.slice(1).join(" "));
+			if (value.length > 0) {
+				next.allowedChannelIds = value;
+				next.enabled = true;
+				line = `Discord voice channel allowlist set to ${value.join(", ")}.`;
+			}
+		}
 	} else if (field === "model") {
 		const value = await readDiscordVoiceValue(ctx, rawValue, "OpenAI Realtime model:", current.openAiRealtimeModel);
 		if (value === undefined) return ctx.ui.notify(discordVoiceUsage(deps.voiceSettings?.path), "warning");
@@ -582,6 +982,92 @@ async function runDiscordVoiceSet(
 	const lines = [line];
 	await restartDiscordBridgeAfterVoiceSettingsChange(deps, lines);
 	ctx.ui.notify(lines.join("\n"));
+}
+
+async function collectDiscordVoiceAdvancedSettings(
+	ctx: ExtensionCommandContext,
+	settings: StoredDiscordVoiceSettings,
+): Promise<StoredDiscordVoiceSettings> {
+	let next = await collectDiscordVoiceModel(ctx, settings);
+	next = await collectDiscordVoiceVoice(ctx, next);
+	next = await collectDiscordVoiceReasoning(ctx, next);
+	return await collectDiscordVoiceFrameInterval(ctx, next);
+}
+
+async function collectDiscordVoiceModel(
+	ctx: ExtensionCommandContext,
+	settings: StoredDiscordVoiceSettings,
+): Promise<StoredDiscordVoiceSettings> {
+	const value = cleanArg(
+		await ctx.ui.input(
+			"OpenAI Realtime model:",
+			settings.openAiRealtimeModel ?? "blank keeps current/default; type clear to remove override",
+		),
+	);
+	if (value === undefined) return settings;
+	const next = { ...settings };
+	if (value === "clear" || value === "default") delete next.openAiRealtimeModel;
+	else next.openAiRealtimeModel = value;
+	return next;
+}
+
+async function collectDiscordVoiceVoice(
+	ctx: ExtensionCommandContext,
+	settings: StoredDiscordVoiceSettings,
+): Promise<StoredDiscordVoiceSettings> {
+	const value = cleanArg(
+		await ctx.ui.input(
+			"OpenAI Realtime voice:",
+			settings.openAiRealtimeVoice ?? "blank keeps current/default; type clear to remove override",
+		),
+	);
+	if (value === undefined) return settings;
+	const next = { ...settings };
+	if (value === "clear" || value === "default") delete next.openAiRealtimeVoice;
+	else next.openAiRealtimeVoice = value;
+	return next;
+}
+
+async function collectDiscordVoiceReasoning(
+	ctx: ExtensionCommandContext,
+	settings: StoredDiscordVoiceSettings,
+): Promise<StoredDiscordVoiceSettings> {
+	const value = await ctx.ui.select("OpenAI Realtime reasoning effort:", [
+		"Keep current/default",
+		"minimal",
+		"low",
+		"medium",
+		"high",
+		"xhigh",
+		"Clear override",
+	]);
+	if (value === undefined || value === "Keep current/default") return settings;
+	const next = { ...settings };
+	if (value === "Clear override") delete next.openAiRealtimeReasoningEffort;
+	else if (isRealtimeReasoningEffort(value)) next.openAiRealtimeReasoningEffort = value;
+	return next;
+}
+
+async function collectDiscordVoiceFrameInterval(
+	ctx: ExtensionCommandContext,
+	settings: StoredDiscordVoiceSettings,
+): Promise<StoredDiscordVoiceSettings> {
+	const value = cleanArg(
+		await ctx.ui.input(
+			"Video frame auto-attach interval in milliseconds:",
+			settings.videoFrameAutoAttachIntervalMs?.toString() ??
+				"blank keeps current/default; type clear to remove override",
+		),
+	);
+	if (value === undefined) return settings;
+	const next = { ...settings };
+	if (value === "clear" || value === "default") {
+		delete next.videoFrameAutoAttachIntervalMs;
+		return next;
+	}
+	const parsed = parseNonNegativeIntegerArg(value);
+	if (parsed !== undefined) next.videoFrameAutoAttachIntervalMs = parsed;
+	return next;
 }
 
 async function runDiscordVoiceClear(deps: DiscordAuthCommandDeps, ctx: ExtensionCommandContext): Promise<void> {
@@ -639,6 +1125,24 @@ function cleanArg(value: string | undefined): string | undefined {
 	return trimmed !== undefined && trimmed.length > 0 ? trimmed : undefined;
 }
 
+function parseDiscordIds(value: string | undefined): string[] {
+	const cleaned = cleanArg(value);
+	if (cleaned === undefined) return [];
+	return mergeDiscordIds(undefined, cleaned.split(/[,\s]+/));
+}
+
+function mergeDiscordIds(current: readonly string[] | undefined, next: readonly string[]): string[] {
+	const seen = new Set<string>();
+	const merged: string[] = [];
+	for (const value of [...(current ?? []), ...next]) {
+		const cleaned = cleanArg(value);
+		if (cleaned === undefined || seen.has(cleaned)) continue;
+		seen.add(cleaned);
+		merged.push(cleaned);
+	}
+	return merged;
+}
+
 function parseCommandArgs(args: string): string[] {
 	return args.trim().split(/\s+/).filter(Boolean);
 }
@@ -647,6 +1151,39 @@ function parseNonNegativeIntegerArg(value: string | undefined): number | undefin
 	if (value === undefined) return undefined;
 	const parsed = Number.parseInt(value, 10);
 	return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function discordVoiceWizardTitle(settings: StoredDiscordVoiceSettings | undefined): string {
+	const enabled = settings?.enabled === true ? "enabled" : "disabled";
+	const target = hasDiscordVoiceTarget(settings)
+		? `guild ${settings.guildId}, channel ${settings.channelId}`
+		: "all accessible channels";
+	const allowedServers =
+		settings?.allowedGuildIds !== undefined && settings.allowedGuildIds.length > 0
+			? `${settings.allowedGuildIds.length} server${settings.allowedGuildIds.length === 1 ? "" : "s"}`
+			: "all servers";
+	const allowedChannels =
+		settings?.allowedChannelIds !== undefined && settings.allowedChannelIds.length > 0
+			? `${settings.allowedChannelIds.length} allowed channel${settings.allowedChannelIds.length === 1 ? "" : "s"}`
+			: "all channels";
+	return `Discord voice settings (${enabled}; ${target}; ${allowedServers}; ${allowedChannels})`;
+}
+
+function formatFrameIntervalLabel(value: number | undefined): string {
+	return value === undefined ? "default" : `${value} ms`;
+}
+
+function hasDiscordVoiceTarget(
+	settings: StoredDiscordVoiceSettings | undefined,
+): settings is StoredDiscordVoiceSettings & {
+	guildId: string;
+	channelId: string;
+} {
+	return cleanArg(settings?.guildId) !== undefined && cleanArg(settings?.channelId) !== undefined;
+}
+
+function hasDiscordVoiceConfiguration(settings: StoredDiscordVoiceSettings | undefined): boolean {
+	return settings !== undefined;
 }
 
 function isRealtimeReasoningEffort(
@@ -659,6 +1196,12 @@ function readStatusString(status: unknown, key: string): string | undefined {
 	if (!isRecord(status)) return undefined;
 	const value = status[key];
 	return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function readStringArray(value: unknown): string[] {
+	return Array.isArray(value)
+		? value.filter((item): item is string => typeof item === "string" && item.length > 0)
+		: [];
 }
 
 /**
@@ -712,7 +1255,7 @@ export function createDiscordAuthExtensionFactory(deps: DiscordAuthCommandDeps):
 			},
 		});
 		pi.registerCommand("discord-voice", {
-			description: "Show or set Clanky's Discord voice bridge target from the TUI",
+			description: "Manage Clanky's Discord voice access from the TUI",
 			handler: async (args, ctx) => {
 				try {
 					await runDiscordVoiceCommand(deps, args, ctx);

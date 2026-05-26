@@ -374,6 +374,12 @@ const discordAddReactionSchema = Type.Object({
 	message_id: Type.Optional(Type.String()),
 	emoji: Type.String(),
 });
+const discordVoiceJoinSchema = Type.Object({
+	guildId: Type.Optional(Type.String()),
+	guild_id: Type.Optional(Type.String()),
+	channelId: Type.Optional(Type.String()),
+	channel_id: Type.Optional(Type.String()),
+});
 
 export type ScheduleCronToolInput = Static<typeof scheduleCronSchema>;
 export type LinearCreateIssueToolInput = Static<typeof linearCreateIssueSchema>;
@@ -397,6 +403,7 @@ export type DiscordRecentAttachmentsToolInput = Static<typeof discordRecentAttac
 export type DiscordSendMessageToolInput = Static<typeof discordSendMessageSchema>;
 export type DiscordListEmojisToolInput = Static<typeof discordListEmojisSchema>;
 export type DiscordAddReactionToolInput = Static<typeof discordAddReactionSchema>;
+export type DiscordVoiceJoinToolInput = Static<typeof discordVoiceJoinSchema>;
 
 export interface ClankyBeforeProviderRequestInput {
 	sessionId: string;
@@ -444,6 +451,9 @@ export interface ClankyAgentToolHandlers {
 	discordSendMessage?: (input: DiscordSendMessageInput) => Promise<unknown>;
 	discordListEmojis?: (input: DiscordListEmojisInput) => Promise<unknown>;
 	discordAddReaction?: (input: DiscordAddReactionInput) => Promise<unknown>;
+	discordVoiceStatus?: () => Promise<unknown>;
+	discordVoiceJoin?: (input: DiscordVoiceJoinToolInput) => Promise<unknown>;
+	discordVoiceLeave?: () => Promise<unknown>;
 }
 
 const CLANKY_MEMORY_PACKET_MESSAGE = "clanky.memory_packet";
@@ -2315,6 +2325,57 @@ export function createClankyToolDefinitions(handlers: ClankyAgentToolHandlers): 
 				parameters: discordAddReactionSchema,
 				async execute(_toolCallId, params) {
 					return toolResult(await discordAddReaction(params));
+				},
+			}),
+		);
+	}
+	const discordVoiceStatus = handlers.discordVoiceStatus;
+	if (discordVoiceStatus !== undefined) {
+		tools.push(
+			defineTool({
+				name: "discord_voice_status",
+				label: "Discord Voice Status",
+				description: "Inspect Clanky's Discord voice access, pinned voice target, allowlist, and bridge state.",
+				promptSnippet:
+					"discord_voice_status: check whether Clanky can use Discord voice and whether a channel is currently joined.",
+				parameters: Type.Object({}),
+				async execute() {
+					return toolResult(await discordVoiceStatus());
+				},
+			}),
+		);
+	}
+	const discordVoiceJoin = handlers.discordVoiceJoin;
+	if (discordVoiceJoin !== undefined) {
+		tools.push(
+			defineTool({
+				name: "discord_voice_join",
+				label: "Discord Voice Join",
+				description: "Join or switch Clanky's active Discord voice channel by guild id and voice channel id.",
+				promptSnippet:
+					"discord_voice_join: join a Discord voice channel after identifying the guild id and channel id.",
+				promptGuidelines: [
+					"Use discord_list_guilds and discord_list_channels first when the target guild or voice channel id is ambiguous.",
+					"Respect user intent and the configured voice allowlists; the tool rejects servers or channels outside the allowlists.",
+				],
+				parameters: discordVoiceJoinSchema,
+				async execute(_toolCallId, params) {
+					return toolResult(await discordVoiceJoin(params));
+				},
+			}),
+		);
+	}
+	const discordVoiceLeave = handlers.discordVoiceLeave;
+	if (discordVoiceLeave !== undefined) {
+		tools.push(
+			defineTool({
+				name: "discord_voice_leave",
+				label: "Discord Voice Leave",
+				description: "Leave Clanky's currently pinned Discord voice channel while keeping voice access enabled.",
+				promptSnippet: "discord_voice_leave: leave the active Discord voice channel without disabling voice access.",
+				parameters: Type.Object({}),
+				async execute() {
+					return toolResult(await discordVoiceLeave());
 				},
 			}),
 		);
