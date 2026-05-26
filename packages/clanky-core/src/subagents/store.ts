@@ -12,6 +12,8 @@ export type DiscordInboxStatus = "queued" | "claimed" | "answered" | "failed";
 export interface DiscordInboxAttachment {
 	url?: string;
 	filename?: string;
+	mime?: string;
+	contentType?: string;
 }
 
 export interface EnqueueDiscordInboxMessageInput {
@@ -698,6 +700,8 @@ function readAttachments(value: unknown): DiscordInboxAttachment[] {
 			const attachment: DiscordInboxAttachment = {};
 			if (typeof record.url === "string") attachment.url = record.url;
 			if (typeof record.filename === "string") attachment.filename = record.filename;
+			if (typeof record.mime === "string") attachment.mime = record.mime;
+			if (typeof record.contentType === "string") attachment.contentType = record.contentType;
 			return Object.keys(attachment).length === 0 ? [] : [attachment];
 		});
 	} catch {

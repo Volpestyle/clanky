@@ -806,6 +806,7 @@ interface SubagentTranscriptMessage {
 	role: "user" | "assistant" | "tool" | "system";
 	text: string;
 	timestamp?: string;
+	speaker?: string;
 }
 
 interface SubagentBrowserOptions {
@@ -1064,6 +1065,8 @@ class SubagentBrowserComponent {
 		} else if (this.transcript.length === 0) {
 			lines.push("No transcript messages yet.");
 		} else {
+			lines.push(`Conversation history (${this.transcript.length} messages)`);
+			lines.push("");
 			const rendered = renderTranscriptRows(this.transcript, contentWidth);
 			const maxScroll = Math.max(0, rendered.length - SUBAGENT_TRANSCRIPT_MAX_ROWS);
 			this.detailScroll = Math.min(Math.max(0, this.detailScroll), maxScroll);
@@ -1334,13 +1337,20 @@ function truncatePlain(value: string, maxLength: number): string {
 	return `${normalized.slice(0, maxLength - 3)}...`;
 }
 
+function truncateLine(value: string, maxLength: number): string {
+	const normalized = value.replace(/\r/g, "").replace(/\t/g, "    ");
+	if (normalized.length <= maxLength) return normalized;
+	if (maxLength <= 3) return normalized.slice(0, maxLength);
+	return `${normalized.slice(0, maxLength - 3)}...`;
+}
+
 function renderPlainBox(lines: readonly string[], width: number, theme: ExtensionContext["ui"]["theme"]): string[] {
 	const boxWidth = Math.max(24, width);
 	const contentWidth = Math.max(1, boxWidth - 4);
 	const top = theme.fg("borderMuted", `+${"-".repeat(boxWidth - 2)}+`);
 	const bottom = theme.fg("borderMuted", `+${"-".repeat(boxWidth - 2)}+`);
 	const body = lines.map((line, index) => {
-		const plain = truncatePlain(line, contentWidth);
+		const plain = truncateLine(line, contentWidth);
 		const padded = `${plain}${" ".repeat(Math.max(0, contentWidth - plain.length))}`;
 		const rendered = `| ${padded} |`;
 		if (index === 0) return theme.bold(rendered);
@@ -1373,27 +1383,43 @@ async function loadSubagentTranscript(sessionFile: string): Promise<SubagentTran
 }
 
 function renderSessionMessageEntry(entry: SessionMessageEntry): SubagentTranscriptMessage[] {
-	const role = entry.message.role;
+	const role = entry.message.role as string;
+	const content = sessionMessageContent(entry.message);
 	if (role === "user") {
+		const prompt = extractDiscordMessageFromPrompt(messageContentText(content));
 		return [
 			{
 				role: "user",
-				text: extractDiscordMessageFromPrompt(messageContentText(entry.message.content)),
+				text: prompt.text,
 				timestamp: entry.timestamp,
+				...(prompt.speaker === undefined ? {} : { speaker: prompt.speaker }),
 			},
 		];
 	}
 	if (role === "assistant") {
-		const messages = assistantContentMessages(entry.message.content);
+		const messages = assistantContentMessages(content);
 		return messages.map((message) => ({ ...message, timestamp: entry.timestamp }));
+	}
+	if (role === "tool") {
+		return [
+			{
+				role: "tool",
+				text: messageContentText(content),
+				timestamp: entry.timestamp,
+			},
+		];
 	}
 	return [
 		{
 			role: "system",
-			text: messageContentText((entry.message as unknown as Record<string, unknown>).content),
+			text: messageContentText(content),
 			timestamp: entry.timestamp,
 		},
 	];
+}
+
+function sessionMessageContent(message: SessionMessageEntry["message"]): unknown {
+	return isRecord(message) ? message.content : undefined;
 }
 
 function assistantContentMessages(content: unknown): Array<Omit<SubagentTranscriptMessage, "timestamp">> {
@@ -1420,16 +1446,16 @@ function assistantContentMessages(content: unknown): Array<Omit<SubagentTranscri
 	return messages;
 }
 
-function extractDiscordMessageFromPrompt(text: string): string {
+function extractDiscordMessageFromPrompt(text: string): { speaker?: string; text: string } {
 	const normalized = text.trim();
 	const marker = "\nMessage from ";
 	const markerIndex = normalized.lastIndexOf(marker);
 	const candidate = markerIndex >= 0 ? normalized.slice(markerIndex + 1) : normalized;
 	const match = /^Message from ([^:\n]+):\n([\s\S]*)$/u.exec(candidate.trim());
-	if (match === null) return truncatePlain(normalized, 1000);
+	if (match === null) return { text: truncatePlain(normalized, 1000) };
 	const sender = match[1]?.trim() ?? "unknown";
 	const message = match[2]?.trim() || "(no text)";
-	return `${sender}: ${message}`;
+	return { speaker: sender, text: message };
 }
 
 function messageContentText(content: unknown): string {
@@ -1448,17 +1474,62 @@ function messageContentText(content: unknown): string {
 
 function renderTranscriptRows(messages: readonly SubagentTranscriptMessage[], width: number): string[] {
 	const rows: string[] = [];
-	for (const message of messages) {
-		const label = message.role === "assistant" ? "clanky" : message.role;
-		const prefix = `${label}: `;
-		const wrapped = wrapPlain(message.text, Math.max(10, width - prefix.length));
-		if (wrapped.length === 0) rows.push(prefix);
-		else {
-			rows.push(`${prefix}${wrapped[0]}`);
-			for (const line of wrapped.slice(1)) rows.push(`${" ".repeat(prefix.length)}${line}`);
+	for (const [index, message] of messages.entries()) {
+		if (index > 0) rows.push("");
+		rows.push(formatTranscriptHeader(message, width));
+		const wrapped = wrapTranscriptText(message.text, Math.max(10, width - 2));
+		if (wrapped.length === 0) {
+			rows.push("  (empty)");
+		} else {
+			for (const line of wrapped) {
+				rows.push(line.length === 0 ? "" : `  ${line}`);
+			}
 		}
 	}
 	return rows;
+}
+
+function formatTranscriptHeader(message: SubagentTranscriptMessage, width: number): string {
+	const timestamp = formatTranscriptTimestamp(message.timestamp);
+	const role = formatTranscriptRole(message.role);
+	const speaker = message.speaker === undefined ? "" : ` / ${message.speaker}`;
+	const prefix = timestamp === undefined ? "" : `[${timestamp}] `;
+	return truncateLine(`${prefix}${role}${speaker}`, width);
+}
+
+function formatTranscriptRole(role: SubagentTranscriptMessage["role"]): string {
+	if (role === "assistant") return "clanky";
+	return role;
+}
+
+function formatTranscriptTimestamp(timestamp: string | undefined): string | undefined {
+	if (timestamp === undefined) return undefined;
+	const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/.exec(timestamp);
+	if (match === null) return truncateLine(timestamp, 16);
+	return `${match[1]} ${match[2]}`;
+}
+
+function wrapTranscriptText(text: string, width: number): string[] {
+	const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\t/g, "    ").trim();
+	if (normalized.length === 0) return [];
+	const rows: string[] = [];
+	for (const rawLine of normalized.split("\n")) {
+		if (rawLine.trim().length === 0) {
+			rows.push("");
+			continue;
+		}
+		rows.push(...wrapPlainLine(rawLine, width));
+	}
+	return rows;
+}
+
+function wrapPlainLine(line: string, width: number): string[] {
+	const leadingWhitespace = /^ */.exec(line)?.[0] ?? "";
+	const indent = leadingWhitespace.slice(0, Math.max(0, width - 1));
+	const content = line.trim();
+	const availableWidth = Math.max(1, width - indent.length);
+	const wrapped = wrapPlain(content, availableWidth);
+	return wrapped.length === 0 ? [indent] : wrapped.map((row) => `${indent}${row}`);
 }
 
 function wrapPlain(text: string, width: number): string[] {

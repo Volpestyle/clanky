@@ -49,6 +49,18 @@ runs.
 Agent-owned Discord starts when a token is resolvable (env or stored) and
 `CLANKY_CHAT_GATEWAY_OWNER` is `agent` (the default).
 
+### Discord Subagents
+
+Clanky-owned Discord subagents are a local multitasking aid, not an AgentRoom
+worker system. Normal accepted Discord chat goes to main Clanky when the main
+session is idle. A Discord subagent only takes the chat turn while main Clanky
+is streaming or already has queued main-session work, so Clanky can keep a
+short Discord reply loop open without interrupting foreground work.
+
+Use AgentRoom for multi-agent development work, room tasks, audited worker
+coordination, and shared room-owned chat connectors. Use Clanky subagents only
+for Clanky's own agent-owned Discord multitasking.
+
 ## OpenAI Setup
 
 Clanky can use the normal Pi `/login` OAuth path, or store an OpenAI API key
@@ -67,6 +79,13 @@ in the active profile's `auth.json` (`0600` perms) under provider id `openai`,
 the same slot Pi uses for OpenAI model auth. `CLANKY_OPENAI_API_KEY` and
 `OPENAI_API_KEY` still work as launch-environment overrides; the Clanky-scoped
 env var wins for Clanky tools when both are set.
+
+Clanky's default Pi chat model is `openai/gpt-5.5` with `xhigh` reasoning.
+Clanky-owned Discord subagents use the same default model with `medium`
+reasoning so quick Discord replies do not inherit the main worker's reasoning
+budget. Pi auto-compaction stays enabled by default. In the TUI, use
+`/effort`, `/effort main <level>`, `/effort subagents <level>`, or
+`/effort all <level>` to inspect or change these levels at runtime.
 
 Without a conversation binding, Clanky accepts DMs, Discord @mentions, direct
 replies to his recent messages, natural name mentions (`clanky` / `clank` by

@@ -17,6 +17,7 @@ import type {
 	DiscordInboundConversation,
 	DiscordInboundMessage,
 } from "./agentDiscordGateway.ts";
+import type { ClankyThinkingLevel } from "./clankyDefaults.ts";
 
 interface DiscordMessageSender {
 	sendMessage(input: {
@@ -88,6 +89,15 @@ export class DiscordSubagentCoordinator {
 		await Promise.all([...this.runtimes.values()].map((entry) => entry.runtime.dispose()));
 		this.runtimes.clear();
 		this.pumpWakeups.clear();
+	}
+
+	setThinkingLevel(level: ClankyThinkingLevel): number {
+		let updated = 0;
+		for (const { runtime } of this.runtimes.values()) {
+			runtime.session.setThinkingLevel(level);
+			updated += 1;
+		}
+		return updated;
 	}
 
 	async enqueue(message: DiscordInboundMessage, acceptanceReason: DiscordAcceptanceReason): Promise<void> {
@@ -274,7 +284,8 @@ function buildDiscordSubagentPrompt(message: DiscordInboxMessage, mainStatus: st
 	const channel = message.conversationName ?? message.conversationId;
 	const attachments = renderAttachments(message.attachments);
 	return [
-		"You are a Discord-facing Clanky subagent. Handle this Discord message as one real person for this server/DM.",
+		"You are a Discord-facing Clanky subagent, used only while main Clanky is busy.",
+		"Handle this Discord message as one real person for this server/DM.",
 		"Answer directly and briefly unless the user asks for detail.",
 		"Keep Discord turns short. If work is likely to take more than 1-2 minutes, call delegate_to_main_worker and then give a brief handoff reply.",
 		"Do not claim the main Clanky stopped or changed work unless the status below says so.",

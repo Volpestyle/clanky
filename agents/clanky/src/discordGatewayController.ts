@@ -32,6 +32,7 @@ import {
 	resolveAgentDiscordVoiceConfig,
 	startAgentDiscordVoiceBridge,
 } from "./agentDiscordVoice.ts";
+import type { ClankyThinkingLevel } from "./clankyDefaults.ts";
 import { readMainSessionContext } from "./mainSessionContext.ts";
 import { delegateToMainWorker } from "./mainWorkerDelegation.ts";
 import { type RuntimeTurnQueue, SerialRuntimeTurnQueue } from "./runtimeTurnQueue.ts";
@@ -191,6 +192,10 @@ export class ClankyDiscordGatewayController {
 			runtimeTurnQueue: this.runtimeTurnQueue,
 			log: (line) => this.logBridge(line),
 		});
+	}
+
+	setSubagentThinkingLevel(level: ClankyThinkingLevel): number {
+		return this.handle?.setSubagentThinkingLevel(level) ?? 0;
 	}
 
 	requestVoiceTextUtterance(text: string): void {

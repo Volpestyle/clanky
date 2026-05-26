@@ -1,6 +1,7 @@
-import type { AgentSessionRuntime } from "@earendil-works/pi-coding-agent";
+import type { AgentSessionRuntime, PromptOptions } from "@earendil-works/pi-coding-agent";
 
 export interface RuntimeTurnQueue {
+	isBusy(): boolean;
 	enqueue<T>(task: () => Promise<T>): Promise<T>;
 	enqueuePrompt(
 		runtime: AgentSessionRuntime,
@@ -16,13 +17,26 @@ export interface RuntimeTurnQueuePromptResult {
 
 export interface RuntimeTurnQueuePromptOptions {
 	beforePrompt?: () => void;
+	images?: PromptOptions["images"];
 }
 
 export class SerialRuntimeTurnQueue implements RuntimeTurnQueue {
 	private tail: Promise<void> = Promise.resolve();
+	private pending = 0;
+
+	isBusy(): boolean {
+		return this.pending > 0;
+	}
 
 	enqueue<T>(task: () => Promise<T>): Promise<T> {
-		const run = this.tail.then(task);
+		this.pending += 1;
+		const run = this.tail.then(async () => {
+			try {
+				return await task();
+			} finally {
+				this.pending -= 1;
+			}
+		});
 		this.tail = run.then(
 			() => undefined,
 			() => undefined,
@@ -39,7 +53,11 @@ export class SerialRuntimeTurnQueue implements RuntimeTurnQueue {
 			options?.beforePrompt?.();
 			const session = runtime.session;
 			const mode = session.isStreaming ? "followUp" : "start";
-			await session.prompt(prompt, { source: "extension", streamingBehavior: "followUp" });
+			await session.prompt(prompt, {
+				source: "extension",
+				streamingBehavior: "followUp",
+				...(options?.images === undefined ? {} : { images: options.images }),
+			});
 			return { mode, sessionId: session.sessionId };
 		});
 	}

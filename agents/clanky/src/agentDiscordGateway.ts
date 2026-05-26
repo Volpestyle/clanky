@@ -3,8 +3,10 @@ import { DiscordChatGatewayProvider, type DiscordGatewayClient } from "@agentroo
 import {
 	type ClankyDiscordCredentialKind,
 	DEFAULT_CLANKY_DISCORD_PROVIDER_ID,
+	type DiscordMessageSummary,
 	type DiscordSubagentStore,
 	loadStoredDiscordCredential,
+	readDiscordMessages,
 	shouldStartAgentChatGateway,
 } from "@clanky/core";
 import type {
@@ -12,8 +14,10 @@ import type {
 	AgentSessionRuntime,
 	AuthStorage,
 	CreateAgentSessionRuntimeFactory,
+	PromptOptions,
 } from "@earendil-works/pi-coding-agent";
 import { createAgentDiscordClient } from "./agentDiscordClient.ts";
+import type { ClankyThinkingLevel } from "./clankyDefaults.ts";
 import { DiscordSubagentCoordinator } from "./discordSubagentCoordinator.ts";
 import { type RuntimeTurnQueue, SerialRuntimeTurnQueue } from "./runtimeTurnQueue.ts";
 
@@ -38,6 +42,8 @@ export interface DiscordInboundSender {
 export interface DiscordInboundAttachment {
 	url?: string;
 	filename?: string;
+	mime?: string;
+	contentType?: string;
 }
 
 export interface DiscordInboundMessage {
@@ -72,7 +78,58 @@ export interface DiscordConversationHistoryEntry {
 	author: string;
 	text: string;
 	attachmentLabels: string[];
+	attachments?: DiscordConversationAttachmentEntry[];
 	messageId?: string;
+}
+
+export interface DiscordConversationAttachmentEntry {
+	url?: string;
+	filename?: string;
+	mime?: string;
+	contentType?: string;
+}
+
+export interface DiscordConversationPromptMetadata {
+	conversationId: string;
+	conversationKind: DiscordInboundConversation["kind"];
+	messageId: string;
+	guildId?: string;
+	threadId?: string;
+	parentId?: string;
+	displayName?: string;
+}
+
+export type DiscordPromptImageContent = NonNullable<PromptOptions["images"]>[number];
+
+export interface DiscordPromptImageCandidate {
+	label: string;
+	url: string;
+	mimeType?: string;
+}
+
+export interface DiscordPromptImageReference {
+	index: number;
+	label: string;
+	sourceUrl: string;
+	mimeType: string;
+}
+
+export interface DiscordPromptImages {
+	images: DiscordPromptImageContent[];
+	references: DiscordPromptImageReference[];
+	failures: string[];
+}
+
+export interface ResolveDiscordPromptImagesOptions {
+	maxImages?: number;
+	maxBytes?: number;
+	fetchImage?: (candidate: DiscordPromptImageCandidate, maxBytes: number) => Promise<DiscordPromptImageContent>;
+}
+
+export interface DiscordSubagentRoutingState {
+	subagentsAvailable: boolean;
+	mainSessionStreaming: boolean;
+	mainQueueBusy: boolean;
 }
 
 export type DiscordBridgeCommand =
@@ -95,7 +152,10 @@ const DEFAULT_ENGAGEMENT_WINDOW_MS = 5 * 60 * 1000;
 const DEFAULT_DISCORD_WAKE_NAMES = ["clanky", "clank"];
 const DISCORD_BRIDGE_COMMAND_PREFIXES = ["/clanky", "/clank", "!clanky", "!clank"];
 const MAX_TRACKED_SELF_MESSAGES = 200;
-const MAX_CONVERSATION_HISTORY_MESSAGES = 8;
+const MAX_CONVERSATION_HISTORY_MESSAGES = 20;
+const MAX_DISCORD_PROMPT_IMAGES = 4;
+const MAX_DISCORD_PROMPT_IMAGE_BYTES = 8 * 1024 * 1024;
+const DISCORD_IMAGE_FETCH_TIMEOUT_MS = 10_000;
 const PRIMARY_WAKE_TOKEN_MIN_LEN = 4;
 const EN_WAKE_PRIMARY_GENERIC_TOKENS = new Set(["bot", "ai", "assistant"]);
 const LEADING_WAKE_PREFIX_TOKENS = new Set([
@@ -134,6 +194,7 @@ function resolveDiscordWakeNames(env: NodeJS.ProcessEnv): string[] {
 export interface ClankyAgentDiscordGatewayHandle {
 	readonly client: DiscordGatewayClient;
 	stop(): Promise<void>;
+	setSubagentThinkingLevel(level: ClankyThinkingLevel): number;
 }
 
 /**
@@ -264,6 +325,7 @@ export async function startAgentDiscordGateway(
 		engagementWindowMs,
 		wakeNames: input.wakeNames ?? resolveDiscordWakeNames(process.env),
 		runtimeTurnQueue: input.runtimeTurnQueue ?? new SerialRuntimeTurnQueue(),
+		...(input.authStorage === undefined ? {} : { authStorage: input.authStorage }),
 		...(subagents === undefined ? {} : { subagents }),
 		...(input.bridgeLogPath !== undefined ? { bridgeLogPath: input.bridgeLogPath } : {}),
 	});
@@ -275,6 +337,7 @@ interface AgentDiscordBridgeOptions {
 	engagementWindowMs: number;
 	wakeNames: string[];
 	runtimeTurnQueue: RuntimeTurnQueue;
+	authStorage?: AuthStorage;
 	subagents?: DiscordSubagentCoordinator;
 	bridgeLogPath?: string;
 }
@@ -370,9 +433,14 @@ class AgentDiscordBridge implements ClankyAgentDiscordGatewayHandle {
 			this.logBridge(
 				`inbound accepted ext=${message.externalMessageId} channel=${channelId} from=${senderId} reason=${decision.reason}`,
 			);
-			if (this.subagents !== undefined) {
-				await this.subagents.enqueue(message, decision.reason);
-				this.logBridge(`queued-for-subagent ext=${message.externalMessageId} channel=${channelId}`);
+			const subagents = this.subagents;
+			if (subagents !== undefined && this.shouldRouteToSubagent()) {
+				await subagents.enqueue(message, decision.reason);
+				this.logBridge(
+					`queued-for-subagent ext=${message.externalMessageId} channel=${channelId} mainStreaming=${
+						this.runtime.session.isStreaming
+					} mainQueueBusy=${this.runtimeTurnQueue.isBusy()}`,
+				);
 				return;
 			}
 			await this.forwardToMainRuntime(message, decision.reason, t1);
@@ -387,7 +455,13 @@ class AgentDiscordBridge implements ClankyAgentDiscordGatewayHandle {
 	): Promise<void> {
 		const channelId = message.conversation.id;
 		const senderId = message.sender.id;
-		const userPrompt = this.formatDiscordUserMessage(message, acceptanceReason);
+		await this.refreshConversationHistoryFromDiscord(message);
+		const history = this.recentConversationMessages.get(conversationHistoryKey(message.conversation)) ?? [];
+		const promptImages = await resolveDiscordPromptImages(message, history);
+		for (const failure of promptImages.failures) {
+			this.logBridge(`image-fetch-failed ext=${message.externalMessageId} ${failure}`);
+		}
+		const userPrompt = this.formatDiscordUserMessage(message, acceptanceReason, history, promptImages.references);
 		const pending: PendingDiscordReply = {
 			conversation: message.conversation,
 			replyToExternalMessageId: message.externalMessageId,
@@ -400,6 +474,7 @@ class AgentDiscordBridge implements ClankyAgentDiscordGatewayHandle {
 		try {
 			await this.runtimeTurnQueue.enqueuePrompt(this.runtime, userPrompt, {
 				beforePrompt: () => this.subscribeToCurrentSession(),
+				...(promptImages.images.length === 0 ? {} : { images: promptImages.images }),
 			});
 		} catch (error) {
 			this.removePendingReply(pending);
@@ -414,6 +489,18 @@ class AgentDiscordBridge implements ClankyAgentDiscordGatewayHandle {
 		this.unsubscribe = undefined;
 		await this.subagents?.stop();
 		await this.provider.stop();
+	}
+
+	setSubagentThinkingLevel(level: ClankyThinkingLevel): number {
+		return this.subagents?.setThinkingLevel(level) ?? 0;
+	}
+
+	private shouldRouteToSubagent(): boolean {
+		return shouldRouteDiscordMessageToSubagent({
+			subagentsAvailable: this.subagents !== undefined,
+			mainSessionStreaming: this.runtime.session.isStreaming,
+			mainQueueBusy: this.runtimeTurnQueue.isBusy(),
+		});
 	}
 
 	private subscribeToCurrentSession(): void {
@@ -457,7 +544,7 @@ class AgentDiscordBridge implements ClankyAgentDiscordGatewayHandle {
 			text,
 		});
 		this.rememberSelfMessageId(sent.externalMessageId);
-		this.recordAssistantMessage(pending.channelId, sent.externalMessageId, text);
+		this.recordAssistantMessage(conversationHistoryKey(pending.conversation), sent.externalMessageId, text);
 		this.recordEngagement(pending.channelId, pending.senderId);
 		this.logBridge(
 			`discord-sent ext=${pending.replyToExternalMessageId} reply-id=${sent.externalMessageId} send-dt=${
@@ -502,9 +589,13 @@ class AgentDiscordBridge implements ClankyAgentDiscordGatewayHandle {
 		return dedupeWakeNames([...clientNames, ...this.options.wakeNames]);
 	}
 
-	private formatDiscordUserMessage(message: DiscordInboundMessage, reason: DiscordAcceptanceReason): string {
-		const history = this.recentConversationMessages.get(message.conversation.id) ?? [];
-		return formatDiscordUserMessage(message, reason, history);
+	private formatDiscordUserMessage(
+		message: DiscordInboundMessage,
+		reason: DiscordAcceptanceReason,
+		history: DiscordConversationHistoryEntry[],
+		imageReferences: DiscordPromptImageReference[],
+	): string {
+		return formatDiscordUserMessage(message, reason, history, conversationPromptMetadata(message), imageReferences);
 	}
 
 	private async handleBridgeCommand(
@@ -572,7 +663,7 @@ class AgentDiscordBridge implements ClankyAgentDiscordGatewayHandle {
 			text,
 		});
 		this.rememberSelfMessageId(sent.externalMessageId);
-		this.recordAssistantMessage(message.conversation.id, sent.externalMessageId, text);
+		this.recordAssistantMessage(conversationHistoryKey(message.conversation), sent.externalMessageId, text);
 		this.recordEngagement(message.conversation.id, message.sender.id);
 		this.inboundReceivedAt.delete(message.externalMessageId);
 	}
@@ -584,14 +675,38 @@ class AgentDiscordBridge implements ClankyAgentDiscordGatewayHandle {
 
 	private recordInboundMessage(message: DiscordInboundMessage): void {
 		const author = message.sender.displayName ?? message.sender.username ?? message.sender.id;
-		this.recordConversationMessage(message.conversation.id, {
+		this.recordConversationMessage(conversationHistoryKey(message.conversation), {
 			author,
 			text: message.text.trim() || "(no text)",
 			attachmentLabels: message.attachments
 				.map((attachment) => attachment.filename ?? attachment.url)
 				.filter((value): value is string => value !== undefined && value.trim().length > 0),
+			attachments: message.attachments.map(discordInboundAttachmentToHistoryAttachment),
 			messageId: message.externalMessageId,
 		});
+	}
+
+	private async refreshConversationHistoryFromDiscord(message: DiscordInboundMessage): Promise<void> {
+		const channelId = conversationHistoryKey(message.conversation);
+		try {
+			const messages = await readDiscordMessages(
+				{
+					channelId,
+					limit: MAX_CONVERSATION_HISTORY_MESSAGES,
+					before: message.externalMessageId,
+				},
+				{
+					...(this.options.authStorage === undefined ? {} : { authStorage: this.options.authStorage }),
+				},
+			);
+			this.mergeConversationHistory(channelId, messages.slice().reverse().map(discordMessageToHistoryEntry));
+		} catch (error) {
+			this.logBridge(
+				`history-fetch-failed ext=${message.externalMessageId} channel=${channelId} error=${
+					error instanceof Error ? error.message : String(error)
+				}`,
+			);
+		}
 	}
 
 	private recordAssistantMessage(channelId: string, messageId: string, text: string): void {
@@ -610,6 +725,18 @@ class AgentDiscordBridge implements ClankyAgentDiscordGatewayHandle {
 		this.recentConversationMessages.set(channelId, entries);
 	}
 
+	private mergeConversationHistory(channelId: string, entries: DiscordConversationHistoryEntry[]): void {
+		if (entries.length === 0) return;
+		const existing = this.recentConversationMessages.get(channelId) ?? [];
+		const incomingIds = new Set(entries.flatMap((entry) => (entry.messageId === undefined ? [] : [entry.messageId])));
+		const merged = [
+			...existing.filter((entry) => entry.messageId === undefined || !incomingIds.has(entry.messageId)),
+			...entries,
+		];
+		while (merged.length > MAX_CONVERSATION_HISTORY_MESSAGES) merged.shift();
+		this.recentConversationMessages.set(channelId, merged);
+	}
+
 	private logBridge(line: string): void {
 		const path = this.options.bridgeLogPath;
 		if (path === undefined) return;
@@ -622,6 +749,213 @@ class AgentDiscordBridge implements ClankyAgentDiscordGatewayHandle {
 
 function engagementKey(channelId: string, userId: string): string {
 	return `${channelId}:${userId}`;
+}
+
+export function shouldRouteDiscordMessageToSubagent(state: DiscordSubagentRoutingState): boolean {
+	return state.subagentsAvailable && (state.mainSessionStreaming || state.mainQueueBusy);
+}
+
+function conversationHistoryKey(conversation: DiscordInboundConversation): string {
+	return conversation.threadId ?? conversation.id;
+}
+
+function conversationPromptMetadata(message: DiscordInboundMessage): DiscordConversationPromptMetadata {
+	return {
+		conversationId: message.conversation.id,
+		conversationKind: message.conversation.kind,
+		messageId: message.externalMessageId,
+		...(message.conversation.guildId === undefined ? {} : { guildId: message.conversation.guildId }),
+		...(message.conversation.threadId === undefined ? {} : { threadId: message.conversation.threadId }),
+		...(message.conversation.parentId === undefined ? {} : { parentId: message.conversation.parentId }),
+		...(message.conversation.displayName === undefined ? {} : { displayName: message.conversation.displayName }),
+	};
+}
+
+function discordMessageToHistoryEntry(message: DiscordMessageSummary): DiscordConversationHistoryEntry {
+	return {
+		author: message.authorUsername ?? message.authorId ?? "unknown",
+		text: message.content.trim() || "(no text)",
+		attachmentLabels: message.attachmentUrls,
+		attachments: message.attachments.map((attachment) => ({
+			...(attachment.url === undefined ? {} : { url: attachment.url }),
+			...(attachment.filename === undefined ? {} : { filename: attachment.filename }),
+			...(attachment.contentType === undefined ? {} : { contentType: attachment.contentType }),
+		})),
+		messageId: message.id,
+	};
+}
+
+function discordInboundAttachmentToHistoryAttachment(
+	attachment: DiscordInboundAttachment,
+): DiscordConversationAttachmentEntry {
+	return {
+		...(attachment.url === undefined ? {} : { url: attachment.url }),
+		...(attachment.filename === undefined ? {} : { filename: attachment.filename }),
+		...(attachment.mime === undefined ? {} : { mime: attachment.mime }),
+		...(attachment.contentType === undefined ? {} : { contentType: attachment.contentType }),
+	};
+}
+
+export async function resolveDiscordPromptImages(
+	message: DiscordInboundMessage,
+	history: readonly DiscordConversationHistoryEntry[],
+	options: ResolveDiscordPromptImagesOptions = {},
+): Promise<DiscordPromptImages> {
+	const maxImages = clampPositiveInt(options.maxImages, MAX_DISCORD_PROMPT_IMAGES);
+	const maxBytes = clampPositiveInt(options.maxBytes, MAX_DISCORD_PROMPT_IMAGE_BYTES);
+	const fetchImage = options.fetchImage ?? fetchDiscordPromptImage;
+	const candidates = maxImages === 0 ? [] : collectDiscordPromptImageCandidates(message, history).slice(-maxImages);
+	const images: DiscordPromptImageContent[] = [];
+	const references: DiscordPromptImageReference[] = [];
+	const failures: string[] = [];
+
+	for (const candidate of candidates) {
+		try {
+			const image = await fetchImage(candidate, maxBytes);
+			images.push(image);
+			references.push({
+				index: images.length,
+				label: candidate.label,
+				sourceUrl: candidate.url,
+				mimeType: image.mimeType,
+			});
+		} catch (error) {
+			failures.push(
+				`label=${JSON.stringify(candidate.label)} url=${candidate.url} error=${
+					error instanceof Error ? error.message : String(error)
+				}`,
+			);
+		}
+	}
+
+	return { images, references, failures };
+}
+
+function collectDiscordPromptImageCandidates(
+	message: DiscordInboundMessage,
+	history: readonly DiscordConversationHistoryEntry[],
+): DiscordPromptImageCandidate[] {
+	const candidates: DiscordPromptImageCandidate[] = [];
+	for (const entry of history) {
+		const sourceLabel =
+			entry.messageId === undefined ? `recent message from ${entry.author}` : `message ${entry.messageId}`;
+		const attachments: DiscordConversationAttachmentEntry[] =
+			entry.attachments ?? entry.attachmentLabels.map((label) => ({ url: label }));
+		for (const attachment of attachments) {
+			const attachmentName = "filename" in attachment ? (attachment.filename ?? attachment.url ?? "") : attachment.url;
+			const candidate = promptImageCandidateFromAttachment(
+				attachment,
+				`${sourceLabel} attachment ${attachmentName}`.trim(),
+			);
+			if (candidate !== undefined) candidates.push(candidate);
+		}
+	}
+	for (const attachment of message.attachments) {
+		const candidate = promptImageCandidateFromAttachment(
+			attachment,
+			`newest message attachment ${attachment.filename ?? attachment.url ?? ""}`.trim(),
+		);
+		if (candidate !== undefined) candidates.push(candidate);
+	}
+	return candidates;
+}
+
+function promptImageCandidateFromAttachment(
+	attachment: DiscordConversationAttachmentEntry,
+	label: string,
+): DiscordPromptImageCandidate | undefined {
+	const url = normalizeHttpUrl(attachment.url);
+	if (url === undefined) return undefined;
+	const mimeType =
+		normalizeImageMimeType(attachment.mime) ??
+		normalizeImageMimeType(attachment.contentType) ??
+		inferImageMimeType(attachment.filename) ??
+		inferImageMimeType(url);
+	if (mimeType === undefined) return undefined;
+	return { label, url, mimeType };
+}
+
+async function fetchDiscordPromptImage(
+	candidate: DiscordPromptImageCandidate,
+	maxBytes: number,
+): Promise<DiscordPromptImageContent> {
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), DISCORD_IMAGE_FETCH_TIMEOUT_MS);
+	timeout.unref?.();
+	try {
+		const response = await fetch(candidate.url, { signal: controller.signal });
+		if (!response.ok) {
+			throw new Error(`HTTP ${response.status} ${response.statusText}`);
+		}
+		const contentLength = response.headers.get("content-length");
+		if (contentLength !== null) {
+			const bytes = Number.parseInt(contentLength, 10);
+			if (Number.isFinite(bytes) && bytes > maxBytes) {
+				throw new Error(`image is ${bytes} bytes, limit is ${maxBytes}`);
+			}
+		}
+		const responseMimeType = normalizeImageMimeType(response.headers.get("content-type") ?? undefined);
+		const mimeType = responseMimeType ?? candidate.mimeType;
+		if (mimeType === undefined) throw new Error("response is not a supported image type");
+		const bytes = Buffer.from(await response.arrayBuffer());
+		if (bytes.byteLength > maxBytes) {
+			throw new Error(`image is ${bytes.byteLength} bytes, limit is ${maxBytes}`);
+		}
+		return {
+			type: "image",
+			data: bytes.toString("base64"),
+			mimeType,
+		};
+	} finally {
+		clearTimeout(timeout);
+	}
+}
+
+function normalizeHttpUrl(value: string | undefined): string | undefined {
+	const trimmed = value?.trim();
+	if (trimmed === undefined || trimmed.length === 0) return undefined;
+	try {
+		const parsed = new URL(trimmed);
+		if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return undefined;
+		return parsed.toString();
+	} catch {
+		return undefined;
+	}
+}
+
+function normalizeImageMimeType(value: string | undefined): string | undefined {
+	const type = value?.split(";")[0]?.trim().toLowerCase();
+	if (type === "image/png" || type === "image/jpeg" || type === "image/webp" || type === "image/gif") {
+		return type;
+	}
+	return undefined;
+}
+
+function inferImageMimeType(value: string | undefined): string | undefined {
+	const trimmed = value?.trim();
+	if (trimmed === undefined || trimmed.length === 0) return undefined;
+	let path = trimmed;
+	try {
+		path = new URL(trimmed).pathname;
+	} catch {
+		path = trimmed;
+	}
+	let lower = path.toLowerCase();
+	try {
+		lower = decodeURIComponent(path).toLowerCase();
+	} catch {
+		lower = path.toLowerCase();
+	}
+	if (lower.endsWith(".png")) return "image/png";
+	if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+	if (lower.endsWith(".webp")) return "image/webp";
+	if (lower.endsWith(".gif")) return "image/gif";
+	return undefined;
+}
+
+function clampPositiveInt(value: number | undefined, fallback: number): number {
+	if (value === undefined || !Number.isFinite(value)) return fallback;
+	return Math.max(0, Math.floor(value));
 }
 
 function parseDiscordCredentialKind(value: string | undefined): DiscordCredentialKind {
@@ -742,6 +1076,8 @@ export function formatDiscordUserMessage(
 	message: DiscordInboundMessage,
 	reason: DiscordAcceptanceReason,
 	history: DiscordConversationHistoryEntry[] = [],
+	metadata: DiscordConversationPromptMetadata = conversationPromptMetadata(message),
+	imageReferences: DiscordPromptImageReference[] = [],
 ): string {
 	const sender = message.sender.displayName ?? message.sender.username ?? message.sender.id;
 	const attachmentLines = message.attachments
@@ -761,6 +1097,26 @@ export function formatDiscordUserMessage(
 		"If you use a Discord send/upload tool for the current channel and that action already satisfies the user, output exactly [SKIP] as your final response instead of posting a duplicate confirmation.",
 		"Only reply with text when it adds something useful beyond actions already taken.",
 		"",
+		"Discord conversation:",
+		`- kind: ${metadata.conversationKind}`,
+		`- conversationId: ${metadata.conversationId}`,
+		`- channelOrThreadId: ${metadata.threadId ?? metadata.conversationId}`,
+		...(metadata.guildId === undefined ? [] : [`- guildId: ${metadata.guildId}`]),
+		...(metadata.threadId === undefined ? [] : [`- threadId: ${metadata.threadId}`]),
+		...(metadata.parentId === undefined ? [] : [`- parentId: ${metadata.parentId}`]),
+		...(metadata.displayName === undefined ? [] : [`- displayName: ${metadata.displayName}`]),
+		`- newestMessageId: ${metadata.messageId}`,
+		"If the user asks about Discord history beyond the messages shown here, use discord_read_messages with channelOrThreadId before answering.",
+		"",
+		...(imageReferences.length > 0
+			? [
+					"Visual attachments included with this turn (actual image pixels are attached to this model request):",
+					...imageReferences.map(
+						(reference) => `- image ${reference.index}: ${reference.label} (${reference.mimeType})`,
+					),
+					"",
+				]
+			: []),
 		...(historyBlock.length > 0 ? ["Recent chat before the newest message:", historyBlock, ""] : []),
 		"Newest Discord message:",
 		`From: ${sender}`,

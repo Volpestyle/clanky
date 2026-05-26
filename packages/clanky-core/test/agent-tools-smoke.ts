@@ -366,7 +366,10 @@ async function assertSubagentPanelCommand(): Promise<void> {
 	const firstSessionFile = join(tmpRoot, "first-subagent.jsonl");
 	const selectedSessionFile = join(tmpRoot, "selected-subagent.jsonl");
 	await writeFile(firstSessionFile, subagentSessionFixture("First User", "first discord", "first back"));
-	await writeFile(selectedSessionFile, subagentSessionFixture("Smoke User", "hello discord", "hello back"));
+	await writeFile(
+		selectedSessionFile,
+		subagentSessionFixture("Smoke User", "hello discord\nsecond line", "hello back\n\nnext step done"),
+	);
 	try {
 		await assertSubagentPanelCommandWithSession({ firstSessionFile, selectedSessionFile });
 	} finally {
@@ -548,8 +551,13 @@ async function assertSubagentPanelCommandWithSession(sessionFiles: {
 	}
 	if (
 		detailLines === undefined ||
+		!detailLines.join("\n").includes("Conversation history (2 messages)") ||
+		!detailLines.join("\n").includes("[2026-01-01 00:01] user / Smoke User") ||
+		!detailLines.join("\n").includes("[2026-01-01 00:02] clanky") ||
 		!detailLines.join("\n").includes("hello discord") ||
-		!detailLines.join("\n").includes("hello back")
+		!detailLines.join("\n").includes("second line") ||
+		!detailLines.join("\n").includes("hello back") ||
+		!detailLines.join("\n").includes("next step done")
 	) {
 		throw new Error(`smoke: /subagents enter did not render transcript: ${JSON.stringify(detailLines)}`);
 	}

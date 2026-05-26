@@ -13,11 +13,22 @@ import {
 	createAgentSessionFromServices,
 	createAgentSessionRuntime,
 	createAgentSessionServices,
+	type ExtensionFactory,
 	InteractiveMode,
 	ModelRegistry,
 	SessionManager,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import {
+	CLANKY_THINKING_LEVELS,
+	type ClankyRuntimeDefaults,
+	type ClankyThinkingLevel,
+	DEFAULT_CLANKY_MAIN_THINKING_LEVEL,
+	DEFAULT_CLANKY_MODEL_ID,
+	DEFAULT_CLANKY_MODEL_PROVIDER,
+	DEFAULT_CLANKY_SUBAGENT_THINKING_LEVEL,
+	isClankyThinkingLevel,
+} from "./clankyDefaults.ts";
 import { createDiscordAuthExtensionFactory, resolveDefaultDiscordProviderId } from "./discordAuth.ts";
 import { ClankyDiscordGatewayController } from "./discordGatewayController.ts";
 import { createClankyHandlers } from "./handlers.ts";
@@ -25,6 +36,13 @@ import { createOpenAiAuthExtensionFactory } from "./openAiAuth.ts";
 import { loadPersona } from "./persona.ts";
 import { createClankyStores } from "./stores.ts";
 import { createXAiAuthExtensionFactory } from "./xAiAuth.ts";
+
+export {
+	DEFAULT_CLANKY_MAIN_THINKING_LEVEL,
+	DEFAULT_CLANKY_MODEL_ID,
+	DEFAULT_CLANKY_MODEL_PROVIDER,
+	DEFAULT_CLANKY_SUBAGENT_THINKING_LEVEL,
+} from "./clankyDefaults.ts";
 
 export interface RunClankyOptions {
 	cwd?: string;
@@ -77,13 +95,24 @@ function resolvePackageRoot(): string {
  */
 function buildRuntimeFactory(opts: {
 	paths: ReturnType<typeof resolveClankyPaths>;
+	stores: ReturnType<typeof createClankyStores>;
 	basePersona: string;
 	authStorage: AuthStorage;
 	discordProviderId: string;
 	gatewayController: ClankyDiscordGatewayController;
+	defaultThinkingLevel: () => ClankyThinkingLevel;
+	additionalExtensionFactories?: ExtensionFactory[];
 }): CreateAgentSessionRuntimeFactory {
-	const { paths, basePersona, authStorage, discordProviderId, gatewayController } = opts;
-	const stores = createClankyStores(paths);
+	const {
+		paths,
+		stores,
+		basePersona,
+		authStorage,
+		discordProviderId,
+		gatewayController,
+		defaultThinkingLevel,
+		additionalExtensionFactories = [],
+	} = opts;
 	const handlers = createClankyHandlers(paths, stores, {
 		authStorage,
 		mainSessionContext: async (input) => gatewayController.mainSessionContext(input),
@@ -107,7 +136,11 @@ function buildRuntimeFactory(opts: {
 
 	return async ({ cwd: runtimeCwd, sessionManager, sessionStartEvent }) => {
 		const modelRegistry = ModelRegistry.create(authStorage, paths.modelsFile);
-		const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false } });
+		const settingsManager = SettingsManager.inMemory({
+			defaultProvider: DEFAULT_CLANKY_MODEL_PROVIDER,
+			defaultModel: DEFAULT_CLANKY_MODEL_ID,
+			defaultThinkingLevel: defaultThinkingLevel(),
+		});
 
 		const servicesOptions = {
 			cwd: runtimeCwd,
@@ -118,6 +151,7 @@ function buildRuntimeFactory(opts: {
 			resourceLoaderOptions: {
 				extensionFactories: [
 					...createClankyExtensionFactories(handlers),
+					...additionalExtensionFactories,
 					discordAuthFactory,
 					openAiAuthFactory,
 					xAiAuthFactory,
@@ -154,6 +188,113 @@ function buildRuntimeFactory(opts: {
 	};
 }
 
+export function createClankyEffortExtensionFactory(
+	defaults: ClankyRuntimeDefaults,
+	options: { setActiveSubagentThinkingLevel?: (level: ClankyThinkingLevel) => number } = {},
+): ExtensionFactory {
+	return (pi) => {
+		pi.on("thinking_level_select", (event) => {
+			if (isClankyThinkingLevel(event.level)) defaults.mainThinkingLevel = event.level;
+		});
+		pi.registerCommand("effort", {
+			description: "Show or set Clanky reasoning effort",
+			handler: async (args, ctx) => {
+				const parsed = parseEffortCommandArgs(args);
+				if (parsed === undefined) {
+					ctx.ui.notify(formatEffortUsage(defaults), "warning");
+					return;
+				}
+				if (parsed.target === "status") {
+					ctx.ui.notify(formatEffortStatus(defaults, pi.getThinkingLevel()));
+					return;
+				}
+				let activeSubagentsUpdated = 0;
+				if (parsed.target === "main" || parsed.target === "all") {
+					defaults.mainThinkingLevel = parsed.level;
+					pi.setThinkingLevel(parsed.level);
+					const effectiveMain = pi.getThinkingLevel();
+					if (isClankyThinkingLevel(effectiveMain)) defaults.mainThinkingLevel = effectiveMain;
+				}
+				if (parsed.target === "subagents" || parsed.target === "all") {
+					defaults.subagentThinkingLevel = parsed.level;
+					activeSubagentsUpdated = options.setActiveSubagentThinkingLevel?.(parsed.level) ?? 0;
+				}
+				ctx.ui.notify(formatEffortUpdate(parsed.target, defaults, pi.getThinkingLevel(), activeSubagentsUpdated));
+			},
+		});
+	};
+}
+
+type EffortCommandTarget = "main" | "subagents" | "all";
+
+type ParsedEffortCommand =
+	| {
+			target: "status";
+	  }
+	| {
+			target: EffortCommandTarget;
+			level: ClankyThinkingLevel;
+	  };
+
+function parseEffortCommandArgs(args: string): ParsedEffortCommand | undefined {
+	const parts = args.trim().split(/\s+/).filter(Boolean);
+	if (parts.length === 0) return { target: "status" };
+	const first = parts[0];
+	if (parts.length === 1 && first !== undefined && isClankyThinkingLevel(first)) {
+		return { target: "main", level: first };
+	}
+	if (parts.length !== 2) return undefined;
+	if (first === undefined) return undefined;
+	const target = parseEffortTarget(first);
+	const level = parts[1];
+	if (level === undefined || target === undefined || !isClankyThinkingLevel(level)) return undefined;
+	return { target, level };
+}
+
+function parseEffortTarget(value: string): EffortCommandTarget | undefined {
+	const normalized = value.toLowerCase();
+	if (normalized === "main" || normalized === "clanky" || normalized === "self") return "main";
+	if (normalized === "subagent" || normalized === "subagents" || normalized === "discord") return "subagents";
+	if (normalized === "all" || normalized === "both") return "all";
+	return undefined;
+}
+
+function formatEffortStatus(defaults: ClankyRuntimeDefaults, effectiveMain: string): string {
+	return [
+		"Effort",
+		`Main Clanky: ${effectiveMain} (default ${defaults.mainThinkingLevel})`,
+		`Clanky subagents: ${defaults.subagentThinkingLevel}`,
+		"",
+		"Usage: /effort [main|subagents|all] <off|minimal|low|medium|high|xhigh>",
+	].join("\n");
+}
+
+function formatEffortUsage(defaults: ClankyRuntimeDefaults): string {
+	return [
+		"Effort",
+		"Usage: /effort [main|subagents|all] <off|minimal|low|medium|high|xhigh>",
+		`Current defaults: main ${defaults.mainThinkingLevel}, subagents ${defaults.subagentThinkingLevel}.`,
+		`Levels: ${CLANKY_THINKING_LEVELS.join(", ")}`,
+	].join("\n");
+}
+
+function formatEffortUpdate(
+	target: EffortCommandTarget,
+	defaults: ClankyRuntimeDefaults,
+	effectiveMain: string,
+	activeSubagentsUpdated: number,
+): string {
+	const lines = [
+		"Effort updated",
+		`Main Clanky: ${effectiveMain} (default ${defaults.mainThinkingLevel})`,
+		`Clanky subagents: ${defaults.subagentThinkingLevel}`,
+	];
+	if (target === "subagents" || target === "all") {
+		lines.push(`Active subagent sessions updated: ${activeSubagentsUpdated}`);
+	}
+	return lines.join("\n");
+}
+
 /**
  * Build (but do not start) the clanky AgentSessionRuntime. Exposed primarily
  * for smoke tests that want to assert wiring without needing a TTY.
@@ -167,19 +308,38 @@ export async function createClankyRuntime(options: RunClankyOptions = {}) {
 	const basePersona = await loadPersona(resolvePackageRoot());
 	const authStorage = AuthStorage.create(paths.authFile);
 	const discordProviderId = resolveDefaultDiscordProviderId();
+	const stores = createClankyStores(paths);
+	const runtimeDefaults: ClankyRuntimeDefaults = {
+		mainThinkingLevel: DEFAULT_CLANKY_MAIN_THINKING_LEVEL,
+		subagentThinkingLevel: DEFAULT_CLANKY_SUBAGENT_THINKING_LEVEL,
+	};
 	const gatewayController = new ClankyDiscordGatewayController({
 		authStorage,
 		paths,
 		bridgeLogPath: `${paths.profileDir}/discord-bridge.log`,
 	});
-	const createRuntime = buildRuntimeFactory({
+	const runtimeFactoryOptions = {
 		paths,
+		stores,
 		basePersona,
 		authStorage,
 		discordProviderId,
 		gatewayController,
+	};
+	const createRuntime = buildRuntimeFactory({
+		...runtimeFactoryOptions,
+		defaultThinkingLevel: () => runtimeDefaults.mainThinkingLevel,
+		additionalExtensionFactories: [
+			createClankyEffortExtensionFactory(runtimeDefaults, {
+				setActiveSubagentThinkingLevel: (level) => gatewayController.setSubagentThinkingLevel(level),
+			}),
+		],
 	});
-	gatewayController.bindSubagentRuntimeFactory(createRuntime, cwd);
+	const createSubagentRuntime = buildRuntimeFactory({
+		...runtimeFactoryOptions,
+		defaultThinkingLevel: () => runtimeDefaults.subagentThinkingLevel,
+	});
+	gatewayController.bindSubagentRuntimeFactory(createSubagentRuntime, cwd);
 
 	const runtime = await createAgentSessionRuntime(createRuntime, {
 		cwd,
@@ -188,7 +348,7 @@ export async function createClankyRuntime(options: RunClankyOptions = {}) {
 	});
 	gatewayController.bindRuntime(runtime);
 
-	return { runtime, paths, authStorage, gatewayController };
+	return { runtime, paths, authStorage, gatewayController, createRuntime, createSubagentRuntime };
 }
 
 /**
@@ -196,7 +356,7 @@ export async function createClankyRuntime(options: RunClankyOptions = {}) {
  *
  * Wires the @clanky/core agent-tool handlers + extension factories, injects
  * the clanky persona via systemPromptOverride, merges bundled/profile skills,
- * disables compaction, and hands the runtime to `InteractiveMode`.
+ * sets Clanky's model defaults, and hands the runtime to `InteractiveMode`.
  */
 export async function runClanky(options: RunClankyOptions = {}): Promise<void> {
 	const { runtime, gatewayController } = await createClankyRuntime(options);

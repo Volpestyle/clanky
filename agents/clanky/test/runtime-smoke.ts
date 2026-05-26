@@ -26,7 +26,12 @@ import {
 	saveStoredOpenAiApiKey,
 	saveStoredXAiApiKey,
 } from "@clanky/core";
-import { AuthStorage } from "@earendil-works/pi-coding-agent";
+import {
+	AuthStorage,
+	type ExtensionCommandContext,
+	type ExtensionFactory,
+	SessionManager,
+} from "@earendil-works/pi-coding-agent";
 import type { CreateAgentDiscordClientOptions } from "../src/agentDiscordClient.ts";
 import {
 	evaluateDiscordMessageAcceptance,
@@ -35,19 +40,30 @@ import {
 	parseDiscordBridgeCommand,
 	resolveAgentDiscordCredentialConfig,
 	resolveAgentDiscordGatewayConfig,
+	resolveDiscordPromptImages,
+	shouldRouteDiscordMessageToSubagent,
 } from "../src/agentDiscordGateway.ts";
 import { DEFAULT_REALTIME_MODEL, resolveAgentDiscordVoiceConfig } from "../src/agentDiscordVoice.ts";
 import { createDiscordAuthExtensionFactory } from "../src/discordAuth.ts";
 import { ClankyDiscordGatewayController } from "../src/discordGatewayController.ts";
 import { delegateToMainWorker } from "../src/mainWorkerDelegation.ts";
 import { createOpenAiAuthExtensionFactory } from "../src/openAiAuth.ts";
-import { createClankyRuntime } from "../src/runClanky.ts";
+import {
+	createClankyEffortExtensionFactory,
+	createClankyRuntime,
+	DEFAULT_CLANKY_MAIN_THINKING_LEVEL,
+	DEFAULT_CLANKY_MODEL_ID,
+	DEFAULT_CLANKY_MODEL_PROVIDER,
+	DEFAULT_CLANKY_SUBAGENT_THINKING_LEVEL,
+} from "../src/runClanky.ts";
 import { SerialRuntimeTurnQueue } from "../src/runtimeTurnQueue.ts";
 import { createXAiAuthExtensionFactory } from "../src/xAiAuth.ts";
 
 async function main(): Promise<void> {
 	assertAgentDiscordGatewayConfig();
 	assertAgentDiscordGatewayAcceptance();
+	assertDiscordSubagentRouting();
+	await assertAgentDiscordPromptImages();
 	assertDiscordBridgeCommands();
 	assertAgentDiscordVoiceConfig();
 	assertStoredDiscordCredentialPath();
@@ -56,6 +72,7 @@ async function main(): Promise<void> {
 	await assertDiscordAuthExtensionCommands();
 	await assertOpenAiAuthExtensionCommands();
 	await assertXAiAuthExtensionCommands();
+	await assertClankyEffortExtensionCommand();
 	await assertDiscordGatewayControllerStartup();
 	const tmpRoot = await mkdtemp(join(tmpdir(), "clanky-agent-smoke-"));
 	const homeDir = join(tmpRoot, "home");
@@ -63,7 +80,7 @@ async function main(): Promise<void> {
 	await mkdir(cwd, { recursive: true });
 
 	try {
-		const { runtime, paths, gatewayController } = await createClankyRuntime({ homeDir, cwd });
+		const { runtime, paths, gatewayController, createSubagentRuntime } = await createClankyRuntime({ homeDir, cwd });
 
 		if (runtime.session === undefined) {
 			throw new Error("smoke: runtime.session was undefined");
@@ -73,6 +90,18 @@ async function main(): Promise<void> {
 		}
 		if (paths.homeDir !== homeDir) {
 			throw new Error(`smoke: paths.homeDir ${paths.homeDir} did not match ${homeDir}`);
+		}
+		assertClankyRuntimeDefaults(runtime, DEFAULT_CLANKY_MAIN_THINKING_LEVEL, "main runtime");
+
+		const subagentResult = await createSubagentRuntime({
+			cwd,
+			agentDir: paths.profileDir,
+			sessionManager: SessionManager.create(cwd, paths.subagentSessionsDir),
+		});
+		try {
+			assertClankyRuntimeDefaults(subagentResult, DEFAULT_CLANKY_SUBAGENT_THINKING_LEVEL, "subagent runtime");
+		} finally {
+			subagentResult.session.dispose();
 		}
 
 		const systemPrompt = runtime.services.resourceLoader.getSystemPrompt() ?? "";
@@ -119,6 +148,42 @@ async function main(): Promise<void> {
 		console.log("runtime-smoke: PASS");
 	} finally {
 		await rm(tmpRoot, { recursive: true, force: true });
+	}
+}
+
+interface RuntimeDefaultsTarget {
+	session: {
+		model:
+			| {
+					provider: string;
+					id: string;
+			  }
+			| undefined;
+		thinkingLevel: string;
+	};
+	services: {
+		settingsManager: {
+			getCompactionEnabled(): boolean;
+		};
+	};
+}
+
+function assertClankyRuntimeDefaults(
+	target: RuntimeDefaultsTarget,
+	expectedThinkingLevel: string,
+	label: string,
+): void {
+	const model = target.session.model;
+	if (model?.provider !== DEFAULT_CLANKY_MODEL_PROVIDER || model.id !== DEFAULT_CLANKY_MODEL_ID) {
+		throw new Error(`smoke: ${label} default model mismatch, got ${model?.provider ?? "none"}/${model?.id ?? "none"}`);
+	}
+	if (target.session.thinkingLevel !== expectedThinkingLevel) {
+		throw new Error(
+			`smoke: ${label} default thinking mismatch, got ${target.session.thinkingLevel}, expected ${expectedThinkingLevel}`,
+		);
+	}
+	if (!target.services.settingsManager.getCompactionEnabled()) {
+		throw new Error(`smoke: ${label} should leave Pi auto-compaction enabled`);
 	}
 }
 
@@ -361,9 +426,93 @@ function assertAgentDiscordGatewayAcceptance(): void {
 		!prompt.includes("Recent chat before the newest message") ||
 		!prompt.includes("Newest Discord message") ||
 		!prompt.includes("If you use a Discord send/upload tool for the current channel") ||
-		!prompt.includes("output exactly [SKIP] as your final response instead of posting a duplicate confirmation")
+		!prompt.includes("output exactly [SKIP] as your final response instead of posting a duplicate confirmation") ||
+		!prompt.includes("channelOrThreadId: channel-1") ||
+		!prompt.includes("use discord_read_messages with channelOrThreadId")
 	) {
 		throw new Error("smoke: Discord prompt should frame replies as conversation-level decisions");
+	}
+}
+
+function assertDiscordSubagentRouting(): void {
+	const idleMain = shouldRouteDiscordMessageToSubagent({
+		subagentsAvailable: true,
+		mainSessionStreaming: false,
+		mainQueueBusy: false,
+	});
+	if (idleMain) {
+		throw new Error("smoke: idle main Clanky should handle Discord directly instead of routing to a subagent");
+	}
+	const streamingMain = shouldRouteDiscordMessageToSubagent({
+		subagentsAvailable: true,
+		mainSessionStreaming: true,
+		mainQueueBusy: false,
+	});
+	if (!streamingMain) {
+		throw new Error("smoke: streaming main Clanky should route Discord to a subagent");
+	}
+	const queuedMain = shouldRouteDiscordMessageToSubagent({
+		subagentsAvailable: true,
+		mainSessionStreaming: false,
+		mainQueueBusy: true,
+	});
+	if (!queuedMain) {
+		throw new Error("smoke: queued main work should route Discord to a subagent");
+	}
+	const unavailableSubagent = shouldRouteDiscordMessageToSubagent({
+		subagentsAvailable: false,
+		mainSessionStreaming: true,
+		mainQueueBusy: true,
+	});
+	if (unavailableSubagent) {
+		throw new Error("smoke: missing subagent coordinator should never route to a subagent");
+	}
+}
+
+async function assertAgentDiscordPromptImages(): Promise<void> {
+	const message = {
+		externalMessageId: "msg-new",
+		conversation: { id: "channel-1", kind: "channel" as const },
+		sender: { id: "user-1", username: "james" },
+		text: "what is in the image?",
+		attachments: [
+			{
+				url: "https://cdn.example/new.png",
+				filename: "new.png",
+				mime: "image/png",
+			},
+		],
+		mentionsSelf: false,
+	};
+	const promptImages = await resolveDiscordPromptImages(
+		message,
+		[
+			{
+				author: "vuhlp",
+				text: "earlier image",
+				attachmentLabels: ["https://cdn.example/old.jpg"],
+				attachments: [{ url: "https://cdn.example/old.jpg", filename: "old.jpg", contentType: "image/jpeg" }],
+				messageId: "msg-old",
+			},
+		],
+		{
+			fetchImage: async (candidate) => ({
+				type: "image",
+				mimeType: candidate.mimeType ?? "image/png",
+				data: candidate.label.includes("msg-old") ? "b2xk" : "bmV3",
+			}),
+		},
+	);
+	if (promptImages.images.length !== 2 || promptImages.references.length !== 2 || promptImages.failures.length !== 0) {
+		throw new Error(`smoke: Discord prompt image resolution mismatch ${JSON.stringify(promptImages)}`);
+	}
+	const prompt = formatDiscordUserMessage(message, "recent_engagement", [], undefined, promptImages.references);
+	if (
+		!prompt.includes("actual image pixels are attached") ||
+		!prompt.includes("image 1: message msg-old attachment old.jpg (image/jpeg)") ||
+		!prompt.includes("image 2: newest message attachment new.png (image/png)")
+	) {
+		throw new Error(`smoke: Discord image references missing from prompt: ${prompt}`);
 	}
 }
 
@@ -438,8 +587,12 @@ function assertStoredDiscordCredentialPath(): void {
 
 async function assertRuntimeTurnQueue(): Promise<void> {
 	const queue = new SerialRuntimeTurnQueue();
+	if (queue.isBusy()) {
+		throw new Error("smoke: new runtime turn queue should start idle");
+	}
 	const order: string[] = [];
 	let releaseFirst: (() => void) | undefined;
+	let releaseSecond: (() => void) | undefined;
 	const first = queue.enqueue(async () => {
 		order.push("first-start");
 		await new Promise<void>((resolve) => {
@@ -450,18 +603,36 @@ async function assertRuntimeTurnQueue(): Promise<void> {
 	});
 	const second = queue.enqueue(async () => {
 		order.push("second-start");
+		await new Promise<void>((resolve) => {
+			releaseSecond = resolve;
+		});
+		order.push("second-end");
 		return "second";
 	});
+	if (!queue.isBusy()) {
+		throw new Error("smoke: runtime turn queue should be busy while work is queued");
+	}
 	await Promise.resolve();
 	if (order.join(",") !== "first-start") {
 		throw new Error(`smoke: runtime turn queue did not block second task, order=${order.join(",")}`);
 	}
 	releaseFirst?.();
+	await delay(0);
+	if (!order.includes("second-start")) {
+		throw new Error(`smoke: runtime turn queue did not start second task after release: ${order.join(",")}`);
+	}
+	if (!queue.isBusy()) {
+		throw new Error("smoke: runtime turn queue should stay busy while later queued work is running");
+	}
+	releaseSecond?.();
 	if ((await first) !== "first" || (await second) !== "second") {
 		throw new Error("smoke: runtime turn queue returned wrong task results");
 	}
-	if (order.join(",") !== "first-start,first-end,second-start") {
+	if (order.join(",") !== "first-start,first-end,second-start,second-end") {
 		throw new Error(`smoke: runtime turn queue serialized in wrong order: ${order.join(",")}`);
+	}
+	if (queue.isBusy()) {
+		throw new Error("smoke: runtime turn queue should be idle after all work completes");
 	}
 	await assertRejects(() => queue.enqueue(async () => Promise.reject(new Error("queued failure"))), "queued failure");
 	const afterFailure = await queue.enqueue(async () => "after-failure");
@@ -470,21 +641,31 @@ async function assertRuntimeTurnQueue(): Promise<void> {
 	}
 
 	const promptCalls: string[] = [];
+	let promptImageCount = 0;
 	const promptRuntime = {
 		session: {
 			isStreaming: true,
 			sessionId: "auto-prompt-smoke",
-			async prompt(message: string, options?: { source?: string; streamingBehavior?: string }): Promise<void> {
+			async prompt(
+				message: string,
+				options?: { source?: string; streamingBehavior?: string; images?: unknown[] },
+			): Promise<void> {
 				promptCalls.push(`${options?.source}:${options?.streamingBehavior}:${message}`);
+				promptImageCount = options?.images?.length ?? 0;
 			},
 		},
 	};
-	const promptResult = await queue.enqueuePrompt(promptRuntime as never, "queued main work");
+	const promptResult = await queue.enqueuePrompt(promptRuntime as never, "queued main work", {
+		images: [{ type: "image", mimeType: "image/png", data: "ZmFrZQ==" }],
+	});
 	if (promptResult.mode !== "followUp" || promptResult.sessionId !== "auto-prompt-smoke") {
 		throw new Error(`smoke: runtime turn queue returned wrong prompt result ${JSON.stringify(promptResult)}`);
 	}
 	if (promptCalls.join("\n") !== "extension:followUp:queued main work") {
 		throw new Error(`smoke: runtime turn queue did not auto-prompt safely ${JSON.stringify(promptCalls)}`);
+	}
+	if (promptImageCount !== 1) {
+		throw new Error(`smoke: runtime turn queue did not preserve prompt images, got ${promptImageCount}`);
 	}
 }
 
@@ -744,6 +925,86 @@ async function assertXAiAuthExtensionCommands(): Promise<void> {
 	}
 }
 
+async function assertClankyEffortExtensionCommand(): Promise<void> {
+	const defaults = {
+		mainThinkingLevel: DEFAULT_CLANKY_MAIN_THINKING_LEVEL,
+		subagentThinkingLevel: DEFAULT_CLANKY_SUBAGENT_THINKING_LEVEL,
+	};
+	let currentThinkingLevel: string = defaults.mainThinkingLevel;
+	let activeSubagentThinkingLevel: string | undefined;
+	let thinkingLevelHandler: ((event: { level: string }) => void) | undefined;
+	const notifications: string[] = [];
+	const commands: Record<string, RegisteredCommand> = {};
+	const factory = createClankyEffortExtensionFactory(defaults, {
+		setActiveSubagentThinkingLevel(level) {
+			activeSubagentThinkingLevel = level;
+			return 2;
+		},
+	});
+	factory({
+		on(event: string, handler: (event: { level: string }) => void) {
+			if (event === "thinking_level_select") thinkingLevelHandler = handler;
+		},
+		registerCommand(name: string, command: RegisteredCommand) {
+			commands[name] = command;
+		},
+		getThinkingLevel() {
+			return currentThinkingLevel;
+		},
+		setThinkingLevel(level: string) {
+			currentThinkingLevel = level;
+		},
+	} as unknown as Parameters<ExtensionFactory>[0]);
+
+	const effort = commands.effort;
+	if (effort === undefined) throw new Error("smoke: /effort command was not registered");
+	const ctx = {
+		ui: {
+			notify(message: string) {
+				notifications.push(message);
+			},
+		},
+	} as unknown as ExtensionCommandContext;
+
+	await effort.handler("", ctx);
+	if (
+		!notifications.at(-1)?.includes("Main Clanky: xhigh") ||
+		!notifications.at(-1)?.includes("Clanky subagents: medium")
+	) {
+		throw new Error(`smoke: /effort status mismatch: ${JSON.stringify(notifications)}`);
+	}
+	await effort.handler("subagents high", ctx);
+	if (defaults.subagentThinkingLevel !== "high" || activeSubagentThinkingLevel !== "high") {
+		throw new Error("smoke: /effort subagents did not update subagent defaults");
+	}
+	if (!notifications.at(-1)?.includes("Active subagent sessions updated: 2")) {
+		throw new Error(`smoke: /effort subagents did not report active updates: ${JSON.stringify(notifications)}`);
+	}
+	await effort.handler("main low", ctx);
+	if (defaults.mainThinkingLevel !== "low" || currentThinkingLevel !== "low") {
+		throw new Error("smoke: /effort main did not update main thinking");
+	}
+	await effort.handler("all xhigh", ctx);
+	assertStringEquals(defaults.mainThinkingLevel, "xhigh", "smoke: /effort all did not update main default");
+	assertStringEquals(defaults.subagentThinkingLevel, "xhigh", "smoke: /effort all did not update subagent default");
+	assertStringEquals(currentThinkingLevel, "xhigh", "smoke: /effort all did not update main runtime");
+	assertStringEquals(activeSubagentThinkingLevel, "xhigh", "smoke: /effort all did not update active subagents");
+	thinkingLevelHandler?.({ level: "medium" });
+	assertStringEquals(
+		defaults.mainThinkingLevel,
+		"medium",
+		"smoke: Pi thinking-level event did not update main Clanky default",
+	);
+	await effort.handler("subagents maximum", ctx);
+	if (!notifications.at(-1)?.includes("Usage: /effort")) {
+		throw new Error("smoke: /effort invalid args did not show usage");
+	}
+}
+
+function assertStringEquals(actual: string | undefined, expected: string, message: string): void {
+	if (actual !== expected) throw new Error(message);
+}
+
 interface RegisteredCommand {
 	handler(args: unknown, ctx: unknown): unknown | Promise<unknown>;
 }
@@ -787,6 +1048,7 @@ async function assertControllerSharedChatAndVoiceStartup(): Promise<void> {
 					throw new Error("smoke: shared path did not pass created client to text gateway");
 				return {
 					client: calls.sharedClient as never,
+					setSubagentThinkingLevel: () => 0,
 					async stop() {
 						calls.textStops += 1;
 					},
@@ -910,6 +1172,7 @@ async function assertControllerSharedVoiceFailureCleanup(): Promise<void> {
 				calls.startGatewayCalls += 1;
 				return {
 					client: calls.sharedClient as never,
+					setSubagentThinkingLevel: () => 0,
 					async stop() {
 						calls.textStops += 1;
 					},

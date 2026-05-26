@@ -44,6 +44,7 @@ export {
 	type DiscordGuildSummary,
 	type DiscordListChannelsInput,
 	type DiscordListEmojisInput,
+	type DiscordMessageAttachmentSummary,
 	type DiscordMessageSummary,
 	type DiscordOperatorOptions,
 	type DiscordParticipantSummary,

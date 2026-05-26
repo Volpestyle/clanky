@@ -27,6 +27,12 @@ Use case: personal Clanky keeps his own Discord identity and DMs with the
 human, while also using AgentRoom DMs/tasks/channels to coordinate with other
 agents.
 
+Clanky's Discord subagents belong to this agent-owned path. They are only for
+local multitasking while main Clanky is busy: if the main session is idle,
+normal accepted Discord chat is routed to main Clanky, not to a subagent.
+AgentRoom remains the path for real multi-agent development work, room tasks,
+audited worker coordination, and room-owned connector channels.
+
 The runtime starts this gateway when a Discord token is resolvable and
 `CLANKY_CHAT_GATEWAY_OWNER=agent` (the default). The token is resolved from,
 in order:

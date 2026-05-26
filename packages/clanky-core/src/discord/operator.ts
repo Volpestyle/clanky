@@ -52,7 +52,16 @@ export interface DiscordMessageSummary {
 	authorUsername?: string;
 	content: string;
 	timestamp?: string;
+	attachments: DiscordMessageAttachmentSummary[];
 	attachmentUrls: string[];
+}
+
+export interface DiscordMessageAttachmentSummary {
+	id?: string;
+	url?: string;
+	filename?: string;
+	contentType?: string;
+	size?: number;
 }
 
 export interface DiscordEmojiSummary {
@@ -531,19 +540,29 @@ function formatDiscordMessage(item: unknown): DiscordMessageSummary {
 			? (record.author as Record<string, unknown>)
 			: undefined;
 	const attachments = Array.isArray(record.attachments) ? record.attachments : [];
+	const attachmentSummaries = attachments.flatMap(formatDiscordMessageAttachment);
 	return {
 		id: expectString(record.id, "message.id"),
 		channelId: expectString(record.channel_id, "message.channel_id"),
 		content: typeof record.content === "string" ? record.content : "",
-		attachmentUrls: attachments.flatMap((attachment) => {
-			if (typeof attachment !== "object" || attachment === null) return [];
-			const url = (attachment as Record<string, unknown>).url;
-			return typeof url === "string" ? [url] : [];
-		}),
+		attachments: attachmentSummaries,
+		attachmentUrls: attachmentSummaries.flatMap((attachment) => (attachment.url === undefined ? [] : [attachment.url])),
 		...(author !== undefined && typeof author.id === "string" ? { authorId: author.id } : {}),
 		...(author !== undefined && typeof author.username === "string" ? { authorUsername: author.username } : {}),
 		...(typeof record.timestamp === "string" ? { timestamp: record.timestamp } : {}),
 	};
+}
+
+function formatDiscordMessageAttachment(item: unknown): DiscordMessageAttachmentSummary[] {
+	if (typeof item !== "object" || item === null) return [];
+	const record = item as Record<string, unknown>;
+	const attachment: DiscordMessageAttachmentSummary = {};
+	if (typeof record.id === "string") attachment.id = record.id;
+	if (typeof record.url === "string") attachment.url = record.url;
+	if (typeof record.filename === "string") attachment.filename = record.filename;
+	if (typeof record.content_type === "string") attachment.contentType = record.content_type;
+	if (typeof record.size === "number") attachment.size = record.size;
+	return [attachment];
 }
 
 function summarizeParticipants(messages: readonly DiscordMessageSummary[]): DiscordParticipantSummary[] {
