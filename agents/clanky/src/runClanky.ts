@@ -24,6 +24,7 @@ import { createClankyHandlers } from "./handlers.ts";
 import { createOpenAiAuthExtensionFactory } from "./openAiAuth.ts";
 import { loadPersona } from "./persona.ts";
 import { createClankyStores } from "./stores.ts";
+import { createXAiAuthExtensionFactory } from "./xAiAuth.ts";
 
 export interface RunClankyOptions {
 	cwd?: string;
@@ -95,6 +96,10 @@ function buildRuntimeFactory(opts: {
 		authFilePath: paths.authFile,
 		gatewayController,
 	});
+	const xAiAuthFactory = createXAiAuthExtensionFactory({
+		authStorage,
+		authFilePath: paths.authFile,
+	});
 
 	return async ({ cwd: runtimeCwd, sessionManager, sessionStartEvent }) => {
 		const modelRegistry = ModelRegistry.create(authStorage, paths.modelsFile);
@@ -107,7 +112,12 @@ function buildRuntimeFactory(opts: {
 			modelRegistry,
 			settingsManager,
 			resourceLoaderOptions: {
-				extensionFactories: [...createClankyExtensionFactories(handlers), discordAuthFactory, openAiAuthFactory],
+				extensionFactories: [
+					...createClankyExtensionFactories(handlers),
+					discordAuthFactory,
+					openAiAuthFactory,
+					xAiAuthFactory,
+				],
 				// Recomputed per call so post-`/discord-login` reloads pick up the new identity.
 				systemPromptOverride: (existing: string | undefined): string => {
 					const persona = augmentPersonaWithDiscordIdentity(basePersona, authStorage, discordProviderId);

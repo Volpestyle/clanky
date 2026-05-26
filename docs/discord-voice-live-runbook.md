@@ -24,11 +24,18 @@ OpenAI credentials can come from `OPENAI_API_KEY`, `CLANKY_OPENAI_API_KEY`, or a
 stored `/openai-login` API key. The examples below show `OPENAI_API_KEY`; omit
 that line if the active profile already has a stored OpenAI key.
 
+This bridge uses the OpenAI Realtime WebSocket/event transport intentionally.
+OpenAI recommends WebRTC for browser or mobile clients where the client owns a
+microphone track. Here, `clankvox` already terminates Discord RTP and exposes
+PCM frames to Node, so WebSocket audio-buffer events map directly onto Discord
+input/output without adding another media peer connection.
+
 ## Bot-Token Audio And Tool Check
 
-This checks voice join, Discord input audio, Realtime output audio, Realtime
-tool calling, Pi delegation, and Realtime socket health. Join the configured
-voice channel yourself and speak briefly during the run.
+This checks voice join, Discord input audio, Realtime session acceptance,
+Realtime output audio, Realtime tool calling, Pi delegation, and Realtime socket
+health. Join the configured voice channel yourself and speak briefly during the
+run.
 
 ```bash
 CLANKY_DISCORD_VOICE_ENABLED=1 \
@@ -37,6 +44,7 @@ CLANKY_DISCORD_VOICE_CHANNEL_ID=... \
 OPENAI_API_KEY=... \
 CLANKY_DISCORD_VOICE_LIVE_MS=90000 \
 CLANKY_DISCORD_VOICE_REQUIRE_INPUT_AUDIO=1 \
+CLANKY_DISCORD_VOICE_REQUIRE_REALTIME_SESSION=1 \
 CLANKY_DISCORD_VOICE_REQUIRE_OUTPUT_AUDIO=1 \
 CLANKY_DISCORD_VOICE_REQUIRE_TOOL_CALL=1 \
 CLANKY_DISCORD_VOICE_REQUIRE_ASK_PI=1 \
@@ -45,6 +53,11 @@ CLANKY_DISCORD_VOICE_RESULT_PATH=tmp/discord-voice-bot-result.json \
 CLANKY_DISCORD_VOICE_SCRIPTED_PROMPT="Use ask_pi to ask Pi for a one-sentence status check, then reply out loud." \
 pnpm voice:live
 ```
+
+`gpt-realtime-2` is the default Realtime model. The bridge sends
+`reasoning.effort=low` by default for that model; override it with
+`CLANKY_OPENAI_REALTIME_REASONING_EFFORT=minimal|low|medium|high|xhigh` when
+you want to trade latency for deeper reasoning.
 
 For group voice validation, add:
 
@@ -91,6 +104,8 @@ The result includes:
 - `phase` (`preflight`, `error`, or `final`)
 - `validation.passed`
 - `validation.failures`
+- `validation.checks` with per-requirement `id`, `observed`, `expected`, and
+  `passed` values when bridge status is available
 - `validation.requirements`
 - bridge `status` when available
 - startup/runtime `error` when available
@@ -103,7 +118,9 @@ are satisfied. For the full Go Live run, the important counters are:
 
 - `discordInputAudioEventCount > 0`
 - `discordInputMaxConcurrentSpeakers > 1` when group audio is required
+- `realtimeSessionUpdatedCount > 0`
 - `realtimeAudioDeltaCount > 0`
+- `discordOutputAudioSendCount > 0`
 - `realtimeFunctionCallCount > 0`
 - `askPiCallCount > 0`
 - `streamWatchConnectCount > 0`
@@ -118,6 +135,11 @@ are satisfied. For the full Go Live run, the important counters are:
   channel, or the bot/user did not join the expected channel.
 - `expected overlapping Discord input from at least two speakers`: group audio
   validation was enabled but the speakers did not overlap.
+- `expected OpenAI Realtime session.updated after session.update`: the Realtime
+  socket opened but OpenAI did not acknowledge the requested session
+  configuration.
+- `expected Realtime output audio to be sent to Discord`: OpenAI emitted audio
+  deltas, but the bridge did not hand any audio to `clankvox`.
 - `expected decoded Discord screen-share frames`: `STREAM_WATCH` connected, but
   no decodable frame reached `clankvox`; keep the Go Live stream visible for
   longer and retry.

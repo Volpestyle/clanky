@@ -3,12 +3,21 @@ type JsonRecord = Record<string, unknown>;
 export interface VoiceLiveValidationRequirements {
 	inputAudio: boolean;
 	groupAudio: boolean;
+	realtimeSession: boolean;
 	outputAudio: boolean;
 	toolCall: boolean;
 	askPi: boolean;
 	streamWatch: boolean;
 	screenFrame: boolean;
 	failOnRealtimeError: boolean;
+}
+
+export interface VoiceLiveValidationCheck {
+	id: string;
+	passed: boolean;
+	observed: number;
+	expected: string;
+	failure: string;
 }
 
 export function parseVoiceLiveValidationRequirements(
@@ -18,6 +27,7 @@ export function parseVoiceLiveValidationRequirements(
 	return {
 		inputAudio: all || parseEnabled(env.CLANKY_DISCORD_VOICE_REQUIRE_INPUT_AUDIO),
 		groupAudio: all || parseEnabled(env.CLANKY_DISCORD_VOICE_REQUIRE_GROUP_AUDIO),
+		realtimeSession: all || parseEnabled(env.CLANKY_DISCORD_VOICE_REQUIRE_REALTIME_SESSION),
 		outputAudio: all || parseEnabled(env.CLANKY_DISCORD_VOICE_REQUIRE_OUTPUT_AUDIO),
 		toolCall: all || parseEnabled(env.CLANKY_DISCORD_VOICE_REQUIRE_TOOL_CALL),
 		askPi: all || parseEnabled(env.CLANKY_DISCORD_VOICE_REQUIRE_ASK_PI),
@@ -28,38 +38,111 @@ export function parseVoiceLiveValidationRequirements(
 }
 
 export function validateVoiceLiveStatus(status: unknown, requirements: VoiceLiveValidationRequirements): string[] {
+	return evaluateVoiceLiveStatus(status, requirements)
+		.filter((check) => !check.passed)
+		.map((check) => check.failure);
+}
+
+export function evaluateVoiceLiveStatus(
+	status: unknown,
+	requirements: VoiceLiveValidationRequirements,
+): VoiceLiveValidationCheck[] {
 	const voice = isRecord(status) && isRecord(status.voice) ? status.voice : {};
 	const stats = isRecord(voice.stats) ? voice.stats : {};
-	const failures: string[] = [];
-	if (requirements.inputAudio && numberValue(stats.discordInputAudioEventCount) <= 0) {
-		failures.push("expected Discord input audio events");
+	const checks: VoiceLiveValidationCheck[] = [];
+	if (requirements.inputAudio) {
+		checks.push(
+			minimumCheck(
+				"discord_input_audio",
+				numberValue(stats.discordInputAudioEventCount),
+				1,
+				"expected Discord input audio events",
+			),
+		);
 	}
-	if (requirements.groupAudio && numberValue(stats.discordInputMaxConcurrentSpeakers) <= 1) {
-		failures.push("expected overlapping Discord input from at least two speakers");
+	if (requirements.groupAudio) {
+		checks.push(
+			minimumCheck(
+				"discord_group_audio",
+				numberValue(stats.discordInputMaxConcurrentSpeakers),
+				2,
+				"expected overlapping Discord input from at least two speakers",
+			),
+		);
 	}
-	if (requirements.outputAudio && numberValue(stats.realtimeAudioDeltaCount) <= 0) {
-		failures.push("expected OpenAI Realtime output audio deltas");
+	if (requirements.realtimeSession) {
+		checks.push(
+			minimumCheck(
+				"openai_realtime_session_updated",
+				numberValue(stats.realtimeSessionUpdatedCount),
+				1,
+				"expected OpenAI Realtime session.updated after session.update",
+			),
+		);
 	}
-	if (requirements.toolCall && numberValue(stats.realtimeFunctionCallCount) <= 0) {
-		failures.push("expected at least one Realtime function call");
+	if (requirements.outputAudio) {
+		checks.push(
+			minimumCheck(
+				"openai_realtime_output_audio",
+				numberValue(stats.realtimeAudioDeltaCount),
+				1,
+				"expected OpenAI Realtime output audio deltas",
+			),
+			minimumCheck(
+				"discord_output_audio",
+				numberValue(stats.discordOutputAudioSendCount),
+				1,
+				"expected Realtime output audio to be sent to Discord",
+			),
+		);
 	}
-	if (requirements.askPi && numberValue(stats.askPiCallCount) <= 0) {
-		failures.push("expected at least one ask_pi call");
+	if (requirements.toolCall) {
+		checks.push(
+			minimumCheck(
+				"openai_realtime_function_call",
+				numberValue(stats.realtimeFunctionCallCount),
+				1,
+				"expected at least one Realtime function call",
+			),
+		);
 	}
-	if (requirements.streamWatch && numberValue(stats.streamWatchConnectCount) <= 0) {
-		failures.push("expected Discord stream_watch connection");
+	if (requirements.askPi) {
+		checks.push(minimumCheck("ask_pi", numberValue(stats.askPiCallCount), 1, "expected at least one ask_pi call"));
 	}
-	if (requirements.screenFrame && numberValue(stats.decodedVideoFrameCount) <= 0) {
-		failures.push("expected decoded Discord screen-share frames");
+	if (requirements.streamWatch) {
+		checks.push(
+			minimumCheck(
+				"discord_stream_watch",
+				numberValue(stats.streamWatchConnectCount),
+				1,
+				"expected Discord stream_watch connection",
+			),
+		);
+	}
+	if (requirements.screenFrame) {
+		checks.push(
+			minimumCheck(
+				"discord_screen_frame",
+				numberValue(stats.decodedVideoFrameCount),
+				1,
+				"expected decoded Discord screen-share frames",
+			),
+		);
 	}
 	if (requirements.failOnRealtimeError) {
 		const realtimeErrors =
 			numberValue(stats.realtimeErrorEventCount) +
 			numberValue(stats.realtimeSocketErrorCount) +
 			numberValue(stats.realtimeSocketCloseCount);
-		if (realtimeErrors > 0) failures.push("expected no OpenAI Realtime API/socket errors");
+		checks.push({
+			id: "openai_realtime_errors",
+			passed: realtimeErrors === 0,
+			observed: realtimeErrors,
+			expected: "= 0",
+			failure: "expected no OpenAI Realtime API/socket errors",
+		});
 	}
-	return failures;
+	return checks;
 }
 
 export function isVoiceLiveValidationSatisfied(
@@ -73,6 +156,7 @@ export function hasVoiceLiveValidationRequirements(requirements: VoiceLiveValida
 	return (
 		requirements.inputAudio ||
 		requirements.groupAudio ||
+		requirements.realtimeSession ||
 		requirements.outputAudio ||
 		requirements.toolCall ||
 		requirements.askPi ||
@@ -86,6 +170,7 @@ export function hasVoiceLiveSuccessRequirements(requirements: VoiceLiveValidatio
 	return (
 		requirements.inputAudio ||
 		requirements.groupAudio ||
+		requirements.realtimeSession ||
 		requirements.outputAudio ||
 		requirements.toolCall ||
 		requirements.askPi ||
@@ -105,6 +190,9 @@ export function describeVoiceLiveValidationRequirements(requirements: VoiceLiveV
 	}
 	if (requirements.groupAudio) {
 		lines.push("Have at least two Discord voice participants overlap briefly so group audio is observed.");
+	}
+	if (requirements.realtimeSession) {
+		lines.push("Wait for OpenAI Realtime to acknowledge the session.update configuration.");
 	}
 	if (requirements.outputAudio) {
 		lines.push("Prompt Clanky verbally and wait for spoken Realtime audio output.");
@@ -138,4 +226,14 @@ function isRecord(value: unknown): value is JsonRecord {
 
 function numberValue(value: unknown): number {
 	return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function minimumCheck(id: string, observed: number, minimum: number, failure: string): VoiceLiveValidationCheck {
+	return {
+		id,
+		passed: observed >= minimum,
+		observed,
+		expected: `>= ${minimum}`,
+		failure,
+	};
 }

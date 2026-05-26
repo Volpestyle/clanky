@@ -23,7 +23,7 @@ Use this skill for API-backed image and video creation. Choose the backend that 
 ## Credentials
 
 - OpenAI image generation uses `/openai-login`, `CLANKY_OPENAI_API_KEY`, `OPENAI_API_KEY`, or a stored `openai` AuthStorage credential.
-- xAI image/video generation uses `XAI_API_KEY` or a stored `xai` AuthStorage credential.
+- xAI image/video generation uses `/xai-login`, `XAI_API_KEY`, or a stored `xai` AuthStorage credential.
 - If credentials are missing, tell the user exactly which setup path is needed.
 
 ## Output Handling

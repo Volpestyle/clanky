@@ -26,6 +26,7 @@ import {
 	OpenAiRealtimeClient,
 	type OpenAiRealtimeClientOptions,
 	type OpenAiRealtimeConnectOptions,
+	type OpenAiRealtimeReasoningEffort,
 	type OpenAiRealtimeTool,
 	type OpenAiRealtimeTranscript,
 } from "./voice/openAiRealtimeClient.ts";
@@ -40,6 +41,7 @@ export interface ClankyAgentDiscordVoiceConfig {
 	openAiBaseUrl?: string;
 	openAiRealtimeModel: string;
 	openAiRealtimeVoice: string;
+	openAiRealtimeReasoningEffort?: OpenAiRealtimeReasoningEffort;
 	clankvoxBin?: string;
 	clankvoxDir?: string;
 	videoFrameAutoAttachIntervalMs?: number;
@@ -86,7 +88,10 @@ interface VoiceBridgeStats {
 	realtimeAudioDeltaCount: number;
 	realtimeAudioDeltaBytes: number;
 	discordOutputAudioSendCount: number;
+	discordOutputAudioDropCount: number;
 	realtimeEventCount: number;
+	realtimeSessionCreatedCount: number;
+	realtimeSessionUpdatedCount: number;
 	realtimeErrorEventCount: number;
 	realtimeSocketCloseCount: number;
 	realtimeSocketErrorCount: number;
@@ -177,6 +182,7 @@ interface ResolvedVoiceDependencies {
 
 export const DEFAULT_REALTIME_MODEL = "gpt-realtime-2";
 const DEFAULT_REALTIME_VOICE = "marin";
+const DEFAULT_REALTIME_REASONING_EFFORT: OpenAiRealtimeReasoningEffort = "low";
 const DEFAULT_VIDEO_FRAME_AUTO_ATTACH_INTERVAL_MS = 2_000;
 const PI_TOOL_TIMEOUT_MS = 120_000;
 
@@ -193,7 +199,10 @@ function createVoiceBridgeStats(): VoiceBridgeStats {
 		realtimeAudioDeltaCount: 0,
 		realtimeAudioDeltaBytes: 0,
 		discordOutputAudioSendCount: 0,
+		discordOutputAudioDropCount: 0,
 		realtimeEventCount: 0,
+		realtimeSessionCreatedCount: 0,
+		realtimeSessionUpdatedCount: 0,
 		realtimeErrorEventCount: 0,
 		realtimeSocketCloseCount: 0,
 		realtimeSocketErrorCount: 0,
@@ -256,18 +265,25 @@ export function resolveAgentDiscordVoiceConfig(
 			"OpenAI credentials are required when Discord voice is enabled. Run /openai-login or set OPENAI_API_KEY/CLANKY_OPENAI_API_KEY.",
 		);
 	}
+	const model = env.CLANKY_OPENAI_REALTIME_MODEL?.trim() || DEFAULT_REALTIME_MODEL;
 	const voiceConfig: ClankyAgentDiscordVoiceConfig = {
 		enabled: true,
 		guildId,
 		channelId,
 		openAiApiKey: openAiApiKey.value,
-		openAiRealtimeModel: env.CLANKY_OPENAI_REALTIME_MODEL?.trim() || DEFAULT_REALTIME_MODEL,
+		openAiRealtimeModel: model,
 		openAiRealtimeVoice: env.CLANKY_OPENAI_REALTIME_VOICE?.trim() || DEFAULT_REALTIME_VOICE,
 		videoFrameAutoAttachIntervalMs: parseNonNegativeInteger(
 			env.CLANKY_DISCORD_VOICE_VIDEO_FRAME_INTERVAL_MS,
 			DEFAULT_VIDEO_FRAME_AUTO_ATTACH_INTERVAL_MS,
 		),
 	};
+	const reasoningEffort = parseRealtimeReasoningEffort(env.CLANKY_OPENAI_REALTIME_REASONING_EFFORT);
+	if (reasoningEffort !== undefined) {
+		voiceConfig.openAiRealtimeReasoningEffort = reasoningEffort;
+	} else if (model === DEFAULT_REALTIME_MODEL) {
+		voiceConfig.openAiRealtimeReasoningEffort = DEFAULT_REALTIME_REASONING_EFFORT;
+	}
 	const baseUrl = env.CLANKY_OPENAI_BASE_URL?.trim() || env.OPENAI_BASE_URL?.trim();
 	if (baseUrl !== undefined && baseUrl.length > 0) voiceConfig.openAiBaseUrl = baseUrl;
 	const clankvoxBin = env.CLANKY_CLANKVOX_BIN?.trim();
@@ -367,13 +383,17 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			this.vox = vox;
 			this.bindVox(vox, realtime);
 			this.bindRealtime(realtime);
-			await realtime.connect({
+			const connectOptions: OpenAiRealtimeConnectOptions = {
 				model: this.config.openAiRealtimeModel,
 				voice: this.config.openAiRealtimeVoice,
 				instructions: buildRealtimeInstructions(this.discordConfig),
 				tools: buildVoiceTools(),
 				toolChoice: "auto",
-			});
+			};
+			if (this.config.openAiRealtimeReasoningEffort !== undefined) {
+				connectOptions.reasoningEffort = this.config.openAiRealtimeReasoningEffort;
+			}
+			await realtime.connect(connectOptions);
 		} catch (error) {
 			this.streamDiscovery?.stop();
 			this.streamDiscovery = undefined;
@@ -417,6 +437,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			channelId: this.config.channelId,
 			model: this.config.openAiRealtimeModel,
 			voice: this.config.openAiRealtimeVoice,
+			reasoningEffort: this.config.openAiRealtimeReasoningEffort,
 			discordCredentialKind: this.discordConfig.credentialKind,
 			nativeScreenWatchSupported: this.discordConfig.credentialKind === "user-token",
 			hasVox: this.vox?.isAlive === true,
@@ -508,11 +529,19 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		realtime.on("audio_delta", (pcmBase64: string) => {
 			this.stats.realtimeAudioDeltaCount += 1;
 			this.stats.realtimeAudioDeltaBytes += base64DecodedByteLength(pcmBase64);
+			const vox = this.vox;
+			if (vox === undefined) {
+				this.stats.discordOutputAudioDropCount += 1;
+				return;
+			}
+			vox.sendAudio(pcmBase64, 24_000);
 			this.stats.discordOutputAudioSendCount += 1;
-			this.vox?.sendAudio(pcmBase64, 24_000);
 		});
 		realtime.on("event", (event: JsonRecord) => {
 			this.stats.realtimeEventCount += 1;
+			const eventType = stringValue(event.type);
+			if (eventType === "session.created") this.stats.realtimeSessionCreatedCount += 1;
+			else if (eventType === "session.updated") this.stats.realtimeSessionUpdatedCount += 1;
 			void this.handleRealtimeEvent(event).catch((error: unknown) => {
 				console.error(error instanceof Error ? error.message : String(error));
 			});
@@ -537,13 +566,15 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 	private async handleRealtimeEvent(event: JsonRecord): Promise<void> {
 		const envelopes = extractRealtimeFunctionCallEnvelopes(event);
 		if (envelopes.length === 0) return;
+		let completedToolCalls = 0;
 		for (const envelope of envelopes) {
-			await this.handleRealtimeFunctionCallEnvelope(envelope);
+			if (await this.handleRealtimeFunctionCallEnvelope(envelope)) completedToolCalls += 1;
 		}
+		if (completedToolCalls > 0) this.realtime?.createAudioResponse();
 	}
 
-	private async handleRealtimeFunctionCallEnvelope(envelope: RealtimeFunctionCallEnvelope): Promise<void> {
-		if (this.completedToolCallIdSet.has(envelope.callId)) return;
+	private async handleRealtimeFunctionCallEnvelope(envelope: RealtimeFunctionCallEnvelope): Promise<boolean> {
+		if (this.completedToolCallIdSet.has(envelope.callId)) return false;
 		const existing = this.pendingToolCalls.get(envelope.callId);
 		const pending: PendingRealtimeToolCall = {
 			callId: envelope.callId,
@@ -552,7 +583,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		};
 		if (envelope.argumentsJson !== undefined) pending.argumentsJson = envelope.argumentsJson;
 		this.pendingToolCalls.set(pending.callId, pending);
-		if (!envelope.done) return;
+		if (!envelope.done) return false;
 		this.pendingToolCalls.delete(pending.callId);
 		this.stats.realtimeFunctionCallCount += 1;
 		let result: unknown;
@@ -568,7 +599,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		this.realtime?.sendFunctionCallOutput({ callId: pending.callId, output: result });
 		this.rememberCompletedToolCallId(pending.callId);
 		this.stats.realtimeFunctionCallOutputCount += 1;
-		this.realtime?.createAudioResponse();
+		return true;
 	}
 
 	private rememberCompletedToolCallId(callId: string): void {
@@ -950,6 +981,20 @@ function parseNonNegativeInteger(value: string | undefined, fallback: number): n
 	if (normalized === undefined || normalized.length === 0) return fallback;
 	const parsed = Number.parseInt(normalized, 10);
 	return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function parseRealtimeReasoningEffort(value: string | undefined): OpenAiRealtimeReasoningEffort | undefined {
+	const normalized = value?.trim().toLowerCase();
+	if (
+		normalized === "minimal" ||
+		normalized === "low" ||
+		normalized === "medium" ||
+		normalized === "high" ||
+		normalized === "xhigh"
+	) {
+		return normalized;
+	}
+	return undefined;
 }
 
 function parseToolArguments(raw: string): JsonRecord {

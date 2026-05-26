@@ -96,6 +96,9 @@ Optional env:
 
 - `CLANKY_OPENAI_REALTIME_MODEL` (default `gpt-realtime-2`)
 - `CLANKY_OPENAI_REALTIME_VOICE` (default `marin`)
+- `CLANKY_OPENAI_REALTIME_REASONING_EFFORT` (default `low` with
+  `gpt-realtime-2`; supported values: `minimal`, `low`, `medium`, `high`,
+  `xhigh`)
 - `CLANKY_OPENAI_BASE_URL`
 - `CLANKY_DISCORD_VOICE_VIDEO_FRAME_INTERVAL_MS` (default `2000`) throttles
   automatic Realtime attachment of decoded screen-share frames; the snapshot
@@ -135,14 +138,17 @@ as soon as all enabled positive validation counters pass; error-only validation
 still runs for the full configured duration. To make the live run fail unless
 specific activity happened, set
 `CLANKY_DISCORD_VOICE_REQUIRE_INPUT_AUDIO`, `CLANKY_DISCORD_VOICE_REQUIRE_GROUP_AUDIO`,
-`CLANKY_DISCORD_VOICE_REQUIRE_OUTPUT_AUDIO`, `CLANKY_DISCORD_VOICE_REQUIRE_TOOL_CALL`,
-`CLANKY_DISCORD_VOICE_REQUIRE_ASK_PI`, `CLANKY_DISCORD_VOICE_REQUIRE_STREAM_WATCH`, or
-`CLANKY_DISCORD_VOICE_REQUIRE_SCREEN_FRAME` to `1`; `CLANKY_DISCORD_VOICE_REQUIRE_ALL=1`
-enables all of them. Set `CLANKY_DISCORD_VOICE_FAIL_ON_REALTIME_ERROR=1` to
-also fail if the Realtime API returns errors or the Realtime socket errors or
-closes during the run. The harness prints a checklist for the enabled
-requirements after joining voice. Stream-watch and screen-frame validation
-require a `user-token` Discord credential.
+`CLANKY_DISCORD_VOICE_REQUIRE_REALTIME_SESSION`,
+`CLANKY_DISCORD_VOICE_REQUIRE_OUTPUT_AUDIO`,
+`CLANKY_DISCORD_VOICE_REQUIRE_TOOL_CALL`, `CLANKY_DISCORD_VOICE_REQUIRE_ASK_PI`,
+`CLANKY_DISCORD_VOICE_REQUIRE_STREAM_WATCH`, or
+`CLANKY_DISCORD_VOICE_REQUIRE_SCREEN_FRAME` to `1`;
+`CLANKY_DISCORD_VOICE_REQUIRE_ALL=1` enables all of them. Set
+`CLANKY_DISCORD_VOICE_FAIL_ON_REALTIME_ERROR=1` to also fail if the Realtime API
+returns errors or the Realtime socket errors or closes during the run. The
+harness prints a checklist for the enabled requirements after joining voice.
+Stream-watch and screen-frame validation require a `user-token` Discord
+credential.
 
 For the exact user-run checklist and copyable bot-token/user-token validation
 commands, including `CLANKY_DISCORD_VOICE_RESULT_PATH` for saving the final

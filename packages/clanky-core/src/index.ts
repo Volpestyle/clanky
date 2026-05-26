@@ -194,6 +194,8 @@ export {
 	DEFAULT_XAI_PROVIDER_ID,
 	getXAiCredentialStatus,
 	type ResolvedXAiApiKey,
+	removeStoredXAiCredential,
 	resolveXAiApiKey,
+	saveStoredXAiApiKey,
 	type XAiCredentialStatus,
 } from "./xai-credentials.ts";

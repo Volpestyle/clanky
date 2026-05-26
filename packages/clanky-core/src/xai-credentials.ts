@@ -20,6 +20,28 @@ export interface XAiCredentialStatus {
 	available: boolean;
 }
 
+export function saveStoredXAiApiKey(
+	authStorage: AuthStorage,
+	apiKey: string,
+	providerId: string = DEFAULT_XAI_PROVIDER_ID,
+): void {
+	const trimmed = apiKey.trim();
+	if (trimmed.length === 0) throw new Error("xAI API key must not be empty.");
+	authStorage.set(providerId, {
+		type: "api_key",
+		key: trimmed,
+	});
+}
+
+export function removeStoredXAiCredential(
+	authStorage: AuthStorage,
+	providerId: string = DEFAULT_XAI_PROVIDER_ID,
+): boolean {
+	if (!authStorage.has(providerId)) return false;
+	authStorage.remove(providerId);
+	return true;
+}
+
 export function getXAiCredentialStatus(
 	env: NodeJS.ProcessEnv = process.env,
 	authStorage?: AuthStorage,

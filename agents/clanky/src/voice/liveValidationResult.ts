@@ -1,6 +1,11 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { hasVoiceLiveValidationRequirements, type VoiceLiveValidationRequirements } from "./liveValidation.ts";
+import {
+	evaluateVoiceLiveStatus,
+	hasVoiceLiveValidationRequirements,
+	type VoiceLiveValidationCheck,
+	type VoiceLiveValidationRequirements,
+} from "./liveValidation.ts";
 
 export interface VoiceLiveValidationResultInput {
 	startedAt: Date;
@@ -21,6 +26,7 @@ export interface VoiceLiveValidationResult {
 		enabled: boolean;
 		passed: boolean;
 		failures: string[];
+		checks: VoiceLiveValidationCheck[];
 		requirements: VoiceLiveValidationRequirements;
 	};
 	status?: unknown;
@@ -41,6 +47,7 @@ export function buildVoiceLiveValidationResult(input: VoiceLiveValidationResultI
 			enabled: hasVoiceLiveValidationRequirements(input.requirements),
 			passed: failures.length === 0 && error === undefined,
 			failures,
+			checks: input.status === undefined ? [] : evaluateVoiceLiveStatus(input.status, input.requirements),
 			requirements: input.requirements,
 		},
 	};

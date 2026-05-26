@@ -16,10 +16,13 @@ export interface OpenAiRealtimeConnectOptions {
 	instructions: string;
 	tools?: OpenAiRealtimeTool[];
 	toolChoice?: "auto" | "none" | "required";
+	reasoningEffort?: OpenAiRealtimeReasoningEffort;
 	inputAudioFormat?: "pcm16";
 	outputAudioFormat?: "pcm16";
 	inputTranscriptionModel?: string;
 }
+
+export type OpenAiRealtimeReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
 
 export interface OpenAiRealtimeClientOptions {
 	apiKey: string;
@@ -269,6 +272,7 @@ export function buildRealtimeSessionUpdateEvent(session: OpenAiRealtimeConnectOp
 			},
 			tools: session.tools ?? [],
 			tool_choice: session.toolChoice ?? "auto",
+			...(session.reasoningEffort !== undefined ? { reasoning: { effort: session.reasoningEffort } } : {}),
 		},
 	};
 }

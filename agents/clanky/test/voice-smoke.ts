@@ -22,6 +22,7 @@ import {
 import { DiscordVoiceTurnBuffer, mixPcm16MonoFrames } from "../src/voice/discordVoiceTurnBuffer.ts";
 import {
 	describeVoiceLiveValidationRequirements,
+	evaluateVoiceLiveStatus,
 	hasVoiceLiveSuccessRequirements,
 	hasVoiceLiveValidationRequirements,
 	isVoiceLiveValidationSatisfied,
@@ -53,6 +54,7 @@ async function main(): Promise<void> {
 	assertVoiceLiveValidation();
 	assertVoiceLiveValidationResult();
 	await assertFakeVoiceBridgeRealtimeTools();
+	await assertFakeVoiceBridgeRealtimeBatchToolResponse();
 	await assertFakeVoiceBridgeBotTokenScreenWatchGuard();
 	await assertFakeVoiceBridgeScreenWatchSwitchCleanup();
 	await assertFakeVoiceBridgeGatewaySessionFallback();
@@ -80,8 +82,49 @@ function assertVoiceConfig(): void {
 	if (config.openAiRealtimeModel !== DEFAULT_REALTIME_MODEL) {
 		throw new Error(`voice-smoke: default realtime model mismatch: ${config.openAiRealtimeModel}`);
 	}
+	if (config.openAiRealtimeReasoningEffort !== "low") {
+		throw new Error("voice-smoke: default realtime reasoning effort should be low for gpt-realtime-2");
+	}
 	if (config.videoFrameAutoAttachIntervalMs !== 2_000) {
 		throw new Error("voice-smoke: default screen frame auto-attach interval mismatch");
+	}
+	const nonReasoningOverride = resolveAgentDiscordVoiceConfig(
+		{
+			CLANKY_DISCORD_VOICE_ENABLED: "1",
+			CLANKY_DISCORD_TOKEN: "discord-token",
+			CLANKY_DISCORD_VOICE_GUILD_ID: "guild-1",
+			CLANKY_DISCORD_VOICE_CHANNEL_ID: "channel-1",
+			OPENAI_API_KEY: "openai-key",
+			CLANKY_OPENAI_REALTIME_MODEL: "gpt-realtime-1.5",
+		},
+		{
+			providerId: "clanky-discord",
+			token: "discord-token",
+			credentialKind: "bot-token",
+			source: "env",
+		},
+	);
+	if (nonReasoningOverride?.openAiRealtimeReasoningEffort !== undefined) {
+		throw new Error("voice-smoke: non-default realtime model should not inherit Realtime 2 reasoning effort");
+	}
+	const reasoningOverride = resolveAgentDiscordVoiceConfig(
+		{
+			CLANKY_DISCORD_VOICE_ENABLED: "1",
+			CLANKY_DISCORD_TOKEN: "discord-token",
+			CLANKY_DISCORD_VOICE_GUILD_ID: "guild-1",
+			CLANKY_DISCORD_VOICE_CHANNEL_ID: "channel-1",
+			OPENAI_API_KEY: "openai-key",
+			CLANKY_OPENAI_REALTIME_REASONING_EFFORT: "medium",
+		},
+		{
+			providerId: "clanky-discord",
+			token: "discord-token",
+			credentialKind: "bot-token",
+			source: "env",
+		},
+	);
+	if (reasoningOverride?.openAiRealtimeReasoningEffort !== "medium") {
+		throw new Error("voice-smoke: realtime reasoning effort override did not parse");
 	}
 	const unthrottled = resolveAgentDiscordVoiceConfig(
 		{
@@ -117,11 +160,18 @@ function assertRealtimeSessionUpdateShape(): void {
 		instructions: "Talk briefly.",
 		tools: [tool],
 		toolChoice: "auto",
+		reasoningEffort: "low",
 	});
 	const session = expectRecord(event.session, "session");
 	if (event.type !== "session.update") throw new Error("voice-smoke: expected session.update");
 	if (session.type !== "realtime") throw new Error("voice-smoke: session.type must be realtime");
 	if (session.model !== DEFAULT_REALTIME_MODEL) throw new Error("voice-smoke: session model missing");
+	if (!Array.isArray(session.output_modalities) || session.output_modalities.join(",") !== "audio") {
+		throw new Error("voice-smoke: realtime session should request audio output");
+	}
+	if ("modalities" in session) {
+		throw new Error("voice-smoke: session.update should not use beta modalities field");
+	}
 	const audio = expectRecord(session.audio, "session.audio");
 	const audioInput = expectRecord(audio.input, "session.audio.input");
 	const audioOutput = expectRecord(audio.output, "session.audio.output");
@@ -130,6 +180,8 @@ function assertRealtimeSessionUpdateShape(): void {
 	if (audioOutput.format !== "pcm16") throw new Error("voice-smoke: realtime output audio format missing");
 	if (audioOutput.voice !== "marin") throw new Error("voice-smoke: realtime voice missing");
 	if ("input_audio_format" in session) throw new Error("voice-smoke: session should use GA nested audio input config");
+	const reasoning = expectRecord(session.reasoning, "session.reasoning");
+	if (reasoning.effort !== "low") throw new Error("voice-smoke: realtime reasoning effort missing");
 	const tools = session.tools;
 	if (!Array.isArray(tools) || tools.length !== 1) throw new Error("voice-smoke: session tools missing");
 }
@@ -482,6 +534,7 @@ function assertVoiceLiveValidation(): void {
 	const requirements = parseVoiceLiveValidationRequirements({
 		CLANKY_DISCORD_VOICE_REQUIRE_INPUT_AUDIO: "1",
 		CLANKY_DISCORD_VOICE_REQUIRE_GROUP_AUDIO: "1",
+		CLANKY_DISCORD_VOICE_REQUIRE_REALTIME_SESSION: "1",
 		CLANKY_DISCORD_VOICE_REQUIRE_OUTPUT_AUDIO: "1",
 		CLANKY_DISCORD_VOICE_REQUIRE_TOOL_CALL: "1",
 		CLANKY_DISCORD_VOICE_REQUIRE_ASK_PI: "1",
@@ -495,7 +548,9 @@ function assertVoiceLiveValidation(): void {
 				stats: {
 					discordInputAudioEventCount: 1,
 					discordInputMaxConcurrentSpeakers: 2,
+					realtimeSessionUpdatedCount: 1,
 					realtimeAudioDeltaCount: 1,
+					discordOutputAudioSendCount: 1,
 					realtimeFunctionCallCount: 1,
 					askPiCallCount: 1,
 					streamWatchConnectCount: 1,
@@ -509,6 +564,30 @@ function assertVoiceLiveValidation(): void {
 		requirements,
 	);
 	if (failures.length > 0) throw new Error(`voice-smoke: unexpected live validation failures: ${failures.join(", ")}`);
+	const checks = evaluateVoiceLiveStatus(
+		{
+			voice: {
+				stats: {
+					discordInputAudioEventCount: 1,
+					discordInputMaxConcurrentSpeakers: 2,
+					realtimeSessionUpdatedCount: 1,
+					realtimeAudioDeltaCount: 1,
+					discordOutputAudioSendCount: 1,
+					realtimeFunctionCallCount: 1,
+					askPiCallCount: 1,
+					streamWatchConnectCount: 1,
+					decodedVideoFrameCount: 1,
+					realtimeErrorEventCount: 0,
+					realtimeSocketErrorCount: 0,
+					realtimeSocketCloseCount: 0,
+				},
+			},
+		},
+		requirements,
+	);
+	if (checks.length !== 10 || checks.some((check) => !check.passed)) {
+		throw new Error("voice-smoke: detailed live validation checks did not pass");
+	}
 	if (
 		!isVoiceLiveValidationSatisfied(
 			{
@@ -516,7 +595,9 @@ function assertVoiceLiveValidation(): void {
 					stats: {
 						discordInputAudioEventCount: 1,
 						discordInputMaxConcurrentSpeakers: 2,
+						realtimeSessionUpdatedCount: 1,
 						realtimeAudioDeltaCount: 1,
+						discordOutputAudioSendCount: 1,
 						realtimeFunctionCallCount: 1,
 						askPiCallCount: 1,
 						streamWatchConnectCount: 1,
@@ -533,8 +614,8 @@ function assertVoiceLiveValidation(): void {
 		throw new Error("voice-smoke: satisfied live validation helper returned false");
 	}
 	const missing = validateVoiceLiveStatus({ voice: { stats: {} } }, requirements);
-	if (missing.length !== 7)
-		throw new Error(`voice-smoke: expected seven live validation failures, got ${missing.length}`);
+	if (missing.length !== 9)
+		throw new Error(`voice-smoke: expected nine live validation failures, got ${missing.length}`);
 	if (isVoiceLiveValidationSatisfied({ voice: { stats: {} } }, requirements)) {
 		throw new Error("voice-smoke: satisfied live validation helper returned true for missing stats");
 	}
@@ -544,7 +625,9 @@ function assertVoiceLiveValidation(): void {
 				stats: {
 					discordInputAudioEventCount: 1,
 					discordInputMaxConcurrentSpeakers: 2,
+					realtimeSessionUpdatedCount: 1,
 					realtimeAudioDeltaCount: 1,
+					discordOutputAudioSendCount: 1,
 					realtimeFunctionCallCount: 1,
 					askPiCallCount: 1,
 					streamWatchConnectCount: 1,
@@ -561,11 +644,11 @@ function assertVoiceLiveValidation(): void {
 
 	const all = parseVoiceLiveValidationRequirements({ CLANKY_DISCORD_VOICE_REQUIRE_ALL: "1" });
 	const allFailures = validateVoiceLiveStatus({ voice: { stats: {} } }, all);
-	if (allFailures.length !== 7) throw new Error("voice-smoke: require-all did not enable every live validation check");
+	if (allFailures.length !== 9) throw new Error("voice-smoke: require-all did not enable every live validation check");
 	if (!requiresNativeDiscordScreenWatch(all)) {
 		throw new Error("voice-smoke: require-all should require native Discord screen watch");
 	}
-	if (describeVoiceLiveValidationRequirements(all).length !== 7) {
+	if (describeVoiceLiveValidationRequirements(all).length !== 8) {
 		throw new Error("voice-smoke: require-all did not produce every live validation checklist item");
 	}
 	const none = parseVoiceLiveValidationRequirements({});
@@ -604,6 +687,10 @@ function assertVoiceLiveValidationResult(): void {
 	if (!passing.validation.enabled || !passing.validation.passed || passing.durationMs !== 5_000) {
 		throw new Error("voice-smoke: passing live result artifact shape was incorrect");
 	}
+	const passingCheck = passing.validation.checks[0];
+	if (passingCheck?.id !== "discord_input_audio" || passingCheck.observed !== 1 || !passingCheck.passed) {
+		throw new Error("voice-smoke: passing live result artifact did not include detailed validation checks");
+	}
 	const failed = buildVoiceLiveValidationResult({
 		startedAt,
 		finishedAt,
@@ -614,6 +701,9 @@ function assertVoiceLiveValidationResult(): void {
 	});
 	if (failed.validation.passed || failed.error?.message !== "missing Discord credential") {
 		throw new Error("voice-smoke: failed live result artifact did not preserve failure/error details");
+	}
+	if (failed.validation.checks.length !== 0) {
+		throw new Error("voice-smoke: preflight result without bridge status should not invent validation checks");
 	}
 }
 
@@ -677,6 +767,8 @@ async function assertFakeVoiceBridgeRealtimeTools(): Promise<void> {
 	if (realtime.textUtterances[0] !== "scripted voice prompt") {
 		throw new Error("voice-smoke: voice bridge did not forward scripted text utterance to Realtime");
 	}
+	realtime.emit("event", { type: "session.created" });
+	realtime.emit("event", { type: "session.updated" });
 	const restoreWarn = silenceConsoleWarn();
 	try {
 		realtime.emit("transcript", { text: "hello", eventType: "response.output_audio_transcript.delta" });
@@ -885,6 +977,9 @@ async function assertFakeVoiceBridgeRealtimeTools(): Promise<void> {
 		stats.realtimeAudioDeltaCount !== 1 ||
 		stats.realtimeAudioDeltaBytes !== 4 ||
 		stats.discordOutputAudioSendCount !== 1 ||
+		stats.discordOutputAudioDropCount !== 0 ||
+		stats.realtimeSessionCreatedCount !== 1 ||
+		stats.realtimeSessionUpdatedCount !== 1 ||
 		stats.realtimeTranscriptCount !== 1 ||
 		stats.realtimeErrorEventCount !== 1 ||
 		stats.realtimeSocketErrorCount !== 1 ||
@@ -940,6 +1035,83 @@ async function assertFakeVoiceBridgeRealtimeTools(): Promise<void> {
 	if (vox.streamWatchDisconnects[0] !== "tool_stop_screen_watch" || vox.streamWatchDisconnects.length !== 1) {
 		throw new Error("voice-smoke: stop_screen_watch did not disconnect stream_watch exactly once");
 	}
+}
+
+async function assertFakeVoiceBridgeRealtimeBatchToolResponse(): Promise<void> {
+	const realtime = new FakeBridgeRealtime();
+	const vox = new FakeBridgeClankvox();
+	const runtime = new FakeVoiceRuntime();
+	const discovery = new FakeVoiceStreamDiscovery({
+		streamKey: "guild:guild-1:voice-1:streamer-1",
+		guildId: "guild-1",
+		channelId: "voice-1",
+		userId: "streamer-1",
+		endpoint: "voice.example",
+		token: "stream-token",
+		rtcServerId: "9002",
+		updatedAt: Date.now(),
+	});
+	const handle = await startAgentDiscordVoiceBridge({
+		runtime: runtime as never,
+		client: new FakeVoiceDiscordClient() as never,
+		discordConfig: {
+			providerId: "clanky-discord",
+			token: "discord-token",
+			credentialKind: "user-token",
+			source: "env",
+		},
+		config: {
+			enabled: true,
+			guildId: "guild-1",
+			channelId: "voice-1",
+			openAiApiKey: "openai-key",
+			openAiRealtimeModel: DEFAULT_REALTIME_MODEL,
+			openAiRealtimeVoice: "marin",
+		},
+		dependencies: {
+			createRealtime() {
+				return realtime;
+			},
+			async spawnVox() {
+				return vox;
+			},
+			createStreamDiscovery() {
+				return discovery;
+			},
+		},
+	});
+	if (handle === undefined) throw new Error("voice-smoke: batch tool voice bridge did not start");
+	realtime.emit("event", {
+		type: "response.done",
+		response: {
+			output: [
+				{
+					type: "function_call",
+					name: "list_screen_shares",
+					call_id: "call-batch-list",
+					arguments: "{}",
+				},
+				{
+					type: "function_call",
+					name: "start_screen_watch",
+					call_id: "call-batch-screen",
+					arguments: '{"target":"streamer-1"}',
+				},
+			],
+		},
+	});
+	await waitUntil(() => realtime.functionOutputs.length === 2, "batch realtime tool outputs");
+	if (realtime.responses !== 1) {
+		throw new Error(`voice-smoke: batch realtime tool calls created ${realtime.responses} audio responses`);
+	}
+	if (vox.streamWatchConnections.length !== 1) {
+		throw new Error("voice-smoke: batch realtime tool call did not connect screen watch");
+	}
+	const stats = expectRecord(handle.status().stats, "batch realtime tool stats");
+	if (stats.realtimeFunctionCallCount !== 2 || stats.realtimeFunctionCallOutputCount !== 2) {
+		throw new Error("voice-smoke: batch realtime tool calls were not counted");
+	}
+	await handle.stop();
 }
 
 async function assertFakeVoiceBridgeBotTokenScreenWatchGuard(): Promise<void> {

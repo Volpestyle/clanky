@@ -19,8 +19,10 @@ import { join } from "node:path";
 import {
 	DEFAULT_CLANKY_DISCORD_PROVIDER_ID,
 	DEFAULT_OPENAI_PROVIDER_ID,
+	DEFAULT_XAI_PROVIDER_ID,
 	saveStoredDiscordCredential,
 	saveStoredOpenAiApiKey,
+	saveStoredXAiApiKey,
 } from "@clanky/core";
 import { AuthStorage } from "@earendil-works/pi-coding-agent";
 import type { CreateAgentDiscordClientOptions } from "../src/agentDiscordClient.ts";
@@ -36,6 +38,7 @@ import { ClankyDiscordGatewayController } from "../src/discordGatewayController.
 import { createOpenAiAuthExtensionFactory } from "../src/openAiAuth.ts";
 import { createClankyRuntime } from "../src/runClanky.ts";
 import { SerialRuntimeTurnQueue } from "../src/runtimeTurnQueue.ts";
+import { createXAiAuthExtensionFactory } from "../src/xAiAuth.ts";
 
 async function main(): Promise<void> {
 	assertAgentDiscordGatewayConfig();
@@ -45,6 +48,7 @@ async function main(): Promise<void> {
 	await assertRuntimeTurnQueue();
 	await assertDiscordAuthExtensionCommands();
 	await assertOpenAiAuthExtensionCommands();
+	await assertXAiAuthExtensionCommands();
 	await assertDiscordGatewayControllerStartup();
 	const tmpRoot = await mkdtemp(join(tmpdir(), "clanky-agent-smoke-"));
 	const homeDir = join(tmpRoot, "home");
@@ -533,6 +537,58 @@ async function assertOpenAiAuthExtensionCommands(): Promise<void> {
 	if (reloads !== 1) throw new Error(`smoke: /openai-logout should reload once, got ${reloads}`);
 	if (!notifications.some((message) => message.includes("Removed stored OpenAI api_key credential"))) {
 		throw new Error("smoke: /openai-logout did not report credential removal");
+	}
+}
+
+async function assertXAiAuthExtensionCommands(): Promise<void> {
+	const authStorage = AuthStorage.inMemory();
+	saveStoredXAiApiKey(authStorage, "stored-xai-key");
+	let reloads = 0;
+	const notifications: string[] = [];
+	const commands: Record<string, RegisteredCommand> = {};
+	const factory = createXAiAuthExtensionFactory({
+		authStorage,
+		authFilePath: "/tmp/clanky-auth.json",
+	});
+	factory({
+		registerCommand(name: string, command: RegisteredCommand) {
+			commands[name] = command;
+		},
+	} as never);
+	const ctx = {
+		ui: {
+			notify(message: string) {
+				notifications.push(message);
+			},
+		},
+		async reload() {
+			reloads += 1;
+		},
+	};
+
+	const whoamiCommand = commands["xai-whoami"];
+	if (whoamiCommand === undefined) throw new Error("smoke: /xai-whoami command was not registered");
+	await whoamiCommand.handler([], ctx);
+	if (
+		!notifications.some(
+			(message) =>
+				message.includes("Stored xAI credential type: api_key.") &&
+				message.includes(`provider id "${DEFAULT_XAI_PROVIDER_ID}"`) &&
+				message.includes("Active xAI credential source: stored:api_key."),
+		)
+	) {
+		throw new Error(`smoke: /xai-whoami did not report stored xAI key: ${notifications.join("\n---\n")}`);
+	}
+
+	const logoutCommand = commands["xai-logout"];
+	if (logoutCommand === undefined) throw new Error("smoke: /xai-logout command was not registered");
+	await logoutCommand.handler([], ctx);
+	if (authStorage.get(DEFAULT_XAI_PROVIDER_ID) !== undefined) {
+		throw new Error("smoke: /xai-logout should remove stored xAI credentials");
+	}
+	if (reloads !== 1) throw new Error(`smoke: /xai-logout should reload once, got ${reloads}`);
+	if (!notifications.some((message) => message.includes("Removed stored xAI api_key credential"))) {
+		throw new Error("smoke: /xai-logout did not report credential removal");
 	}
 }
 

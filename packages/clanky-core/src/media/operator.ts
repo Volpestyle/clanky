@@ -183,7 +183,7 @@ export async function generateXAiImage(
 	const fetchImpl = options.fetchImpl ?? fetch;
 	const apiKey = await resolveXAiApiKey(env, options.authStorage);
 	if (apiKey === undefined) {
-		throw new Error("xAI credentials are required for xai_image_generate. Set XAI_API_KEY.");
+		throw new Error("xAI credentials are required for xai_image_generate. Run /xai-login or set XAI_API_KEY.");
 	}
 	const prompt = input.prompt.trim();
 	if (prompt.length === 0) throw new Error("xai_image_generate prompt must not be empty.");
@@ -225,7 +225,7 @@ export async function generateXAiVideo(
 	const fetchImpl = options.fetchImpl ?? fetch;
 	const apiKey = await resolveXAiApiKey(env, options.authStorage);
 	if (apiKey === undefined) {
-		throw new Error("xAI credentials are required for xai_video_generate. Set XAI_API_KEY.");
+		throw new Error("xAI credentials are required for xai_video_generate. Run /xai-login or set XAI_API_KEY.");
 	}
 	const prompt = input.prompt.trim();
 	if (prompt.length === 0) throw new Error("xai_video_generate prompt must not be empty.");
