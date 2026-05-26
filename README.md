@@ -121,6 +121,9 @@ OpenAI credentials for voice may come from `OPENAI_API_KEY`,
 
 Optional env:
 
+- `CLANKY_DISCORD_VOICE_TTS_PROVIDER` or `CLANKY_VOICE_TTS_PROVIDER`
+  (default `openai`; supported values: `openai`, `realtime`, `elevenlabs`,
+  `eleven_labs`, `11labs`)
 - `CLANKY_OPENAI_REALTIME_MODEL` (default `gpt-realtime-2`)
 - `CLANKY_OPENAI_REALTIME_VOICE` (default `marin`)
 - `CLANKY_OPENAI_REALTIME_REASONING_EFFORT` (default `low` with
@@ -132,6 +135,13 @@ Optional env:
   values: `minimal`, `low`, `medium`, `high`, `xhigh`)
 - `CLANKY_OPENAI_REALTIME_TRANSCRIPTION_LANGUAGE` to provide a language hint
   such as `en`
+- `CLANKY_ELEVENLABS_API_KEY` or `ELEVENLABS_API_KEY` when using
+  `CLANKY_DISCORD_VOICE_TTS_PROVIDER=elevenlabs`
+- `CLANKY_ELEVENLABS_VOICE_ID` when using ElevenLabs speech
+- `CLANKY_ELEVENLABS_MODEL` (default `eleven_flash_v2_5`)
+- `CLANKY_ELEVENLABS_OUTPUT_FORMAT` (default `pcm_24000`; supported values:
+  `pcm_16000`, `pcm_22050`, `pcm_24000`, `pcm_44100`)
+- `CLANKY_ELEVENLABS_BASE_URL` or `ELEVENLABS_BASE_URL`
 - `CLANKY_DISCORD_VOICE_SPEAKER_TRANSCRIPTION_IDLE_CLOSE_MS` (default `120000`)
   closes inactive per-speaker transcription sessions
 - `CLANKY_DISCORD_VOICE_TRANSCRIPT_RESPONSE_BATCH_DELAY_MS` (default `350`)
@@ -143,6 +153,14 @@ Optional env:
   tool always attaches the latest decoded frame on demand.
 - `CLANKY_CLANKVOX_DIR` or `CLANKY_CLANKVOX_BIN` to override the bundled
   `clankvox` Rust source/binary lookup
+
+With the default `openai` TTS provider, OpenAI Realtime returns audio directly
+and `CLANKY_OPENAI_REALTIME_VOICE` selects the output voice. With
+`elevenlabs`, OpenAI Realtime is used for live reasoning, tools, and text
+responses; Clanky streams the response text through ElevenLabs TTS and sends
+the returned PCM audio to Discord. The `/discord-voice` advanced settings can
+store the speech provider, ElevenLabs voice id, and ElevenLabs model in the
+active profile; env vars still override profile settings.
 
 The bundled native helper can be checked or prebuilt before launching voice:
 

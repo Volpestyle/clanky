@@ -1,5 +1,10 @@
 # Clanky: Plan
 
+> Historical note: this document records an earlier daemon/gateway plan. The
+> current repo is a standalone personal Pi agent; use `README.md`,
+> `docs/AGENTROOM.md`, `docs/demo.md`, and `docs/live-gates.md` for current
+> operation.
+
 An always-on agent harness built on **Pi**, modeled on **hermes-agent**, capable of acting as the **gateway/leader** of **swarm-mcp**.
 
 **Current status (2026-05-22):** the local v1 implementation is substantially built and covered by `pnpm check`, `pnpm smoke`, and `pnpm audit --prod`. The authoritative evidence map is `docs/v1-audit.md`; the approval-safe live-gate runbook is `docs/live-gates.md`. Do not treat v1 as complete until the remaining live gates have either been run successfully or explicitly waived.

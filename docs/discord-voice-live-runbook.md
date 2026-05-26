@@ -2,7 +2,9 @@
 
 Use this after the non-live checks pass. The harness joins a real Discord voice
 channel, connects OpenAI Realtime, and validates the counters that prove the
-voice bridge is working.
+voice bridge is working. OpenAI Realtime is always used for live reasoning,
+tool calls, and speaker transcription. Speech output can come from OpenAI
+Realtime audio directly or from ElevenLabs TTS.
 
 ## Preflight
 
@@ -36,6 +38,17 @@ When voice access is enabled without a pinned target, Clanky can use the
 choose or leave a voice channel at runtime. If an allowlist is configured,
 `discord_voice_join` rejects channels outside it.
 
+By default OpenAI Realtime provides both the spoken response and the
+tool-calling brain. To use ElevenLabs voices for speech while keeping Realtime
+for reasoning, use the `/discord-voice` advanced settings or the shortcut
+commands:
+
+```text
+/discord-voice set tts-provider elevenlabs
+/discord-voice set elevenlabs-voice <voice-id>
+/discord-voice set elevenlabs-model eleven_flash_v2_5
+```
+
 Env config still works and overrides the TUI profile setting when present:
 
 ```bash
@@ -47,22 +60,44 @@ CLANKY_DISCORD_VOICE_CHANNEL_ID=...
 CLANKY_DISCORD_VOICE_ALLOWED_GUILD_IDS=...
 # Optional comma/space-separated channel allowlist:
 CLANKY_DISCORD_VOICE_ALLOWED_CHANNEL_IDS=...
+# Optional ElevenLabs speech synthesis:
+CLANKY_DISCORD_VOICE_TTS_PROVIDER=elevenlabs
+ELEVENLABS_API_KEY=...
+# or CLANKY_ELEVENLABS_API_KEY=...
+CLANKY_ELEVENLABS_VOICE_ID=...
+CLANKY_ELEVENLABS_MODEL=eleven_flash_v2_5
+CLANKY_ELEVENLABS_OUTPUT_FORMAT=pcm_24000
 ```
+
+Supported ElevenLabs PCM output formats are `pcm_16000`, `pcm_22050`,
+`pcm_24000`, and `pcm_44100`. `CLANKY_ELEVENLABS_BASE_URL` or
+`ELEVENLABS_BASE_URL` can override the API base URL.
 
 Credentials can come from `CLANKY_DISCORD_TOKEN` or from a stored
 `/discord-login` credential in the active Clanky profile. Bot tokens are enough
 for normal voice audio. Native Discord Go Live watching requires a user-token
 credential.
 
-OpenAI credentials can come from `OPENAI_API_KEY`, `CLANKY_OPENAI_API_KEY`, or a
-stored `/openai-login` API key. The examples below show `OPENAI_API_KEY`; omit
-that line if the active profile already has a stored OpenAI key.
+OpenAI credentials are still required for the Realtime model and can come from
+`OPENAI_API_KEY`, `CLANKY_OPENAI_API_KEY`, or a stored `/openai-login` API key.
+The examples below show `OPENAI_API_KEY`; omit that line if the active profile
+already has a stored OpenAI key. ElevenLabs speech additionally requires
+`ELEVENLABS_API_KEY` or `CLANKY_ELEVENLABS_API_KEY`.
 
 This bridge uses the OpenAI Realtime WebSocket/event transport intentionally.
 OpenAI recommends WebRTC for browser or mobile clients where the client owns a
 microphone track. Here, `clankvox` already terminates Discord RTP and exposes
 PCM frames to Node, so WebSocket audio-buffer events map directly onto Discord
 input/output without adding another media peer connection.
+
+In group voice, barge-in is intentionally gated. While Clanky has spoken audio
+buffered or active external TTS, ordinary speaker transcripts are recorded but
+not forwarded to the response session. A speaker must explicitly say `Clanky`
+or a configured/known STT alias such as `clank`, `clanker`, `clonky`,
+`clunky`, or `planky` to interrupt; that path stops TTS playback, cancels the
+active Realtime response, and forwards the addressed transcript. Add
+`CLANKY_DISCORD_VOICE_WAKE_NAMES` or `CLANKY_DISCORD_WAKE_NAMES` for local
+nicknames that should also count.
 
 ## Music And Video Media
 
@@ -114,6 +149,43 @@ pnpm voice:live
 `reasoning.effort=low` by default for that model; override it with
 `CLANKY_OPENAI_REALTIME_REASONING_EFFORT=minimal|low|medium|high|xhigh` when
 you want to trade latency for deeper reasoning.
+
+`CLANKY_DISCORD_VOICE_REQUIRE_OUTPUT_AUDIO=1` follows the active speech
+provider. For the default OpenAI speech path it requires OpenAI Realtime audio
+deltas plus Discord output sends. For ElevenLabs speech it requires ElevenLabs
+TTS output plus Discord output sends.
+
+## ElevenLabs Speech Check
+
+This checks voice join, Discord input audio, Realtime session acceptance,
+Realtime tool calling, Pi delegation, ElevenLabs TTS streaming, Discord output
+sends, and Realtime socket health. Join the configured voice channel yourself
+and speak briefly during the run.
+
+```bash
+CLANKY_DISCORD_VOICE_ENABLED=1 \
+CLANKY_DISCORD_VOICE_GUILD_ID=... \
+CLANKY_DISCORD_VOICE_CHANNEL_ID=... \
+OPENAI_API_KEY=... \
+CLANKY_DISCORD_VOICE_TTS_PROVIDER=elevenlabs \
+ELEVENLABS_API_KEY=... \
+CLANKY_ELEVENLABS_VOICE_ID=... \
+CLANKY_DISCORD_VOICE_LIVE_MS=90000 \
+CLANKY_DISCORD_VOICE_REQUIRE_INPUT_AUDIO=1 \
+CLANKY_DISCORD_VOICE_REQUIRE_REALTIME_SESSION=1 \
+CLANKY_DISCORD_VOICE_REQUIRE_OUTPUT_AUDIO=1 \
+CLANKY_DISCORD_VOICE_REQUIRE_TOOL_CALL=1 \
+CLANKY_DISCORD_VOICE_REQUIRE_ASK_PI=1 \
+CLANKY_DISCORD_VOICE_FAIL_ON_REALTIME_ERROR=1 \
+CLANKY_DISCORD_VOICE_RESULT_PATH=tmp/discord-voice-elevenlabs-result.json \
+CLANKY_DISCORD_VOICE_SCRIPTED_PROMPT="Use ask_pi to ask Pi for a one-sentence status check, then reply out loud." \
+pnpm voice:live
+```
+
+Pass criteria for this path are the enabled checklist plus
+`externalTtsRequestCount > 0`, `externalTtsAudioBytes > 0`,
+`externalTtsErrorCount = 0`, and `discordOutputAudioSendCount > 0` in the final
+status/result JSON.
 
 For group voice validation, add:
 
@@ -175,7 +247,9 @@ are satisfied. For the full Go Live run, the important counters are:
 - `discordInputAudioEventCount > 0`
 - `discordInputMaxConcurrentSpeakers > 1` when group audio is required
 - `realtimeSessionUpdatedCount > 0`
-- `realtimeAudioDeltaCount > 0`
+- `realtimeAudioDeltaCount > 0` when OpenAI speech is active
+- `externalTtsRequestCount > 0` and `externalTtsAudioBytes > 0` when
+  `CLANKY_DISCORD_VOICE_TTS_PROVIDER=elevenlabs`
 - `discordOutputAudioSendCount > 0`
 - `realtimeFunctionCallCount > 0`
 - `askPiCallCount > 0`
@@ -194,8 +268,11 @@ are satisfied. For the full Go Live run, the important counters are:
 - `expected OpenAI Realtime session.updated after session.update`: the Realtime
   socket opened but OpenAI did not acknowledge the requested session
   configuration.
-- `expected Realtime output audio to be sent to Discord`: OpenAI emitted audio
-  deltas, but the bridge did not hand any audio to `clankvox`.
+- `expected voice output audio to be sent to Discord`: the active speech
+  provider produced output, but the bridge did not hand any audio to `clankvox`.
+- `expected ElevenLabs TTS output audio`: ElevenLabs speech is active, but the
+  bridge did not complete a TTS request; check the API key, voice id, model, and
+  `externalTtsErrorCount`.
 - `expected decoded Discord screen-share frames`: `STREAM_WATCH` connected, but
   no decodable frame reached `clankvox`; keep the Go Live stream visible for
   longer and retry.

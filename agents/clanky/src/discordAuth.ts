@@ -24,7 +24,11 @@ import {
 } from "@clanky/core";
 import type { AuthStorage, ExtensionCommandContext, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import type { ClankyDiscordGatewayController } from "./discordGatewayController.ts";
-import type { DiscordVoiceSettingsAccessor, StoredDiscordVoiceSettings } from "./discordVoiceSettings.ts";
+import type {
+	DiscordVoiceSettingsAccessor,
+	DiscordVoiceTtsProvider,
+	StoredDiscordVoiceSettings,
+} from "./discordVoiceSettings.ts";
 import { promptForSecret } from "./secretPrompt.ts";
 
 const DEV_PORTAL_URL = "https://discord.com/developers/applications";
@@ -347,6 +351,9 @@ function formatDiscordBridgeStatus(status: unknown): string {
 			lines.push("Allowed voice channels: all channels the Discord credential can access.");
 		}
 		if (typeof voice.model === "string") lines.push(`Realtime model: ${voice.model}.`);
+		if (typeof voice.ttsProvider === "string") lines.push(`Speech provider: ${voice.ttsProvider}.`);
+		if (typeof voice.elevenLabsVoiceId === "string") lines.push(`ElevenLabs voice id: ${voice.elevenLabsVoiceId}.`);
+		if (typeof voice.elevenLabsModel === "string") lines.push(`ElevenLabs model: ${voice.elevenLabsModel}.`);
 		if (typeof voice.discordCredentialKind === "string") {
 			lines.push(`Discord credential kind: ${voice.discordCredentialKind}.`);
 		}
@@ -451,6 +458,10 @@ function formatDiscordVoiceSettings(settings: StoredDiscordVoiceSettings | undef
 	}
 	if (settings.openAiRealtimeModel !== undefined) lines.push(`Stored Realtime model: ${settings.openAiRealtimeModel}.`);
 	if (settings.openAiRealtimeVoice !== undefined) lines.push(`Stored Realtime voice: ${settings.openAiRealtimeVoice}.`);
+	lines.push(`Speech provider: ${settings.ttsProvider ?? "openai"}.`);
+	if (settings.elevenLabsVoiceId !== undefined)
+		lines.push(`Stored ElevenLabs voice id: ${settings.elevenLabsVoiceId}.`);
+	if (settings.elevenLabsModel !== undefined) lines.push(`Stored ElevenLabs model: ${settings.elevenLabsModel}.`);
 	if (settings.openAiRealtimeReasoningEffort !== undefined) {
 		lines.push(`Stored Realtime reasoning effort: ${settings.openAiRealtimeReasoningEffort}.`);
 	}
@@ -472,10 +483,16 @@ function formatDiscordVoiceEnvOverrides(): string[] {
 	if (allowedGuildIds !== undefined) lines.push(`Env allowed server override: ${allowedGuildIds}.`);
 	const allowedChannelIds = cleanArg(process.env.CLANKY_DISCORD_VOICE_ALLOWED_CHANNEL_IDS);
 	if (allowedChannelIds !== undefined) lines.push(`Env allowed voice channel override: ${allowedChannelIds}.`);
+	const ttsProvider = cleanArg(process.env.CLANKY_DISCORD_VOICE_TTS_PROVIDER ?? process.env.CLANKY_VOICE_TTS_PROVIDER);
+	if (ttsProvider !== undefined) lines.push(`Env speech provider override: ${ttsProvider}.`);
 	const model = cleanArg(process.env.CLANKY_OPENAI_REALTIME_MODEL);
 	if (model !== undefined) lines.push(`Env Realtime model override: ${model}.`);
 	const voice = cleanArg(process.env.CLANKY_OPENAI_REALTIME_VOICE);
 	if (voice !== undefined) lines.push(`Env Realtime voice override: ${voice}.`);
+	const elevenLabsVoice = cleanArg(process.env.CLANKY_ELEVENLABS_VOICE_ID);
+	if (elevenLabsVoice !== undefined) lines.push(`Env ElevenLabs voice override: ${elevenLabsVoice}.`);
+	const elevenLabsModel = cleanArg(process.env.CLANKY_ELEVENLABS_MODEL);
+	if (elevenLabsModel !== undefined) lines.push(`Env ElevenLabs model override: ${elevenLabsModel}.`);
 	return lines;
 }
 
@@ -485,7 +502,10 @@ function hasDiscordVoiceEnvConfiguration(): boolean {
 		cleanArg(process.env.CLANKY_DISCORD_VOICE_GUILD_ID) !== undefined ||
 		cleanArg(process.env.CLANKY_DISCORD_VOICE_CHANNEL_ID) !== undefined ||
 		cleanArg(process.env.CLANKY_DISCORD_VOICE_ALLOWED_GUILD_IDS) !== undefined ||
-		cleanArg(process.env.CLANKY_DISCORD_VOICE_ALLOWED_CHANNEL_IDS) !== undefined
+		cleanArg(process.env.CLANKY_DISCORD_VOICE_ALLOWED_CHANNEL_IDS) !== undefined ||
+		cleanArg(process.env.CLANKY_DISCORD_VOICE_TTS_PROVIDER ?? process.env.CLANKY_VOICE_TTS_PROVIDER) !== undefined ||
+		cleanArg(process.env.CLANKY_ELEVENLABS_VOICE_ID) !== undefined ||
+		cleanArg(process.env.CLANKY_ELEVENLABS_MODEL) !== undefined
 	);
 }
 
@@ -663,8 +683,11 @@ async function runDiscordVoiceAdvancedWizard(
 ): Promise<void> {
 	const current = deps.voiceSettings?.read() ?? { enabled: false };
 	const choice = await ctx.ui.select("Discord voice advanced settings", [
+		`Speech provider (${current.ttsProvider ?? "openai"})`,
 		`Realtime model (${current.openAiRealtimeModel ?? "default"})`,
 		`Realtime voice (${current.openAiRealtimeVoice ?? "default"})`,
+		`ElevenLabs voice id (${current.elevenLabsVoiceId ?? "not set"})`,
+		`ElevenLabs model (${current.elevenLabsModel ?? "default"})`,
 		`Reasoning effort (${current.openAiRealtimeReasoningEffort ?? "default"})`,
 		`Video frame interval (${formatFrameIntervalLabel(current.videoFrameAutoAttachIntervalMs)})`,
 		"Clear advanced overrides",
@@ -672,10 +695,16 @@ async function runDiscordVoiceAdvancedWizard(
 	]);
 	if (choice === undefined || choice === "Back") return;
 	let next: StoredDiscordVoiceSettings = { ...current };
-	if (choice.startsWith("Realtime model")) {
+	if (choice.startsWith("Speech provider")) {
+		next = await collectDiscordVoiceTtsProvider(ctx, next);
+	} else if (choice.startsWith("Realtime model")) {
 		next = await collectDiscordVoiceModel(ctx, next);
 	} else if (choice.startsWith("Realtime voice")) {
 		next = await collectDiscordVoiceVoice(ctx, next);
+	} else if (choice.startsWith("ElevenLabs voice id")) {
+		next = await collectDiscordVoiceElevenLabsVoice(ctx, next);
+	} else if (choice.startsWith("ElevenLabs model")) {
+		next = await collectDiscordVoiceElevenLabsModel(ctx, next);
 	} else if (choice.startsWith("Reasoning effort")) {
 		next = await collectDiscordVoiceReasoning(ctx, next);
 	} else if (choice.startsWith("Video frame interval")) {
@@ -684,6 +713,9 @@ async function runDiscordVoiceAdvancedWizard(
 		delete next.openAiRealtimeModel;
 		delete next.openAiRealtimeVoice;
 		delete next.openAiRealtimeReasoningEffort;
+		delete next.ttsProvider;
+		delete next.elevenLabsVoiceId;
+		delete next.elevenLabsModel;
 		delete next.videoFrameAutoAttachIntervalMs;
 	}
 	deps.voiceSettings?.write(next);
@@ -959,6 +991,35 @@ async function runDiscordVoiceSet(
 		if (value === undefined) return ctx.ui.notify(discordVoiceUsage(deps.voiceSettings?.path), "warning");
 		next.openAiRealtimeVoice = value;
 		line = `Realtime voice set to ${value}.`;
+	} else if (field === "tts-provider" || field === "speech-provider") {
+		const provider = parseDiscordVoiceTtsProvider(rawValue);
+		if (provider !== undefined) {
+			next.ttsProvider = provider;
+			line = `Discord voice speech provider set to ${provider}.`;
+		} else if (rawValue === "clear" || rawValue === "default") {
+			delete next.ttsProvider;
+			line = "Discord voice speech provider override cleared.";
+		}
+	} else if (field === "elevenlabs-voice" || field === "elevenlabs-voice-id") {
+		const value = await readDiscordVoiceValue(ctx, rawValue, "ElevenLabs voice id:", current.elevenLabsVoiceId);
+		if (value === undefined) return ctx.ui.notify(discordVoiceUsage(deps.voiceSettings?.path), "warning");
+		if (value === "clear" || value === "default") {
+			delete next.elevenLabsVoiceId;
+			line = "ElevenLabs voice id cleared.";
+		} else {
+			next.elevenLabsVoiceId = value;
+			line = `ElevenLabs voice id set to ${value}.`;
+		}
+	} else if (field === "elevenlabs-model") {
+		const value = await readDiscordVoiceValue(ctx, rawValue, "ElevenLabs model:", current.elevenLabsModel);
+		if (value === undefined) return ctx.ui.notify(discordVoiceUsage(deps.voiceSettings?.path), "warning");
+		if (value === "clear" || value === "default") {
+			delete next.elevenLabsModel;
+			line = "ElevenLabs model override cleared.";
+		} else {
+			next.elevenLabsModel = value;
+			line = `ElevenLabs model set to ${value}.`;
+		}
 	} else if (field === "reasoning") {
 		if (rawValue === "clear" || rawValue === "default") {
 			delete next.openAiRealtimeReasoningEffort;
@@ -994,6 +1055,23 @@ async function collectDiscordVoiceAdvancedSettings(
 	return await collectDiscordVoiceFrameInterval(ctx, next);
 }
 
+async function collectDiscordVoiceTtsProvider(
+	ctx: ExtensionCommandContext,
+	settings: StoredDiscordVoiceSettings,
+): Promise<StoredDiscordVoiceSettings> {
+	const value = await ctx.ui.select("Discord voice speech provider:", [
+		"OpenAI Realtime voice",
+		"ElevenLabs",
+		"Keep current/default",
+		"Clear override",
+	]);
+	if (value === undefined || value === "Keep current/default") return settings;
+	const next = { ...settings };
+	if (value === "Clear override") delete next.ttsProvider;
+	else next.ttsProvider = value === "ElevenLabs" ? "elevenlabs" : "openai";
+	return next;
+}
+
 async function collectDiscordVoiceModel(
 	ctx: ExtensionCommandContext,
 	settings: StoredDiscordVoiceSettings,
@@ -1025,6 +1103,40 @@ async function collectDiscordVoiceVoice(
 	const next = { ...settings };
 	if (value === "clear" || value === "default") delete next.openAiRealtimeVoice;
 	else next.openAiRealtimeVoice = value;
+	return next;
+}
+
+async function collectDiscordVoiceElevenLabsVoice(
+	ctx: ExtensionCommandContext,
+	settings: StoredDiscordVoiceSettings,
+): Promise<StoredDiscordVoiceSettings> {
+	const value = cleanArg(
+		await ctx.ui.input(
+			"ElevenLabs voice id:",
+			settings.elevenLabsVoiceId ?? "blank keeps current; type clear to remove override",
+		),
+	);
+	if (value === undefined) return settings;
+	const next = { ...settings };
+	if (value === "clear" || value === "default") delete next.elevenLabsVoiceId;
+	else next.elevenLabsVoiceId = value;
+	return next;
+}
+
+async function collectDiscordVoiceElevenLabsModel(
+	ctx: ExtensionCommandContext,
+	settings: StoredDiscordVoiceSettings,
+): Promise<StoredDiscordVoiceSettings> {
+	const value = cleanArg(
+		await ctx.ui.input(
+			"ElevenLabs model:",
+			settings.elevenLabsModel ?? "blank keeps current/default; type clear to remove override",
+		),
+	);
+	if (value === undefined) return settings;
+	const next = { ...settings };
+	if (value === "clear" || value === "default") delete next.elevenLabsModel;
+	else next.elevenLabsModel = value;
 	return next;
 }
 
@@ -1190,6 +1302,13 @@ function isRealtimeReasoningEffort(
 	value: string | undefined,
 ): value is NonNullable<StoredDiscordVoiceSettings["openAiRealtimeReasoningEffort"]> {
 	return value === "minimal" || value === "low" || value === "medium" || value === "high" || value === "xhigh";
+}
+
+function parseDiscordVoiceTtsProvider(value: string | undefined): DiscordVoiceTtsProvider | undefined {
+	const normalized = value?.trim().toLowerCase();
+	if (normalized === "openai" || normalized === "realtime") return "openai";
+	if (normalized === "elevenlabs" || normalized === "eleven_labs" || normalized === "11labs") return "elevenlabs";
+	return undefined;
 }
 
 function readStatusString(status: unknown, key: string): string | undefined {

@@ -66,6 +66,8 @@ async function main(): Promise<void> {
 	assertVoiceLiveValidation();
 	assertVoiceLiveValidationResult();
 	await assertFakeVoiceBridgeRealtimeTools();
+	await assertFakeVoiceBridgeElevenLabsTts();
+	await assertFakeVoiceBridgeBargeInPolicy();
 	await assertFakeVoiceBridgeSubagents();
 	await assertFakeVoiceBridgeRealtimeMediaTools();
 	await assertFakeVoiceBridgeRealtimeBatchToolResponse();
@@ -123,6 +125,31 @@ function assertVoiceConfig(): void {
 	);
 	if (dynamicConfig === undefined || dynamicConfig.guildId !== undefined || dynamicConfig.channelId !== undefined) {
 		throw new Error("voice-smoke: enabled voice config should not require a pinned guild/channel target");
+	}
+	const elevenLabsConfig = resolveAgentDiscordVoiceConfig(
+		{
+			CLANKY_DISCORD_VOICE_ENABLED: "1",
+			CLANKY_DISCORD_TOKEN: "discord-token",
+			OPENAI_API_KEY: "openai-key",
+			ELEVENLABS_API_KEY: "elevenlabs-key",
+			CLANKY_DISCORD_VOICE_TTS_PROVIDER: "elevenlabs",
+			CLANKY_ELEVENLABS_VOICE_ID: "eleven-voice",
+			CLANKY_ELEVENLABS_MODEL: "eleven_flash_v2_5",
+		},
+		{
+			providerId: "clanky-discord",
+			token: "discord-token",
+			credentialKind: "bot-token",
+			source: "env",
+		},
+	);
+	if (
+		elevenLabsConfig?.ttsProvider !== "elevenlabs" ||
+		elevenLabsConfig.elevenLabsApiKey !== "elevenlabs-key" ||
+		elevenLabsConfig.elevenLabsVoiceId !== "eleven-voice" ||
+		elevenLabsConfig.elevenLabsModel !== "eleven_flash_v2_5"
+	) {
+		throw new Error(`voice-smoke: ElevenLabs voice config did not resolve ${JSON.stringify(elevenLabsConfig)}`);
 	}
 	const transcriptionOverride = resolveAgentDiscordVoiceConfig(
 		{
@@ -213,6 +240,7 @@ function assertVoiceConfig(): void {
 	const storedConfig = resolveAgentDiscordVoiceConfig(
 		{
 			OPENAI_API_KEY: "openai-key",
+			ELEVENLABS_API_KEY: "stored-elevenlabs-key",
 		},
 		{
 			providerId: "clanky-discord",
@@ -227,6 +255,9 @@ function assertVoiceConfig(): void {
 			channelId: "stored-channel",
 			allowedGuildIds: ["stored-guild", "guild-2", "stored-guild"],
 			allowedChannelIds: ["stored-channel", "voice-2", "stored-channel"],
+			ttsProvider: "elevenlabs",
+			elevenLabsVoiceId: "stored-eleven-voice",
+			elevenLabsModel: "eleven_turbo_v2_5",
 			openAiRealtimeModel: "gpt-realtime-1.5",
 			openAiRealtimeVoice: "cedar",
 			openAiRealtimeReasoningEffort: "medium",
@@ -238,6 +269,9 @@ function assertVoiceConfig(): void {
 		storedConfig.channelId !== "stored-channel" ||
 		storedConfig.allowedGuildIds?.join(",") !== "stored-guild,guild-2" ||
 		storedConfig.allowedChannelIds?.join(",") !== "stored-channel,voice-2" ||
+		storedConfig.ttsProvider !== "elevenlabs" ||
+		storedConfig.elevenLabsVoiceId !== "stored-eleven-voice" ||
+		storedConfig.elevenLabsModel !== "eleven_turbo_v2_5" ||
 		storedConfig.openAiRealtimeModel !== "gpt-realtime-1.5" ||
 		storedConfig.openAiRealtimeVoice !== "cedar" ||
 		storedConfig.openAiRealtimeReasoningEffort !== "medium" ||
@@ -305,6 +339,19 @@ function assertRealtimeSessionUpdateShape(): void {
 	if (reasoning.effort !== "low") throw new Error("voice-smoke: realtime reasoning effort missing");
 	const tools = session.tools;
 	if (!Array.isArray(tools) || tools.length !== 1) throw new Error("voice-smoke: session tools missing");
+	const textEvent = buildRealtimeSessionUpdateEvent({
+		model: DEFAULT_REALTIME_MODEL,
+		voice: "marin",
+		instructions: "Talk briefly.",
+		responseOutputModality: "text",
+	});
+	const textSession = expectRecord(textEvent.session, "text session");
+	if (!Array.isArray(textSession.output_modalities) || textSession.output_modalities.join(",") !== "text") {
+		throw new Error("voice-smoke: realtime text session should request text output");
+	}
+	const textAudio = expectRecord(textSession.audio, "text session audio");
+	if ("output" in textAudio)
+		throw new Error("voice-smoke: realtime text session should not configure audio output voice");
 }
 
 function assertRealtimeTranscriptionSessionUpdateShape(): void {
@@ -743,6 +790,25 @@ function assertVoiceLiveValidation(): void {
 	);
 	if (checks.length !== 10 || checks.some((check) => !check.passed)) {
 		throw new Error("voice-smoke: detailed live validation checks did not pass");
+	}
+	const elevenLabsChecks = evaluateVoiceLiveStatus(
+		{
+			voice: {
+				ttsProvider: "elevenlabs",
+				stats: {
+					externalTtsRequestCount: 1,
+					discordOutputAudioSendCount: 1,
+				},
+			},
+		},
+		parseVoiceLiveValidationRequirements({ CLANKY_DISCORD_VOICE_REQUIRE_OUTPUT_AUDIO: "1" }),
+	);
+	if (
+		elevenLabsChecks.length !== 2 ||
+		elevenLabsChecks.some((check) => !check.passed) ||
+		elevenLabsChecks[0]?.id !== "elevenlabs_tts_output_audio"
+	) {
+		throw new Error("voice-smoke: ElevenLabs output audio validation did not pass");
 	}
 	if (
 		!isVoiceLiveValidationSatisfied(
@@ -1235,6 +1301,171 @@ async function assertFakeVoiceBridgeRealtimeTools(): Promise<void> {
 	if (vox.streamWatchDisconnects[0] !== "tool_stop_screen_watch" || vox.streamWatchDisconnects.length !== 1) {
 		throw new Error("voice-smoke: stop_screen_watch did not disconnect stream_watch exactly once");
 	}
+}
+
+async function assertFakeVoiceBridgeElevenLabsTts(): Promise<void> {
+	const realtime = new FakeBridgeRealtime();
+	const vox = new FakeBridgeClankvox();
+	const speech = new FakeSpeechSynthesizer();
+	const handle = await startAgentDiscordVoiceBridge({
+		runtime: new FakeVoiceRuntime() as never,
+		client: new FakeVoiceDiscordClient() as never,
+		discordConfig: {
+			providerId: "clanky-discord",
+			token: "discord-token",
+			credentialKind: "bot-token",
+			source: "env",
+		},
+		config: {
+			enabled: true,
+			guildId: "guild-1",
+			channelId: "voice-1",
+			ttsProvider: "elevenlabs",
+			openAiApiKey: "openai-key",
+			openAiRealtimeModel: DEFAULT_REALTIME_MODEL,
+			openAiRealtimeVoice: "marin",
+			elevenLabsApiKey: "elevenlabs-key",
+			elevenLabsVoiceId: "eleven-voice",
+			elevenLabsModel: "eleven_flash_v2_5",
+		},
+		dependencies: {
+			createRealtime() {
+				return realtime;
+			},
+			createTranscriptionRealtime() {
+				return new FakeSpeakerTranscriptionRealtime("speaker transcript");
+			},
+			async spawnVox() {
+				return vox;
+			},
+			createStreamDiscovery() {
+				return new FakeVoiceStreamDiscovery({
+					streamKey: "guild:guild-1:voice-1:streamer-1",
+					guildId: "guild-1",
+					channelId: "voice-1",
+					userId: "streamer-1",
+					endpoint: "voice.example",
+					token: "stream-token",
+					rtcServerId: "9002",
+					updatedAt: Date.now(),
+				});
+			},
+			createSpeechSynthesizer(config) {
+				if (config.elevenLabsVoiceId !== "eleven-voice") {
+					throw new Error("voice-smoke: ElevenLabs config was not passed to synthesizer");
+				}
+				return speech;
+			},
+		},
+	});
+	if (handle === undefined) throw new Error("voice-smoke: ElevenLabs voice bridge did not start");
+	if (realtime.connectOptions?.responseOutputModality !== "text") {
+		throw new Error("voice-smoke: ElevenLabs voice bridge should request text output from Realtime");
+	}
+	realtime.emit("audio_delta", "AQIDBA==");
+	if (vox.audioSends.length !== 0) {
+		throw new Error("voice-smoke: ElevenLabs voice bridge should ignore Realtime audio deltas");
+	}
+	realtime.emit("transcript", { eventType: "response.output_text.delta", itemId: "item-1", text: "Hello " });
+	realtime.emit("transcript", { eventType: "response.output_text.delta", itemId: "item-1", text: "world." });
+	realtime.emit("transcript", { eventType: "response.output_text.done", itemId: "item-1", text: "" });
+	await waitUntil(() => vox.audioSends.length === 1, "ElevenLabs synthesized audio send");
+	if (speech.texts[0] !== "Hello world.") {
+		throw new Error(`voice-smoke: ElevenLabs synthesized wrong text ${JSON.stringify(speech.texts)}`);
+	}
+	if (vox.audioSends[0]?.pcmBase64 !== Buffer.from([1, 2, 3, 4]).toString("base64")) {
+		throw new Error("voice-smoke: ElevenLabs PCM was not sent to Discord voice");
+	}
+	if (vox.audioSends[0]?.sampleRate !== 24_000) {
+		throw new Error("voice-smoke: ElevenLabs PCM sample rate was not preserved");
+	}
+	await handle.stop();
+}
+
+async function assertFakeVoiceBridgeBargeInPolicy(): Promise<void> {
+	const realtime = new FakeBridgeRealtime();
+	const vox = new FakeBridgeClankvox();
+	const transcripts = ["side chatter", "hey Clanky, hold on a second", "yo planky, one more thing"];
+	const handle = await startAgentDiscordVoiceBridge({
+		runtime: new FakeVoiceRuntime() as never,
+		client: new FakeVoiceDiscordClient() as never,
+		discordConfig: {
+			providerId: "clanky-discord",
+			token: "discord-token",
+			credentialKind: "bot-token",
+			source: "env",
+		},
+		config: {
+			enabled: true,
+			guildId: "guild-1",
+			channelId: "voice-1",
+			openAiApiKey: "openai-key",
+			openAiRealtimeModel: DEFAULT_REALTIME_MODEL,
+			openAiRealtimeVoice: "marin",
+			transcriptResponseBatchDelayMs: 0,
+		},
+		dependencies: {
+			createRealtime() {
+				return realtime;
+			},
+			createTranscriptionRealtime() {
+				return new FakeSpeakerTranscriptionRealtime(transcripts.shift() ?? "extra transcript");
+			},
+			async spawnVox() {
+				return vox;
+			},
+			createStreamDiscovery() {
+				return new FakeVoiceStreamDiscovery({
+					streamKey: "guild:guild-1:voice-1:streamer-1",
+					guildId: "guild-1",
+					channelId: "voice-1",
+					userId: "streamer-1",
+					endpoint: "voice.example",
+					token: "stream-token",
+					rtcServerId: "9002",
+					updatedAt: Date.now(),
+				});
+			},
+		},
+	});
+	if (handle === undefined) throw new Error("voice-smoke: barge-in voice bridge did not start");
+	vox.emit("bufferDepth", 24_000, 0);
+	vox.emit("speakingStart", "speaker-1");
+	vox.emit("userAudio", "speaker-1", Buffer.from([1, 2, 3, 4]));
+	vox.emit("userAudioEnd", "speaker-1");
+	await sleep(10);
+	if (realtime.textUtterances.length !== 0) {
+		throw new Error("voice-smoke: side chatter should not barge in while Clanky is speaking");
+	}
+	realtime.emit("event", { type: "response.created" });
+	vox.emit("bufferDepth", 24_000, 0);
+	vox.emit("speakingStart", "speaker-2");
+	vox.emit("userAudio", "speaker-2", Buffer.from([5, 6, 7, 8]));
+	vox.emit("userAudioEnd", "speaker-2");
+	await waitUntil(
+		() => realtime.textUtterances.some((text) => text.includes("hey Clanky, hold on a second")),
+		"named barge-in transcript",
+	);
+	if (vox.stopTtsPlaybackCount !== 1 || realtime.cancelResponses !== 1) {
+		throw new Error("voice-smoke: named barge-in did not stop current TTS and cancel Realtime response");
+	}
+	realtime.emit("event", { type: "response.created" });
+	vox.emit("bufferDepth", 24_000, 0);
+	vox.emit("speakingStart", "speaker-3");
+	vox.emit("userAudio", "speaker-3", Buffer.from([9, 10, 11, 12]));
+	vox.emit("userAudioEnd", "speaker-3");
+	await waitUntil(
+		() => realtime.textUtterances.some((text) => text.includes("yo planky, one more thing")),
+		"STT alias barge-in transcript",
+	);
+	if (Number(vox.stopTtsPlaybackCount) !== 2 || Number(realtime.cancelResponses) !== 2) {
+		throw new Error("voice-smoke: STT alias barge-in did not stop current TTS and cancel Realtime response");
+	}
+	const stats = expectRecord(handle.status().stats, "barge-in stats");
+	if (stats.voiceBargeInSuppressedCount !== 1 || stats.voiceBargeInAcceptedCount !== 2) {
+		throw new Error("voice-smoke: barge-in stats were not counted");
+	}
+	await handle.stop();
 }
 
 async function assertFakeVoiceBridgeSubagents(): Promise<void> {
@@ -2080,6 +2311,7 @@ class FakeRealtime {
 	audioAppends = 0;
 	commits = 0;
 	responses = 0;
+	cancelResponses = 0;
 	videoFrames = 0;
 
 	appendInputAudioPcm(): void {
@@ -2092,6 +2324,10 @@ class FakeRealtime {
 
 	createAudioResponse(): void {
 		this.responses += 1;
+	}
+
+	cancelResponse(): void {
+		this.cancelResponses += 1;
 	}
 
 	appendInputVideoFrame(): void {
@@ -2186,6 +2422,7 @@ class FakeBridgeRealtime extends EventEmitter {
 	connectOptions:
 		| {
 				tools?: { name: string }[];
+				responseOutputModality?: string;
 		  }
 		| undefined;
 	readonly functionOutputs: { callId: string; output: unknown }[] = [];
@@ -2194,8 +2431,9 @@ class FakeBridgeRealtime extends EventEmitter {
 	audioAppends = 0;
 	commits = 0;
 	responses = 0;
+	cancelResponses = 0;
 
-	async connect(options: { tools?: { name: string }[] }): Promise<void> {
+	async connect(options: { tools?: { name: string }[]; responseOutputModality?: string }): Promise<void> {
 		this.connected = true;
 		this.connectOptions = options;
 	}
@@ -2216,6 +2454,10 @@ class FakeBridgeRealtime extends EventEmitter {
 		this.responses += 1;
 	}
 
+	cancelResponse(): void {
+		this.cancelResponses += 1;
+	}
+
 	appendInputVideoFrame(input: { mimeType: string; dataBase64: string }): void {
 		this.videoFrames.push(input);
 	}
@@ -2226,6 +2468,15 @@ class FakeBridgeRealtime extends EventEmitter {
 
 	sendFunctionCallOutput(input: { callId: string; output: unknown }): void {
 		this.functionOutputs.push(input);
+	}
+}
+
+class FakeSpeechSynthesizer {
+	readonly texts: string[] = [];
+
+	async synthesize(text: string, onAudio: (chunk: { pcmBase64: string; sampleRate: number }) => void): Promise<void> {
+		this.texts.push(text);
+		onAudio({ pcmBase64: Buffer.from([1, 2, 3, 4]).toString("base64"), sampleRate: 24_000 });
 	}
 }
 
@@ -2298,6 +2549,8 @@ class FakeBridgeClankvox extends EventEmitter {
 	streamPublishStops = 0;
 	streamPublishPauses = 0;
 	streamPublishResumes = 0;
+	stopPlaybackCount = 0;
+	stopTtsPlaybackCount = 0;
 	destroyed = false;
 	voiceSessionId: string | undefined = "voice-session-1";
 
@@ -2307,9 +2560,13 @@ class FakeBridgeClankvox extends EventEmitter {
 		this.audioSends.push(send);
 	}
 
-	stopPlayback(): void {}
+	stopPlayback(): void {
+		this.stopPlaybackCount += 1;
+	}
 
-	stopTtsPlayback(): void {}
+	stopTtsPlayback(): void {
+		this.stopTtsPlaybackCount += 1;
+	}
 
 	subscribeUser(userId: string, silenceDurationMs?: number, sampleRate?: number): void {
 		const subscription: { userId: string; silenceDurationMs?: number; sampleRate?: number } = { userId };

@@ -15,6 +15,7 @@ export interface ClankvoxRealtimeBridgeVox {
 export interface ClankvoxRealtimeBridgeRealtime {
 	appendInputAudioPcm(audio: Buffer): void;
 	commitInputAudioBuffer(): void;
+	cancelResponse?(): void;
 	createAudioResponse(): void;
 	appendInputVideoFrame(input: { mimeType: string; dataBase64: string }): void;
 }

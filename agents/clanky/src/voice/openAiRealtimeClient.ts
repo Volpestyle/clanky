@@ -17,11 +17,13 @@ export interface OpenAiRealtimeConnectOptions {
 	tools?: OpenAiRealtimeTool[];
 	toolChoice?: "auto" | "none" | "required";
 	reasoningEffort?: OpenAiRealtimeReasoningEffort;
+	responseOutputModality?: OpenAiRealtimeOutputModality;
 	inputAudioFormat?: "pcm16";
 	outputAudioFormat?: "pcm16";
 	inputTranscriptionModel?: string;
 }
 
+export type OpenAiRealtimeOutputModality = "audio" | "text";
 export type OpenAiRealtimeReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
 export type OpenAiRealtimeTranscriptionDelay = "minimal" | "low" | "medium" | "high" | "xhigh";
 
@@ -75,11 +77,14 @@ export class OpenAiRealtimeClient extends EventEmitter {
 
 	async connect(options: OpenAiRealtimeConnectOptions): Promise<void> {
 		if (this.apiKey.length === 0) throw new Error("OPENAI_API_KEY is required for Discord voice realtime.");
-		if (options.voice.trim().length === 0) throw new Error("A realtime voice is required for Discord voice.");
+		if ((options.responseOutputModality ?? "audio") === "audio" && options.voice.trim().length === 0) {
+			throw new Error("A realtime voice is required for Discord voice.");
+		}
 		if (this.ws?.readyState === WebSocket.OPEN) return;
 
 		this.session = {
 			...options,
+			responseOutputModality: options.responseOutputModality ?? "audio",
 			inputAudioFormat: options.inputAudioFormat ?? "pcm16",
 			outputAudioFormat: options.outputAudioFormat ?? "pcm16",
 			inputTranscriptionModel: options.inputTranscriptionModel ?? "gpt-4o-mini-transcribe",
@@ -112,8 +117,15 @@ export class OpenAiRealtimeClient extends EventEmitter {
 		this.send({ type: "input_audio_buffer.commit" });
 	}
 
+	cancelResponse(): void {
+		this.send({ type: "response.cancel" });
+	}
+
 	createAudioResponse(): void {
-		this.send({ type: "response.create", response: { output_modalities: ["audio"] } });
+		this.send({
+			type: "response.create",
+			response: { output_modalities: [this.session?.responseOutputModality ?? "audio"] },
+		});
 	}
 
 	requestTextUtterance(text: string): void {
@@ -399,24 +411,28 @@ function stringValue(value: unknown): string {
 }
 
 export function buildRealtimeSessionUpdateEvent(session: OpenAiRealtimeConnectOptions): JsonRecord {
+	const outputModality = session.responseOutputModality ?? "audio";
+	const audio: JsonRecord = {
+		input: {
+			format: session.inputAudioFormat ?? "pcm16",
+			transcription: { model: session.inputTranscriptionModel ?? "gpt-4o-mini-transcribe" },
+			turn_detection: null,
+		},
+	};
+	if (outputModality === "audio") {
+		audio.output = {
+			format: session.outputAudioFormat ?? "pcm16",
+			voice: session.voice,
+		};
+	}
 	return {
 		type: "session.update",
 		session: {
 			type: "realtime",
 			model: session.model,
 			instructions: session.instructions,
-			output_modalities: ["audio"],
-			audio: {
-				input: {
-					format: session.inputAudioFormat ?? "pcm16",
-					transcription: { model: session.inputTranscriptionModel ?? "gpt-4o-mini-transcribe" },
-					turn_detection: null,
-				},
-				output: {
-					format: session.outputAudioFormat ?? "pcm16",
-					voice: session.voice,
-				},
-			},
+			output_modalities: [outputModality],
+			audio,
 			tools: session.tools ?? [],
 			tool_choice: session.toolChoice ?? "auto",
 			...(session.reasoningEffort !== undefined ? { reasoning: { effort: session.reasoningEffort } } : {}),

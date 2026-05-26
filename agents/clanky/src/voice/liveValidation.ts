@@ -81,18 +81,19 @@ export function evaluateVoiceLiveStatus(
 		);
 	}
 	if (requirements.outputAudio) {
+		const externalTts = stringValue(voice.ttsProvider) === "elevenlabs";
 		checks.push(
 			minimumCheck(
-				"openai_realtime_output_audio",
-				numberValue(stats.realtimeAudioDeltaCount),
+				externalTts ? "elevenlabs_tts_output_audio" : "openai_realtime_output_audio",
+				externalTts ? numberValue(stats.externalTtsRequestCount) : numberValue(stats.realtimeAudioDeltaCount),
 				1,
-				"expected OpenAI Realtime output audio deltas",
+				externalTts ? "expected ElevenLabs TTS output audio" : "expected OpenAI Realtime output audio deltas",
 			),
 			minimumCheck(
 				"discord_output_audio",
 				numberValue(stats.discordOutputAudioSendCount),
 				1,
-				"expected Realtime output audio to be sent to Discord",
+				"expected voice output audio to be sent to Discord",
 			),
 		);
 	}
@@ -226,6 +227,10 @@ function isRecord(value: unknown): value is JsonRecord {
 
 function numberValue(value: unknown): number {
 	return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function stringValue(value: unknown): string {
+	return typeof value === "string" ? value : "";
 }
 
 function minimumCheck(id: string, observed: number, minimum: number, failure: string): VoiceLiveValidationCheck {

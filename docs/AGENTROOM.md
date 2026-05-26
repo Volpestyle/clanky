@@ -166,12 +166,27 @@ Agent-owned Discord voice env:
 - `CLANKY_DISCORD_VOICE_GUILD_ID`
 - `CLANKY_DISCORD_VOICE_CHANNEL_ID`
 - `OPENAI_API_KEY` or `CLANKY_OPENAI_API_KEY`
+- `CLANKY_DISCORD_VOICE_TTS_PROVIDER` or `CLANKY_VOICE_TTS_PROVIDER`
+  (default `openai`; set to `elevenlabs` to use external ElevenLabs speech)
+- `CLANKY_OPENAI_REALTIME_MODEL` (default `gpt-realtime-2`)
+- `CLANKY_OPENAI_REALTIME_VOICE` (default `marin`; used by the default
+  OpenAI speech path)
+- `CLANKY_OPENAI_REALTIME_REASONING_EFFORT` (default `low` with
+  `gpt-realtime-2`; supported values: `minimal`, `low`, `medium`, `high`,
+  `xhigh`)
 - `CLANKY_OPENAI_REALTIME_TRANSCRIPTION_MODEL` (default
   `gpt-realtime-whisper`)
 - `CLANKY_OPENAI_REALTIME_TRANSCRIPTION_DELAY` (default `low`; supported
   values: `minimal`, `low`, `medium`, `high`, `xhigh`)
 - `CLANKY_OPENAI_REALTIME_TRANSCRIPTION_LANGUAGE` to provide a language hint
   such as `en`
+- `CLANKY_ELEVENLABS_API_KEY` or `ELEVENLABS_API_KEY` when using
+  `CLANKY_DISCORD_VOICE_TTS_PROVIDER=elevenlabs`
+- `CLANKY_ELEVENLABS_VOICE_ID` when using ElevenLabs speech
+- `CLANKY_ELEVENLABS_MODEL` (default `eleven_flash_v2_5`)
+- `CLANKY_ELEVENLABS_OUTPUT_FORMAT` (default `pcm_24000`; supported values:
+  `pcm_16000`, `pcm_22050`, `pcm_24000`, `pcm_44100`)
+- `CLANKY_ELEVENLABS_BASE_URL` or `ELEVENLABS_BASE_URL`
 - `CLANKY_DISCORD_VOICE_SPEAKER_TRANSCRIPTION_IDLE_CLOSE_MS` (default `120000`)
   closes inactive per-speaker transcription sessions
 - `CLANKY_DISCORD_VOICE_TRANSCRIPT_RESPONSE_BATCH_DELAY_MS` (default `350`)
@@ -192,6 +207,11 @@ bridge transcribes each active Discord speaker through a separate streaming
 transcription session, then sends labeled transcript turns into the main voice
 response session. The tool surface includes `ask_pi`, `list_screen_shares`,
 `start_screen_watch`, `stop_screen_watch`, and `see_screenshare_snapshot`.
+OpenAI Realtime is the default speech path; when ElevenLabs speech is selected,
+Realtime returns text and Clanky streams that text through ElevenLabs before
+playing the PCM audio through `clankvox`. The `/discord-voice` advanced
+settings can store the speech provider, ElevenLabs voice id, and ElevenLabs
+model in the active profile; env vars still override profile settings.
 
 The bundled native helper can be validated or prebuilt with `pnpm
 voice:native:test` and `pnpm voice:build`. If no release binary exists, the

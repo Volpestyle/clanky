@@ -7,7 +7,7 @@ import type {
 	CreateAgentSessionRuntimeFactory,
 } from "@earendil-works/pi-coding-agent";
 import { type ClankyAgentDiscordGatewayConfig, resolveAgentDiscordCredentialConfig } from "./agentDiscordGateway.ts";
-import type { StoredDiscordVoiceSettings } from "./discordVoiceSettings.ts";
+import type { DiscordVoiceTtsProvider, StoredDiscordVoiceSettings } from "./discordVoiceSettings.ts";
 import { DiscordVoiceSubagentCoordinator } from "./discordVoiceSubagentCoordinator.ts";
 import { type RuntimeTurnQueue, SerialRuntimeTurnQueue } from "./runtimeTurnQueue.ts";
 import {
@@ -31,6 +31,14 @@ import {
 	type DiscordVoiceSpeakerTranscriptionRealtime,
 } from "./voice/discordVoiceSpeakerTranscription.ts";
 import {
+	DEFAULT_ELEVENLABS_OUTPUT_FORMAT,
+	DEFAULT_ELEVENLABS_TTS_MODEL,
+	type ElevenLabsPcmOutputFormat,
+	type ElevenLabsTtsAudioChunk,
+	ElevenLabsTtsClient,
+	parseElevenLabsPcmOutputFormat,
+} from "./voice/elevenLabsTtsClient.ts";
+import {
 	OpenAiRealtimeClient,
 	type OpenAiRealtimeClientOptions,
 	type OpenAiRealtimeConnectOptions,
@@ -51,11 +59,18 @@ export interface ClankyAgentDiscordVoiceConfig {
 	channelId?: string;
 	allowedGuildIds?: string[];
 	allowedChannelIds?: string[];
+	wakeNames?: string[];
+	ttsProvider?: DiscordVoiceTtsProvider;
 	openAiApiKey: string;
 	openAiBaseUrl?: string;
 	openAiRealtimeModel: string;
 	openAiRealtimeVoice: string;
 	openAiRealtimeReasoningEffort?: OpenAiRealtimeReasoningEffort;
+	elevenLabsApiKey?: string;
+	elevenLabsBaseUrl?: string;
+	elevenLabsVoiceId?: string;
+	elevenLabsModel?: string;
+	elevenLabsOutputFormat?: ElevenLabsPcmOutputFormat;
 	openAiRealtimeTranscriptionModel?: string;
 	openAiRealtimeTranscriptionDelay?: OpenAiRealtimeTranscriptionDelay;
 	openAiRealtimeTranscriptionLanguage?: string;
@@ -114,6 +129,8 @@ interface VoiceBridgeStats {
 	discordInputAudioEventCount: number;
 	discordInputAudioBytes: number;
 	discordInputAudioEndCount: number;
+	voiceBargeInAcceptedCount: number;
+	voiceBargeInSuppressedCount: number;
 	realtimeAudioDeltaCount: number;
 	realtimeAudioDeltaBytes: number;
 	discordOutputAudioSendCount: number;
@@ -147,6 +164,9 @@ interface VoiceBridgeStats {
 	snapshotSuccessCount: number;
 	videoFrameAttachCount: number;
 	videoFrameAutoAttachSkipCount: number;
+	externalTtsRequestCount: number;
+	externalTtsAudioBytes: number;
+	externalTtsErrorCount: number;
 	musicPlayRequestCount: number;
 	musicPauseRequestCount: number;
 	musicResumeRequestCount: number;
@@ -173,6 +193,7 @@ export interface ClankyAgentDiscordVoiceDependencies {
 		client: DiscordRawGatewayClient,
 		hooks: Parameters<typeof createDiscordStreamDiscovery>[1],
 	): DiscordStreamDiscovery;
+	createSpeechSynthesizer?(config: FixedClankyAgentDiscordVoiceConfig): VoiceSpeechSynthesizerLike | undefined;
 }
 
 interface VoiceRealtimeClientLike extends ClankvoxRealtimeBridgeRealtime {
@@ -180,6 +201,7 @@ interface VoiceRealtimeClientLike extends ClankvoxRealtimeBridgeRealtime {
 	close(): Promise<void>;
 	requestTextUtterance(text: string): void;
 	sendFunctionCallOutput(input: { callId: string; output: unknown }): void;
+	cancelResponse(): void;
 	on(event: "audio_delta", listener: (pcmBase64: string) => void): unknown;
 	on(event: "socket_closed", listener: (event: JsonRecord) => void): unknown;
 	on(event: "socket_error", listener: (error: Error) => void): unknown;
@@ -243,6 +265,20 @@ interface VoiceVoxClientLike extends ClankvoxRealtimeBridgeVox {
 	destroy(): Promise<void>;
 }
 
+interface VoiceSpeechSynthesizerLike {
+	synthesize(
+		text: string,
+		onAudio: (chunk: ElevenLabsTtsAudioChunk) => void,
+		options?: VoiceSpeechSynthesisOptions,
+	): Promise<void>;
+	dispose?(): Promise<void> | void;
+	status?(): JsonRecord;
+}
+
+interface VoiceSpeechSynthesisOptions {
+	signal?: AbortSignal;
+}
+
 type VoiceMusicStatus = "idle" | "loading" | "playing" | "paused" | "error";
 type VoiceStreamPublishSourceKind = "video_url" | "music_visualizer";
 
@@ -263,6 +299,7 @@ interface SpeakerTranscriptLine {
 	userId: string;
 	displayName: string;
 	text: string;
+	interruptedAssistant?: boolean;
 }
 
 interface ResolvedVoiceDependencies {
@@ -278,6 +315,7 @@ interface ResolvedVoiceDependencies {
 		client: DiscordRawGatewayClient,
 		hooks: Parameters<typeof createDiscordStreamDiscovery>[1],
 	): DiscordStreamDiscovery;
+	createSpeechSynthesizer(config: FixedClankyAgentDiscordVoiceConfig): VoiceSpeechSynthesizerLike | undefined;
 }
 
 export const DEFAULT_REALTIME_MODEL = "gpt-realtime-2";
@@ -289,6 +327,77 @@ const DEFAULT_VIDEO_FRAME_AUTO_ATTACH_INTERVAL_MS = 2_000;
 const DEFAULT_SPEAKER_TRANSCRIPTION_IDLE_CLOSE_MS = 120_000;
 const DEFAULT_TRANSCRIPT_RESPONSE_BATCH_DELAY_MS = 350;
 const PI_TOOL_TIMEOUT_MS = 120_000;
+const DEFAULT_VOICE_BARGE_IN_WAKE_WORDS = [
+	"blankie",
+	"clank",
+	"clanka",
+	"clanker",
+	"clankerconk",
+	"clankie",
+	"clanky",
+	"clay",
+	"clayton",
+	"clenk",
+	"clenka",
+	"clenker",
+	"click",
+	"clickink",
+	"clink",
+	"clinka",
+	"clinker",
+	"clinkeroni",
+	"clinkerton",
+	"clinkie",
+	"clinky",
+	"clint",
+	"clinic",
+	"clonk",
+	"clonker",
+	"clonky",
+	"clunk",
+	"clunka",
+	"clunky",
+	"coinker",
+	"crank",
+	"craigey",
+	"craigy",
+	"cranker",
+	"crankey",
+	"flakey",
+	"flanker",
+	"flankey",
+	"frankie",
+	"hank",
+	"hanker",
+	"hankie",
+	"hanky",
+	"kanky",
+	"klanker",
+	"klang",
+	"klien",
+	"klink",
+	"klinker",
+	"klinkie",
+	"klinky",
+	"klinky conk",
+	"link",
+	"plank",
+	"planker",
+	"planka",
+	"plinker",
+	"plinky",
+	"plakey",
+	"plakie",
+	"oinky",
+	"plankey",
+	"planky",
+	"plonka",
+	"quaker",
+	"quakie",
+];
+const PRIMARY_WAKE_TOKEN_MIN_LEN = 4;
+const EN_WAKE_PRIMARY_GENERIC_TOKENS = new Set(["bot", "ai", "assistant"]);
+const LEADING_WAKE_PREFIX_TOKENS = new Set(["yo", "hey", "hi", "hello", "ok", "okay", "uh", "um", "uhh", "umm"]);
 
 function createVoiceBridgeStats(): VoiceBridgeStats {
 	return {
@@ -300,6 +409,8 @@ function createVoiceBridgeStats(): VoiceBridgeStats {
 		discordInputAudioEventCount: 0,
 		discordInputAudioBytes: 0,
 		discordInputAudioEndCount: 0,
+		voiceBargeInAcceptedCount: 0,
+		voiceBargeInSuppressedCount: 0,
 		realtimeAudioDeltaCount: 0,
 		realtimeAudioDeltaBytes: 0,
 		discordOutputAudioSendCount: 0,
@@ -344,6 +455,9 @@ function createVoiceBridgeStats(): VoiceBridgeStats {
 		streamPublishDisconnectCount: 0,
 		streamPublishStopCount: 0,
 		streamPublishTransportEventCount: 0,
+		externalTtsRequestCount: 0,
+		externalTtsAudioBytes: 0,
+		externalTtsErrorCount: 0,
 	};
 }
 
@@ -358,7 +472,26 @@ function resolveVoiceDependencies(
 			dependencies?.spawnVox ??
 			((guildId, channelId, guild, options) => ClankvoxIpcClient.spawn(guildId, channelId, guild, options)),
 		createStreamDiscovery: dependencies?.createStreamDiscovery ?? createDiscordStreamDiscovery,
+		createSpeechSynthesizer: dependencies?.createSpeechSynthesizer ?? createDefaultSpeechSynthesizer,
 	};
+}
+
+function createDefaultSpeechSynthesizer(
+	config: FixedClankyAgentDiscordVoiceConfig,
+): VoiceSpeechSynthesizerLike | undefined {
+	if ((config.ttsProvider ?? "openai") !== "elevenlabs") return undefined;
+	if (config.elevenLabsApiKey === undefined) throw new Error("ELEVENLABS_API_KEY is required for ElevenLabs speech.");
+	if (config.elevenLabsVoiceId === undefined)
+		throw new Error("An ElevenLabs voice id is required for ElevenLabs speech.");
+	const options: ConstructorParameters<typeof ElevenLabsTtsClient>[0] = {
+		apiKey: config.elevenLabsApiKey,
+		voiceId: config.elevenLabsVoiceId,
+		modelId: config.elevenLabsModel ?? DEFAULT_ELEVENLABS_TTS_MODEL,
+		outputFormat: config.elevenLabsOutputFormat ?? DEFAULT_ELEVENLABS_OUTPUT_FORMAT,
+		logger: (level, event, details) => console[level](`[discord-voice] ${event}`, details ?? {}),
+	};
+	if (config.elevenLabsBaseUrl !== undefined) options.baseUrl = config.elevenLabsBaseUrl;
+	return new ElevenLabsTtsClient(options);
 }
 
 export function resolveAgentDiscordVoiceConfig(
@@ -381,6 +514,11 @@ export function resolveAgentDiscordVoiceConfig(
 		parseOptionalStringList(env.CLANKY_DISCORD_VOICE_ALLOWED_GUILD_IDS) ?? storedSettings?.allowedGuildIds;
 	const allowedChannelIds =
 		parseOptionalStringList(env.CLANKY_DISCORD_VOICE_ALLOWED_CHANNEL_IDS) ?? storedSettings?.allowedChannelIds;
+	const wakeNames = parseOptionalStringList(env.CLANKY_DISCORD_VOICE_WAKE_NAMES ?? env.CLANKY_DISCORD_WAKE_NAMES);
+	const ttsProvider =
+		parseDiscordVoiceTtsProvider(env.CLANKY_DISCORD_VOICE_TTS_PROVIDER ?? env.CLANKY_VOICE_TTS_PROVIDER) ??
+		storedSettings?.ttsProvider ??
+		"openai";
 	const openAiApiKey = resolveOpenAiApiKeySync(env, authStorage);
 	if (openAiApiKey === undefined) {
 		throw new Error(
@@ -393,6 +531,7 @@ export function resolveAgentDiscordVoiceConfig(
 		DEFAULT_REALTIME_MODEL;
 	const voiceConfig: ClankyAgentDiscordVoiceConfig = {
 		enabled: true,
+		ttsProvider,
 		openAiApiKey: openAiApiKey.value,
 		openAiRealtimeModel: model,
 		openAiRealtimeVoice:
@@ -416,6 +555,33 @@ export function resolveAgentDiscordVoiceConfig(
 	}
 	if (allowedChannelIds !== undefined && allowedChannelIds.length > 0) {
 		voiceConfig.allowedChannelIds = dedupeNonEmptyStrings(allowedChannelIds);
+	}
+	if (wakeNames !== undefined && wakeNames.length > 0) {
+		voiceConfig.wakeNames = dedupeNonEmptyStrings(wakeNames);
+	}
+	if (ttsProvider === "elevenlabs") {
+		const elevenLabsApiKey =
+			cleanOptionalString(env.CLANKY_ELEVENLABS_API_KEY) ?? cleanOptionalString(env.ELEVENLABS_API_KEY);
+		if (elevenLabsApiKey === undefined) {
+			throw new Error("ElevenLabs credentials are required for ElevenLabs Discord voice. Set ELEVENLABS_API_KEY.");
+		}
+		const elevenLabsVoiceId = cleanOptionalString(env.CLANKY_ELEVENLABS_VOICE_ID) ?? storedSettings?.elevenLabsVoiceId;
+		if (elevenLabsVoiceId === undefined) {
+			throw new Error(
+				"An ElevenLabs voice id is required for ElevenLabs Discord voice. Set CLANKY_ELEVENLABS_VOICE_ID or configure /discord-voice advanced settings.",
+			);
+		}
+		voiceConfig.elevenLabsApiKey = elevenLabsApiKey;
+		voiceConfig.elevenLabsVoiceId = elevenLabsVoiceId;
+		voiceConfig.elevenLabsModel =
+			cleanOptionalString(env.CLANKY_ELEVENLABS_MODEL) ??
+			storedSettings?.elevenLabsModel ??
+			DEFAULT_ELEVENLABS_TTS_MODEL;
+		voiceConfig.elevenLabsOutputFormat =
+			parseElevenLabsPcmOutputFormat(env.CLANKY_ELEVENLABS_OUTPUT_FORMAT) ?? DEFAULT_ELEVENLABS_OUTPUT_FORMAT;
+		const elevenLabsBaseUrl =
+			cleanOptionalString(env.CLANKY_ELEVENLABS_BASE_URL) ?? cleanOptionalString(env.ELEVENLABS_BASE_URL);
+		if (elevenLabsBaseUrl !== undefined) voiceConfig.elevenLabsBaseUrl = elevenLabsBaseUrl;
 	}
 	const transcriptionLanguage = cleanOptionalString(env.CLANKY_OPENAI_REALTIME_TRANSCRIPTION_LANGUAGE);
 	if (transcriptionLanguage !== undefined) voiceConfig.openAiRealtimeTranscriptionLanguage = transcriptionLanguage;
@@ -536,9 +702,15 @@ class AgentDiscordVoiceDynamicHandle implements ClankyAgentDiscordVoiceHandle {
 			channelId: this.config.channelId,
 			allowedGuildIds: this.config.allowedGuildIds ?? [],
 			allowedChannelIds: this.config.allowedChannelIds ?? [],
+			wakeNames: resolveVoiceBargeInWakeWords(this.config),
+			ttsProvider: this.config.ttsProvider ?? "openai",
 			model: this.config.openAiRealtimeModel,
 			voice: this.config.openAiRealtimeVoice,
+			elevenLabsVoiceId: this.config.elevenLabsVoiceId,
+			elevenLabsModel: this.config.elevenLabsModel,
+			elevenLabsOutputFormat: this.config.elevenLabsOutputFormat,
 			reasoningEffort: this.config.openAiRealtimeReasoningEffort,
+			interruptionPolicy: "while-speaking-requires-clanky",
 			transcriptionModel: this.config.openAiRealtimeTranscriptionModel ?? DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
 			transcriptionDelay: this.config.openAiRealtimeTranscriptionDelay,
 			transcriptionLanguage: this.config.openAiRealtimeTranscriptionLanguage,
@@ -560,6 +732,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 	private readonly subagents: DiscordVoiceSubagentCoordinator | undefined;
 	private realtime: VoiceRealtimeClientLike | undefined;
 	private vox: VoiceVoxClientLike | undefined;
+	private speechSynthesizer: VoiceSpeechSynthesizerLike | undefined;
 	private streamDiscovery: DiscordStreamDiscovery | undefined;
 	private speakerTranscription: DiscordVoiceSpeakerTranscriptionManager | undefined;
 	private guild: ClankvoxGuildLike | undefined;
@@ -578,11 +751,18 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 	private readonly activeSpeakingUserIds = new Set<string>();
 	private readonly seenInputSpeakerIds = new Set<string>();
 	private readonly pendingToolCalls = new Map<string, PendingRealtimeToolCall>();
+	private readonly pendingRealtimeOutputText = new Map<string, string>();
 	private readonly completedToolCallIds: string[] = [];
 	private readonly completedToolCallIdSet = new Set<string>();
 	private readonly pendingSpeakerTranscriptLines: SpeakerTranscriptLine[] = [];
 	private readonly stats: VoiceBridgeStats = createVoiceBridgeStats();
 	private transcriptResponseTimer: TimerHandle | undefined;
+	private speechSynthesisQueue: Promise<void> = Promise.resolve();
+	private speechSynthesisGeneration = 0;
+	private speechSynthesisAbortController: AbortController | undefined;
+	private externalSpeechActiveCount = 0;
+	private assistantSpeechActiveUntilMs = 0;
+	private realtimeResponseActive = false;
 
 	constructor(
 		runtime: AgentSessionRuntime,
@@ -623,6 +803,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		});
 		let realtime: VoiceRealtimeClientLike | undefined;
 		let vox: VoiceVoxClientLike | undefined;
+		let speechSynthesizer: VoiceSpeechSynthesizerLike | undefined;
 		try {
 			const guild = await this.resolveGuild(this.config.guildId);
 			this.guild = guild;
@@ -639,17 +820,20 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			if (this.config.clankvoxBin !== undefined) voxOptions.bin = this.config.clankvoxBin;
 			if (this.config.clankvoxDir !== undefined) voxOptions.cwd = this.config.clankvoxDir;
 			vox = await this.dependencies.spawnVox(this.config.guildId, this.config.channelId, guild, voxOptions);
+			speechSynthesizer = this.dependencies.createSpeechSynthesizer(this.config);
 			this.realtime = realtime;
 			this.vox = vox;
+			this.speechSynthesizer = speechSynthesizer;
 			this.speakerTranscription = this.createSpeakerTranscription(vox, realtimeOptions);
 			this.bindVox(vox);
 			this.bindRealtime(realtime);
 			const connectOptions: OpenAiRealtimeConnectOptions = {
 				model: this.config.openAiRealtimeModel,
 				voice: this.config.openAiRealtimeVoice,
-				instructions: buildRealtimeInstructions(this.discordConfig),
+				instructions: buildRealtimeInstructions(this.discordConfig, this.config.ttsProvider ?? "openai"),
 				tools: buildVoiceTools(),
 				toolChoice: "auto",
+				responseOutputModality: (this.config.ttsProvider ?? "openai") === "elevenlabs" ? "text" : "audio",
 			};
 			if (this.config.openAiRealtimeReasoningEffort !== undefined) {
 				connectOptions.reasoningEffort = this.config.openAiRealtimeReasoningEffort;
@@ -662,10 +846,12 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			this.streamDiscovery = undefined;
 			await this.speakerTranscription?.dispose().catch(() => undefined);
 			this.speakerTranscription = undefined;
+			await speechSynthesizer?.dispose?.();
 			await realtime?.close().catch(() => undefined);
 			await vox?.destroy().catch(() => undefined);
 			this.realtime = undefined;
 			this.vox = undefined;
+			this.speechSynthesizer = undefined;
 			this.guild = undefined;
 			throw error;
 		}
@@ -673,6 +859,8 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 
 	async stop(): Promise<void> {
 		this.clearTranscriptResponseTimer();
+		this.cancelExternalSpeechSynthesis();
+		this.assistantSpeechActiveUntilMs = 0;
 		this.clearStreamPublish("voice_bridge_stop", true);
 		this.streamDiscovery?.stop();
 		this.streamDiscovery = undefined;
@@ -684,6 +872,9 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		this.activeSpeakingUserIds.clear();
 		this.seenInputSpeakerIds.clear();
 		this.pendingSpeakerTranscriptLines.length = 0;
+		this.pendingRealtimeOutputText.clear();
+		await this.speechSynthesizer?.dispose?.();
+		this.speechSynthesizer = undefined;
 		await this.realtime?.close();
 		this.realtime = undefined;
 		await this.vox?.destroy();
@@ -708,9 +899,15 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			channelId: this.config.channelId,
 			allowedGuildIds: this.config.allowedGuildIds ?? [],
 			allowedChannelIds: this.config.allowedChannelIds ?? [],
+			wakeNames: this.voiceBargeInWakeWords(),
+			ttsProvider: this.config.ttsProvider ?? "openai",
 			model: this.config.openAiRealtimeModel,
 			voice: this.config.openAiRealtimeVoice,
+			elevenLabsVoiceId: this.config.elevenLabsVoiceId,
+			elevenLabsModel: this.config.elevenLabsModel,
+			elevenLabsOutputFormat: this.config.elevenLabsOutputFormat,
 			reasoningEffort: this.config.openAiRealtimeReasoningEffort,
+			interruptionPolicy: "while-speaking-requires-clanky",
 			transcriptionModel: this.config.openAiRealtimeTranscriptionModel ?? DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
 			transcriptionDelay: this.config.openAiRealtimeTranscriptionDelay,
 			transcriptionLanguage: this.config.openAiRealtimeTranscriptionLanguage,
@@ -724,6 +921,10 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			activeStreamWatchKey: this.activeStreamWatchKey,
 			activeVideoUserId: this.activeVideoUserId,
 			media: {
+				speech: {
+					provider: this.config.ttsProvider ?? "openai",
+					synthesizer: this.speechSynthesizer?.status?.(),
+				},
 				music: {
 					status: this.musicStatus,
 					url: this.musicUrl,
@@ -797,10 +998,21 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 				text,
 				eventType: transcript.eventType,
 			});
+			const assistantWasSpeaking = this.isAssistantSpeechActive();
+			const addressedAssistant = transcriptAddressesAssistant(text, this.voiceBargeInWakeWords());
+			if (assistantWasSpeaking) {
+				if (!addressedAssistant) {
+					this.stats.voiceBargeInSuppressedCount += 1;
+					return;
+				}
+				this.stats.voiceBargeInAcceptedCount += 1;
+				this.interruptAssistantSpeech();
+			}
 			this.queueSpeakerTranscriptForResponse({
 				userId: transcript.userId,
 				displayName,
 				text,
+				interruptedAssistant: assistantWasSpeaking && addressedAssistant,
 			});
 			return;
 		}
@@ -824,11 +1036,18 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		const transcriptLines = lines.map((line) => {
 			return `${line.displayName} (${line.userId}): ${line.text}`;
 		});
+		const interruptionLines = lines.some((line) => line.interruptedAssistant === true)
+			? [
+					"",
+					"Interruption policy: a speaker explicitly addressed Clanky while Clanky was speaking. Treat that as an intentional interruption and answer that addressed request now.",
+				]
+			: [];
 		realtime.requestTextUtterance(
 			[
 				"Discord voice transcript with speaker attribution:",
 				"",
 				...transcriptLines,
+				...interruptionLines,
 				"",
 				"Respond in the Discord voice channel. Use the speaker names above when attribution matters.",
 			].join("\n"),
@@ -937,12 +1156,14 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		realtime.on("audio_delta", (pcmBase64: string) => {
 			this.stats.realtimeAudioDeltaCount += 1;
 			this.stats.realtimeAudioDeltaBytes += base64DecodedByteLength(pcmBase64);
+			if ((this.config.ttsProvider ?? "openai") === "elevenlabs") return;
 			const vox = this.vox;
 			if (vox === undefined) {
 				this.stats.discordOutputAudioDropCount += 1;
 				return;
 			}
 			vox.sendAudio(pcmBase64, 24_000);
+			this.rememberAssistantSpeechOutput(pcmBase64, 24_000);
 			this.stats.discordOutputAudioSendCount += 1;
 		});
 		realtime.on("event", (event: JsonRecord) => {
@@ -950,6 +1171,8 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			const eventType = stringValue(event.type);
 			if (eventType === "session.created") this.stats.realtimeSessionCreatedCount += 1;
 			else if (eventType === "session.updated") this.stats.realtimeSessionUpdatedCount += 1;
+			else if (eventType === "response.created") this.realtimeResponseActive = true;
+			else if (eventType === "response.done" || eventType === "response.cancelled") this.realtimeResponseActive = false;
 			void this.handleRealtimeEvent(event).catch((error: unknown) => {
 				console.error(error instanceof Error ? error.message : String(error));
 			});
@@ -967,9 +1190,113 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			console.warn("[discord-voice] openai realtime socket error", error.message);
 		});
 		realtime.on("transcript", (transcript: OpenAiRealtimeTranscript) => {
-			this.stats.realtimeTranscriptCount += 1;
-			this.subagents?.recordRealtimeTranscript(transcript);
+			this.handleRealtimeTranscript(transcript);
 		});
+	}
+
+	private handleRealtimeTranscript(transcript: OpenAiRealtimeTranscript): void {
+		this.stats.realtimeTranscriptCount += 1;
+		this.subagents?.recordRealtimeTranscript(transcript);
+		if ((this.config.ttsProvider ?? "openai") !== "elevenlabs") return;
+		const eventType = transcript.eventType;
+		if (eventType === "response.output_text.delta" || eventType === "response.output_audio_transcript.delta") {
+			const key = transcript.itemId ?? "default";
+			this.pendingRealtimeOutputText.set(key, `${this.pendingRealtimeOutputText.get(key) ?? ""}${transcript.text}`);
+			return;
+		}
+		if (eventType !== "response.output_text.done" && eventType !== "response.output_audio_transcript.done") return;
+		const key = transcript.itemId ?? "default";
+		const fallback = this.pendingRealtimeOutputText.get(key) ?? "";
+		this.pendingRealtimeOutputText.delete(key);
+		const text = transcript.text.trim().length > 0 ? transcript.text : fallback;
+		this.enqueueExternalSpeech(text);
+	}
+
+	private enqueueExternalSpeech(text: string): void {
+		const prompt = text.trim();
+		if (prompt.length === 0) return;
+		const generation = this.speechSynthesisGeneration;
+		const run = this.speechSynthesisQueue.then(() => this.synthesizeExternalSpeech(prompt, generation));
+		this.speechSynthesisQueue = run.catch(() => undefined);
+	}
+
+	private async synthesizeExternalSpeech(text: string, generation: number): Promise<void> {
+		if (generation !== this.speechSynthesisGeneration) return;
+		const synthesizer = this.speechSynthesizer;
+		const vox = this.vox;
+		if (synthesizer === undefined || vox === undefined) {
+			this.stats.discordOutputAudioDropCount += 1;
+			return;
+		}
+		this.stats.externalTtsRequestCount += 1;
+		this.externalSpeechActiveCount += 1;
+		const abortController = new AbortController();
+		this.speechSynthesisAbortController = abortController;
+		try {
+			await synthesizer.synthesize(
+				text,
+				(chunk) => {
+					if (generation !== this.speechSynthesisGeneration || abortController.signal.aborted) return;
+					this.stats.externalTtsAudioBytes += base64DecodedByteLength(chunk.pcmBase64);
+					const activeVox = this.vox;
+					if (activeVox === undefined) {
+						this.stats.discordOutputAudioDropCount += 1;
+						return;
+					}
+					activeVox.sendAudio(chunk.pcmBase64, chunk.sampleRate);
+					this.rememberAssistantSpeechOutput(chunk.pcmBase64, chunk.sampleRate);
+					this.stats.discordOutputAudioSendCount += 1;
+				},
+				{ signal: abortController.signal },
+			);
+		} catch (error) {
+			if (abortController.signal.aborted || isAbortError(error)) return;
+			this.stats.externalTtsErrorCount += 1;
+			console.warn("[discord-voice] external tts error", error instanceof Error ? error.message : String(error));
+			throw error;
+		} finally {
+			this.externalSpeechActiveCount = Math.max(0, this.externalSpeechActiveCount - 1);
+			if (this.speechSynthesisAbortController === abortController) this.speechSynthesisAbortController = undefined;
+		}
+	}
+
+	private cancelExternalSpeechSynthesis(): void {
+		this.speechSynthesisGeneration += 1;
+		this.speechSynthesisAbortController?.abort();
+		this.speechSynthesisAbortController = undefined;
+	}
+
+	private interruptAssistantSpeech(): void {
+		this.cancelExternalSpeechSynthesis();
+		this.pendingRealtimeOutputText.clear();
+		this.assistantSpeechActiveUntilMs = 0;
+		this.vox?.stopTtsPlayback();
+		if (this.realtimeResponseActive) {
+			this.realtimeResponseActive = false;
+			this.realtime?.cancelResponse();
+		}
+	}
+
+	private rememberAssistantSpeechOutput(pcmBase64: string, sampleRate: number): void {
+		const bytes = base64DecodedByteLength(pcmBase64);
+		if (bytes <= 0 || sampleRate <= 0) return;
+		const samples = bytes / 2;
+		const durationMs = (samples / sampleRate) * 1_000;
+		if (durationMs < 1) return;
+		const now = Date.now();
+		this.assistantSpeechActiveUntilMs = Math.max(this.assistantSpeechActiveUntilMs, now) + durationMs;
+	}
+
+	private isAssistantSpeechActive(): boolean {
+		return (
+			this.externalSpeechActiveCount > 0 ||
+			this.mediaBufferDepth.ttsSamples > 0 ||
+			Date.now() < this.assistantSpeechActiveUntilMs
+		);
+	}
+
+	private voiceBargeInWakeWords(): string[] {
+		return resolveVoiceBargeInWakeWords(this.config, this.client.user?.username);
 	}
 
 	private async handleRealtimeEvent(event: JsonRecord): Promise<void> {
@@ -1556,8 +1883,11 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 	}
 }
 
-function buildRealtimeInstructions(config: ClankyAgentDiscordGatewayConfig): string {
-	return [
+function buildRealtimeInstructions(
+	config: ClankyAgentDiscordGatewayConfig,
+	ttsProvider: DiscordVoiceTtsProvider = "openai",
+): string {
+	const lines = [
 		"You are Clanky in a Discord group voice channel.",
 		"You receive labeled text transcripts from individual Discord speakers; use those speaker names when attribution matters.",
 		"Keep replies short enough for spoken conversation, and avoid reading long tool output verbatim.",
@@ -1572,7 +1902,13 @@ function buildRealtimeInstructions(config: ClankyAgentDiscordGatewayConfig): str
 		"Use start_music_visualizer to show a Go Live visualizer for current music or a resolved music URL.",
 		"Use media_pause, media_resume, media_stop, and media_status for live voice media controls.",
 		`Discord credential kind: ${config.credentialKind}.`,
-	].join("\n");
+	];
+	if (ttsProvider === "elevenlabs") {
+		lines.push(
+			"Your text output is spoken by ElevenLabs external TTS; write directly speakable text and avoid markdown formatting or stage directions unless requested.",
+		);
+	}
+	return lines.join("\n");
 }
 
 function buildVoiceTools(): OpenAiRealtimeTool[] {
@@ -1825,6 +2161,13 @@ function cleanOptionalString(value: string | undefined): string | undefined {
 	return normalized !== undefined && normalized.length > 0 ? normalized : undefined;
 }
 
+function parseDiscordVoiceTtsProvider(value: string | undefined): DiscordVoiceTtsProvider | undefined {
+	const normalized = value?.trim().toLowerCase();
+	if (normalized === "openai" || normalized === "realtime") return "openai";
+	if (normalized === "elevenlabs" || normalized === "eleven_labs" || normalized === "11labs") return "elevenlabs";
+	return undefined;
+}
+
 function parseOptionalStringList(value: string | undefined): string[] | undefined {
 	const normalized = value?.trim();
 	if (normalized === undefined || normalized.length === 0) return undefined;
@@ -1970,6 +2313,224 @@ function discordDisplayNameFromRecord(value: unknown): string | undefined {
 		if (text.length > 0) return text;
 	}
 	return undefined;
+}
+
+function resolveVoiceBargeInWakeWords(
+	config: Pick<ClankyAgentDiscordVoiceConfig, "wakeNames">,
+	username?: string,
+): string[] {
+	return dedupeNonEmptyStrings([...DEFAULT_VOICE_BARGE_IN_WAKE_WORDS, ...(config.wakeNames ?? []), username ?? ""]);
+}
+
+function transcriptAddressesAssistant(text: string, wakeWords: readonly string[]): boolean {
+	for (const wakeWord of wakeWords) {
+		if (isVoiceWakeNameAddressed({ transcript: text, botName: wakeWord })) return true;
+		if (containsVoiceWakeNameMention({ transcript: text, botName: wakeWord })) return true;
+		if (hasLikelyVoiceWakeNameCue({ transcript: text, botName: wakeWord })) return true;
+	}
+	return false;
+}
+
+function isVoiceWakeNameAddressed({ transcript, botName = "" }: { transcript: string; botName?: string }): boolean {
+	const transcriptTokens = tokenizeWakeTokens(transcript);
+	if (transcriptTokens.length === 0) return false;
+
+	const botTokens = tokenizeWakeTokens(botName);
+	if (botTokens.length === 0) return false;
+	if (botTokens.length === 1) {
+		return hasSingleTokenWakeAddress({
+			transcript,
+			transcriptTokens,
+			wakeToken: botTokens[0] ?? "",
+		});
+	}
+	if (containsTokenSequence(transcriptTokens, botTokens)) return true;
+	const mergedWakeToken = resolveMergedWakeToken(botTokens);
+	if (mergedWakeToken !== null && transcriptTokens.some((token) => token === mergedWakeToken)) return true;
+
+	const primaryWakeToken = resolvePrimaryWakeToken(botTokens);
+	if (primaryWakeToken === null) return false;
+	return hasSingleTokenWakeAddress({
+		transcript,
+		transcriptTokens,
+		wakeToken: primaryWakeToken,
+	});
+}
+
+function containsVoiceWakeNameMention({ transcript, botName = "" }: { transcript: string; botName?: string }): boolean {
+	const transcriptTokens = tokenizeWakeTokens(transcript);
+	if (transcriptTokens.length === 0) return false;
+	const botTokens = tokenizeWakeTokens(botName);
+	if (botTokens.length === 0) return false;
+	if (containsTokenSequence(transcriptTokens, botTokens)) return true;
+	const mergedWakeToken = resolveMergedWakeToken(botTokens);
+	if (mergedWakeToken !== null && transcriptTokens.some((token) => token === mergedWakeToken)) return true;
+	if (botTokens.length === 1) {
+		const token = botTokens[0] ?? "";
+		return token.length >= PRIMARY_WAKE_TOKEN_MIN_LEN && !EN_WAKE_PRIMARY_GENERIC_TOKENS.has(token)
+			? transcriptTokens.some((candidate) => candidate === token)
+			: false;
+	}
+	return false;
+}
+
+function hasLikelyVoiceWakeNameCue({ transcript, botName = "" }: { transcript: string; botName?: string }): boolean {
+	const primary = pickPrimaryWakeToken(tokenizeWakeTokens(botName));
+	if (primary.length === 0) return false;
+	const transcriptTokens = tokenizeWakeTokens(transcript);
+	for (const token of transcriptTokens) {
+		if (isLikelyWakeCueToken(token, primary)) return true;
+	}
+	return false;
+}
+
+function tokenizeWakeTokens(value = ""): string[] {
+	const normalized = normalizeWakeText(value);
+	const matches = normalized.match(/[\p{L}\p{N}]+/gu);
+	return Array.isArray(matches) ? matches : [];
+}
+
+function normalizeWakeText(value = ""): string {
+	return value
+		.trim()
+		.toLowerCase()
+		.normalize("NFKD")
+		.replace(/\p{M}+/gu, "");
+}
+
+function containsTokenSequence(tokens: string[] = [], sequence: string[] = []): boolean {
+	if (tokens.length === 0 || sequence.length === 0 || sequence.length > tokens.length) return false;
+	for (let start = 0; start <= tokens.length - sequence.length; start += 1) {
+		let matched = true;
+		for (let index = 0; index < sequence.length; index += 1) {
+			if (tokens[start + index] !== sequence[index]) {
+				matched = false;
+				break;
+			}
+		}
+		if (matched) return true;
+	}
+	return false;
+}
+
+function resolvePrimaryWakeToken(botTokens: string[] = []): string | null {
+	const candidates = botTokens.filter((token) => token.length >= PRIMARY_WAKE_TOKEN_MIN_LEN);
+	if (candidates.length === 0) return null;
+	const preferred = candidates.find((token) => !EN_WAKE_PRIMARY_GENERIC_TOKENS.has(token));
+	return preferred ?? candidates[0] ?? null;
+}
+
+function pickPrimaryWakeToken(botTokens: string[] = []): string {
+	const primary = resolvePrimaryWakeToken(botTokens);
+	if (primary !== null) return primary;
+	return botTokens.find((token) => token.length >= PRIMARY_WAKE_TOKEN_MIN_LEN) ?? "";
+}
+
+function resolveMergedWakeToken(botTokens: string[] = []): string | null {
+	if (botTokens.length < 2) return null;
+	const merged = botTokens.join("");
+	return merged.length >= PRIMARY_WAKE_TOKEN_MIN_LEN ? merged : null;
+}
+
+function hasSingleTokenWakeAddress({
+	transcript,
+	transcriptTokens,
+	wakeToken,
+}: {
+	transcript: string;
+	transcriptTokens: string[];
+	wakeToken: string;
+}): boolean {
+	const normalizedWakeToken = wakeToken.trim().toLowerCase();
+	if (normalizedWakeToken.length === 0) return false;
+	if (hasLeadingWakeToken(transcriptTokens, normalizedWakeToken)) return true;
+	return hasVocativeWakeToken(transcript, normalizedWakeToken);
+}
+
+function hasLeadingWakeToken(tokens: string[] = [], wakeToken = ""): boolean {
+	if (tokens.length === 0 || wakeToken.length === 0) return false;
+	let index = 0;
+	while (index < tokens.length && LEADING_WAKE_PREFIX_TOKENS.has(tokens[index] ?? "")) {
+		index += 1;
+	}
+	return tokens[index] === wakeToken;
+}
+
+function hasVocativeWakeToken(transcript = "", wakeToken = ""): boolean {
+	const normalizedTranscript = normalizeWakeText(transcript);
+	if (normalizedTranscript.length === 0 || wakeToken.length === 0) return false;
+	const escapedWakeToken = escapeRegExp(wakeToken);
+	return new RegExp(`[,;:.!?]\\s*${escapedWakeToken}(?:\\b|')`, "u").test(normalizedTranscript);
+}
+
+function isLikelyWakeCueToken(token = "", primary = ""): boolean {
+	const normalizedToken = token.trim().toLowerCase();
+	const normalizedPrimary = primary.trim().toLowerCase();
+	if (normalizedToken.length < PRIMARY_WAKE_TOKEN_MIN_LEN || normalizedPrimary.length < PRIMARY_WAKE_TOKEN_MIN_LEN) {
+		return false;
+	}
+	if (normalizedToken === normalizedPrimary) return true;
+	if (normalizedToken.slice(0, 3) === normalizedPrimary.slice(0, 3)) return true;
+	if (
+		normalizedToken.slice(0, 2) === normalizedPrimary.slice(0, 2) &&
+		sharedConsonantCount(normalizedToken, normalizedPrimary) >= 2
+	) {
+		return true;
+	}
+	const distance = levenshteinDistance(normalizedToken, normalizedPrimary);
+	const maxLen = Math.max(normalizedToken.length, normalizedPrimary.length);
+	const normalizedSimilarity = maxLen > 0 ? 1 - distance / maxLen : 0;
+	return normalizedSimilarity >= 0.58 && sharedConsonantCount(normalizedToken, normalizedPrimary) >= 2;
+}
+
+function sharedConsonantCount(left = "", right = ""): number {
+	const leftSet = new Set(consonants(left));
+	const rightSet = new Set(consonants(right));
+	let count = 0;
+	for (const char of leftSet) {
+		if (rightSet.has(char)) count += 1;
+	}
+	return count;
+}
+
+function consonants(value = ""): string[] {
+	const letters = value.toLowerCase().replace(/[^a-z]/g, "");
+	const out: string[] = [];
+	for (const char of letters) {
+		if ("aeiou".includes(char)) continue;
+		out.push(char);
+	}
+	return out;
+}
+
+function levenshteinDistance(left = "", right = ""): number {
+	const rows = left.length + 1;
+	const cols = right.length + 1;
+	const matrix = Array.from({ length: rows }, (_, row) =>
+		Array.from({ length: cols }, (_, col) => (row === 0 ? col : col === 0 ? row : 0)),
+	);
+
+	for (let row = 1; row < rows; row += 1) {
+		for (let col = 1; col < cols; col += 1) {
+			const cost = left[row - 1] === right[col - 1] ? 0 : 1;
+			const deletion = (matrix[row - 1]?.[col] ?? 0) + 1;
+			const insertion = (matrix[row]?.[col - 1] ?? 0) + 1;
+			const substitution = (matrix[row - 1]?.[col - 1] ?? 0) + cost;
+			const target = matrix[row];
+			if (target !== undefined) target[col] = Math.min(deletion, insertion, substitution);
+		}
+	}
+
+	return matrix[rows - 1]?.[cols - 1] ?? 0;
+}
+
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function isAbortError(error: unknown): boolean {
+	if (!isRecord(error)) return false;
+	return stringValue(error.name) === "AbortError";
 }
 
 function isFinalInputTranscriptEvent(eventType: string): boolean {

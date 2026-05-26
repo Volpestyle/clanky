@@ -1,5 +1,10 @@
 # Clanky v1 Audit
 
+> Historical note: this audit covers an earlier daemon/gateway implementation
+> plan. The current repo is a standalone personal Pi agent; use `README.md`,
+> `docs/AGENTROOM.md`, `docs/demo.md`, and `docs/live-gates.md` for current
+> operation.
+
 Objective: build the v1 in `../clanky-plan.md`: an always-on Pi-based Clanky daemon with CLI/TUI/HTTP/MCP ingress, cron, profile isolation, skills, Linear outbox delivery, and swarm-mcp leader integration.
 
 ## Prompt-To-Artifact Checklist
