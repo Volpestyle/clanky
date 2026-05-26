@@ -80,6 +80,24 @@ const handlers: ClankyAgentToolHandlers = {
 		calls.push("media-status");
 		return { openaiImages: { available: true }, xaiImagineImages: { available: true } };
 	},
+	discordRecentActivity: async (input) => {
+		calls.push(`discord-recent:${input.guildId ?? input.guild_id ?? "auto"}:${input.since ?? "default"}`);
+		return {
+			guildId: input.guildId ?? input.guild_id ?? "guild-tool",
+			sinceTimestamp: "2026-01-01T00:00:00.000Z",
+			generatedAt: "2026-01-01T00:05:00.000Z",
+			activeChannelCount: 1,
+			channels: [
+				{
+					channelId: "channel-tool",
+					channelName: "general",
+					type: 0,
+					messageCount: 2,
+					topParticipants: [{ authorId: "user-tool", authorUsername: "tester", messageCount: 2 }],
+				},
+			],
+		};
+	},
 };
 
 const tools = createClankyToolDefinitions(handlers);
@@ -93,6 +111,7 @@ const expectedNames = [
 	"memory_remember",
 	"memory_search",
 	"memory_forget",
+	"discord_recent_activity",
 	"media_backend_status",
 	"openai_image_generate",
 	"web_backend_status",
@@ -174,6 +193,14 @@ await executeTool(tools, "xai_video_generate", {
 
 await executeTool(tools, "media_backend_status", {});
 
+await executeTool(tools, "discord_recent_activity", {
+	guild_id: "guild-smoke",
+	since: "24h",
+	limit_channels: 3,
+	message_limit: 5,
+	include_messages: false,
+});
+
 const expectedCallPrefixes = [
 	"schedule:",
 	"linear-create:",
@@ -189,6 +216,7 @@ const expectedCallPrefixes = [
 	"xai-image:",
 	"xai-video:",
 	"media-status",
+	"discord-recent:",
 ];
 for (const prefix of expectedCallPrefixes) {
 	if (!calls.some((entry) => entry.startsWith(prefix))) {

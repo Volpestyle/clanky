@@ -1,4 +1,5 @@
 import {
+	addDiscordReaction,
 	type ClankyAgentToolHandlers,
 	type ClankyPaths,
 	generateOpenAiImage,
@@ -8,10 +9,16 @@ import {
 	getWebBackendStatus,
 	hasLinearCredentials,
 	LinearClient,
+	listDiscordChannels,
+	listDiscordEmojis,
+	listDiscordGuilds,
 	loadClankySkills,
+	readDiscordMessages,
+	recentDiscordActivity,
 	resolveClankyChatGatewayOwner,
 	resolveClankyChatMode,
 	runOpenAiWebSearch,
+	sendDiscordMessage,
 	shouldStartAgentChatGateway,
 } from "@clanky/core";
 import type { AuthStorage } from "@earendil-works/pi-coding-agent";
@@ -105,6 +112,34 @@ export function createClankyHandlers(
 			}),
 		mediaBackendStatus: async () =>
 			getMediaBackendStatus({
+				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
+			}),
+		discordListGuilds: async () =>
+			listDiscordGuilds({
+				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
+			}),
+		discordListChannels: async (input) =>
+			listDiscordChannels(input, {
+				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
+			}),
+		discordReadMessages: async (input) =>
+			readDiscordMessages(input, {
+				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
+			}),
+		discordRecentActivity: async (input) =>
+			recentDiscordActivity(input, {
+				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
+			}),
+		discordSendMessage: async (input) =>
+			sendDiscordMessage(input, {
+				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
+			}),
+		discordListEmojis: async (input) =>
+			listDiscordEmojis(input, {
+				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
+			}),
+		discordAddReaction: async (input) =>
+			addDiscordReaction(input, {
 				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
 			}),
 	};

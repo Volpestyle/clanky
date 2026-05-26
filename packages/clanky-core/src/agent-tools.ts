@@ -8,6 +8,14 @@ import {
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
+import type {
+	DiscordAddReactionInput,
+	DiscordListChannelsInput,
+	DiscordListEmojisInput,
+	DiscordReadMessagesInput,
+	DiscordRecentActivityInput,
+	DiscordSendMessageInput,
+} from "./discord/operator.ts";
 import type { LinearCreateIssueInput } from "./linear/client.ts";
 import type { CreateLinearLinkInput } from "./linear/links.ts";
 import type { OpenAiImageGenerateInput, XAiImageGenerateInput, XAiVideoGenerateInput } from "./media/operator.ts";
@@ -253,6 +261,64 @@ const xaiVideoGenerateSchema = Type.Object({
 	timeoutMs: Type.Optional(Type.Number()),
 	timeout_ms: Type.Optional(Type.Number()),
 });
+const discordListChannelsSchema = Type.Object({
+	guildId: Type.Optional(Type.String()),
+	guild_id: Type.Optional(Type.String()),
+	since: Type.Optional(Type.String()),
+	sinceTimestamp: Type.Optional(Type.String()),
+	since_timestamp: Type.Optional(Type.String()),
+});
+const discordReadMessagesSchema = Type.Object({
+	channelId: Type.Optional(Type.String()),
+	channel_id: Type.Optional(Type.String()),
+	limit: Type.Optional(Type.Number()),
+	before: Type.Optional(Type.String()),
+	after: Type.Optional(Type.String()),
+	around: Type.Optional(Type.String()),
+	since: Type.Optional(Type.String()),
+	sinceTimestamp: Type.Optional(Type.String()),
+	since_timestamp: Type.Optional(Type.String()),
+	until: Type.Optional(Type.String()),
+	untilTimestamp: Type.Optional(Type.String()),
+	until_timestamp: Type.Optional(Type.String()),
+});
+const discordRecentActivitySchema = Type.Object({
+	guildId: Type.Optional(Type.String()),
+	guild_id: Type.Optional(Type.String()),
+	since: Type.Optional(Type.String()),
+	sinceTimestamp: Type.Optional(Type.String()),
+	since_timestamp: Type.Optional(Type.String()),
+	channelIds: Type.Optional(Type.Array(Type.String())),
+	channel_ids: Type.Optional(Type.Array(Type.String())),
+	channelNameQuery: Type.Optional(Type.String()),
+	channel_name_query: Type.Optional(Type.String()),
+	limitChannels: Type.Optional(Type.Number()),
+	limit_channels: Type.Optional(Type.Number()),
+	messageLimit: Type.Optional(Type.Number()),
+	message_limit: Type.Optional(Type.Number()),
+	includeMessages: Type.Optional(Type.Boolean()),
+	include_messages: Type.Optional(Type.Boolean()),
+});
+const discordSendMessageSchema = Type.Object({
+	channelId: Type.Optional(Type.String()),
+	channel_id: Type.Optional(Type.String()),
+	content: Type.Optional(Type.String()),
+	replyToMessageId: Type.Optional(Type.String()),
+	reply_to_message_id: Type.Optional(Type.String()),
+	filePaths: Type.Optional(Type.Array(Type.String())),
+	file_paths: Type.Optional(Type.Array(Type.String())),
+});
+const discordListEmojisSchema = Type.Object({
+	guildId: Type.Optional(Type.String()),
+	guild_id: Type.Optional(Type.String()),
+});
+const discordAddReactionSchema = Type.Object({
+	channelId: Type.Optional(Type.String()),
+	channel_id: Type.Optional(Type.String()),
+	messageId: Type.Optional(Type.String()),
+	message_id: Type.Optional(Type.String()),
+	emoji: Type.String(),
+});
 
 export type ScheduleCronToolInput = Static<typeof scheduleCronSchema>;
 export type LinearCreateIssueToolInput = Static<typeof linearCreateIssueSchema>;
@@ -266,6 +332,12 @@ export type WebSearchToolInput = Static<typeof webSearchSchema>;
 export type OpenAiImageGenerateToolInput = Static<typeof openAiImageGenerateSchema>;
 export type XAiImageGenerateToolInput = Static<typeof xaiImageGenerateSchema>;
 export type XAiVideoGenerateToolInput = Static<typeof xaiVideoGenerateSchema>;
+export type DiscordListChannelsToolInput = Static<typeof discordListChannelsSchema>;
+export type DiscordReadMessagesToolInput = Static<typeof discordReadMessagesSchema>;
+export type DiscordRecentActivityToolInput = Static<typeof discordRecentActivitySchema>;
+export type DiscordSendMessageToolInput = Static<typeof discordSendMessageSchema>;
+export type DiscordListEmojisToolInput = Static<typeof discordListEmojisSchema>;
+export type DiscordAddReactionToolInput = Static<typeof discordAddReactionSchema>;
 
 export interface ClankyBeforeProviderRequestInput {
 	sessionId: string;
@@ -298,6 +370,13 @@ export interface ClankyAgentToolHandlers {
 	xaiImageGenerate?: (input: XAiImageGenerateInput, signal?: AbortSignal) => Promise<unknown>;
 	xaiVideoGenerate?: (input: XAiVideoGenerateInput, signal?: AbortSignal) => Promise<unknown>;
 	mediaBackendStatus?: () => Promise<unknown>;
+	discordListGuilds?: () => Promise<unknown>;
+	discordListChannels?: (input: DiscordListChannelsInput) => Promise<unknown>;
+	discordReadMessages?: (input: DiscordReadMessagesInput) => Promise<unknown>;
+	discordRecentActivity?: (input: DiscordRecentActivityInput) => Promise<unknown>;
+	discordSendMessage?: (input: DiscordSendMessageInput) => Promise<unknown>;
+	discordListEmojis?: (input: DiscordListEmojisInput) => Promise<unknown>;
+	discordAddReaction?: (input: DiscordAddReactionInput) => Promise<unknown>;
 }
 
 const CLANKY_MEMORY_PACKET_MESSAGE = "clanky.memory_packet";
@@ -902,6 +981,127 @@ export function createClankyToolDefinitions(handlers: ClankyAgentToolHandlers): 
 				parameters: Type.Object({}),
 				async execute() {
 					return toolResult(await mediaBackendStatus());
+				},
+			}),
+		);
+	}
+	const discordListGuilds = handlers.discordListGuilds;
+	if (discordListGuilds !== undefined) {
+		tools.push(
+			defineTool({
+				name: "discord_list_guilds",
+				label: "Discord Guilds",
+				description: "List Discord guilds/servers visible to Clanky's agent-owned Discord credential.",
+				promptSnippet: "discord_list_guilds: inspect available Discord servers before reading or sending to a channel.",
+				parameters: Type.Object({}),
+				async execute() {
+					return toolResult(await discordListGuilds());
+				},
+			}),
+		);
+	}
+	const discordListChannels = handlers.discordListChannels;
+	if (discordListChannels !== undefined) {
+		tools.push(
+			defineTool({
+				name: "discord_list_channels",
+				label: "Discord Channels",
+				description:
+					"List channels in a Discord guild/server by guild id, including last-message metadata when available.",
+				promptSnippet:
+					"discord_list_channels: find channel ids and lastMessageAt metadata before reading, sending, uploading, or reacting.",
+				parameters: discordListChannelsSchema,
+				async execute(_toolCallId, params) {
+					return toolResult(await discordListChannels(params));
+				},
+			}),
+		);
+	}
+	const discordReadMessages = handlers.discordReadMessages;
+	if (discordReadMessages !== undefined) {
+		tools.push(
+			defineTool({
+				name: "discord_read_messages",
+				label: "Discord Read",
+				description:
+					"Read recent messages from a Discord channel visible to Clanky's agent-owned Discord credential, optionally filtered by time window.",
+				promptSnippet:
+					"discord_read_messages: read a bounded set of recent Discord messages from a channel, optionally using since/until for time-window questions.",
+				parameters: discordReadMessagesSchema,
+				async execute(_toolCallId, params) {
+					return toolResult(await discordReadMessages(params));
+				},
+			}),
+		);
+	}
+	const discordRecentActivity = handlers.discordRecentActivity;
+	if (discordRecentActivity !== undefined) {
+		tools.push(
+			defineTool({
+				name: "discord_recent_activity",
+				label: "Discord Recent Activity",
+				description:
+					"Summarize active Discord channels in a guild within a recent time window, including recent messages and top participants.",
+				promptSnippet:
+					"discord_recent_activity: answer questions like what happened recently, what's active, or give me a guild/channel digest.",
+				promptGuidelines: [
+					"Use when the user asks what happened recently in a Discord server or wants a digest instead of raw channel IDs.",
+					"Default since to a recent window such as 24h or 7d when the user says recently and does not specify a range.",
+					"Prefer this over manually reading many channels when you only need active channels and recent context.",
+				],
+				parameters: discordRecentActivitySchema,
+				async execute(_toolCallId, params) {
+					return toolResult(await discordRecentActivity(params));
+				},
+			}),
+		);
+	}
+	const discordSendMessage = handlers.discordSendMessage;
+	if (discordSendMessage !== undefined) {
+		tools.push(
+			defineTool({
+				name: "discord_send_message",
+				label: "Discord Send",
+				description: "Send a Discord message and optionally upload local file attachments to a channel.",
+				promptSnippet: "discord_send_message: send user-approved messages or upload generated local files to Discord.",
+				promptGuidelines: [
+					"Use Clanky's agent-owned Discord credential only; never use AgentRoom room connector tokens.",
+					"Confirm before sending sensitive files, high-impact messages, or messages to ambiguous channels.",
+				],
+				parameters: discordSendMessageSchema,
+				async execute(_toolCallId, params) {
+					return toolResult(await discordSendMessage(params));
+				},
+			}),
+		);
+	}
+	const discordListEmojis = handlers.discordListEmojis;
+	if (discordListEmojis !== undefined) {
+		tools.push(
+			defineTool({
+				name: "discord_list_emojis",
+				label: "Discord Emojis",
+				description: "List custom reaction emojis available in a Discord guild/server.",
+				promptSnippet: "discord_list_emojis: discover server emoji reaction strings such as name:id before reacting.",
+				parameters: discordListEmojisSchema,
+				async execute(_toolCallId, params) {
+					return toolResult(await discordListEmojis(params));
+				},
+			}),
+		);
+	}
+	const discordAddReaction = handlers.discordAddReaction;
+	if (discordAddReaction !== undefined) {
+		tools.push(
+			defineTool({
+				name: "discord_add_reaction",
+				label: "Discord React",
+				description: "Add a Unicode or server custom emoji reaction to a Discord message.",
+				promptSnippet:
+					"discord_add_reaction: react to a Discord message; use discord_list_emojis first for server custom emojis.",
+				parameters: discordAddReactionSchema,
+				async execute(_toolCallId, params) {
+					return toolResult(await discordAddReaction(params));
 				},
 			}),
 		);
