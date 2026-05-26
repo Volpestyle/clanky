@@ -20,6 +20,10 @@ Credentials can come from `CLANKY_DISCORD_TOKEN` or from a stored
 for normal voice audio. Native Discord Go Live watching requires a user-token
 credential.
 
+OpenAI credentials can come from `OPENAI_API_KEY`, `CLANKY_OPENAI_API_KEY`, or a
+stored `/openai-login` API key. The examples below show `OPENAI_API_KEY`; omit
+that line if the active profile already has a stored OpenAI key.
+
 ## Bot-Token Audio And Tool Check
 
 This checks voice join, Discord input audio, Realtime output audio, Realtime

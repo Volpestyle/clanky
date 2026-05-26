@@ -49,6 +49,25 @@ runs.
 Agent-owned Discord starts when a token is resolvable (env or stored) and
 `CLANKY_CHAT_GATEWAY_OWNER` is `agent` (the default).
 
+## OpenAI Setup
+
+Clanky can use the normal Pi `/login` OAuth path, or store an OpenAI API key
+interactively:
+
+```bash
+pnpm clanky
+# inside Clanky:
+/openai-login     # masked API-key entry + validation
+/openai-whoami    # shows the active OpenAI credential source
+/openai-logout    # removes the stored OpenAI credential
+```
+
+`/openai-login` validates the key against OpenAI's models endpoint and stores it
+in the active profile's `auth.json` (`0600` perms) under provider id `openai`,
+the same slot Pi uses for OpenAI model auth. `CLANKY_OPENAI_API_KEY` and
+`OPENAI_API_KEY` still work as launch-environment overrides; the Clanky-scoped
+env var wins for Clanky tools when both are set.
+
 Without a conversation binding, Clanky accepts DMs, Discord @mentions, direct
 replies to his recent messages, natural name mentions (`clanky` / `clank` by
 default), and same-user follow-ups during the engagement window. Name mentions
@@ -69,7 +88,9 @@ Required runtime env:
 - `CLANKY_DISCORD_VOICE_ENABLED=1`
 - `CLANKY_DISCORD_VOICE_GUILD_ID`
 - `CLANKY_DISCORD_VOICE_CHANNEL_ID`
-- `OPENAI_API_KEY` or `CLANKY_OPENAI_API_KEY`
+
+OpenAI credentials for voice may come from `OPENAI_API_KEY`,
+`CLANKY_OPENAI_API_KEY`, or a stored `/openai-login` API key.
 
 Optional env:
 
@@ -128,23 +149,38 @@ commands, including `CLANKY_DISCORD_VOICE_RESULT_PATH` for saving the final
 or startup-failure validation JSON, see
 [docs/discord-voice-live-runbook.md](docs/discord-voice-live-runbook.md).
 
-## Browser CLI Skills
+## Operator Skills
 
-Bundled browser skills use local project CLIs, not global installs:
+Bundled operator skills use Clanky tools and local project CLIs, not global installs:
 
 - `clanky-web-operator`: broad routing policy for live web lookup and browser
   work. It can choose OpenAI hosted `web_search`, direct HTTP, Playwright,
   Chrome CDP, or `agent-browser` depending on the task.
+- `clanky-media-operator`: image/video generation routing across OpenAI Images
+  API, xAI Grok Imagine images, and xAI Grok Imagine videos.
 - `clanky-playwright-browser`: general browsing, extraction, and screenshots through
   `pnpm browser:playwright ...` or short `pnpm exec tsx` Playwright scripts.
 - `clanky-chrome-cdp`: attach to Chrome DevTools Protocol sessions through
   `pnpm browser:cdp ...`; launch a temporary-profile debug Chrome with
   `pnpm browser:chrome-debug ...`.
 
-`web_search` requires `OPENAI_API_KEY` or `CLANKY_OPENAI_API_KEY` and defaults
-to `CLANKY_WEB_SEARCH_MODEL` or `gpt-5.5`. Set
+`web_search` requires an OpenAI credential from `/openai-login`,
+`OPENAI_API_KEY`, or `CLANKY_OPENAI_API_KEY`, and defaults to
+`CLANKY_WEB_SEARCH_MODEL` or `gpt-5.5`. Set
 `CLANKY_WEB_OPERATOR_AUTO_SKILL=0` to disable automatic `clanky-web-operator`
 skill injection for lookup/browser-like prompts.
+
+Media generation tools:
+
+- `openai_image_generate` uses `/openai-login`, `CLANKY_OPENAI_API_KEY`, or
+  `OPENAI_API_KEY`; default model `CLANKY_OPENAI_IMAGE_MODEL` or `gpt-image-2`.
+- `xai_image_generate` uses `XAI_API_KEY`; default model `CLANKY_XAI_IMAGE_MODEL`
+  or `grok-imagine-image-quality`.
+- `xai_video_generate` uses `XAI_API_KEY`; default model `CLANKY_XAI_VIDEO_MODEL`
+  or `grok-imagine-video`.
+- `media_backend_status` shows configured media backends. Set
+  `CLANKY_MEDIA_OPERATOR_AUTO_SKILL=0` to disable automatic
+  `clanky-media-operator` skill injection for media-generation prompts.
 
 Install Playwright's Chromium binary once with `pnpm browser:install` if the
 host does not already have it.

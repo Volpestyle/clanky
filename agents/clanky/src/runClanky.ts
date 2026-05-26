@@ -21,6 +21,7 @@ import {
 import { createDiscordAuthExtensionFactory, resolveDefaultDiscordProviderId } from "./discordAuth.ts";
 import { ClankyDiscordGatewayController } from "./discordGatewayController.ts";
 import { createClankyHandlers } from "./handlers.ts";
+import { createOpenAiAuthExtensionFactory } from "./openAiAuth.ts";
 import { loadPersona } from "./persona.ts";
 import { createClankyStores } from "./stores.ts";
 
@@ -82,10 +83,15 @@ function buildRuntimeFactory(opts: {
 }): CreateAgentSessionRuntimeFactory {
 	const { paths, basePersona, authStorage, discordProviderId, gatewayController } = opts;
 	const stores = createClankyStores(paths);
-	const handlers = createClankyHandlers(paths, stores);
+	const handlers = createClankyHandlers(paths, stores, { authStorage });
 	const discordAuthFactory = createDiscordAuthExtensionFactory({
 		authStorage,
 		providerId: discordProviderId,
+		authFilePath: paths.authFile,
+		gatewayController,
+	});
+	const openAiAuthFactory = createOpenAiAuthExtensionFactory({
+		authStorage,
 		authFilePath: paths.authFile,
 		gatewayController,
 	});
@@ -101,7 +107,7 @@ function buildRuntimeFactory(opts: {
 			modelRegistry,
 			settingsManager,
 			resourceLoaderOptions: {
-				extensionFactories: [...createClankyExtensionFactories(handlers), discordAuthFactory],
+				extensionFactories: [...createClankyExtensionFactories(handlers), discordAuthFactory, openAiAuthFactory],
 				// Recomputed per call so post-`/discord-login` reloads pick up the new identity.
 				systemPromptOverride: (existing: string | undefined): string => {
 					const persona = augmentPersonaWithDiscordIdentity(basePersona, authStorage, discordProviderId);

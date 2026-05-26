@@ -23,6 +23,8 @@ Use this skill for live web work. You are not limited to one narrow API: choose 
 - Use `agent-browser` when a persistent browser session, headed browser, authenticated profile, or old-Clanky-style browser operation loop is the best fit.
 - Use `web_backend_status` when you need to know which backends are available before choosing.
 
+If `web_search` reports missing OpenAI credentials, tell the user to run `/openai-login` in the Clanky TUI or set `OPENAI_API_KEY`/`CLANKY_OPENAI_API_KEY` in the launch environment.
+
 ## Clanky Local CLI Paths
 
 Run these from the Clanky Pi repo root when using local browser CLIs:

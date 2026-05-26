@@ -2,6 +2,8 @@ import { constants, existsSync } from "node:fs";
 import { access, readFile } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { AuthStorage } from "@earendil-works/pi-coding-agent";
+import { getOpenAiCredentialStatus, resolveOpenAiApiKey } from "../openai-credentials.ts";
 
 export type SearchContextSize = "low" | "medium" | "high";
 export type ReturnTokenBudget = "default" | "unlimited";
@@ -35,6 +37,7 @@ export interface ApproximateUserLocation {
 }
 
 export interface OpenAiWebSearchOptions {
+	authStorage?: AuthStorage;
 	env?: NodeJS.ProcessEnv;
 	fetchImpl?: typeof fetch;
 	signal?: AbortSignal;
@@ -60,13 +63,9 @@ export interface OpenAiWebSearchResult {
 }
 
 export interface WebBackendStatusOptions {
+	authStorage?: AuthStorage;
 	cwd?: string;
 	env?: NodeJS.ProcessEnv;
-}
-
-interface ResolvedApiKey {
-	value: string;
-	source: string;
 }
 
 interface PackageJson {
@@ -83,9 +82,11 @@ export async function runOpenAiWebSearch(
 ): Promise<OpenAiWebSearchResult> {
 	const env = options.env ?? process.env;
 	const fetchImpl = options.fetchImpl ?? fetch;
-	const apiKey = resolveOpenAiApiKey(env);
+	const apiKey = await resolveOpenAiApiKey(env, options.authStorage);
 	if (apiKey === undefined) {
-		throw new Error("OPENAI_API_KEY or CLANKY_OPENAI_API_KEY is required for web_search.");
+		throw new Error(
+			"OpenAI credentials are required for web_search. Run /openai-login or set OPENAI_API_KEY/CLANKY_OPENAI_API_KEY.",
+		);
 	}
 
 	const query = input.query.trim();
@@ -127,17 +128,17 @@ export async function getWebBackendStatus(options: WebBackendStatusOptions = {})
 	const pnpm = await resolveExecutable("pnpm", env);
 	const node = await resolveExecutable("node", env);
 	const agentBrowser = await resolveExecutable("agent-browser", env);
-	const openAiApiKey = resolveOpenAiApiKey(env);
+	const openAiStatus = getOpenAiCredentialStatus(env, options.authStorage);
 
 	return {
 		cwd,
 		clankyRoot,
 		openaiWebSearch: {
-			available: openAiApiKey !== undefined,
+			available: openAiStatus.available,
 			model: env.CLANKY_WEB_SEARCH_MODEL || DEFAULT_WEB_SEARCH_MODEL,
-			apiKeyEnv: openAiApiKey?.source,
-			acceptedApiKeyEnv: ["OPENAI_API_KEY", "CLANKY_OPENAI_API_KEY"],
-			access: openAiApiKey === undefined ? "missing_credentials" : "not_checked_until_tool_call",
+			apiKeySource: openAiStatus.activeSource,
+			acceptedApiKeySources: ["CLANKY_OPENAI_API_KEY", "OPENAI_API_KEY", "stored openai AuthStorage credential"],
+			access: openAiStatus.available ? "not_checked_until_tool_call" : "missing_credentials",
 		},
 		backends: {
 			agentBrowser: {
@@ -169,18 +170,6 @@ export async function getWebBackendStatus(options: WebBackendStatusOptions = {})
 			node: { available: node !== undefined, path: node },
 		},
 	};
-}
-
-function resolveOpenAiApiKey(env: NodeJS.ProcessEnv): ResolvedApiKey | undefined {
-	const candidates = [
-		["OPENAI_API_KEY", env.OPENAI_API_KEY],
-		["CLANKY_OPENAI_API_KEY", env.CLANKY_OPENAI_API_KEY],
-	] as const;
-	for (const [source, value] of candidates) {
-		const trimmed = value?.trim();
-		if (trimmed !== undefined && trimmed.length > 0) return { value: trimmed, source };
-	}
-	return undefined;
 }
 
 function buildOpenAiWebSearchRequest(

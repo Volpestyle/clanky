@@ -8,10 +8,14 @@
  *   CLANKY_DISCORD_VOICE_ENABLED=1 \
  *   CLANKY_DISCORD_VOICE_GUILD_ID=... \
  *   CLANKY_DISCORD_VOICE_CHANNEL_ID=... \
- *   OPENAI_API_KEY=... \
  *   pnpm voice:live
+ *
+ * OpenAI credentials may come from OPENAI_API_KEY, CLANKY_OPENAI_API_KEY, or
+ * a stored /openai-login API key for the active profile.
  */
+
 import { setTimeout as sleep } from "node:timers/promises";
+import { resolveOpenAiApiKeySync } from "@clanky/core";
 import { resolveAgentDiscordCredentialConfig } from "../src/agentDiscordGateway.ts";
 import { createClankyRuntime } from "../src/runClanky.ts";
 import {
@@ -69,6 +73,22 @@ async function main(): Promise<void> {
 				phase: "preflight",
 				requirements,
 				failures: ["missing Discord credential"],
+			});
+			resultWritten = true;
+			process.exitCode = 2;
+			return;
+		}
+		const openAiCredential = resolveOpenAiApiKeySync(process.env, authStorage);
+		if (openAiCredential === undefined) {
+			console.error(
+				"voice-live: missing OpenAI credential. Set OPENAI_API_KEY, set CLANKY_OPENAI_API_KEY, or run /openai-login for this profile.",
+			);
+			await writeResultIfRequested(resultPath, {
+				startedAt,
+				finishedAt: new Date(),
+				phase: "preflight",
+				requirements,
+				failures: ["missing OpenAI credential"],
 			});
 			resultWritten = true;
 			process.exitCode = 2;
@@ -155,9 +175,6 @@ function requiredLiveEnvMissing(env: NodeJS.ProcessEnv): string[] {
 	}
 	if ((env.CLANKY_DISCORD_VOICE_CHANNEL_ID ?? "").trim().length === 0) {
 		missing.push("CLANKY_DISCORD_VOICE_CHANNEL_ID");
-	}
-	if ((env.CLANKY_OPENAI_API_KEY ?? env.OPENAI_API_KEY ?? "").trim().length === 0) {
-		missing.push("OPENAI_API_KEY or CLANKY_OPENAI_API_KEY");
 	}
 	return missing;
 }

@@ -1,5 +1,6 @@
 import type { DiscordGatewayClient } from "@agentroom/chat-discord";
-import type { AgentSessionEvent, AgentSessionRuntime } from "@earendil-works/pi-coding-agent";
+import { resolveOpenAiApiKeySync } from "@clanky/core";
+import type { AgentSessionEvent, AgentSessionRuntime, AuthStorage } from "@earendil-works/pi-coding-agent";
 import { type ClankyAgentDiscordGatewayConfig, resolveAgentDiscordCredentialConfig } from "./agentDiscordGateway.ts";
 import { type RuntimeTurnQueue, SerialRuntimeTurnQueue } from "./runtimeTurnQueue.ts";
 import {
@@ -48,6 +49,7 @@ export interface StartAgentDiscordVoiceBridgeInput {
 	runtime: AgentSessionRuntime;
 	client: DiscordGatewayClient;
 	discordConfig: ClankyAgentDiscordGatewayConfig;
+	authStorage?: AuthStorage;
 	config?: ClankyAgentDiscordVoiceConfig;
 	runtimeTurnQueue?: RuntimeTurnQueue;
 	dependencies?: ClankyAgentDiscordVoiceDependencies;
@@ -231,6 +233,7 @@ function resolveVoiceDependencies(
 export function resolveAgentDiscordVoiceConfig(
 	env: NodeJS.ProcessEnv = process.env,
 	discordConfig?: ClankyAgentDiscordGatewayConfig,
+	authStorage?: AuthStorage,
 ): ClankyAgentDiscordVoiceConfig | undefined {
 	if (!parseEnabled(env.CLANKY_DISCORD_VOICE_ENABLED ?? env.CLANKY_DISCORD_VOICE)) return undefined;
 	const config = discordConfig ?? resolveAgentDiscordCredentialConfig(env);
@@ -247,15 +250,17 @@ export function resolveAgentDiscordVoiceConfig(
 	if (channelId === undefined || channelId.length === 0) {
 		throw new Error("CLANKY_DISCORD_VOICE_CHANNEL_ID is required when Discord voice is enabled.");
 	}
-	const openAiApiKey = (env.CLANKY_OPENAI_API_KEY ?? env.OPENAI_API_KEY)?.trim();
-	if (openAiApiKey === undefined || openAiApiKey.length === 0) {
-		throw new Error("OPENAI_API_KEY or CLANKY_OPENAI_API_KEY is required when Discord voice is enabled.");
+	const openAiApiKey = resolveOpenAiApiKeySync(env, authStorage);
+	if (openAiApiKey === undefined) {
+		throw new Error(
+			"OpenAI credentials are required when Discord voice is enabled. Run /openai-login or set OPENAI_API_KEY/CLANKY_OPENAI_API_KEY.",
+		);
 	}
 	const voiceConfig: ClankyAgentDiscordVoiceConfig = {
 		enabled: true,
 		guildId,
 		channelId,
-		openAiApiKey,
+		openAiApiKey: openAiApiKey.value,
 		openAiRealtimeModel: env.CLANKY_OPENAI_REALTIME_MODEL?.trim() || DEFAULT_REALTIME_MODEL,
 		openAiRealtimeVoice: env.CLANKY_OPENAI_REALTIME_VOICE?.trim() || DEFAULT_REALTIME_VOICE,
 		videoFrameAutoAttachIntervalMs: parseNonNegativeInteger(
@@ -275,7 +280,7 @@ export function resolveAgentDiscordVoiceConfig(
 export async function startAgentDiscordVoiceBridge(
 	input: StartAgentDiscordVoiceBridgeInput,
 ): Promise<ClankyAgentDiscordVoiceHandle | undefined> {
-	const config = input.config ?? resolveAgentDiscordVoiceConfig(process.env, input.discordConfig);
+	const config = input.config ?? resolveAgentDiscordVoiceConfig(process.env, input.discordConfig, input.authStorage);
 	if (config === undefined || !config.enabled) return undefined;
 	const bridge = new AgentDiscordVoiceBridge(
 		input.runtime,

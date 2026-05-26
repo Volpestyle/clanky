@@ -1,6 +1,10 @@
 import {
 	type ClankyAgentToolHandlers,
 	type ClankyPaths,
+	generateOpenAiImage,
+	generateXAiImage,
+	generateXAiVideo,
+	getMediaBackendStatus,
 	getWebBackendStatus,
 	hasLinearCredentials,
 	LinearClient,
@@ -10,6 +14,7 @@ import {
 	runOpenAiWebSearch,
 	shouldStartAgentChatGateway,
 } from "@clanky/core";
+import type { AuthStorage } from "@earendil-works/pi-coding-agent";
 import type { ClankyStores } from "./stores.ts";
 
 /**
@@ -30,7 +35,11 @@ import type { ClankyStores } from "./stores.ts";
  * - taskCreate / listTasks (coupled to SessionRegistry event log)
  * - indexMessage (depends on SessionIndexStore)
  */
-export function createClankyHandlers(paths: ClankyPaths, stores: ClankyStores): ClankyAgentToolHandlers {
+export function createClankyHandlers(
+	paths: ClankyPaths,
+	stores: ClankyStores,
+	options: { authStorage?: AuthStorage } = {},
+): ClankyAgentToolHandlers {
 	return {
 		beforeProviderRequest: async (input) => input.payload,
 
@@ -69,7 +78,34 @@ export function createClankyHandlers(paths: ClankyPaths, stores: ClankyStores): 
 		},
 
 		linearLink: async (input) => stores.linearLinks.link(input),
-		webSearch: async (input, signal) => runOpenAiWebSearch(input, signal === undefined ? {} : { signal }),
-		webBackendStatus: async () => getWebBackendStatus({ cwd: process.cwd() }),
+		webSearch: async (input, signal) =>
+			runOpenAiWebSearch(input, {
+				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
+				...(signal === undefined ? {} : { signal }),
+			}),
+		webBackendStatus: async () =>
+			getWebBackendStatus({
+				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
+				cwd: process.cwd(),
+			}),
+		openAiImageGenerate: async (input, signal) =>
+			generateOpenAiImage(input, {
+				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
+				...(signal === undefined ? {} : { signal }),
+			}),
+		xaiImageGenerate: async (input, signal) =>
+			generateXAiImage(input, {
+				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
+				...(signal === undefined ? {} : { signal }),
+			}),
+		xaiVideoGenerate: async (input, signal) =>
+			generateXAiVideo(input, {
+				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
+				...(signal === undefined ? {} : { signal }),
+			}),
+		mediaBackendStatus: async () =>
+			getMediaBackendStatus({
+				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
+			}),
 	};
 }

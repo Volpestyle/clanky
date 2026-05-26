@@ -9,9 +9,14 @@ export {
 	type MemoryForgetToolInput,
 	type MemoryRememberToolInput,
 	type MemorySearchToolInput,
+	maybeInjectMediaOperatorSkill,
+	type OpenAiImageGenerateToolInput,
 	type ScheduleCronToolInput,
+	shouldUseMediaOperatorSkill,
 	type TaskCreateToolInput,
 	type WebSearchToolInput,
+	type XAiImageGenerateToolInput,
+	type XAiVideoGenerateToolInput,
 } from "./agent-tools.ts";
 export {
 	type ClankyChatGatewayOwner,
@@ -54,6 +59,20 @@ export {
 	type MarkLinearOutboxPostedInput,
 } from "./linear/outbox.ts";
 export {
+	type GeneratedMediaFile,
+	generateOpenAiImage,
+	generateXAiImage,
+	generateXAiVideo,
+	getMediaBackendStatus,
+	type MediaOperatorOptions,
+	type OpenAiImageGenerateInput,
+	type OpenAiImageGenerateResult,
+	type XAiImageGenerateInput,
+	type XAiImageGenerateResult,
+	type XAiVideoGenerateInput,
+	type XAiVideoGenerateResult,
+} from "./media/operator.ts";
+export {
 	type ForgetMemoryInput,
 	type MemoryAtom,
 	type MemoryAtomType,
@@ -80,6 +99,16 @@ export {
 	type SetMemoryConsentInput,
 	stableMemorySourceId,
 } from "./memory/store.ts";
+export {
+	DEFAULT_OPENAI_PROVIDER_ID,
+	getOpenAiCredentialStatus,
+	type OpenAiCredentialStatus,
+	type ResolvedOpenAiApiKey,
+	removeStoredOpenAiCredential,
+	resolveOpenAiApiKey,
+	resolveOpenAiApiKeySync,
+	saveStoredOpenAiApiKey,
+} from "./openai-credentials.ts";
 export {
 	type ClankyPaths,
 	type ResolveClankyPathsOptions,
@@ -128,3 +157,10 @@ export {
 	runOpenAiWebSearch,
 	type WebBackendStatusOptions,
 } from "./web/operator.ts";
+export {
+	DEFAULT_XAI_PROVIDER_ID,
+	getXAiCredentialStatus,
+	type ResolvedXAiApiKey,
+	resolveXAiApiKey,
+	type XAiCredentialStatus,
+} from "./xai-credentials.ts";

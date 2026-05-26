@@ -10,6 +10,7 @@ import {
 import { type Static, Type } from "typebox";
 import type { LinearCreateIssueInput } from "./linear/client.ts";
 import type { CreateLinearLinkInput } from "./linear/links.ts";
+import type { OpenAiImageGenerateInput, XAiImageGenerateInput, XAiVideoGenerateInput } from "./media/operator.ts";
 import type {
 	ForgetMemoryInput,
 	MemoryExport,
@@ -180,6 +181,79 @@ const webSearchSchema = Type.Object({
 	user_location: Type.Optional(approximateUserLocationSchema),
 });
 
+const imageQualitySchema = Type.Union([
+	Type.Literal("low"),
+	Type.Literal("medium"),
+	Type.Literal("high"),
+	Type.Literal("auto"),
+]);
+const imageOutputFormatSchema = Type.Union([Type.Literal("png"), Type.Literal("jpeg"), Type.Literal("webp")]);
+const mediaAspectRatioSchema = Type.Union([
+	Type.Literal("1:1"),
+	Type.Literal("16:9"),
+	Type.Literal("9:16"),
+	Type.Literal("4:3"),
+	Type.Literal("3:4"),
+	Type.Literal("3:2"),
+	Type.Literal("2:3"),
+	Type.Literal("2:1"),
+	Type.Literal("1:2"),
+	Type.Literal("19.5:9"),
+	Type.Literal("9:19.5"),
+	Type.Literal("20:9"),
+	Type.Literal("9:20"),
+	Type.Literal("auto"),
+]);
+const openAiImageGenerateSchema = Type.Object({
+	prompt: Type.String(),
+	model: Type.Optional(Type.String()),
+	n: Type.Optional(Type.Number()),
+	size: Type.Optional(Type.String()),
+	quality: Type.Optional(imageQualitySchema),
+	background: Type.Optional(Type.Union([Type.Literal("auto"), Type.Literal("opaque"), Type.Literal("transparent")])),
+	outputFormat: Type.Optional(imageOutputFormatSchema),
+	output_format: Type.Optional(imageOutputFormatSchema),
+	outputCompression: Type.Optional(Type.Number()),
+	output_compression: Type.Optional(Type.Number()),
+	moderation: Type.Optional(Type.Union([Type.Literal("auto"), Type.Literal("low")])),
+	outputDir: Type.Optional(Type.String()),
+	output_dir: Type.Optional(Type.String()),
+	filenamePrefix: Type.Optional(Type.String()),
+	filename_prefix: Type.Optional(Type.String()),
+});
+const xaiImageGenerateSchema = Type.Object({
+	prompt: Type.String(),
+	model: Type.Optional(Type.String()),
+	n: Type.Optional(Type.Number()),
+	aspectRatio: Type.Optional(mediaAspectRatioSchema),
+	aspect_ratio: Type.Optional(mediaAspectRatioSchema),
+	resolution: Type.Optional(Type.Union([Type.Literal("1k"), Type.Literal("2k")])),
+	responseFormat: Type.Optional(Type.Union([Type.Literal("url"), Type.Literal("b64_json")])),
+	response_format: Type.Optional(Type.Union([Type.Literal("url"), Type.Literal("b64_json")])),
+	outputDir: Type.Optional(Type.String()),
+	output_dir: Type.Optional(Type.String()),
+	filenamePrefix: Type.Optional(Type.String()),
+	filename_prefix: Type.Optional(Type.String()),
+	download: Type.Optional(Type.Boolean()),
+});
+const xaiVideoGenerateSchema = Type.Object({
+	prompt: Type.String(),
+	model: Type.Optional(Type.String()),
+	duration: Type.Optional(Type.Number()),
+	aspectRatio: Type.Optional(mediaAspectRatioSchema),
+	aspect_ratio: Type.Optional(mediaAspectRatioSchema),
+	resolution: Type.Optional(Type.Union([Type.Literal("480p"), Type.Literal("720p")])),
+	outputDir: Type.Optional(Type.String()),
+	output_dir: Type.Optional(Type.String()),
+	filenamePrefix: Type.Optional(Type.String()),
+	filename_prefix: Type.Optional(Type.String()),
+	download: Type.Optional(Type.Boolean()),
+	pollIntervalMs: Type.Optional(Type.Number()),
+	poll_interval_ms: Type.Optional(Type.Number()),
+	timeoutMs: Type.Optional(Type.Number()),
+	timeout_ms: Type.Optional(Type.Number()),
+});
+
 export type ScheduleCronToolInput = Static<typeof scheduleCronSchema>;
 export type LinearCreateIssueToolInput = Static<typeof linearCreateIssueSchema>;
 export type LinearLinkToolInput = Static<typeof linearLinkSchema>;
@@ -189,6 +263,9 @@ export type MemoryRememberToolInput = Static<typeof memoryRememberSchema>;
 export type MemorySearchToolInput = Static<typeof memorySearchSchema>;
 export type MemoryForgetToolInput = Static<typeof memoryForgetSchema>;
 export type WebSearchToolInput = Static<typeof webSearchSchema>;
+export type OpenAiImageGenerateToolInput = Static<typeof openAiImageGenerateSchema>;
+export type XAiImageGenerateToolInput = Static<typeof xaiImageGenerateSchema>;
+export type XAiVideoGenerateToolInput = Static<typeof xaiVideoGenerateSchema>;
 
 export interface ClankyBeforeProviderRequestInput {
 	sessionId: string;
@@ -217,10 +294,15 @@ export interface ClankyAgentToolHandlers {
 	profileStatus?: () => Promise<unknown>;
 	webSearch?: (input: OpenAiWebSearchInput, signal?: AbortSignal) => Promise<unknown>;
 	webBackendStatus?: () => Promise<unknown>;
+	openAiImageGenerate?: (input: OpenAiImageGenerateInput, signal?: AbortSignal) => Promise<unknown>;
+	xaiImageGenerate?: (input: XAiImageGenerateInput, signal?: AbortSignal) => Promise<unknown>;
+	xaiVideoGenerate?: (input: XAiVideoGenerateInput, signal?: AbortSignal) => Promise<unknown>;
+	mediaBackendStatus?: () => Promise<unknown>;
 }
 
 const CLANKY_MEMORY_PACKET_MESSAGE = "clanky.memory_packet";
 const WEB_OPERATOR_SKILL_NAME = "clanky-web-operator";
+const MEDIA_OPERATOR_SKILL_NAME = "clanky-media-operator";
 
 export function createClankyExtensionFactories(handlers: ClankyAgentToolHandlers): ExtensionFactory[] {
 	const indexMessage = handlers.indexMessage;
@@ -238,7 +320,8 @@ export function createClankyExtensionFactories(handlers: ClankyAgentToolHandlers
 		handlers.memoryConsent !== undefined ||
 		handlers.selfMemory !== undefined ||
 		handlers.profileStatus !== undefined ||
-		handlers.webBackendStatus !== undefined;
+		handlers.webBackendStatus !== undefined ||
+		handlers.mediaBackendStatus !== undefined;
 	if (indexMessage === undefined && beforeProviderRequest === undefined && memoryPacket === undefined && !hasCommands) {
 		return [];
 	}
@@ -246,7 +329,7 @@ export function createClankyExtensionFactories(handlers: ClankyAgentToolHandlers
 		(pi) => {
 			registerClankyCommands(pi, handlers);
 			pi.on("input", async (event) => {
-				const transformed = maybeInjectWebOperatorSkill(event.text);
+				const transformed = maybeInjectWebOperatorSkill(maybeInjectMediaOperatorSkill(event.text));
 				if (transformed === event.text) return { action: "continue" };
 				if (event.images !== undefined) return { action: "transform", text: transformed, images: event.images };
 				return { action: "transform", text: transformed };
@@ -378,6 +461,14 @@ function registerClankyCommands(pi: Parameters<ExtensionFactory>[0], handlers: C
 			description: "Show Clanky web operator backend status",
 			handler: async (_args, ctx) => {
 				ctx.ui.notify(formatCommandResult("Web Operator", await handlers.webBackendStatus?.()));
+			},
+		});
+	}
+	if (handlers.mediaBackendStatus !== undefined) {
+		pi.registerCommand("media", {
+			description: "Show Clanky media generation backend status",
+			handler: async (_args, ctx) => {
+				ctx.ui.notify(formatCommandResult("Media Operator", await handlers.mediaBackendStatus?.()));
 			},
 		});
 	}
@@ -735,6 +826,86 @@ export function createClankyToolDefinitions(handlers: ClankyAgentToolHandlers): 
 			}),
 		);
 	}
+	const openAiImageGenerate = handlers.openAiImageGenerate;
+	if (openAiImageGenerate !== undefined) {
+		tools.push(
+			defineTool({
+				name: "openai_image_generate",
+				label: "OpenAI Image",
+				description: "Generate still images through the OpenAI Images API and save returned images to local files.",
+				promptSnippet:
+					"openai_image_generate: create images with OpenAI gpt-image models when the user asks for generated still images or assets.",
+				promptGuidelines: [
+					"Use for single-prompt still image creation with OpenAI models such as gpt-image-2.",
+					"Use output_dir or filename_prefix when the user cares where the generated asset lands.",
+					"For xAI Grok Imagine images, use xai_image_generate instead.",
+				],
+				parameters: openAiImageGenerateSchema,
+				async execute(_toolCallId, params, signal) {
+					return toolResult(await openAiImageGenerate(params, signal));
+				},
+			}),
+		);
+	}
+	const xaiImageGenerate = handlers.xaiImageGenerate;
+	if (xaiImageGenerate !== undefined) {
+		tools.push(
+			defineTool({
+				name: "xai_image_generate",
+				label: "xAI Image",
+				description:
+					"Generate still images through xAI Grok Imagine image models and save returned images or downloaded URLs to local files.",
+				promptSnippet:
+					"xai_image_generate: create images with xAI Grok Imagine when the user asks for Grok/xAI/Imagine images.",
+				promptGuidelines: [
+					"Use for Grok Imagine still image requests, especially when aspect_ratio or 1k/2k resolution controls are requested.",
+					"Default response_format is b64_json so temporary xAI URLs are not lost.",
+				],
+				parameters: xaiImageGenerateSchema,
+				async execute(_toolCallId, params, signal) {
+					return toolResult(await xaiImageGenerate(params, signal));
+				},
+			}),
+		);
+	}
+	const xaiVideoGenerate = handlers.xaiVideoGenerate;
+	if (xaiVideoGenerate !== undefined) {
+		tools.push(
+			defineTool({
+				name: "xai_video_generate",
+				label: "xAI Video",
+				description:
+					"Generate videos through xAI Grok Imagine video models, poll until complete, and optionally download the video.",
+				promptSnippet:
+					"xai_video_generate: create videos with xAI Grok Imagine when the user asks for generated video, animation, or text-to-video.",
+				promptGuidelines: [
+					"Use for Grok Imagine video requests. Duration must be 1-15 seconds.",
+					"Use 480p for faster drafts and 720p when the user wants HD output.",
+					"Tell the user if generation returns failed, expired, or times out.",
+				],
+				parameters: xaiVideoGenerateSchema,
+				async execute(_toolCallId, params, signal) {
+					return toolResult(await xaiVideoGenerate(params, signal));
+				},
+			}),
+		);
+	}
+	const mediaBackendStatus = handlers.mediaBackendStatus;
+	if (mediaBackendStatus !== undefined) {
+		tools.push(
+			defineTool({
+				name: "media_backend_status",
+				label: "Media Backend Status",
+				description:
+					"Inspect which media generation backends are configured: OpenAI Images, xAI Grok Imagine images, and xAI Grok Imagine videos.",
+				promptSnippet: "media_backend_status: check OpenAI/xAI media generation credentials and default models.",
+				parameters: Type.Object({}),
+				async execute() {
+					return toolResult(await mediaBackendStatus());
+				},
+			}),
+		);
+	}
 	return tools;
 }
 
@@ -746,6 +917,16 @@ export function maybeInjectWebOperatorSkill(text: string, env: NodeJS.ProcessEnv
 	if (trimmed.includes(`<skill name="${WEB_OPERATOR_SKILL_NAME}"`)) return text;
 	if (!shouldUseWebOperatorSkill(trimmed)) return text;
 	return `/skill:${WEB_OPERATOR_SKILL_NAME} ${text}`;
+}
+
+export function maybeInjectMediaOperatorSkill(text: string, env: NodeJS.ProcessEnv = process.env): string {
+	if (env.CLANKY_MEDIA_OPERATOR_AUTO_SKILL === "0" || env.CLANKY_MEDIA_OPERATOR_AUTO_SKILL === "false") return text;
+	const trimmed = text.trimStart();
+	if (trimmed.length === 0) return text;
+	if (trimmed.startsWith("/")) return text;
+	if (trimmed.includes(`<skill name="${MEDIA_OPERATOR_SKILL_NAME}"`)) return text;
+	if (!shouldUseMediaOperatorSkill(trimmed)) return text;
+	return `/skill:${MEDIA_OPERATOR_SKILL_NAME} ${text}`;
 }
 
 export function shouldUseWebOperatorSkill(text: string): boolean {
@@ -764,6 +945,32 @@ export function shouldUseWebOperatorSkill(text: string): boolean {
 		return true;
 	}
 	if (normalized.includes("what does") && /\b(cost|price)\b/i.test(text)) return true;
+	return false;
+}
+
+export function shouldUseMediaOperatorSkill(text: string): boolean {
+	if (/\b(grok\s+imagine|xai\s+imagine|openai\s+image|gpt-image)\b/i.test(text)) return true;
+	if (
+		/\b(text[- ]to[- ]video|image[- ]to[- ]video|generate\s+a\s+video|make\s+a\s+video|create\s+a\s+video)\b/i.test(
+			text,
+		)
+	) {
+		return true;
+	}
+	if (
+		/\b(generate|create|make|draw|render|design|imagine)\b.{0,50}\b(image|picture|photo|illustration|art|logo|icon|banner|thumbnail|poster|video|animation|clip)\b/i.test(
+			text,
+		)
+	) {
+		return true;
+	}
+	if (
+		/\b(image|picture|photo|illustration|logo|icon|banner|thumbnail|poster)\b.{0,30}\b(generate|create|make|draw|render|design)\b/i.test(
+			text,
+		)
+	) {
+		return true;
+	}
 	return false;
 }
 

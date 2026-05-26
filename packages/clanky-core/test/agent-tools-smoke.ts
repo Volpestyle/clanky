@@ -7,14 +7,19 @@ import {
 	type MemoryForgetToolInput,
 	type MemoryRememberToolInput,
 	type MemorySearchToolInput,
+	type OpenAiImageGenerateToolInput,
 	resolveClankyChatGatewayOwner,
 	resolveClankyChatMode,
+	runOpenAiWebSearch,
 	type ScheduleCronToolInput,
+	saveStoredOpenAiApiKey,
 	shouldStartAgentChatGateway,
 	type TaskCreateToolInput,
 	type WebSearchToolInput,
+	type XAiImageGenerateToolInput,
+	type XAiVideoGenerateToolInput,
 } from "@clanky/core";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { AuthStorage, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 
 const calls: string[] = [];
 
@@ -59,6 +64,22 @@ const handlers: ClankyAgentToolHandlers = {
 		calls.push("web-status");
 		return { openaiWebSearch: { available: true } };
 	},
+	openAiImageGenerate: async (input) => {
+		calls.push(`openai-image:${input.prompt}`);
+		return { provider: "openai", files: [{ path: "/tmp/openai-image.png" }] };
+	},
+	xaiImageGenerate: async (input) => {
+		calls.push(`xai-image:${input.prompt}`);
+		return { provider: "xai", files: [{ path: "/tmp/xai-image.jpg" }] };
+	},
+	xaiVideoGenerate: async (input) => {
+		calls.push(`xai-video:${input.prompt}`);
+		return { provider: "xai", requestId: "video-request", status: "done", path: "/tmp/xai-video.mp4" };
+	},
+	mediaBackendStatus: async () => {
+		calls.push("media-status");
+		return { openaiImages: { available: true }, xaiImagineImages: { available: true } };
+	},
 };
 
 const tools = createClankyToolDefinitions(handlers);
@@ -72,10 +93,15 @@ const expectedNames = [
 	"memory_remember",
 	"memory_search",
 	"memory_forget",
+	"media_backend_status",
+	"openai_image_generate",
 	"web_backend_status",
 	"web_search",
+	"xai_image_generate",
+	"xai_video_generate",
 ];
 assertToolNames(tools, expectedNames);
+await assertOpenAiWebSearchUsesStoredCredential();
 
 await executeTool(tools, "schedule_cron", {
 	schedule: "every 1h",
@@ -129,6 +155,25 @@ await executeTool(tools, "web_search", {
 
 await executeTool(tools, "web_backend_status", {});
 
+await executeTool(tools, "openai_image_generate", {
+	prompt: "Draw a test icon",
+	quality: "low",
+} satisfies OpenAiImageGenerateToolInput);
+
+await executeTool(tools, "xai_image_generate", {
+	prompt: "Draw a test poster",
+	aspect_ratio: "16:9",
+	resolution: "1k",
+} satisfies XAiImageGenerateToolInput);
+
+await executeTool(tools, "xai_video_generate", {
+	prompt: "A test animation",
+	duration: 5,
+	resolution: "480p",
+} satisfies XAiVideoGenerateToolInput);
+
+await executeTool(tools, "media_backend_status", {});
+
 const expectedCallPrefixes = [
 	"schedule:",
 	"linear-create:",
@@ -140,6 +185,10 @@ const expectedCallPrefixes = [
 	"memory-forget:",
 	"web-search:",
 	"web-status",
+	"openai-image:",
+	"xai-image:",
+	"xai-video:",
+	"media-status",
 ];
 for (const prefix of expectedCallPrefixes) {
 	if (!calls.some((entry) => entry.startsWith(prefix))) {
@@ -188,6 +237,40 @@ function assertToolNames(actual: readonly ToolDefinition[], expected: readonly s
 	const sortedExpected = [...expected].sort();
 	if (names.join(",") !== sortedExpected.join(",")) {
 		throw new Error(`Tool definitions mismatch. expected=${sortedExpected.join(",")} actual=${names.join(",")}`);
+	}
+}
+
+async function assertOpenAiWebSearchUsesStoredCredential(): Promise<void> {
+	const authStorage = AuthStorage.inMemory();
+	saveStoredOpenAiApiKey(authStorage, "stored-openai-key");
+	const result = await runOpenAiWebSearch(
+		{ query: "stored key smoke", search_context_size: "low" },
+		{
+			authStorage,
+			env: {},
+			fetchImpl: async (_input, init) => {
+				const headers = init?.headers as Record<string, string> | undefined;
+				if (headers?.authorization !== "Bearer stored-openai-key") {
+					throw new Error(`smoke: web_search used wrong authorization header: ${headers?.authorization}`);
+				}
+				return new Response(
+					JSON.stringify({
+						id: "resp-smoke",
+						status: "completed",
+						output: [
+							{
+								type: "message",
+								content: [{ type: "output_text", text: "stored credential ok", annotations: [] }],
+							},
+						],
+					}),
+					{ status: 200 },
+				);
+			},
+		},
+	);
+	if (result.answer !== "stored credential ok") {
+		throw new Error(`smoke: web_search did not parse fake response: ${result.answer}`);
 	}
 }
 

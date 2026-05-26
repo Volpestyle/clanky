@@ -79,7 +79,7 @@ export class ClankyDiscordGatewayController {
 		}
 		const discordCredentials = resolveAgentDiscordCredentialConfig(this.env, this.authStorage);
 		const discordConfig = resolveAgentDiscordGatewayConfig(this.env, this.authStorage);
-		const voiceConfig = resolveAgentDiscordVoiceConfig(this.env, discordCredentials);
+		const voiceConfig = resolveAgentDiscordVoiceConfig(this.env, discordCredentials, this.authStorage);
 		const client =
 			discordCredentials !== undefined && voiceConfig !== undefined
 				? this.dependencies.createClient({ voice: true, chat: discordConfig !== undefined })
@@ -114,6 +114,7 @@ export class ClankyDiscordGatewayController {
 					runtime: this.runtime,
 					client: voiceClient,
 					discordConfig: discordCredentials,
+					authStorage: this.authStorage,
 					config: voiceConfig,
 					runtimeTurnQueue: this.runtimeTurnQueue,
 				});

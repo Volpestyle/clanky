@@ -16,7 +16,12 @@
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_CLANKY_DISCORD_PROVIDER_ID, saveStoredDiscordCredential } from "@clanky/core";
+import {
+	DEFAULT_CLANKY_DISCORD_PROVIDER_ID,
+	DEFAULT_OPENAI_PROVIDER_ID,
+	saveStoredDiscordCredential,
+	saveStoredOpenAiApiKey,
+} from "@clanky/core";
 import { AuthStorage } from "@earendil-works/pi-coding-agent";
 import type { CreateAgentDiscordClientOptions } from "../src/agentDiscordClient.ts";
 import {
@@ -28,6 +33,7 @@ import {
 import { DEFAULT_REALTIME_MODEL, resolveAgentDiscordVoiceConfig } from "../src/agentDiscordVoice.ts";
 import { createDiscordAuthExtensionFactory } from "../src/discordAuth.ts";
 import { ClankyDiscordGatewayController } from "../src/discordGatewayController.ts";
+import { createOpenAiAuthExtensionFactory } from "../src/openAiAuth.ts";
 import { createClankyRuntime } from "../src/runClanky.ts";
 import { SerialRuntimeTurnQueue } from "../src/runtimeTurnQueue.ts";
 
@@ -38,6 +44,7 @@ async function main(): Promise<void> {
 	assertStoredDiscordCredentialPath();
 	await assertRuntimeTurnQueue();
 	await assertDiscordAuthExtensionCommands();
+	await assertOpenAiAuthExtensionCommands();
 	await assertDiscordGatewayControllerStartup();
 	const tmpRoot = await mkdtemp(join(tmpdir(), "clanky-agent-smoke-"));
 	const homeDir = join(tmpRoot, "home");
@@ -72,9 +79,14 @@ async function main(): Promise<void> {
 		} else {
 			console.log(`smoke: loaded ${skillNames.length} skills: ${skillNames.join(", ")}`);
 		}
-		for (const expectedSkill of ["clanky-chrome-cdp", "clanky-playwright-browser", "clanky-web-operator"]) {
+		for (const expectedSkill of [
+			"clanky-chrome-cdp",
+			"clanky-media-operator",
+			"clanky-playwright-browser",
+			"clanky-web-operator",
+		]) {
 			if (!skillNames.includes(expectedSkill)) {
-				throw new Error(`smoke: bundled browser skill ${expectedSkill} was not loaded`);
+				throw new Error(`smoke: bundled Clanky skill ${expectedSkill} was not loaded`);
 			}
 		}
 
@@ -112,6 +124,21 @@ function assertAgentDiscordVoiceConfig(): void {
 	}
 	if (voiceConfig.guildId !== "guild-1" || voiceConfig.channelId !== "channel-1") {
 		throw new Error("smoke: Discord voice guild/channel config did not round-trip");
+	}
+	const openAiAuthStorage = AuthStorage.inMemory();
+	saveStoredOpenAiApiKey(openAiAuthStorage, "stored-openai-key");
+	const storedOpenAiVoiceConfig = resolveAgentDiscordVoiceConfig(
+		{
+			CLANKY_DISCORD_VOICE_ENABLED: "1",
+			CLANKY_DISCORD_TOKEN: "token",
+			CLANKY_DISCORD_VOICE_GUILD_ID: "guild-1",
+			CLANKY_DISCORD_VOICE_CHANNEL_ID: "channel-1",
+		},
+		discordConfig,
+		openAiAuthStorage,
+	);
+	if (storedOpenAiVoiceConfig?.openAiApiKey !== "stored-openai-key") {
+		throw new Error("smoke: stored /openai-login API key should configure Discord voice");
 	}
 	const voiceOnlyCredentials = resolveAgentDiscordCredentialConfig({
 		CLANKY_CHAT_GATEWAY_OWNER: "room",
@@ -454,6 +481,58 @@ async function assertDiscordAuthExtensionCommands(): Promise<void> {
 	}
 	if (!notifications.some((message) => message.includes("Discord bridge restarted after logout."))) {
 		throw new Error("smoke: /discord-logout did not report bridge restart after logout");
+	}
+}
+
+async function assertOpenAiAuthExtensionCommands(): Promise<void> {
+	const authStorage = AuthStorage.inMemory();
+	saveStoredOpenAiApiKey(authStorage, "stored-openai-key");
+	let reloads = 0;
+	const notifications: string[] = [];
+	const commands: Record<string, RegisteredCommand> = {};
+	const factory = createOpenAiAuthExtensionFactory({
+		authStorage,
+		authFilePath: "/tmp/clanky-auth.json",
+	});
+	factory({
+		registerCommand(name: string, command: RegisteredCommand) {
+			commands[name] = command;
+		},
+	} as never);
+	const ctx = {
+		ui: {
+			notify(message: string) {
+				notifications.push(message);
+			},
+		},
+		async reload() {
+			reloads += 1;
+		},
+	};
+
+	const whoamiCommand = commands["openai-whoami"];
+	if (whoamiCommand === undefined) throw new Error("smoke: /openai-whoami command was not registered");
+	await whoamiCommand.handler([], ctx);
+	if (
+		!notifications.some(
+			(message) =>
+				message.includes("Stored OpenAI credential type: api_key.") &&
+				message.includes(`provider id "${DEFAULT_OPENAI_PROVIDER_ID}"`) &&
+				message.includes("Active OpenAI credential source: stored:api_key."),
+		)
+	) {
+		throw new Error(`smoke: /openai-whoami did not report stored OpenAI key: ${notifications.join("\n---\n")}`);
+	}
+
+	const logoutCommand = commands["openai-logout"];
+	if (logoutCommand === undefined) throw new Error("smoke: /openai-logout command was not registered");
+	await logoutCommand.handler([], ctx);
+	if (authStorage.get(DEFAULT_OPENAI_PROVIDER_ID) !== undefined) {
+		throw new Error("smoke: /openai-logout should remove stored OpenAI credentials");
+	}
+	if (reloads !== 1) throw new Error(`smoke: /openai-logout should reload once, got ${reloads}`);
+	if (!notifications.some((message) => message.includes("Removed stored OpenAI api_key credential"))) {
+		throw new Error("smoke: /openai-logout did not report credential removal");
 	}
 }
 
