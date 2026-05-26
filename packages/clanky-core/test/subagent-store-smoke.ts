@@ -116,7 +116,9 @@ try {
 		runningSubagent.state !== "running" ||
 		runningSubagent.activeSummary !== "processing high priority"
 	) {
-		throw new Error(`subagent smoke: enqueue behind running worker rewrote active state ${JSON.stringify(runningSummary)}`);
+		throw new Error(
+			`subagent smoke: enqueue behind running worker rewrote active state ${JSON.stringify(runningSummary)}`,
+		);
 	}
 	await store.completeDiscordMessage(first.id, "reply-high", new Date("2026-01-01T00:03:00.000Z"));
 

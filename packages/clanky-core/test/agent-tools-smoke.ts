@@ -1,10 +1,15 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
 	type ClankyAgentToolHandlers,
 	createClankyExtensionFactories,
 	createClankyToolDefinitions,
+	type DelegateToMainWorkerToolInput,
 	type ExternalMcpCallToolInput,
 	type LinearCreateIssueToolInput,
 	type LinearLinkToolInput,
+	type MainSessionContextToolInput,
 	type MemoryForgetToolInput,
 	type MemoryRememberToolInput,
 	type MemorySearchToolInput,
@@ -24,6 +29,7 @@ import {
 	AuthStorage,
 	type ExtensionCommandContext,
 	type ExtensionFactory,
+	type TerminalInputHandler,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 
@@ -49,6 +55,18 @@ const handlers: ClankyAgentToolHandlers = {
 	taskCreate: async (input) => {
 		calls.push(`task:${input.title}:${input.sessionId ?? "none"}`);
 		return { task: { id: "task-created", ...input } };
+	},
+	mainSessionContext: async (input) => {
+		calls.push(`main-session:${input.limit ?? "default"}`);
+		return {
+			sessionId: "main-session-smoke",
+			branchEntries: 3,
+			entries: [{ id: "entry-smoke", role: "user", text: "main context smoke" }],
+		};
+	},
+	delegateToMainWorker: async (input) => {
+		calls.push(`delegate-main:${input.title}`);
+		return { delegated: true, title: input.title, mode: "followUp" };
 	},
 	listSubagents: async () => {
 		calls.push("subagent-status");
@@ -131,6 +149,8 @@ const expectedNames = [
 	"linear_create_issue",
 	"linear_link",
 	"task_create",
+	"main_session_context",
+	"delegate_to_main_worker",
 	"subagent_status",
 	"memory_remember",
 	"memory_search",
@@ -175,6 +195,16 @@ await executeTool(tools, "task_create", {
 	title: "Task smoke",
 	priority: "high",
 } satisfies TaskCreateToolInput);
+
+await executeTool(tools, "main_session_context", {
+	limit: 4,
+} satisfies MainSessionContextToolInput);
+
+await executeTool(tools, "delegate_to_main_worker", {
+	title: "Long Discord work",
+	prompt: "Do the durable follow-up from Discord.",
+	reason: "would take more than two minutes",
+} satisfies DelegateToMainWorkerToolInput);
 
 await executeTool(tools, "subagent_status", {});
 
@@ -233,6 +263,8 @@ const expectedCallPrefixes = [
 	"linear:",
 	"mcp-call:",
 	"task:",
+	"main-session:",
+	"delegate-main:",
 	"subagent-status",
 	"memory-remember:",
 	"memory-search:",
@@ -330,9 +362,75 @@ async function assertOpenAiWebSearchUsesStoredCredential(): Promise<void> {
 }
 
 async function assertSubagentPanelCommand(): Promise<void> {
+	const tmpRoot = await mkdtemp(join(tmpdir(), "clanky-subagent-panel-"));
+	const firstSessionFile = join(tmpRoot, "first-subagent.jsonl");
+	const selectedSessionFile = join(tmpRoot, "selected-subagent.jsonl");
+	await writeFile(firstSessionFile, subagentSessionFixture("First User", "first discord", "first back"));
+	await writeFile(selectedSessionFile, subagentSessionFixture("Smoke User", "hello discord", "hello back"));
+	try {
+		await assertSubagentPanelCommandWithSession({ firstSessionFile, selectedSessionFile });
+	} finally {
+		await rm(tmpRoot, { recursive: true, force: true });
+	}
+}
+
+function subagentSessionFixture(sender: string, userText: string, assistantText: string): string {
+	return [
+		JSON.stringify({
+			type: "session",
+			version: 3,
+			id: `session-${sender.toLowerCase().replace(/\s+/g, "-")}`,
+			timestamp: "2026-01-01T00:00:00.000Z",
+			cwd: "/tmp/clanky-agent-tools-smoke",
+		}),
+		JSON.stringify({
+			type: "message",
+			id: "user-1",
+			parentId: null,
+			timestamp: "2026-01-01T00:01:00.000Z",
+			message: {
+				role: "user",
+				content: [
+					{
+						type: "text",
+						text: `Discord scope: discord-guild guild-smoke\nMessage from ${sender}:\n${userText}`,
+					},
+				],
+			},
+		}),
+		JSON.stringify({
+			type: "message",
+			id: "assistant-1",
+			parentId: "user-1",
+			timestamp: "2026-01-01T00:02:00.000Z",
+			message: {
+				role: "assistant",
+				content: [{ type: "text", text: assistantText }],
+			},
+		}),
+		"",
+	].join("\n");
+}
+
+async function assertSubagentPanelCommandWithSession(sessionFiles: {
+	firstSessionFile: string;
+	selectedSessionFile: string;
+}): Promise<void> {
 	const commands = new Map<string, Parameters<Parameters<ExtensionFactory>[0]["registerCommand"]>[1]>();
 	const factories = createClankyExtensionFactories({
 		listSubagents: async () => [
+			{
+				id: "discord-guild:guild-first",
+				kind: "discord-guild",
+				scopeId: "guild-first",
+				scopeName: "First Guild",
+				state: "running",
+				queueDepth: 3,
+				activeSummary: "replying to First User in general",
+				sessionFile: sessionFiles.firstSessionFile,
+				createdAt: "2026-01-01T00:00:00.000Z",
+				updatedAt: "2026-01-01T00:01:30.000Z",
+			},
 			{
 				id: "discord-guild:guild-smoke",
 				kind: "discord-guild",
@@ -341,6 +439,7 @@ async function assertSubagentPanelCommand(): Promise<void> {
 				state: "running",
 				queueDepth: 2,
 				activeSummary: "replying to Smoke User in general",
+				sessionFile: sessionFiles.selectedSessionFile,
 				createdAt: "2026-01-01T00:00:00.000Z",
 				updatedAt: "2026-01-01T00:01:00.000Z",
 			},
@@ -358,9 +457,37 @@ async function assertSubagentPanelCommand(): Promise<void> {
 
 	const widgets = new Map<string, string[] | undefined>();
 	const notifications: string[] = [];
+	let detailLines: string[] | undefined;
+	let terminalInput: TerminalInputHandler | undefined;
 	const ctx = {
 		hasUI: true,
 		ui: {
+			async custom(
+				factory: (tui: unknown, theme: unknown, keybindings: unknown, done: (result: undefined) => void) => unknown,
+			) {
+				const component = factory(
+					{ requestRender() {} },
+					{
+						fg: (_color: string, text: string) => text,
+						bold: (text: string) => text,
+					},
+					{},
+					() => undefined,
+				) as {
+					render(width: number): string[];
+					handleInput?(data: string): void;
+					dispose?(): void;
+				};
+				await new Promise((resolve) => setTimeout(resolve, 10));
+				detailLines = component.render(100);
+				component.dispose?.();
+			},
+			onTerminalInput(handler: TerminalInputHandler) {
+				terminalInput = handler;
+				return () => {
+					terminalInput = undefined;
+				};
+			},
 			notify(message: string) {
 				notifications.push(message);
 			},
@@ -378,7 +505,30 @@ async function assertSubagentPanelCommand(): Promise<void> {
 	} as unknown as ExtensionCommandContext;
 	const subagents = commands.get("subagents");
 	if (subagents === undefined) throw new Error("smoke: /subagents command was not registered");
-	await subagents.handler("show", ctx);
+	await subagents.handler("", ctx);
+	const focusedPanelLines = widgets.get("clanky-subagents");
+	if (
+		focusedPanelLines === undefined ||
+		!focusedPanelLines.join("\n").includes("Smoke Guild") ||
+		!focusedPanelLines.join("\n").includes("Up/Down select")
+	) {
+		throw new Error(`smoke: /subagents did not focus the live panel: ${JSON.stringify(focusedPanelLines)}`);
+	}
+	if (terminalInput === undefined) throw new Error("smoke: /subagents did not register focused panel input");
+	terminalInput("\u001b[B");
+	terminalInput("\r");
+	await new Promise((resolve) => setTimeout(resolve, 20));
+	if (detailLines?.join("\n").includes("first discord")) {
+		throw new Error(`smoke: /subagents enter opened the wrong transcript: ${JSON.stringify(detailLines)}`);
+	}
+	if (
+		detailLines === undefined ||
+		!detailLines.join("\n").includes("hello discord") ||
+		!detailLines.join("\n").includes("hello back")
+	) {
+		throw new Error(`smoke: /subagents enter did not render transcript: ${JSON.stringify(detailLines)}`);
+	}
+	await subagents.handler("panel", ctx);
 	const panelLines = widgets.get("clanky-subagents");
 	if (panelLines === undefined || !panelLines.join("\n").includes("Smoke Guild")) {
 		throw new Error(`smoke: /subagents show did not render live panel: ${JSON.stringify(panelLines)}`);

@@ -38,6 +38,8 @@ interface DiscordSubagentRuntimeEntry {
 	workerId: string;
 }
 
+const DISCORD_OPERATOR_SKILL_NAME = "clanky-discord-operator";
+
 export interface DiscordSubagentCoordinatorOptions {
 	provider: DiscordMessageSender;
 	store: DiscordSubagentStore;
@@ -232,11 +234,15 @@ async function runSubagentTurn(runtime: AgentSessionRuntime, prompt: string): Pr
 		if (text !== undefined) finalText = text;
 	});
 	try {
-		await runtime.session.sendUserMessage(prompt);
+		await runtime.session.prompt(activateDiscordOperatorSkill(prompt), { source: "extension" });
 		return finalText;
 	} finally {
 		unsubscribe();
 	}
+}
+
+function activateDiscordOperatorSkill(prompt: string): string {
+	return `/skill:${DISCORD_OPERATOR_SKILL_NAME} \n\n${prompt}`;
 }
 
 function resolveDiscordWorkerTarget(message: DiscordInboundMessage): DiscordWorkerTarget {
@@ -270,7 +276,9 @@ function buildDiscordSubagentPrompt(message: DiscordInboxMessage, mainStatus: st
 	return [
 		"You are a Discord-facing Clanky subagent. Handle this Discord message as one real person for this server/DM.",
 		"Answer directly and briefly unless the user asks for detail.",
+		"Keep Discord turns short. If work is likely to take more than 1-2 minutes, call delegate_to_main_worker and then give a brief handoff reply.",
 		"Do not claim the main Clanky stopped or changed work unless the status below says so.",
+		"Use main_session_context only when you need deeper main-session history than the status snapshot.",
 		"If the message does not actually need a reply, output exactly [SKIP].",
 		"If you use a Discord send/upload tool for this conversation and that action already satisfies the user, output exactly [SKIP] as your final response instead of posting a duplicate confirmation.",
 		"",

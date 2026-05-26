@@ -2,6 +2,7 @@ import {
 	addDiscordReaction,
 	type ClankyAgentToolHandlers,
 	type ClankyPaths,
+	type DelegateToMainWorkerToolInput,
 	generateOpenAiImage,
 	generateXAiImage,
 	generateXAiVideo,
@@ -13,6 +14,7 @@ import {
 	listDiscordEmojis,
 	listDiscordGuilds,
 	loadClankySkills,
+	type MainSessionContextToolInput,
 	readDiscordMessages,
 	recentDiscordActivity,
 	resolveClankyChatGatewayOwner,
@@ -45,7 +47,11 @@ import type { ClankyStores } from "./stores.ts";
 export function createClankyHandlers(
 	paths: ClankyPaths,
 	stores: ClankyStores,
-	options: { authStorage?: AuthStorage } = {},
+	options: {
+		authStorage?: AuthStorage;
+		mainSessionContext?: (input: MainSessionContextToolInput) => Promise<unknown>;
+		delegateToMainWorker?: (input: DelegateToMainWorkerToolInput) => Promise<unknown>;
+	} = {},
 ): ClankyAgentToolHandlers {
 	return {
 		beforeProviderRequest: async (input) => input.payload,
@@ -85,6 +91,8 @@ export function createClankyHandlers(
 		},
 
 		linearLink: async (input) => stores.linearLinks.link(input),
+		...(options.mainSessionContext === undefined ? {} : { mainSessionContext: options.mainSessionContext }),
+		...(options.delegateToMainWorker === undefined ? {} : { delegateToMainWorker: options.delegateToMainWorker }),
 		webSearch: async (input, signal) =>
 			runOpenAiWebSearch(input, {
 				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),

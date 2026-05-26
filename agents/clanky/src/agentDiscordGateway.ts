@@ -75,8 +75,25 @@ export interface DiscordConversationHistoryEntry {
 	messageId?: string;
 }
 
+export type DiscordBridgeCommand =
+	| {
+			type: "direct";
+			prompt: string;
+	  }
+	| {
+			type: "new";
+	  }
+	| {
+			type: "compact";
+			customInstructions?: string;
+	  }
+	| {
+			type: "help";
+	  };
+
 const DEFAULT_ENGAGEMENT_WINDOW_MS = 5 * 60 * 1000;
 const DEFAULT_DISCORD_WAKE_NAMES = ["clanky", "clank"];
+const DISCORD_BRIDGE_COMMAND_PREFIXES = ["/clanky", "/clank", "!clanky", "!clank"];
 const MAX_TRACKED_SELF_MESSAGES = 200;
 const MAX_CONVERSATION_HISTORY_MESSAGES = 8;
 const PRIMARY_WAKE_TOKEN_MIN_LEN = 4;
@@ -265,6 +282,7 @@ interface AgentDiscordBridgeOptions {
 export type DiscordAcceptanceReason =
 	| "bound_conversation"
 	| "dm"
+	| "discord_command"
 	| "platform_mention"
 	| "reply_to_self"
 	| "name_address"
@@ -326,6 +344,16 @@ class AgentDiscordBridge implements ClankyAgentDiscordGatewayHandle {
 			const t1 = Date.now();
 			const channelId = message.conversation.id;
 			const senderId = message.sender.id;
+			const command = parseDiscordBridgeCommand(message.text);
+			if (command !== undefined) {
+				this.inboundReceivedAt.set(message.externalMessageId, t1);
+				this.recordEngagement(channelId, senderId);
+				this.logBridge(
+					`command accepted ext=${message.externalMessageId} channel=${channelId} from=${senderId} type=${command.type}`,
+				);
+				await this.handleBridgeCommand(message, command, t1);
+				return;
+			}
 			const decision = evaluateDiscordMessageAcceptance(message, this.config, {
 				isEngaged: (c, u) => this.isEngaged(c, u),
 				isKnownSelfMessage: (id) => this.selfMessageIds.has(id),
@@ -347,29 +375,38 @@ class AgentDiscordBridge implements ClankyAgentDiscordGatewayHandle {
 				this.logBridge(`queued-for-subagent ext=${message.externalMessageId} channel=${channelId}`);
 				return;
 			}
-			const pending: PendingDiscordReply = {
-				conversation: message.conversation,
-				replyToExternalMessageId: message.externalMessageId,
-				senderId,
-				channelId,
-				acceptanceReason: decision.reason,
-			};
-			await this.runtimeTurnQueue.enqueue(async () => {
-				this.subscribeToCurrentSession();
-				const userPrompt = this.formatDiscordUserMessage(message, decision.reason);
-				this.recordInboundMessage(message);
-				this.pendingReplies.push(pending);
-				try {
-					await this.runtime.session.sendUserMessage(userPrompt);
-				} catch (error) {
-					this.removePendingReply(pending);
-					this.inboundReceivedAt.delete(message.externalMessageId);
-					throw error;
-				}
-				this.logBridge(`forwarded-to-pi ext=${message.externalMessageId} dt=${Date.now() - t1}ms`);
-			});
+			await this.forwardToMainRuntime(message, decision.reason, t1);
 		});
 		await this.subagents?.start();
+	}
+
+	private async forwardToMainRuntime(
+		message: DiscordInboundMessage,
+		acceptanceReason: DiscordAcceptanceReason,
+		receivedAt: number,
+	): Promise<void> {
+		const channelId = message.conversation.id;
+		const senderId = message.sender.id;
+		const userPrompt = this.formatDiscordUserMessage(message, acceptanceReason);
+		const pending: PendingDiscordReply = {
+			conversation: message.conversation,
+			replyToExternalMessageId: message.externalMessageId,
+			senderId,
+			channelId,
+			acceptanceReason,
+		};
+		this.recordInboundMessage(message);
+		this.pendingReplies.push(pending);
+		try {
+			await this.runtimeTurnQueue.enqueuePrompt(this.runtime, userPrompt, {
+				beforePrompt: () => this.subscribeToCurrentSession(),
+			});
+		} catch (error) {
+			this.removePendingReply(pending);
+			this.inboundReceivedAt.delete(message.externalMessageId);
+			throw error;
+		}
+		this.logBridge(`forwarded-to-pi ext=${message.externalMessageId} dt=${Date.now() - receivedAt}ms`);
 	}
 
 	async stop(): Promise<void> {
@@ -470,6 +507,81 @@ class AgentDiscordBridge implements ClankyAgentDiscordGatewayHandle {
 		return formatDiscordUserMessage(message, reason, history);
 	}
 
+	private async handleBridgeCommand(
+		message: DiscordInboundMessage,
+		command: DiscordBridgeCommand,
+		receivedAt: number,
+	): Promise<void> {
+		if (command.type === "direct") {
+			const prompt = command.prompt.trim();
+			if (prompt.length === 0) {
+				await this.sendBridgeCommandReply(message, discordBridgeCommandHelpText());
+				return;
+			}
+			await this.forwardToMainRuntime({ ...message, text: prompt }, "discord_command", receivedAt);
+			return;
+		}
+		if (command.type === "new") {
+			this.recordInboundMessage(message);
+			await this.runBridgeControlCommand(message, "new-session", async () => {
+				const result = await this.runtimeTurnQueue.enqueue(async () => {
+					this.clearPendingMainReplies();
+					const newSessionResult = await this.runtime.newSession();
+					this.subscribeToCurrentSession();
+					return newSessionResult;
+				});
+				if (result.cancelled) throw new Error("new session was cancelled");
+				return "Started a new main Clanky session.";
+			});
+			return;
+		}
+		if (command.type === "compact") {
+			this.recordInboundMessage(message);
+			await this.runBridgeControlCommand(message, "compact", async () => {
+				const result = await this.runtimeTurnQueue.enqueue(async () => {
+					this.clearPendingMainReplies();
+					return await this.runtime.session.compact(command.customInstructions);
+				});
+				return `Compacted main Clanky context. Tokens before: ${result.tokensBefore}.`;
+			});
+			return;
+		}
+		await this.sendBridgeCommandReply(message, discordBridgeCommandHelpText());
+	}
+
+	private async runBridgeControlCommand(
+		message: DiscordInboundMessage,
+		label: string,
+		task: () => Promise<string>,
+	): Promise<void> {
+		try {
+			const reply = await task();
+			await this.sendBridgeCommandReply(message, reply);
+			this.logBridge(`command-complete ext=${message.externalMessageId} type=${label}`);
+		} catch (error) {
+			const text = error instanceof Error ? error.message : String(error);
+			this.logBridge(`command-failed ext=${message.externalMessageId} type=${label} error=${text}`);
+			await this.sendBridgeCommandReply(message, `Command failed: ${text}`);
+		}
+	}
+
+	private async sendBridgeCommandReply(message: DiscordInboundMessage, text: string): Promise<void> {
+		const sent = await this.provider.sendMessage({
+			conversation: message.conversation,
+			replyToExternalMessageId: message.externalMessageId,
+			text,
+		});
+		this.rememberSelfMessageId(sent.externalMessageId);
+		this.recordAssistantMessage(message.conversation.id, sent.externalMessageId, text);
+		this.recordEngagement(message.conversation.id, message.sender.id);
+		this.inboundReceivedAt.delete(message.externalMessageId);
+	}
+
+	private clearPendingMainReplies(): void {
+		for (const pending of this.pendingReplies) this.inboundReceivedAt.delete(pending.replyToExternalMessageId);
+		this.pendingReplies.length = 0;
+	}
+
 	private recordInboundMessage(message: DiscordInboundMessage): void {
 		const author = message.sender.displayName ?? message.sender.username ?? message.sender.id;
 		this.recordConversationMessage(message.conversation.id, {
@@ -516,6 +628,59 @@ function parseDiscordCredentialKind(value: string | undefined): DiscordCredentia
 	if (value === undefined || value === "") return "bot-token";
 	if (value === "bot-token" || value === "user-token") return value;
 	throw new Error("CLANKY_DISCORD_CREDENTIAL_KIND must be bot-token or user-token");
+}
+
+export function parseDiscordBridgeCommand(text: string): DiscordBridgeCommand | undefined {
+	const trimmed = text.trim();
+	if (trimmed.length === 0) return undefined;
+	const lower = trimmed.toLowerCase();
+	if (lower === "/new" || lower === "/reset") return { type: "new" };
+	if (lower === "/compact" || lower === "/summarize" || lower === "/summarise") return { type: "compact" };
+	for (const standalone of ["/compact", "/summarize", "/summarise"]) {
+		if (lower.startsWith(`${standalone} `)) {
+			const customInstructions = trimmed.slice(standalone.length).trim();
+			return customInstructions.length === 0 ? { type: "compact" } : { type: "compact", customInstructions };
+		}
+	}
+	const prefix = DISCORD_BRIDGE_COMMAND_PREFIXES.find(
+		(candidate) => lower === candidate || lower.startsWith(`${candidate} `),
+	);
+	if (prefix === undefined) return undefined;
+	const rest = trimmed.slice(prefix.length).trim();
+	if (rest.length === 0) return { type: "help" };
+	const split = rest.match(/^(\S+)(?:\s+([\s\S]*))?$/u);
+	const command = split?.[1]?.toLowerCase() ?? "";
+	const args = split?.[2]?.trim() ?? "";
+
+	if (command === "help" || command === "commands") return { type: "help" };
+	if (command === "new" || command === "reset") return { type: "new" };
+	if (command === "compact" || command === "summarize" || command === "summarise") {
+		return args.length === 0 ? { type: "compact" } : { type: "compact", customInstructions: args };
+	}
+	if (
+		command === "direct" ||
+		command === "main" ||
+		command === "ask" ||
+		command === "talk" ||
+		command === "no-subagent" ||
+		command === "nosubagent" ||
+		command === "skip-subagent" ||
+		command === "skip_subagent"
+	) {
+		return { type: "direct", prompt: args };
+	}
+
+	return { type: "direct", prompt: rest };
+}
+
+function discordBridgeCommandHelpText(): string {
+	return [
+		"Discord Clanky commands:",
+		"- /clanky <message> or /clanky direct <message>: send this turn straight to main Clanky.",
+		"- /clanky new: start a new main Clanky session.",
+		"- /clanky compact [focus]: compact the main Clanky context.",
+		"Aliases: /clank, !clanky, !clank, /new, /compact.",
+	].join("\n");
 }
 
 export function shouldAcceptDiscordMessage(
@@ -622,6 +787,8 @@ function formatAcceptanceReasonForPrompt(reason: DiscordAcceptanceReason): strin
 			return "This profile is bound to the current Discord conversation.";
 		case "dm":
 			return "This is a Discord DM.";
+		case "discord_command":
+			return "The message used a Discord bridge command that bypasses the subagent and goes straight to main Clanky.";
 		case "platform_mention":
 			return "The message directly @mentioned you.";
 		case "reply_to_self":

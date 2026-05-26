@@ -8,7 +8,13 @@
  * extension factory captures it).
  */
 
-import { type ClankyPaths, DiscordSubagentStore } from "@clanky/core";
+import { appendFile } from "node:fs/promises";
+import {
+	type ClankyPaths,
+	type DelegateToMainWorkerToolInput,
+	DiscordSubagentStore,
+	type MainSessionContextToolInput,
+} from "@clanky/core";
 import type {
 	AgentSessionRuntime,
 	AuthStorage,
@@ -26,6 +32,8 @@ import {
 	resolveAgentDiscordVoiceConfig,
 	startAgentDiscordVoiceBridge,
 } from "./agentDiscordVoice.ts";
+import { readMainSessionContext } from "./mainSessionContext.ts";
+import { delegateToMainWorker } from "./mainWorkerDelegation.ts";
 import { type RuntimeTurnQueue, SerialRuntimeTurnQueue } from "./runtimeTurnQueue.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -173,6 +181,18 @@ export class ClankyDiscordGatewayController {
 		return this.handle !== undefined || this.voiceHandle !== undefined;
 	}
 
+	mainSessionContext(input: MainSessionContextToolInput): unknown {
+		return readMainSessionContext(this.runtime, input);
+	}
+
+	delegateToMainWorker(input: DelegateToMainWorkerToolInput): unknown {
+		return delegateToMainWorker(input, {
+			runtime: this.runtime,
+			runtimeTurnQueue: this.runtimeTurnQueue,
+			log: (line) => this.logBridge(line),
+		});
+	}
+
 	requestVoiceTextUtterance(text: string): void {
 		if (this.voiceHandle === undefined) throw new Error("Discord voice bridge is not active.");
 		this.voiceHandle.requestTextUtterance(text);
@@ -185,5 +205,12 @@ export class ClankyDiscordGatewayController {
 			voiceOnlyClientActive: this.voiceOnlyClient !== undefined,
 			voice: this.voiceHandle?.status(),
 		};
+	}
+
+	private logBridge(line: string): void {
+		if (this.bridgeLogPath === undefined) return;
+		appendFile(this.bridgeLogPath, `${new Date().toISOString()} ${line}\n`).catch((error: unknown) => {
+			console.error(`discord-controller log failed: ${error instanceof Error ? error.message : String(error)}`);
+		});
 	}
 }

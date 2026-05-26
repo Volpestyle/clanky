@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -32,6 +32,9 @@ try {
 	let disposedSessionCount = 0;
 	const cwd = join(tmpRoot, "work");
 	const agentDir = join(tmpRoot, "agent");
+	const bridgeLogPath = join(tmpRoot, "bridge.log");
+	await mkdir(cwd, { recursive: true });
+	await mkdir(agentDir, { recursive: true });
 	const provider = {
 		async sendMessage(input: {
 			conversation: DiscordInboundConversation;
@@ -59,8 +62,8 @@ try {
 				listeners.add(listener);
 				return () => listeners.delete(listener);
 			},
-			async sendUserMessage(prompt: string): Promise<void> {
-				prompts.push(prompt);
+			async prompt(promptText: string): Promise<void> {
+				prompts.push(promptText);
 				const text = replies.shift() ?? "fallback reply";
 				const event = {
 					type: "message_end",
@@ -78,8 +81,15 @@ try {
 		};
 		return {
 			session: fakeSession as unknown as CreateAgentSessionRuntimeResult["session"],
-			extensionsResult: { extensions: [], errors: [], runtime: {} } as unknown as CreateAgentSessionRuntimeResult["extensionsResult"],
-			services: { cwd: options.cwd, agentDir: options.agentDir } as unknown as CreateAgentSessionRuntimeResult["services"],
+			extensionsResult: {
+				extensions: [],
+				errors: [],
+				runtime: {},
+			} as unknown as CreateAgentSessionRuntimeResult["extensionsResult"],
+			services: {
+				cwd: options.cwd,
+				agentDir: options.agentDir,
+			} as unknown as CreateAgentSessionRuntimeResult["services"],
 			diagnostics: [],
 		};
 	};
@@ -101,6 +111,7 @@ try {
 		agentDir,
 		cwd,
 		sessionDir: paths.subagentSessionsDir,
+		bridgeLogPath,
 	});
 
 	let injectedWakeup = false;
@@ -135,6 +146,9 @@ try {
 	if (sentMessages.length !== 2) {
 		throw new Error(`coordinator smoke: [SKIP] should not send a Discord reply ${JSON.stringify(sentMessages)}`);
 	}
+	if (!prompts.every((prompt) => prompt.startsWith("/skill:clanky-discord-operator "))) {
+		throw new Error(`coordinator smoke: Discord operator skill was not activated ${JSON.stringify(prompts)}`);
+	}
 
 	await coordinator.stop();
 	if (disposedSessionCount !== 1) {
@@ -142,6 +156,12 @@ try {
 	}
 
 	console.log(JSON.stringify({ sent: sentMessages.length, prompts: prompts.length, runtimeCreateCount }));
+} catch (error) {
+	const bridgeLog = await readFile(join(tmpRoot, "bridge.log"), "utf8").catch(() => "");
+	if (bridgeLog.length > 0) {
+		throw new Error(`${error instanceof Error ? error.message : String(error)}\nbridge log:\n${bridgeLog}`);
+	}
+	throw error;
 } finally {
 	await coordinator?.stop();
 	store.close();

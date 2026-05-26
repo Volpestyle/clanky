@@ -84,7 +84,11 @@ function buildRuntimeFactory(opts: {
 }): CreateAgentSessionRuntimeFactory {
 	const { paths, basePersona, authStorage, discordProviderId, gatewayController } = opts;
 	const stores = createClankyStores(paths);
-	const handlers = createClankyHandlers(paths, stores, { authStorage });
+	const handlers = createClankyHandlers(paths, stores, {
+		authStorage,
+		mainSessionContext: async (input) => gatewayController.mainSessionContext(input),
+		delegateToMainWorker: async (input) => gatewayController.delegateToMainWorker(input),
+	});
 	const discordAuthFactory = createDiscordAuthExtensionFactory({
 		authStorage,
 		providerId: discordProviderId,

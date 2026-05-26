@@ -16,6 +16,7 @@
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import {
 	DEFAULT_CLANKY_DISCORD_PROVIDER_ID,
 	DEFAULT_OPENAI_PROVIDER_ID,
@@ -31,12 +32,14 @@ import {
 	evaluateDiscordMessageAcceptance,
 	formatDiscordUserMessage,
 	isDiscordSkipReplyText,
+	parseDiscordBridgeCommand,
 	resolveAgentDiscordCredentialConfig,
 	resolveAgentDiscordGatewayConfig,
 } from "../src/agentDiscordGateway.ts";
 import { DEFAULT_REALTIME_MODEL, resolveAgentDiscordVoiceConfig } from "../src/agentDiscordVoice.ts";
 import { createDiscordAuthExtensionFactory } from "../src/discordAuth.ts";
 import { ClankyDiscordGatewayController } from "../src/discordGatewayController.ts";
+import { delegateToMainWorker } from "../src/mainWorkerDelegation.ts";
 import { createOpenAiAuthExtensionFactory } from "../src/openAiAuth.ts";
 import { createClankyRuntime } from "../src/runClanky.ts";
 import { SerialRuntimeTurnQueue } from "../src/runtimeTurnQueue.ts";
@@ -45,9 +48,11 @@ import { createXAiAuthExtensionFactory } from "../src/xAiAuth.ts";
 async function main(): Promise<void> {
 	assertAgentDiscordGatewayConfig();
 	assertAgentDiscordGatewayAcceptance();
+	assertDiscordBridgeCommands();
 	assertAgentDiscordVoiceConfig();
 	assertStoredDiscordCredentialPath();
 	await assertRuntimeTurnQueue();
+	await assertMainWorkerDelegation();
 	await assertDiscordAuthExtensionCommands();
 	await assertOpenAiAuthExtensionCommands();
 	await assertXAiAuthExtensionCommands();
@@ -58,7 +63,7 @@ async function main(): Promise<void> {
 	await mkdir(cwd, { recursive: true });
 
 	try {
-		const { runtime, paths } = await createClankyRuntime({ homeDir, cwd });
+		const { runtime, paths, gatewayController } = await createClankyRuntime({ homeDir, cwd });
 
 		if (runtime.session === undefined) {
 			throw new Error("smoke: runtime.session was undefined");
@@ -73,6 +78,17 @@ async function main(): Promise<void> {
 		const systemPrompt = runtime.services.resourceLoader.getSystemPrompt() ?? "";
 		if (!systemPrompt.includes("Clanky Self")) {
 			throw new Error(`smoke: persona not injected into system prompt. Got: ${systemPrompt.slice(0, 120)}...`);
+		}
+		runtime.session.sessionManager.appendMessage({
+			role: "user",
+			content: "main session context smoke",
+			timestamp: Date.now(),
+		});
+		const mainContext = gatewayController.mainSessionContext({ limit: 4 });
+		if (!mainSessionContextHasText(mainContext, "main session context smoke")) {
+			throw new Error(
+				`smoke: main_session_context did not expose current main session: ${JSON.stringify(mainContext)}`,
+			);
 		}
 
 		const skills = runtime.services.resourceLoader.getSkills().skills;
@@ -104,6 +120,17 @@ async function main(): Promise<void> {
 	} finally {
 		await rm(tmpRoot, { recursive: true, force: true });
 	}
+}
+
+function mainSessionContextHasText(value: unknown, expected: string): boolean {
+	if (typeof value !== "object" || value === null) return false;
+	const entries = (value as Record<string, unknown>).entries;
+	if (!Array.isArray(entries)) return false;
+	return entries.some((entry) => {
+		if (typeof entry !== "object" || entry === null) return false;
+		const text = (entry as Record<string, unknown>).text;
+		return typeof text === "string" && text.includes(expected);
+	});
 }
 
 function assertAgentDiscordVoiceConfig(): void {
@@ -340,6 +367,28 @@ function assertAgentDiscordGatewayAcceptance(): void {
 	}
 }
 
+function assertDiscordBridgeCommands(): void {
+	const direct = parseDiscordBridgeCommand("/clanky direct what is the current status?");
+	if (direct?.type !== "direct" || direct.prompt !== "what is the current status?") {
+		throw new Error(`smoke: direct Discord command parsed incorrectly: ${JSON.stringify(direct)}`);
+	}
+	const shorthandDirect = parseDiscordBridgeCommand("/clanky what is the current status?");
+	if (shorthandDirect?.type !== "direct" || shorthandDirect.prompt !== "what is the current status?") {
+		throw new Error(`smoke: shorthand Discord command parsed incorrectly: ${JSON.stringify(shorthandDirect)}`);
+	}
+	const newSession = parseDiscordBridgeCommand("/new");
+	if (newSession?.type !== "new") {
+		throw new Error(`smoke: /new Discord command parsed incorrectly: ${JSON.stringify(newSession)}`);
+	}
+	const compact = parseDiscordBridgeCommand("/clanky compact preserve Discord handoff details");
+	if (compact?.type !== "compact" || compact.customInstructions !== "preserve Discord handoff details") {
+		throw new Error(`smoke: compact Discord command parsed incorrectly: ${JSON.stringify(compact)}`);
+	}
+	if (parseDiscordBridgeCommand("ordinary Discord chat") !== undefined) {
+		throw new Error("smoke: ordinary Discord chat should not parse as a bridge command");
+	}
+}
+
 function assertStoredDiscordCredentialPath(): void {
 	const stored = AuthStorage.inMemory();
 	saveStoredDiscordCredential(stored, {
@@ -418,6 +467,86 @@ async function assertRuntimeTurnQueue(): Promise<void> {
 	const afterFailure = await queue.enqueue(async () => "after-failure");
 	if (afterFailure !== "after-failure") {
 		throw new Error("smoke: runtime turn queue did not recover after a failed task");
+	}
+
+	const promptCalls: string[] = [];
+	const promptRuntime = {
+		session: {
+			isStreaming: true,
+			sessionId: "auto-prompt-smoke",
+			async prompt(message: string, options?: { source?: string; streamingBehavior?: string }): Promise<void> {
+				promptCalls.push(`${options?.source}:${options?.streamingBehavior}:${message}`);
+			},
+		},
+	};
+	const promptResult = await queue.enqueuePrompt(promptRuntime as never, "queued main work");
+	if (promptResult.mode !== "followUp" || promptResult.sessionId !== "auto-prompt-smoke") {
+		throw new Error(`smoke: runtime turn queue returned wrong prompt result ${JSON.stringify(promptResult)}`);
+	}
+	if (promptCalls.join("\n") !== "extension:followUp:queued main work") {
+		throw new Error(`smoke: runtime turn queue did not auto-prompt safely ${JSON.stringify(promptCalls)}`);
+	}
+}
+
+async function assertMainWorkerDelegation(): Promise<void> {
+	const calls: string[] = [];
+	const session = {
+		isStreaming: true,
+		sessionId: "main-delegate-smoke",
+		async prompt(message: string, options?: { source?: string; streamingBehavior?: string }): Promise<void> {
+			calls.push(`prompt:${options?.source}:${options?.streamingBehavior}:${message}`);
+		},
+	};
+	const result = delegateToMainWorker(
+		{
+			title: "Long Discord work",
+			prompt: "Handle this task from Discord when the main worker is free.",
+			reason: "longer than a Discord quick reply",
+		},
+		{
+			runtime: { session } as never,
+			runtimeTurnQueue: new SerialRuntimeTurnQueue(),
+			now: () => new Date("2026-01-01T00:00:00.000Z"),
+		},
+	);
+	if (
+		!result.delegated ||
+		result.mode !== "followUp" ||
+		!result.autoPrompt ||
+		result.sessionId !== "main-delegate-smoke"
+	) {
+		throw new Error(`smoke: streaming main delegation returned wrong result ${JSON.stringify(result)}`);
+	}
+	await delay(0);
+	if (
+		!calls.some(
+			(call) =>
+				call.startsWith("prompt:extension:followUp:") &&
+				call.includes("Long Discord work") &&
+				call.includes("Handle this task from Discord"),
+		)
+	) {
+		throw new Error(`smoke: streaming main delegation did not auto-prompt ${JSON.stringify(calls)}`);
+	}
+
+	session.isStreaming = false;
+	const idleResult = delegateToMainWorker(
+		{
+			title: "Idle main work",
+			prompt: "Start this now.",
+		},
+		{
+			runtime: { session } as never,
+			runtimeTurnQueue: new SerialRuntimeTurnQueue(),
+			now: () => new Date("2026-01-01T00:01:00.000Z"),
+		},
+	);
+	if (!idleResult.delegated || idleResult.mode !== "start" || !idleResult.autoPrompt) {
+		throw new Error(`smoke: idle main delegation returned wrong result ${JSON.stringify(idleResult)}`);
+	}
+	await delay(0);
+	if (!calls.some((call) => call.startsWith("prompt:extension:followUp:") && call.includes("Idle main work"))) {
+		throw new Error(`smoke: idle main delegation did not auto-prompt main turn ${JSON.stringify(calls)}`);
 	}
 }
 

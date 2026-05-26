@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import {
 	type AgentToolResult,
 	type BeforeProviderRequestEvent,
@@ -5,6 +6,8 @@ import {
 	type ExtensionCommandContext,
 	type ExtensionContext,
 	type ExtensionFactory,
+	parseSessionEntries,
+	type SessionMessageEntry,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
@@ -83,6 +86,23 @@ const externalMcpCallSchema = Type.Object({
 	server: Type.String(),
 	tool: Type.String(),
 	arguments: Type.Optional(Type.Unknown()),
+});
+
+const mainSessionContextSchema = Type.Object({
+	limit: Type.Optional(Type.Number()),
+	maxChars: Type.Optional(Type.Number()),
+	max_chars: Type.Optional(Type.Number()),
+	includeToolResults: Type.Optional(Type.Boolean()),
+	include_tool_results: Type.Optional(Type.Boolean()),
+	includeHidden: Type.Optional(Type.Boolean()),
+	include_hidden: Type.Optional(Type.Boolean()),
+});
+
+const delegateToMainWorkerSchema = Type.Object({
+	title: Type.String(),
+	prompt: Type.String(),
+	reason: Type.Optional(Type.String()),
+	source: Type.Optional(Type.String()),
 });
 
 const taskCreateSchema = Type.Object({
@@ -325,6 +345,8 @@ export type ScheduleCronToolInput = Static<typeof scheduleCronSchema>;
 export type LinearCreateIssueToolInput = Static<typeof linearCreateIssueSchema>;
 export type LinearLinkToolInput = Static<typeof linearLinkSchema>;
 export type ExternalMcpCallToolInput = Static<typeof externalMcpCallSchema>;
+export type MainSessionContextToolInput = Static<typeof mainSessionContextSchema>;
+export type DelegateToMainWorkerToolInput = Static<typeof delegateToMainWorkerSchema>;
 export type TaskCreateToolInput = Static<typeof taskCreateSchema>;
 export type MemoryRememberToolInput = Static<typeof memoryRememberSchema>;
 export type MemorySearchToolInput = Static<typeof memorySearchSchema>;
@@ -350,6 +372,8 @@ export interface ClankyAgentToolHandlers {
 	linearCreateIssue?: (input: LinearCreateIssueInput) => Promise<unknown>;
 	linearLink?: (input: CreateLinearLinkInput) => Promise<unknown>;
 	externalMcpCall?: (input: ExternalMcpCallToolInput) => Promise<unknown>;
+	mainSessionContext?: (input: MainSessionContextToolInput) => Promise<unknown>;
+	delegateToMainWorker?: (input: DelegateToMainWorkerToolInput) => Promise<unknown>;
 	taskCreate?: (input: TaskCreateToolInput) => Promise<unknown>;
 	beforeProviderRequest?: (input: ClankyBeforeProviderRequestInput) => Promise<unknown | undefined>;
 	indexMessage?: (input: SessionIndexMessageInput) => Promise<void>;
@@ -387,6 +411,10 @@ const MEDIA_OPERATOR_SKILL_NAME = "clanky-media-operator";
 const SUBAGENT_PANEL_WIDGET_KEY = "clanky-subagents";
 const SUBAGENT_PANEL_STATUS_KEY = "clanky-subagents";
 const SUBAGENT_PANEL_REFRESH_MS = 2000;
+const SUBAGENT_PANEL_MAX_ROWS = 7;
+const SUBAGENT_BROWSER_REFRESH_MS = 2000;
+const SUBAGENT_BROWSER_MAX_ROWS = 9;
+const SUBAGENT_TRANSCRIPT_MAX_ROWS = 20;
 
 export function createClankyExtensionFactories(handlers: ClankyAgentToolHandlers): ExtensionFactory[] {
 	const indexMessage = handlers.indexMessage;
@@ -470,8 +498,13 @@ export function createClankyExtensionFactories(handlers: ClankyAgentToolHandlers
 }
 
 class SubagentPanelController {
-	private visible = false;
+	private visible = true;
+	private focused = false;
+	private summaries: ClankySubagentSummary[] = [];
+	private selectedIndex = 0;
+	private listScroll = 0;
 	private timer: ReturnType<typeof setInterval> | undefined;
+	private unsubscribeInput: (() => void) | undefined;
 	private refreshRunning = false;
 	private readonly listSubagents: () => Promise<ClankySubagentSummary[]>;
 
@@ -492,6 +525,27 @@ class SubagentPanelController {
 
 	async handleCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
 		const command = args.trim().toLowerCase();
+		if (command === "" || command === "focus" || command === "list") {
+			this.visible = true;
+			this.focused = true;
+			this.start(ctx);
+			await this.refresh(ctx);
+			return;
+		}
+		if (command === "chat" || command === "enter") {
+			this.visible = true;
+			this.start(ctx);
+			await this.refresh(ctx);
+			await this.openSelectedTranscript(ctx);
+			return;
+		}
+		if (command === "modal" || command === "open" || command === "browse") {
+			this.visible = true;
+			this.start(ctx);
+			await this.refresh(ctx);
+			await this.openBrowser(ctx);
+			return;
+		}
 		if (command === "json") {
 			ctx.ui.notify(formatCommandResult("Subagents", await this.listSubagents()));
 			return;
@@ -502,21 +556,80 @@ class SubagentPanelController {
 		}
 		if (command === "hide" || command === "off") {
 			this.visible = false;
+			this.focused = false;
 			ctx.ui.setWidget(SUBAGENT_PANEL_WIDGET_KEY, undefined);
 			await this.refresh(ctx);
 			return;
 		}
-		if (command === "" || command === "show" || command === "on" || command === "toggle") {
-			this.visible = command === "toggle" ? !this.visible : command === "" ? !this.visible : true;
+		if (command === "panel" || command === "show" || command === "on" || command === "toggle") {
+			this.visible = command === "toggle" ? !this.visible : true;
+			this.focused = false;
 			this.start(ctx);
 			await this.refresh(ctx);
 			return;
 		}
-		ctx.ui.notify("Subagents\nUsage: /subagents [show|hide|toggle|status|json]", "warning");
+		ctx.ui.notify("Subagents\nUsage: /subagents [focus|chat|modal|panel|hide|toggle|status|json]", "warning");
+	}
+
+	private async openBrowser(ctx: ExtensionCommandContext): Promise<void> {
+		const initialSummaries = await this.listSubagents();
+		await ctx.ui.custom<void>(
+			(tui, theme, _keybindings, done) =>
+				new SubagentBrowserComponent({
+					initialSummaries,
+					listSubagents: this.listSubagents,
+					theme,
+					done,
+					requestRender: () => tui.requestRender(),
+				}),
+			{
+				overlay: true,
+				overlayOptions: {
+					width: "88%",
+					minWidth: 72,
+					maxHeight: "85%",
+					anchor: "center",
+					margin: 1,
+				},
+			},
+		);
+	}
+
+	private async openSelectedTranscript(ctx: ExtensionContext): Promise<void> {
+		const selected = this.selectedSummary();
+		if (selected === undefined) return;
+		await this.openTranscript(ctx, selected.id);
+	}
+
+	private async openTranscript(ctx: ExtensionContext, selectedId: string): Promise<void> {
+		await ctx.ui.custom<void>(
+			(tui, theme, _keybindings, done) =>
+				new SubagentBrowserComponent({
+					initialSummaries: this.summaries,
+					listSubagents: this.listSubagents,
+					theme,
+					done,
+					requestRender: () => tui.requestRender(),
+					initialSelectedId: selectedId,
+					initialMode: "detail",
+					detailBackBehavior: "close",
+				}),
+			{
+				overlay: true,
+				overlayOptions: {
+					width: "88%",
+					minWidth: 72,
+					maxHeight: "85%",
+					anchor: "center",
+					margin: 1,
+				},
+			},
+		);
 	}
 
 	private start(ctx: ExtensionContext): void {
 		if (this.timer !== undefined) return;
+		this.unsubscribeInput = ctx.ui.onTerminalInput((data) => this.handleTerminalInput(data, ctx));
 		this.timer = setInterval(() => {
 			void this.refresh(ctx);
 		}, SUBAGENT_PANEL_REFRESH_MS);
@@ -528,21 +641,53 @@ class SubagentPanelController {
 			clearInterval(this.timer);
 			this.timer = undefined;
 		}
+		this.unsubscribeInput?.();
+		this.unsubscribeInput = undefined;
 		ctx.ui.setWidget(SUBAGENT_PANEL_WIDGET_KEY, undefined);
 		ctx.ui.setStatus(SUBAGENT_PANEL_STATUS_KEY, undefined);
+	}
+
+	private handleTerminalInput(data: string, ctx: ExtensionContext): { consume?: boolean; data?: string } | undefined {
+		if (!this.focused) return undefined;
+		if (isEscapeKey(data) || data === "q") {
+			this.focused = false;
+			this.renderPanel(ctx);
+			return { consume: true };
+		}
+		if (data === "r") {
+			void this.refresh(ctx);
+			return { consume: true };
+		}
+		if (isUpKey(data) || data === "k") {
+			this.selectedIndex = Math.max(0, this.selectedIndex - 1);
+			this.ensureSelectedVisible(SUBAGENT_PANEL_MAX_ROWS);
+			this.renderPanel(ctx);
+			return { consume: true };
+		}
+		if (isDownKey(data) || data === "j") {
+			this.selectedIndex = Math.min(Math.max(0, this.summaries.length - 1), this.selectedIndex + 1);
+			this.ensureSelectedVisible(SUBAGENT_PANEL_MAX_ROWS);
+			this.renderPanel(ctx);
+			return { consume: true };
+		}
+		if (isEnterKey(data)) {
+			const selected = this.selectedSummary();
+			if (selected !== undefined) void this.openTranscript(ctx, selected.id);
+			return { consume: true };
+		}
+		return { consume: true };
 	}
 
 	private async refresh(ctx: ExtensionContext): Promise<void> {
 		if (this.refreshRunning) return;
 		this.refreshRunning = true;
 		try {
-			const summaries = await this.listSubagents();
-			ctx.ui.setStatus(SUBAGENT_PANEL_STATUS_KEY, formatSubagentFooterStatus(summaries, ctx));
-			if (this.visible) {
-				ctx.ui.setWidget(SUBAGENT_PANEL_WIDGET_KEY, formatSubagentPanelLines(summaries, ctx, { includeEmpty: true }));
-			} else {
-				ctx.ui.setWidget(SUBAGENT_PANEL_WIDGET_KEY, undefined);
-			}
+			const selectedId = this.selectedSummary()?.id;
+			this.summaries = [...(await this.listSubagents())].sort(compareSubagentsForPanel);
+			this.selectedIndex = resolveSelectedIndex(this.summaries, selectedId, this.selectedIndex);
+			this.ensureSelectedVisible(SUBAGENT_PANEL_MAX_ROWS);
+			ctx.ui.setStatus(SUBAGENT_PANEL_STATUS_KEY, formatSubagentFooterStatus(this.summaries, ctx));
+			this.renderPanel(ctx);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			ctx.ui.setStatus(SUBAGENT_PANEL_STATUS_KEY, ctx.ui.theme.fg("error", "subagents error"));
@@ -555,6 +700,317 @@ class SubagentPanelController {
 		} finally {
 			this.refreshRunning = false;
 		}
+	}
+
+	private renderPanel(ctx: ExtensionContext): void {
+		if (!this.visible) {
+			ctx.ui.setWidget(SUBAGENT_PANEL_WIDGET_KEY, undefined);
+			return;
+		}
+		const lines = formatSubagentPanelLines(this.summaries, ctx, {
+			includeEmpty: this.focused,
+			focused: this.focused,
+			selectedIndex: this.selectedIndex,
+			scroll: this.listScroll,
+		});
+		ctx.ui.setWidget(SUBAGENT_PANEL_WIDGET_KEY, lines.length === 0 ? undefined : lines);
+	}
+
+	private selectedSummary(): ClankySubagentSummary | undefined {
+		return this.summaries[this.selectedIndex];
+	}
+
+	private ensureSelectedVisible(maxRows: number): void {
+		if (this.summaries.length === 0) {
+			this.selectedIndex = 0;
+			this.listScroll = 0;
+			return;
+		}
+		this.selectedIndex = Math.min(Math.max(0, this.selectedIndex), this.summaries.length - 1);
+		const maxScroll = Math.max(0, this.summaries.length - maxRows);
+		if (this.selectedIndex < this.listScroll) {
+			this.listScroll = this.selectedIndex;
+		} else if (this.selectedIndex >= this.listScroll + maxRows) {
+			this.listScroll = this.selectedIndex - maxRows + 1;
+		}
+		this.listScroll = Math.min(Math.max(0, this.listScroll), maxScroll);
+	}
+}
+
+interface SubagentTranscriptMessage {
+	role: "user" | "assistant" | "tool" | "system";
+	text: string;
+	timestamp?: string;
+}
+
+interface SubagentBrowserOptions {
+	initialSummaries: ClankySubagentSummary[];
+	listSubagents: () => Promise<ClankySubagentSummary[]>;
+	theme: ExtensionContext["ui"]["theme"];
+	done: (result: undefined) => void;
+	requestRender: () => void;
+	initialSelectedId?: string;
+	initialMode?: "list" | "detail";
+	detailBackBehavior?: "list" | "close";
+}
+
+class SubagentBrowserComponent {
+	private summaries: ClankySubagentSummary[];
+	private selectedIndex = 0;
+	private listScroll = 0;
+	private mode: "list" | "detail" = "list";
+	private detailSubagentId: string | undefined;
+	private detailScroll = 0;
+	private transcript: SubagentTranscriptMessage[] = [];
+	private detailError: string | undefined;
+	private refreshRunning = false;
+	private readonly listSubagents: () => Promise<ClankySubagentSummary[]>;
+	private readonly theme: ExtensionContext["ui"]["theme"];
+	private readonly done: (result: undefined) => void;
+	private readonly requestRender: () => void;
+	private readonly timer: ReturnType<typeof setInterval>;
+	private readonly detailBackBehavior: "list" | "close";
+
+	constructor(options: SubagentBrowserOptions) {
+		this.summaries = [...options.initialSummaries].sort(compareSubagentsForPanel);
+		this.selectedIndex = resolveSelectedIndex(this.summaries, options.initialSelectedId, 0);
+		this.listSubagents = options.listSubagents;
+		this.theme = options.theme;
+		this.done = options.done;
+		this.requestRender = options.requestRender;
+		this.mode = options.initialMode ?? "list";
+		this.detailBackBehavior = options.detailBackBehavior ?? "list";
+		if (this.mode === "detail") {
+			this.detailSubagentId = this.selectedSummary()?.id;
+			this.detailScroll = Number.MAX_SAFE_INTEGER;
+		}
+		this.ensureSelectedVisible();
+		this.timer = setInterval(() => {
+			void this.refresh();
+		}, SUBAGENT_BROWSER_REFRESH_MS);
+		this.timer.unref?.();
+		void this.refresh();
+	}
+
+	dispose(): void {
+		clearInterval(this.timer);
+	}
+
+	invalidate(): void {
+		return;
+	}
+
+	handleInput(data: string): void {
+		if (isEscapeKey(data) || data === "q") {
+			if (this.mode === "detail") {
+				if (this.detailBackBehavior === "close") {
+					this.done(undefined);
+					return;
+				}
+				this.mode = "list";
+				this.detailError = undefined;
+				this.requestRender();
+				return;
+			}
+			this.done(undefined);
+			return;
+		}
+		if (data === "r") {
+			void this.refresh({ forceTranscript: true });
+			return;
+		}
+		if (this.mode === "detail") {
+			this.handleDetailInput(data);
+			return;
+		}
+		this.handleListInput(data);
+	}
+
+	render(width: number): string[] {
+		return this.mode === "detail" ? this.renderDetail(width) : this.renderList(width);
+	}
+
+	private handleListInput(data: string): void {
+		if (isUpKey(data) || data === "k") {
+			this.selectedIndex = Math.max(0, this.selectedIndex - 1);
+			this.ensureSelectedVisible();
+			this.requestRender();
+			return;
+		}
+		if (isDownKey(data) || data === "j") {
+			this.selectedIndex = Math.min(Math.max(0, this.summaries.length - 1), this.selectedIndex + 1);
+			this.ensureSelectedVisible();
+			this.requestRender();
+			return;
+		}
+		if (isEnterKey(data)) {
+			void this.openSelected();
+		}
+	}
+
+	private handleDetailInput(data: string): void {
+		if (isUpKey(data) || data === "k") {
+			this.detailScroll = Math.max(0, this.detailScroll - 1);
+			this.requestRender();
+			return;
+		}
+		if (isDownKey(data) || data === "j") {
+			this.detailScroll += 1;
+			this.requestRender();
+			return;
+		}
+		if (isPageUpKey(data)) {
+			this.detailScroll = Math.max(0, this.detailScroll - 8);
+			this.requestRender();
+			return;
+		}
+		if (isPageDownKey(data)) {
+			this.detailScroll += 8;
+			this.requestRender();
+			return;
+		}
+		if (data === "g") {
+			this.detailScroll = 0;
+			this.requestRender();
+			return;
+		}
+		if (data === "G") {
+			this.detailScroll = Number.MAX_SAFE_INTEGER;
+			this.requestRender();
+			return;
+		}
+		if (isBackspaceKey(data)) {
+			if (this.detailBackBehavior === "close") {
+				this.done(undefined);
+				return;
+			}
+			this.mode = "list";
+			this.requestRender();
+		}
+	}
+
+	private async refresh(options: { forceTranscript?: boolean } = {}): Promise<void> {
+		if (this.refreshRunning) return;
+		this.refreshRunning = true;
+		try {
+			const selectedId = this.selectedSummary()?.id;
+			this.summaries = [...(await this.listSubagents())].sort(compareSubagentsForPanel);
+			this.selectedIndex = resolveSelectedIndex(this.summaries, selectedId, this.selectedIndex);
+			this.ensureSelectedVisible();
+			if (this.mode === "detail" && (options.forceTranscript === true || this.detailSubagentId !== undefined)) {
+				await this.loadSelectedTranscript();
+			}
+		} finally {
+			this.refreshRunning = false;
+			this.requestRender();
+		}
+	}
+
+	private async openSelected(): Promise<void> {
+		const selected = this.selectedSummary();
+		if (selected === undefined) return;
+		this.mode = "detail";
+		this.detailSubagentId = selected.id;
+		this.detailScroll = Number.MAX_SAFE_INTEGER;
+		await this.loadSelectedTranscript();
+		this.requestRender();
+	}
+
+	private async loadSelectedTranscript(): Promise<void> {
+		const selected = this.selectedSummary();
+		if (selected === undefined || selected.sessionFile === undefined) {
+			this.transcript = [];
+			this.detailError = "No session file recorded yet.";
+			return;
+		}
+		try {
+			this.transcript = await loadSubagentTranscript(selected.sessionFile);
+			this.detailError = undefined;
+		} catch (error) {
+			this.transcript = [];
+			this.detailError = error instanceof Error ? error.message : String(error);
+		}
+	}
+
+	private selectedSummary(): ClankySubagentSummary | undefined {
+		if (this.mode === "detail" && this.detailSubagentId !== undefined) {
+			return (
+				this.summaries.find((summary) => summary.id === this.detailSubagentId) ?? this.summaries[this.selectedIndex]
+			);
+		}
+		return this.summaries[this.selectedIndex];
+	}
+
+	private ensureSelectedVisible(): void {
+		if (this.summaries.length === 0) {
+			this.selectedIndex = 0;
+			this.listScroll = 0;
+			return;
+		}
+		this.selectedIndex = Math.min(Math.max(0, this.selectedIndex), this.summaries.length - 1);
+		const maxScroll = Math.max(0, this.summaries.length - SUBAGENT_BROWSER_MAX_ROWS);
+		if (this.selectedIndex < this.listScroll) {
+			this.listScroll = this.selectedIndex;
+		} else if (this.selectedIndex >= this.listScroll + SUBAGENT_BROWSER_MAX_ROWS) {
+			this.listScroll = this.selectedIndex - SUBAGENT_BROWSER_MAX_ROWS + 1;
+		}
+		this.listScroll = Math.min(Math.max(0, this.listScroll), maxScroll);
+	}
+
+	private renderList(width: number): string[] {
+		const contentWidth = Math.max(20, width - 4);
+		const counts = subagentCounts(this.summaries);
+		this.ensureSelectedVisible();
+		const lines = [
+			`Subagents  ${counts.running} running  ${counts.queued} queued  ${counts.failed} failed`,
+			"Up/Down select  Enter open chat  r refresh  Esc/q close",
+			"",
+		];
+		if (this.summaries.length === 0) {
+			lines.push("No Discord subagents yet.");
+		} else {
+			lines.push("  state     queue  scope / active work");
+			const visibleSummaries = this.summaries.slice(this.listScroll, this.listScroll + SUBAGENT_BROWSER_MAX_ROWS);
+			for (const [visibleIndex, summary] of visibleSummaries.entries()) {
+				const index = this.listScroll + visibleIndex;
+				const selected = index === this.selectedIndex;
+				const row = formatSubagentBrowserRow(summary, contentWidth - 2);
+				lines.push(`${selected ? ">" : " "} ${row}`);
+			}
+			if (this.summaries.length > SUBAGENT_BROWSER_MAX_ROWS) {
+				const end = Math.min(this.summaries.length, this.listScroll + SUBAGENT_BROWSER_MAX_ROWS);
+				lines.push(`  showing ${this.listScroll + 1}-${end} of ${this.summaries.length}`);
+			}
+		}
+		return renderPlainBox(lines, width, this.theme);
+	}
+
+	private renderDetail(width: number): string[] {
+		const selected = this.selectedSummary();
+		const contentWidth = Math.max(20, width - 4);
+		const title = selected === undefined ? "Subagent" : `Subagent ${selected.scopeName ?? selected.scopeId}`;
+		const lines = [truncatePlain(title, contentWidth), "Up/Down scroll  PgUp/PgDn page  r refresh  Esc/q back", ""];
+		if (selected !== undefined) {
+			lines.push(formatSubagentBrowserRow(selected, contentWidth));
+			lines.push("");
+		}
+		if (this.detailError !== undefined) {
+			lines.push(`No transcript: ${this.detailError}`);
+		} else if (this.transcript.length === 0) {
+			lines.push("No transcript messages yet.");
+		} else {
+			const rendered = renderTranscriptRows(this.transcript, contentWidth);
+			const maxScroll = Math.max(0, rendered.length - SUBAGENT_TRANSCRIPT_MAX_ROWS);
+			this.detailScroll = Math.min(Math.max(0, this.detailScroll), maxScroll);
+			lines.push(...rendered.slice(this.detailScroll, this.detailScroll + SUBAGENT_TRANSCRIPT_MAX_ROWS));
+			if (rendered.length > SUBAGENT_TRANSCRIPT_MAX_ROWS) {
+				lines.push("");
+				lines.push(
+					`${this.detailScroll + 1}-${Math.min(rendered.length, this.detailScroll + SUBAGENT_TRANSCRIPT_MAX_ROWS)} of ${rendered.length}`,
+				);
+			}
+		}
+		return renderPlainBox(lines, width, this.theme);
 	}
 }
 
@@ -683,11 +1139,14 @@ function formatSubagentFooterStatus(
 function formatSubagentPanelLines(
 	summaries: readonly ClankySubagentSummary[],
 	ctx: ExtensionContext,
-	options: { includeEmpty?: boolean } = {},
+	options: { includeEmpty?: boolean; focused?: boolean; selectedIndex?: number; scroll?: number } = {},
 ): string[] {
 	if (summaries.length === 0) {
 		return options.includeEmpty === true
-			? [ctx.ui.theme.bold("Subagents"), ctx.ui.theme.fg("dim", "No Discord subagents yet.")]
+			? [
+					ctx.ui.theme.bold(options.focused === true ? "Subagents focused" : "Subagents"),
+					ctx.ui.theme.fg("dim", "No Discord subagents yet. Esc exits focus."),
+				]
 			: [];
 	}
 	const counts = subagentCounts(summaries);
@@ -701,25 +1160,50 @@ function formatSubagentPanelLines(
 		]
 			.filter((part): part is string => part !== undefined)
 			.join("  "),
+		ctx.ui.theme.fg(
+			"dim",
+			options.focused === true
+				? "Up/Down select  Enter chat  Esc done"
+				: "/subagents to focus  /subagents chat to open selected",
+		),
 		ctx.ui.theme.fg("dim", "state     queue  scope / active work"),
 	];
-	for (const subagent of ordered.slice(0, 7)) {
-		lines.push(formatSubagentPanelRow(subagent, ctx));
+	const scroll = Math.min(Math.max(0, options.scroll ?? 0), Math.max(0, ordered.length - SUBAGENT_PANEL_MAX_ROWS));
+	const selectedIndex = options.selectedIndex ?? -1;
+	const visible = ordered.slice(scroll, scroll + SUBAGENT_PANEL_MAX_ROWS);
+	for (const [visibleIndex, subagent] of visible.entries()) {
+		lines.push(
+			formatSubagentPanelRow(subagent, ctx, scroll + visibleIndex === selectedIndex, options.focused === true),
+		);
 	}
-	if (ordered.length > 7) {
-		lines.push(ctx.ui.theme.fg("dim", `... ${ordered.length - 7} more`));
+	if (ordered.length > SUBAGENT_PANEL_MAX_ROWS) {
+		const end = Math.min(ordered.length, scroll + SUBAGENT_PANEL_MAX_ROWS);
+		lines.push(ctx.ui.theme.fg("dim", `showing ${scroll + 1}-${end} of ${ordered.length}`));
 	}
 	return lines;
 }
 
-function formatSubagentPanelRow(subagent: ClankySubagentSummary, ctx: ExtensionContext): string {
-	const marker = subagent.state === "running" ? ">" : " ";
+function formatSubagentPanelRow(
+	subagent: ClankySubagentSummary,
+	ctx: ExtensionContext,
+	selected = false,
+	focused = false,
+): string {
+	const marker = selected && focused ? ">" : subagent.state === "running" ? "*" : " ";
 	const state = formatSubagentState(subagent.state, ctx);
 	const queue = subagent.queueDepth > 0 ? String(subagent.queueDepth).padStart(5) : ctx.ui.theme.fg("dim", "    -");
 	const scope = truncatePlain(subagent.scopeName ?? subagent.scopeId, 28);
 	const summary = truncatePlain(subagent.activeSummary ?? "idle", 44);
 	const age = ctx.ui.theme.fg("dim", formatRelativeAge(subagent.updatedAt));
 	return `${marker} ${state} ${queue}  ${scope} - ${summary} ${age}`;
+}
+
+function formatSubagentBrowserRow(subagent: ClankySubagentSummary, width: number): string {
+	const queue = subagent.queueDepth > 0 ? String(subagent.queueDepth).padStart(5) : "    -";
+	const scope = truncatePlain(subagent.scopeName ?? subagent.scopeId, 24);
+	const summary = truncatePlain(subagent.activeSummary ?? "idle", Math.max(12, width - 45));
+	const line = `${subagent.state.padEnd(8)} ${queue}  ${scope.padEnd(24)}  ${summary}  ${formatRelativeAge(subagent.updatedAt)}`;
+	return truncatePlain(line, width);
 }
 
 function formatSubagentState(state: ClankySubagentState, ctx: ExtensionContext): string {
@@ -778,6 +1262,189 @@ function truncatePlain(value: string, maxLength: number): string {
 	if (normalized.length <= maxLength) return normalized;
 	if (maxLength <= 3) return normalized.slice(0, maxLength);
 	return `${normalized.slice(0, maxLength - 3)}...`;
+}
+
+function renderPlainBox(lines: readonly string[], width: number, theme: ExtensionContext["ui"]["theme"]): string[] {
+	const boxWidth = Math.max(24, width);
+	const contentWidth = Math.max(1, boxWidth - 4);
+	const top = theme.fg("borderMuted", `+${"-".repeat(boxWidth - 2)}+`);
+	const bottom = theme.fg("borderMuted", `+${"-".repeat(boxWidth - 2)}+`);
+	const body = lines.map((line, index) => {
+		const plain = truncatePlain(line, contentWidth);
+		const padded = `${plain}${" ".repeat(Math.max(0, contentWidth - plain.length))}`;
+		const rendered = `| ${padded} |`;
+		if (index === 0) return theme.bold(rendered);
+		if (index === 1) return theme.fg("dim", rendered);
+		return rendered;
+	});
+	return [top, ...body, bottom];
+}
+
+function resolveSelectedIndex(
+	summaries: readonly ClankySubagentSummary[],
+	selectedId: string | undefined,
+	previousIndex: number,
+): number {
+	if (summaries.length === 0) return 0;
+	if (selectedId !== undefined) {
+		const index = summaries.findIndex((summary) => summary.id === selectedId);
+		if (index >= 0) return index;
+	}
+	return Math.min(Math.max(0, previousIndex), summaries.length - 1);
+}
+
+async function loadSubagentTranscript(sessionFile: string): Promise<SubagentTranscriptMessage[]> {
+	const content = await readFile(sessionFile, "utf8");
+	const entries = parseSessionEntries(content);
+	return entries.flatMap((entry) => {
+		if (entry.type !== "message") return [];
+		return renderSessionMessageEntry(entry);
+	});
+}
+
+function renderSessionMessageEntry(entry: SessionMessageEntry): SubagentTranscriptMessage[] {
+	const role = entry.message.role;
+	if (role === "user") {
+		return [
+			{
+				role: "user",
+				text: extractDiscordMessageFromPrompt(messageContentText(entry.message.content)),
+				timestamp: entry.timestamp,
+			},
+		];
+	}
+	if (role === "assistant") {
+		const messages = assistantContentMessages(entry.message.content);
+		return messages.map((message) => ({ ...message, timestamp: entry.timestamp }));
+	}
+	return [
+		{
+			role: "system",
+			text: messageContentText((entry.message as unknown as Record<string, unknown>).content),
+			timestamp: entry.timestamp,
+		},
+	];
+}
+
+function assistantContentMessages(content: unknown): Array<Omit<SubagentTranscriptMessage, "timestamp">> {
+	if (!Array.isArray(content)) {
+		const text = messageContentText(content);
+		return text.length === 0 ? [] : [{ role: "assistant", text }];
+	}
+	const messages: Array<Omit<SubagentTranscriptMessage, "timestamp">> = [];
+	const assistantText = content
+		.flatMap((part) => {
+			if (!isRecord(part)) return [];
+			if (part.type === "text" && typeof part.text === "string") return [part.text];
+			return [];
+		})
+		.join("\n")
+		.trim();
+	if (assistantText.length > 0) messages.push({ role: "assistant", text: assistantText });
+	for (const part of content) {
+		if (!isRecord(part)) continue;
+		if (part.type === "toolCall" && typeof part.name === "string") {
+			messages.push({ role: "tool", text: `tool call: ${part.name}` });
+		}
+	}
+	return messages;
+}
+
+function extractDiscordMessageFromPrompt(text: string): string {
+	const normalized = text.trim();
+	const marker = "\nMessage from ";
+	const markerIndex = normalized.lastIndexOf(marker);
+	const candidate = markerIndex >= 0 ? normalized.slice(markerIndex + 1) : normalized;
+	const match = /^Message from ([^:\n]+):\n([\s\S]*)$/u.exec(candidate.trim());
+	if (match === null) return truncatePlain(normalized, 1000);
+	const sender = match[1]?.trim() ?? "unknown";
+	const message = match[2]?.trim() || "(no text)";
+	return `${sender}: ${message}`;
+}
+
+function messageContentText(content: unknown): string {
+	if (typeof content === "string") return content.trim();
+	if (!Array.isArray(content)) return "";
+	return content
+		.flatMap((part) => {
+			if (!isRecord(part)) return [];
+			if (part.type === "text" && typeof part.text === "string") return [part.text];
+			if (part.type === "toolCall" && typeof part.name === "string") return [`tool call: ${part.name}`];
+			return [];
+		})
+		.join("\n")
+		.trim();
+}
+
+function renderTranscriptRows(messages: readonly SubagentTranscriptMessage[], width: number): string[] {
+	const rows: string[] = [];
+	for (const message of messages) {
+		const label = message.role === "assistant" ? "clanky" : message.role;
+		const prefix = `${label}: `;
+		const wrapped = wrapPlain(message.text, Math.max(10, width - prefix.length));
+		if (wrapped.length === 0) rows.push(prefix);
+		else {
+			rows.push(`${prefix}${wrapped[0]}`);
+			for (const line of wrapped.slice(1)) rows.push(`${" ".repeat(prefix.length)}${line}`);
+		}
+	}
+	return rows;
+}
+
+function wrapPlain(text: string, width: number): string[] {
+	const normalized = text.replace(/\s+/g, " ").trim();
+	if (normalized.length === 0) return [];
+	const words = normalized.split(" ");
+	const lines: string[] = [];
+	let current = "";
+	for (const word of words) {
+		if (current.length === 0) {
+			current = word;
+		} else if (current.length + 1 + word.length <= width) {
+			current = `${current} ${word}`;
+		} else {
+			lines.push(truncatePlain(current, width));
+			current = word;
+		}
+		while (current.length > width) {
+			lines.push(current.slice(0, width));
+			current = current.slice(width);
+		}
+	}
+	if (current.length > 0) lines.push(current);
+	return lines;
+}
+
+function isUpKey(data: string): boolean {
+	return data === "\u001b[A";
+}
+
+function isDownKey(data: string): boolean {
+	return data === "\u001b[B";
+}
+
+function isPageUpKey(data: string): boolean {
+	return data === "\u001b[5~";
+}
+
+function isPageDownKey(data: string): boolean {
+	return data === "\u001b[6~";
+}
+
+function isEnterKey(data: string): boolean {
+	return data === "\r" || data === "\n";
+}
+
+function isEscapeKey(data: string): boolean {
+	return data === "\u001b";
+}
+
+function isBackspaceKey(data: string): boolean {
+	return data === "\u007f" || data === "\b";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
 }
 
 function registerMemoryCommands(pi: Parameters<ExtensionFactory>[0], handlers: ClankyAgentToolHandlers): void {
@@ -1038,6 +1705,50 @@ export function createClankyToolDefinitions(handlers: ClankyAgentToolHandlers): 
 				async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 					const input = normalizeTaskCreateToolInput(params, ctx.sessionManager.getSessionId());
 					return toolResult(await taskCreate(input));
+				},
+			}),
+		);
+	}
+	const mainSessionContext = handlers.mainSessionContext;
+	if (mainSessionContext !== undefined) {
+		tools.push(
+			defineTool({
+				name: "main_session_context",
+				label: "Main Session Context",
+				description:
+					"Read bounded recent history from the main Clanky session so a Discord subagent can understand what the foreground agent has been doing.",
+				promptSnippet:
+					"main_session_context: read the main Clanky session history when the Discord subagent needs more than the startup status snapshot.",
+				promptGuidelines: [
+					"Use when the user asks what the main agent has been doing or when the Discord answer depends on deeper main-session context.",
+					"Do not reveal unrelated private main-session details into Discord; use the context to stay accurate and concise.",
+					"Increase limit or include_tool_results only when the first result is not enough.",
+				],
+				parameters: mainSessionContextSchema,
+				async execute(_toolCallId, params) {
+					return toolResult(await mainSessionContext(params));
+				},
+			}),
+		);
+	}
+	const delegateToMainWorker = handlers.delegateToMainWorker;
+	if (delegateToMainWorker !== undefined) {
+		tools.push(
+			defineTool({
+				name: "delegate_to_main_worker",
+				label: "Delegate To Main Worker",
+				description:
+					"Hand off durable or long-running work from a Discord subagent to the main Clanky worker without blocking the Discord reply loop.",
+				promptSnippet:
+					"delegate_to_main_worker: hand off work likely to take more than a minute or two, then reply briefly in Discord.",
+				promptGuidelines: [
+					"Use when a Discord request needs coding, deep research, multi-step operations, or other work likely to take more than 1-2 minutes.",
+					"Include enough context in prompt for the main worker to proceed without rereading the Discord conversation.",
+					"After delegating, tell the Discord user that the main worker has picked it up; do not also do the long task yourself.",
+				],
+				parameters: delegateToMainWorkerSchema,
+				async execute(_toolCallId, params) {
+					return toolResult(await delegateToMainWorker(params));
 				},
 			}),
 		);
