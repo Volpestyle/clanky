@@ -119,8 +119,20 @@ export function createClankyHandlers(
 				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
 			}),
 		listSubagents: async () => stores.subagents.listSubagents(),
-		externalMcpStatus: async () => getExternalMcpStatus({ cwd: process.cwd() }),
-		externalMcpListTools: async (input) => listExternalMcpTools(input, { cwd: process.cwd() }),
-		externalMcpCall: async (input) => callExternalMcpTool(input, { cwd: process.cwd() }),
+		externalMcpStatus: async () =>
+			getExternalMcpStatus({
+				cwd: process.cwd(),
+				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
+			}),
+		externalMcpListTools: async (input) =>
+			listExternalMcpTools(input, {
+				cwd: process.cwd(),
+				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
+			}),
+		externalMcpCall: async (input) =>
+			callExternalMcpTool(input, {
+				cwd: process.cwd(),
+				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
+			}),
 	};
 }

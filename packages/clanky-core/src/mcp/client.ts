@@ -1,7 +1,9 @@
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
+import type { AuthStorage } from "@earendil-works/pi-coding-agent";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { DEFAULT_CLANKY_DISCORD_PROVIDER_ID, loadStoredDiscordCredential } from "../discord-credentials.ts";
 
 const require = createRequire(import.meta.url);
 
@@ -19,6 +21,7 @@ export interface ExternalMcpClientOptions {
 	cwd?: string;
 	env?: NodeJS.ProcessEnv;
 	timeoutMs?: number;
+	authStorage?: AuthStorage;
 }
 
 export interface ClankyMcpServerConfig {
@@ -166,6 +169,7 @@ export function resolveMcpServerConfigs(
 				cwd,
 				description: "Discord guild/channel/message/media/send/reaction tools from the local discord-mcp package.",
 				allowedTools: DISCORD_DEFAULT_TOOLS,
+				...(resolveStoredDiscordMcpEnv(env, options.authStorage) ?? {}),
 			},
 			cwd,
 			env,
@@ -305,6 +309,29 @@ function shouldAutoAddAgentRoom(env: NodeJS.ProcessEnv, cwd: string): boolean {
 
 function shouldAutoAddDiscord(env: NodeJS.ProcessEnv): boolean {
 	return env.CLANKY_DISCORD_MCP !== "0" && env.CLANKY_DISCORD_MCP !== "false";
+}
+
+function resolveStoredDiscordMcpEnv(
+	env: NodeJS.ProcessEnv,
+	authStorage: AuthStorage | undefined,
+): Pick<ClankyMcpServerConfig, "env"> | undefined {
+	if (authStorage === undefined || hasDiscordTokenEnv(env)) return undefined;
+	const providerId = env.CLANKY_DISCORD_PROVIDER_ID?.trim() || DEFAULT_CLANKY_DISCORD_PROVIDER_ID;
+	const stored = loadStoredDiscordCredential(authStorage, providerId);
+	if (stored === undefined) return undefined;
+	return {
+		env: {
+			DISCORD_MCP_PROVIDER_ID: stored.providerId,
+			DISCORD_MCP_TOKEN: stored.payload.token,
+			DISCORD_MCP_CREDENTIAL_KIND: stored.payload.credentialKind,
+		},
+	};
+}
+
+function hasDiscordTokenEnv(env: NodeJS.ProcessEnv): boolean {
+	return [env.DISCORD_MCP_TOKEN, env.DISCORD_TOKEN, env.CLANKY_DISCORD_TOKEN].some(
+		(value) => value !== undefined && value.trim().length > 0,
+	);
 }
 
 function resolveDiscordMcpCommand(env: NodeJS.ProcessEnv): { command: string; args: string[] } {

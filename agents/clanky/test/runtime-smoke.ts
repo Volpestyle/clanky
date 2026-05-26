@@ -22,6 +22,7 @@ import {
 	DEFAULT_OPENAI_PROVIDER_ID,
 	DEFAULT_XAI_PROVIDER_ID,
 	resolveClankyPaths,
+	resolveMcpServerConfigs,
 	saveStoredDiscordCredential,
 	saveStoredOpenAiApiKey,
 	saveStoredXAiApiKey,
@@ -596,6 +597,33 @@ function assertStoredDiscordCredentialPath(): void {
 	}
 	if (fromStored.providerId !== DEFAULT_CLANKY_DISCORD_PROVIDER_ID) {
 		throw new Error(`smoke: stored providerId default mismatch, got ${fromStored.providerId}`);
+	}
+
+	const discordMcpConfig = resolveMcpServerConfigs({
+		authStorage: stored,
+		cwd: "/tmp/clanky-mcp-smoke",
+		env: {},
+	}).discord;
+	if (discordMcpConfig === undefined) {
+		throw new Error("smoke: auto Discord MCP config should exist");
+	}
+	if (discordMcpConfig.env.DISCORD_MCP_TOKEN !== "stored-token") {
+		throw new Error("smoke: stored Discord credential should be injected into auto Discord MCP env");
+	}
+	if (discordMcpConfig.env.DISCORD_MCP_CREDENTIAL_KIND !== "bot-token") {
+		throw new Error("smoke: stored Discord credential kind should be injected into auto Discord MCP env");
+	}
+
+	const envDiscordMcpConfig = resolveMcpServerConfigs({
+		authStorage: stored,
+		cwd: "/tmp/clanky-mcp-smoke",
+		env: { CLANKY_DISCORD_TOKEN: "env-token" },
+	}).discord;
+	if (envDiscordMcpConfig?.env.DISCORD_MCP_TOKEN !== undefined) {
+		throw new Error("smoke: stored Discord MCP token should not override an env Discord token");
+	}
+	if (envDiscordMcpConfig?.env.CLANKY_DISCORD_TOKEN !== "env-token") {
+		throw new Error("smoke: Discord MCP env should preserve the explicit env token");
 	}
 
 	const envOverridesStored = resolveAgentDiscordGatewayConfig({ CLANKY_DISCORD_TOKEN: "env-token" }, stored);
