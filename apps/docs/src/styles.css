@@ -151,6 +151,18 @@
 	@apply border-l-2 pl-4 text-muted-foreground;
 }
 
+.docs-prose p:has(> img:only-child) {
+	@apply flex justify-center;
+}
+
+.docs-prose img {
+	@apply max-w-full rounded-xl;
+}
+
+.docs-prose p:has(> img:only-child) > img {
+	@apply max-h-96;
+}
+
 .docs-prose code:not(pre code) {
 	@apply rounded-md border bg-muted px-1.5 py-0.5 font-mono text-[0.88em] text-foreground;
 }

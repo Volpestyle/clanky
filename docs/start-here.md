@@ -1,5 +1,7 @@
 # Start Here
 
+![Clanky](/branding/clanky-logo-512.png)
+
 Clanky is a personal agent built on [Pi](https://pi.dev). The most useful
 mental model is:
 
@@ -88,6 +90,12 @@ Linear state. Running two live Clankies on the same profile is unsupported.
   memory policy, and forget/export commands.
 - [Troubleshooting](troubleshooting.md): common setup failures and where to look
   first.
+
+If you want to feed Clanky's docs into an LLM, the docs site publishes
+[`llms.txt`](https://volpestyle.github.io/clanky/llms.txt) (index) and
+[`llms-full.txt`](https://volpestyle.github.io/clanky/llms-full.txt)
+(all docs concatenated, paste-ready). The same links also appear under
+"For LLMs" in the docs site sidebar.
 
 ## The Two Big Boundaries
 

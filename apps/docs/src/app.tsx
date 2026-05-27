@@ -4,13 +4,15 @@ import {
 	ClipboardIcon,
 	FileTextIcon,
 	MenuIcon,
+	MoonIcon,
 	SearchIcon,
 	ShieldCheckIcon,
 	SparklesIcon,
+	SunIcon,
 	TerminalSquareIcon,
 	XIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -34,6 +36,63 @@ const groupIcons = {
 	Advanced: ShieldCheckIcon,
 	Maintainer: SparklesIcon,
 } satisfies Record<DocGroup, typeof BookOpenTextIcon>;
+
+const iconBase = `${import.meta.env.BASE_URL}branding/clanky-icon`;
+const THEME_STORAGE_KEY = "clanky-docs-theme";
+
+function ClankyLogo({ className }: { className?: string }) {
+	return (
+		<img
+			src={`${iconBase}-32.png`}
+			srcSet={`${iconBase}-32.png 1x, ${iconBase}-64.png 2x, ${iconBase}-128.png 4x`}
+			alt=""
+			width={32}
+			height={32}
+			className={cn("rounded-md", className)}
+		/>
+	);
+}
+
+function useTheme() {
+	const [theme, setTheme] = useState<"light" | "dark">(() =>
+		typeof document !== "undefined" && document.documentElement.classList.contains("dark") ? "dark" : "light",
+	);
+	const skipFirstWrite = useRef(true);
+
+	useEffect(() => {
+		if (skipFirstWrite.current) {
+			skipFirstWrite.current = false;
+			return;
+		}
+
+		document.documentElement.classList.toggle("dark", theme === "dark");
+		try {
+			localStorage.setItem(THEME_STORAGE_KEY, theme);
+		} catch {}
+	}, [theme]);
+
+	return [theme, setTheme] as const;
+}
+
+function ThemeToggle() {
+	const [theme, setTheme] = useTheme();
+	const isDark = theme === "dark";
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<Button
+					size="icon-sm"
+					variant="ghost"
+					aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
+					onClick={() => setTheme(isDark ? "light" : "dark")}
+				>
+					{isDark ? <SunIcon data-icon="inline-start" /> : <MoonIcon data-icon="inline-start" />}
+				</Button>
+			</TooltipTrigger>
+			<TooltipContent>{isDark ? "Light mode" : "Dark mode"}</TooltipContent>
+		</Tooltip>
+	);
+}
 
 export function App() {
 	const { slug, navigate } = useDocRouter();
@@ -112,7 +171,7 @@ export function App() {
 						</Button>
 
 						<a className="flex min-w-0 items-center gap-2 font-semibold text-[15px]" href="?doc=overview">
-							<span className="size-5 rounded-full bg-primary" />
+							<ClankyLogo className="size-8 shrink-0" />
 							<span className="truncate">Clanky Docs</span>
 						</a>
 
@@ -129,6 +188,8 @@ export function App() {
 						>
 							<SearchIcon data-icon="inline-start" />
 						</Button>
+
+						<ThemeToggle />
 
 						<Badge variant="outline" className="hidden rounded-md font-medium sm:inline-flex">
 							localhost
@@ -224,7 +285,8 @@ function MobileNavigation({ activeSlug, onClose, onNavigate, onOpenSearch }: Mob
 				role="dialog"
 			>
 				<div className="flex items-start justify-between gap-3 border-b p-4">
-					<div className="flex flex-col gap-1">
+					<div className="flex items-center gap-2">
+						<ClankyLogo className="size-8 shrink-0" />
 						<h2 id="mobile-nav-title" className="font-semibold text-sm">
 							Clanky Docs
 						</h2>
@@ -306,6 +368,30 @@ function Sidebar({ activeSlug, onNavigate, onOpenSearch }: SidebarProps) {
 					)}
 				</nav>
 			</ScrollArea>
+			<LlmsLinks />
+		</div>
+	);
+}
+
+function LlmsLinks() {
+	const base = import.meta.env.BASE_URL;
+	return (
+		<div className="flex flex-col gap-1 border-t p-4 text-xs">
+			<div className="px-2 font-medium text-muted-foreground uppercase tracking-wider">For LLMs</div>
+			<a
+				className="rounded-md px-2 py-1.5 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+				href={`${base}llms.txt`}
+			>
+				llms.txt
+				<span className="ml-2 text-[10px] text-muted-foreground/70">index</span>
+			</a>
+			<a
+				className="rounded-md px-2 py-1.5 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+				href={`${base}llms-full.txt`}
+			>
+				llms-full.txt
+				<span className="ml-2 text-[10px] text-muted-foreground/70">all docs, paste-ready</span>
+			</a>
 		</div>
 	);
 }
