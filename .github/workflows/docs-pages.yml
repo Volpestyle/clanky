@@ -48,6 +48,12 @@ jobs:
           printf '%s\n' '{"name":"discord-mcp","version":"0.0.0","type":"module","bin":{"discord-mcp":"index.js"},"engines":{"node":">=22.19.0"},"dependencies":{"@modelcontextprotocol/sdk":"^1.29.0","tsx":"^4.22.3","zod":"^3.25.76"}}' > ../discord_mcp/package.json
           printf '%s\n' '#!/usr/bin/env node' > ../discord_mcp/index.js
 
+      - name: Checkout shared docs framework
+        run: git clone --depth 1 https://github.com/Volpestyle/docs.git ../docs
+
+      - name: Install shared docs dependencies
+        run: pnpm --dir ../docs install --no-frozen-lockfile
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
