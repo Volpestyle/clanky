@@ -10,6 +10,7 @@ import {
 	getXAiCredentialStatus,
 	isAgentRoomEnrolled,
 	loadStoredDiscordCredential,
+	maybeLoadAgentRoomPortableConfig,
 	resolveClankyChatGatewayOwner,
 	resolveClankyChatMode,
 } from "@clanky/core";
@@ -23,6 +24,7 @@ import { interpretVoiceStatus, readStatusBoolean } from "./voiceStatus.ts";
 import { runXAiLogin } from "./xAiAuth.ts";
 
 interface ClankySetupWizardDeps {
+	cwd: string;
 	paths: ClankyPaths;
 	authStorage: AuthStorage;
 	discordProviderId: string;
@@ -35,6 +37,8 @@ type SetupChoice = "status" | "openai" | "discord" | "voice" | "elevenlabs" | "x
 
 const SETUP_COMMAND_COMPLETIONS = [
 	{ value: "status", description: "Show connector and profile setup status." },
+	{ value: "agentroom", description: "Show AgentRoom room config defaults." },
+	{ value: "fresh", description: "Show the fresh-profile setup smoke command." },
 ] satisfies readonly ClankyCommandCompletionSpec[];
 
 export function createClankySetupExtensionFactory(deps: ClankySetupWizardDeps): ExtensionFactory {
@@ -73,6 +77,10 @@ async function runClankySetupCommand(
 	const command = args.trim().toLowerCase();
 	if (command === "status") {
 		ctx.ui.notify(formatClankySetupStatus(deps));
+		return;
+	}
+	if (command === "agentroom" || command === "room") {
+		ctx.ui.notify(formatAgentRoomParticipation(deps));
 		return;
 	}
 	if (command === "fresh" || command === "new-user") {
@@ -164,6 +172,7 @@ function setupOptions(deps: ClankySetupWizardDeps): string[] {
 	const elevenLabsStatus = getElevenLabsCredentialStatus(env, deps.authStorage, DEFAULT_ELEVENLABS_PROVIDER_ID);
 	const xaiStatus = getXAiCredentialStatus(env, deps.authStorage, DEFAULT_XAI_PROVIDER_ID);
 	const voiceSettings = deps.voiceSettings.read();
+	const roomConfig = maybeLoadAgentRoomPortableConfig(deps.cwd, env);
 	return [
 		"Status",
 		`Models / OpenAI [${openAiStatus.available ? "set" : "missing"}]`,
@@ -171,7 +180,7 @@ function setupOptions(deps: ClankySetupWizardDeps): string[] {
 		`Voice / Discord voice [${voiceSettings?.enabled === true ? "enabled" : "disabled"}]`,
 		`Voice / ElevenLabs [${elevenLabsStatus.available ? "set" : "missing"}]`,
 		`Media / xAI [${xaiStatus.available ? "set" : "missing"}]`,
-		`AgentRoom [${isAgentRoomEnrolled(env) ? "participating" : "not enrolled"}]`,
+		`AgentRoom [${agentRoomSetupLabel(env, roomConfig !== undefined)}]`,
 		"Done",
 	];
 }
@@ -196,6 +205,7 @@ function formatClankySetupStatus(deps: ClankySetupWizardDeps): string {
 	const storedDiscord = loadStoredDiscordCredential(deps.authStorage, deps.discordProviderId);
 	const envDiscord = env.CLANKY_DISCORD_TOKEN?.trim();
 	const voiceSettings = deps.voiceSettings.read();
+	const roomConfig = maybeLoadAgentRoomPortableConfig(deps.cwd, env);
 	const lines = [
 		"Clanky setup",
 		`Profile: ${deps.paths.profile}`,
@@ -208,7 +218,8 @@ function formatClankySetupStatus(deps: ClankySetupWizardDeps): string {
 		`Discord voice: ${voiceSettings?.enabled === true ? "enabled" : "disabled"}`,
 		`ElevenLabs: ${elevenLabsStatus.available ? (elevenLabsStatus.activeSource ?? "configured") : "missing"}`,
 		`xAI media: ${xaiStatus.available ? (xaiStatus.activeSource ?? "configured") : "missing"}`,
-		`AgentRoom: ${isAgentRoomEnrolled(env) ? "participating" : "not enrolled"}`,
+		`AgentRoom: ${agentRoomSetupLabel(env, roomConfig !== undefined)}`,
+		`Room config: ${roomConfig?.configPath ?? "not detected"}`,
 		`Work tracker: ${env.CLANKY_WORK_TRACKER ?? "profile/default"} (${env.CLANKY_WORK_TRACKER_PROVIDER_KIND ?? "unknown"})`,
 		"",
 		"Connector ownership:",
@@ -230,6 +241,7 @@ function formatClankyStatusDashboard(deps: ClankySetupWizardDeps): string {
 	const envDiscord = env.CLANKY_DISCORD_TOKEN?.trim();
 	const voiceSettings = deps.voiceSettings.read();
 	const bridge = deps.gatewayController.status();
+	const roomConfig = maybeLoadAgentRoomPortableConfig(deps.cwd, env);
 	const lines = [
 		"Clanky status",
 		`Profile: ${deps.paths.profile}`,
@@ -249,7 +261,8 @@ function formatClankyStatusDashboard(deps: ClankySetupWizardDeps): string {
 		"Runtime",
 		`Chat mode: ${resolveClankyChatMode(env)}`,
 		`Gateway owner: ${resolveClankyChatGatewayOwner(env)}`,
-		`AgentRoom: ${isAgentRoomEnrolled(env) ? "participating" : "not enrolled"}`,
+		`AgentRoom: ${agentRoomSetupLabel(env, roomConfig !== undefined)}`,
+		`Room config: ${roomConfig?.configPath ?? "not detected"}`,
 		`Work tracker: ${env.CLANKY_WORK_TRACKER ?? "profile/default"} (${env.CLANKY_WORK_TRACKER_PROVIDER_KIND ?? "unknown"})`,
 	];
 	const nextSteps = formatStatusNextSteps(
@@ -313,25 +326,46 @@ function formatStatusActive(active: boolean | undefined): string {
 
 function formatAgentRoomParticipation(deps: ClankySetupWizardDeps): string {
 	const env = setupEnv(deps);
+	const roomConfig = maybeLoadAgentRoomPortableConfig(deps.cwd, env);
+	const clanky = roomConfig?.clanky;
+	const trackerId = roomConfig?.workTracker?.default;
+	const tracker = trackerId === undefined ? undefined : roomConfig?.workTracker?.providers[trackerId];
 	const lines = [
 		"AgentRoom participation",
 		`Current mode: ${resolveClankyChatMode(env)}`,
+		`Working directory: ${deps.cwd}`,
 		`AGENTROOM: ${env.AGENTROOM === "1" ? "1" : "not set"}`,
 		`AGENTROOM_AGENT_ID: ${env.AGENTROOM_AGENT_ID ?? "not set"}`,
 		`AGENTROOM_ROOM_ID: ${env.AGENTROOM_ROOM_ID ?? "not set"}`,
-		`Portable config: ${env.CLANKY_AGENTROOM_CONFIG ?? "not set"}`,
+		`Portable config: ${roomConfig?.configPath ?? env.CLANKY_AGENTROOM_CONFIG ?? "not detected"}`,
 		`Work tracker: ${env.CLANKY_WORK_TRACKER ?? "profile/default"}`,
+		"",
+		"Room defaults",
+		`Clanky home: ${clanky?.home ?? clanky?.homeDir ?? "not set"}`,
+		`Clanky profile: ${clanky?.profile ?? "not set"}`,
+		`Chat owner: ${clanky?.chatGatewayOwner ?? resolveClankyChatGatewayOwner(env)}`,
+		`Tracker default: ${trackerId ?? "not set"}${tracker?.type !== undefined ? ` (${tracker.type})` : ""}`,
+		`Tracker team: ${tracker?.teamId ?? "not set"}`,
 		"",
 		"These values only mean Clanky is participating in a room.",
 		"They do not transfer Clanky's personal Discord token to AgentRoom.",
 		"",
-		"To suppress Clanky's agent-owned gateway from an AgentRoom launcher, set:",
-		"CLANKY_CHAT_GATEWAY_OWNER=room",
+		"Room-level setup is edited in the AgentRoom TUI:",
+		"  agent-room",
+		"  /setup",
+		"  /setup clanky room .clanky-room lead",
+		"  /setup tracker linear team_123",
 		"",
-		"For room-owned Discord, configure the connector in AgentRoom's setup wizard instead.",
+		"For room-owned Discord, configure the connector in AgentRoom setup.",
 		`Current profile remains isolated at ${deps.paths.profileDir}.`,
 	];
 	return lines.join("\n");
+}
+
+function agentRoomSetupLabel(env: NodeJS.ProcessEnv, hasRoomConfig: boolean): string {
+	if (isAgentRoomEnrolled(env)) return "participating";
+	if (hasRoomConfig) return "room config detected";
+	return "not enrolled";
 }
 
 function setupEnv(deps: ClankySetupWizardDeps): NodeJS.ProcessEnv {
@@ -353,5 +387,5 @@ function formatFreshUserHelp(deps: ClankySetupWizardDeps): string {
 }
 
 function formatSetupUsage(): string {
-	return ["Usage: /setup", "", "Shortcuts:", "  /setup status"].join("\n");
+	return ["Usage: /setup", "", "Shortcuts:", "  /setup status", "  /setup agentroom", "  /setup fresh"].join("\n");
 }

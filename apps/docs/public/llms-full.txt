@@ -663,6 +663,7 @@ flow:
 /login
 /openai-login
 /openai-whoami
+/auth
 ```
 
 `/openai-login` stores the key in the active profile's `auth.json` under the
@@ -671,11 +672,15 @@ OpenAI provider id. Environment variables still work and override stored auth:
 - `CLANKY_OPENAI_API_KEY`
 - `OPENAI_API_KEY`
 
+Remove stored provider credentials from the TUI with `/auth remove <provider>`
+or `/auth remove all`. That does not unset launch environment variables.
+
 Clanky's default chat model is `openai/gpt-5.5`. Main Clanky defaults to
 `xhigh` thinking, while Clanky-owned subagents default to `medium`. Inspect or
 change that at runtime with:
 
 ```text
+/model
 /effort
 /effort main high
 /effort subagents medium
@@ -852,6 +857,7 @@ The TUI setup and status commands edit or report these stores:
 
 ```text
 /setup
+/setup agentroom
 /openai-login
 /discord-login
 /discord-voice
@@ -905,7 +911,6 @@ workTracker:
   providers:
     linear:
       type: linear
-      tokenEnv: LINEAR_API_KEY
       teamId: team_123
 
 clanky:
@@ -917,10 +922,9 @@ clanky:
 Precedence remains explicit: `--home` / `--profile` and `CLANKY_HOME` /
 `CLANKY_PROFILE` win over the portable Clanky defaults. The AgentRoom block can
 set the selected work tracker and provider-local defaults such as a team id, but
-it only names secret environment variables; it does not store API keys or make
-Clanky own provider-specific API calls. Tracker creation, comments, and status
-updates still go through the installed MCP server, CLI, or skill for that
-provider.
+it does not store API keys or make Clanky own provider-specific API calls.
+Tracker creation, comments, and status updates still go through the installed
+MCP server, CLI, connector, or skill for that provider.
 
 ## Rule For New Settings
 
@@ -981,12 +985,15 @@ Useful Pi editor patterns still apply:
 ```text
 /setup
 /setup status
+/setup agentroom
 /setup fresh
 ```
 
 Use `/setup status` when you want a compact view of profile paths, OpenAI,
 gateway ownership, current Discord adapter status, Discord voice, ElevenLabs,
-xAI, and AgentRoom participation.
+xAI, and AgentRoom participation. Use `/setup agentroom` to inspect the
+detected room config, Clanky room defaults, chat ownership, and work tracker
+defaults. Edit room-level settings from the AgentRoom TUI with `/setup`.
 
 ## Memory Workflow
 
@@ -1564,6 +1571,9 @@ clanky logs --json
 | `/effort main <level>` | Set main Clanky thinking level. |
 | `/effort subagents <level>` | Set active/default subagent thinking level. |
 | `/effort all <level>` | Set both. |
+| `/auth` | List stored provider credentials in the active Clanky profile. |
+| `/auth remove <provider>` | Remove stored credentials for one provider. |
+| `/auth remove all` | Remove all stored provider credentials from the active profile. |
 
 Thinking levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`.
 
@@ -1611,7 +1621,8 @@ These are inherited from Pi and work inside Clanky:
 | `/elevenlabs-whoami` | Show active ElevenLabs credential source. |
 | `/elevenlabs-logout` | Remove the stored ElevenLabs credential. |
 
-Environment variables still override stored credentials where supported.
+`/auth remove` edits only the active profile `auth.json`. Environment variables
+and `models.json` request auth still override stored credentials where supported.
 
 ## Discord Voice Commands
 

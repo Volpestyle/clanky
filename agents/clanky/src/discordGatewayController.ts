@@ -255,6 +255,7 @@ export class ClankyDiscordGatewayController {
 					discordCredential: discordCredentials,
 					authStorage: this.authStorage,
 					config: voiceConfig,
+					env: this.env,
 					runtimeTurnQueue: this.runtimeTurnQueue,
 					joinRequested: options.joinRequested === true,
 					...(this.createRuntime === undefined
@@ -392,6 +393,7 @@ export class ClankyDiscordGatewayController {
 				discordCredential: discordCredentials,
 				authStorage: this.authStorage,
 				config: voiceConfig,
+				env: this.env,
 				runtimeTurnQueue: this.runtimeTurnQueue,
 				joinRequested,
 				...(this.createRuntime === undefined

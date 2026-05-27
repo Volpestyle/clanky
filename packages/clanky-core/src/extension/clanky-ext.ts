@@ -9,6 +9,5 @@ export {
 	type MemorySearchToolInput,
 	type ScheduleCronToolInput,
 	type TaskCreateToolInput,
-	type WorkTrackerCreateIssueToolInput,
 	type WorkTrackerLinkToolInput,
 } from "../agent-tools.ts";

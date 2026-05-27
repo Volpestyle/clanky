@@ -37,7 +37,9 @@ The TUI setup and status commands edit or report these stores:
 
 ```text
 /setup
+/setup agentroom
 /openai-login
+/auth
 /discord-login
 /discord-voice
 /xai-login
@@ -46,6 +48,9 @@ The TUI setup and status commands edit or report these stores:
 ```
 
 They should not write hidden state outside the resolved Clanky home/profile.
+Use `/auth remove <provider>` or `/auth remove all` to delete stored provider
+credentials from the active profile without touching launch environment
+variables.
 
 ## Environment Overrides
 
@@ -90,7 +95,6 @@ workTracker:
   providers:
     linear:
       type: linear
-      tokenEnv: LINEAR_API_KEY
       teamId: team_123
 
 clanky:
@@ -102,10 +106,9 @@ clanky:
 Precedence remains explicit: `--home` / `--profile` and `CLANKY_HOME` /
 `CLANKY_PROFILE` win over the portable Clanky defaults. The AgentRoom block can
 set the selected work tracker and provider-local defaults such as a team id, but
-it only names secret environment variables; it does not store API keys or make
-Clanky own provider-specific API calls. Tracker creation, comments, and status
-updates still go through the installed MCP server, CLI, or skill for that
-provider.
+it does not store API keys or make Clanky own provider-specific API calls.
+Tracker creation, comments, and status updates still go through the installed
+MCP server, CLI, connector, or skill for that provider.
 
 ## Rule For New Settings
 

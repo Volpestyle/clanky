@@ -25,6 +25,7 @@ import {
 	SessionManager,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import { createClankyAuthExtensionFactory } from "./authCommands.ts";
 import {
 	CLANKY_THINKING_LEVELS,
 	type ClankyRuntimeDefaults,
@@ -271,6 +272,12 @@ function buildRuntimeFactory(opts: {
 		gatewayController,
 		baseUrl: () => discordVoiceSettings.read()?.elevenLabsBaseUrl,
 	});
+	const clankyAuthFactory = createClankyAuthExtensionFactory({
+		authStorage,
+		authFilePath: paths.authFile,
+		discordProviderId,
+		gatewayController,
+	});
 
 	return async ({ cwd: runtimeCwd, sessionManager, sessionStartEvent }) => {
 		const modelRegistry = ModelRegistry.create(authStorage, paths.modelsFile);
@@ -288,12 +295,13 @@ function buildRuntimeFactory(opts: {
 			settingsManager,
 			resourceLoaderOptions: {
 				extensionFactories: [
-					...createClankyExtensionFactories(handlers),
+					...createClankyExtensionFactories(handlers, { env }),
 					...additionalExtensionFactories,
 					discordAuthFactory,
 					openAiAuthFactory,
 					xAiAuthFactory,
 					elevenLabsAuthFactory,
+					clankyAuthFactory,
 				],
 				// Recomputed per call so post-`/discord-login` reloads pick up the new identity.
 				systemPromptOverride: (existing: string | undefined): string => {
@@ -582,6 +590,7 @@ export async function createClankyRuntime(options: RunClankyOptions = {}) {
 			}),
 			createClankyVoiceStatusExtensionFactory(gatewayController),
 			createClankySetupExtensionFactory({
+				cwd,
 				paths,
 				authStorage,
 				discordProviderId,

@@ -112,6 +112,7 @@ flow:
 /login
 /openai-login
 /openai-whoami
+/auth
 ```
 
 `/openai-login` stores the key in the active profile's `auth.json` under the
@@ -120,11 +121,15 @@ OpenAI provider id. Environment variables still work and override stored auth:
 - `CLANKY_OPENAI_API_KEY`
 - `OPENAI_API_KEY`
 
+Remove stored provider credentials from the TUI with `/auth remove <provider>`
+or `/auth remove all`. That does not unset launch environment variables.
+
 Clanky's default chat model is `openai/gpt-5.5`. Main Clanky defaults to
 `xhigh` thinking, while Clanky-owned subagents default to `medium`. Inspect or
 change that at runtime with:
 
 ```text
+/model
 /effort
 /effort main high
 /effort subagents medium

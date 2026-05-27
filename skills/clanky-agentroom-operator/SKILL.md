@@ -23,7 +23,7 @@ Use the configured AgentRoom MCP server first for common room coordination. Clan
 - Use `agentroom_events` for bounded audit/debug snapshots.
 - Use `agentroom_post` for short room channel updates. Prefer `channel: "implementation"` for implementation chatter unless the user names another channel.
 - Use `agentroom_dm` for direct coordination with a named agent.
-- Use `agentroom_task` for task shadows: create, list, show, claim, status, comment, and link-linear.
+- Use `agentroom_task` for task shadows: create, list, show, claim, status, comment, and link-tracker.
 - Use `agentroom_wait` when your next step depends on a future room message, DM, or task-status event. Do not end the turn just saying you are waiting.
 
 Example:
@@ -62,7 +62,7 @@ Rules for raw CLI:
 
 ## Coordination Policy
 
-- AgentRoom messages are for short-lived coordination; Linear remains the durable tracker when a Linear issue exists.
+- AgentRoom messages are for short-lived coordination; the configured work tracker remains the durable tracker when an external tracker issue exists.
 - Post a short status before meaningful room work.
 - Claim or update the relevant AgentRoom task before editing on behalf of the room.
 - Ask a human through the room only when the decision cannot be inferred from existing context.

@@ -121,7 +121,7 @@ guide Clanky just like it guides Pi.
 
 | Command | Why it still matters |
 | --- | --- |
-| `/login`, `/logout` | Pi provider auth path for subscription/API-key providers. Clanky also has `/openai-login` for profile-local API keys. |
+| `/login`, `/logout` | Pi provider auth path for subscription/API-key providers. Clanky also has `/openai-login` and `/auth remove <provider>` for profile-local API keys. |
 | `/model` | Switch the current model. Clanky defaults to `openai/gpt-5.5`. |
 | `/settings` | Change thinking, theme, message delivery, and transport settings. |
 | `/resume`, `/new`, `/session` | Manage Pi session files stored in the active Clanky profile. |
