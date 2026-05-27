@@ -10,11 +10,20 @@ import {
 	createAgentSessionRuntime,
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
+import type { ClankyThinkingLevel } from "./clankyDefaults.ts";
 import { SerialRuntimeTurnQueue } from "./runtimeTurnQueue.ts";
+import type {
+	VoiceSupervisorDelegateHandle,
+	VoiceSupervisorDelegateInput,
+	VoiceSupervisorDelegateResult,
+} from "./voiceSupervisorExtension.ts";
+
+type JsonRecord = Record<string, unknown>;
 
 export interface DiscordVoiceSubagentCoordinatorOptions {
 	store: DiscordSubagentStore;
 	createRuntime: CreateAgentSessionRuntimeFactory;
+	createGeneralRuntime: CreateAgentSessionRuntimeFactory;
 	agentDir: string;
 	cwd: string;
 	sessionDir: string;
@@ -23,6 +32,7 @@ export interface DiscordVoiceSubagentCoordinatorOptions {
 	model: string;
 	voice: string;
 	reasoningEffort?: string;
+	voiceSupervisorDelegate?: VoiceSupervisorDelegateHandle;
 	bridgeLogPath?: string;
 }
 
@@ -40,13 +50,23 @@ export interface DiscordVoiceSpeakerTranscriptRecord {
 
 const VOICE_AGENT_KIND = "discord-voice";
 const VOICE_WORKER_KIND = "voice-worker";
+const VOICE_GENERAL_SUBAGENT_KIND = "voice-general";
 const VOICE_WORKER_TIMEOUT_MS = 120_000;
+const VOICE_GENERAL_SUBAGENT_TIMEOUT_MS = 120_000;
 const MAX_TRANSCRIPT_TEXT_CHARS = 3000;
 const MAX_TOOL_TEXT_CHARS = 4000;
+
+interface VoiceGeneralSubagentRuntimeEntry {
+	runtime: AgentSessionRuntime;
+	queue: SerialRuntimeTurnQueue;
+	workerId: string;
+	workerKey: string;
+}
 
 export class DiscordVoiceSubagentCoordinator {
 	private readonly store: DiscordSubagentStore;
 	private readonly createRuntime: CreateAgentSessionRuntimeFactory;
+	private readonly createGeneralRuntime: CreateAgentSessionRuntimeFactory;
 	private readonly agentDir: string;
 	private readonly cwd: string;
 	private readonly sessionDir: string;
@@ -55,18 +75,25 @@ export class DiscordVoiceSubagentCoordinator {
 	private readonly model: string;
 	private readonly voice: string;
 	private readonly reasoningEffort: string | undefined;
+	private readonly voiceSupervisorDelegate: VoiceSupervisorDelegateHandle | undefined;
 	private readonly bridgeLogPath: string | undefined;
 	private readonly voiceId: string;
 	private readonly workerId: string;
 	private readonly scopeId: string;
 	private readonly voiceTranscript: SubagentTranscriptFile;
 	private readonly workerQueue = new SerialRuntimeTurnQueue();
+	private readonly generalRuntimes = new Map<string, VoiceGeneralSubagentRuntimeEntry>();
 	private workerRuntime: AgentSessionRuntime | undefined;
+	private workerRuntimePromise: Promise<AgentSessionRuntime> | undefined;
+	private readonly delegateToSubagent = async (
+		input: VoiceSupervisorDelegateInput,
+	): Promise<VoiceSupervisorDelegateResult> => await this.delegateToGeneralSubagent(input);
 	private stopped = false;
 
 	constructor(options: DiscordVoiceSubagentCoordinatorOptions) {
 		this.store = options.store;
 		this.createRuntime = options.createRuntime;
+		this.createGeneralRuntime = options.createGeneralRuntime;
 		this.agentDir = options.agentDir;
 		this.cwd = options.cwd;
 		this.sessionDir = options.sessionDir;
@@ -75,6 +102,7 @@ export class DiscordVoiceSubagentCoordinator {
 		this.model = options.model;
 		this.voice = options.voice;
 		this.reasoningEffort = options.reasoningEffort;
+		this.voiceSupervisorDelegate = options.voiceSupervisorDelegate;
 		this.bridgeLogPath = options.bridgeLogPath;
 		this.scopeId = `${options.guildId}:${options.channelId}`;
 		this.voiceId = `discord-voice:${this.scopeId}`;
@@ -88,6 +116,9 @@ export class DiscordVoiceSubagentCoordinator {
 
 	async start(): Promise<void> {
 		this.stopped = false;
+		if (this.voiceSupervisorDelegate !== undefined) {
+			this.voiceSupervisorDelegate.delegateToSubagent = this.delegateToSubagent;
+		}
 		const sessionFile = await this.voiceTranscript.ensure();
 		await this.store.upsertSubagent({
 			id: this.voiceId,
@@ -98,13 +129,52 @@ export class DiscordVoiceSubagentCoordinator {
 			activeConversationId: this.channelId,
 			activeSummary: "connecting realtime voice session",
 			sessionFile,
+			...(this.reasoningEffort === undefined ? {} : { thinkingLevel: this.reasoningEffort }),
 			pid: process.pid,
 		});
 		await this.voiceTranscript.append("system", this.voiceSessionStartedText());
 	}
 
+	prewarmWorker(): void {
+		void this.ensureWorkerRuntime()
+			.then((runtime) =>
+				this.store.setSubagentState(this.workerId, "idle", {
+					activeConversationId: this.channelId,
+					activeSummary: "prewarmed voice supervisor ready",
+					...(runtime.session.sessionFile === undefined ? {} : { sessionFile: runtime.session.sessionFile }),
+					thinkingLevel: runtime.session.thinkingLevel,
+				}),
+			)
+			.catch((error: unknown) => {
+				if (this.stopped) return;
+				this.log(`voice-worker-prewarm-failed worker=${this.workerId} error=${errorMessage(error)}`);
+			});
+	}
+
+	status(): JsonRecord {
+		return {
+			scopeId: this.scopeId,
+			voiceSubagentId: this.voiceId,
+			workerSubagentId: this.workerId,
+			workerRuntimeReady: this.workerRuntime !== undefined,
+			workerRuntimeStarting: this.workerRuntimePromise !== undefined,
+			workerQueueBusy: this.workerQueue.isBusy(),
+			generalSubagentCount: this.generalRuntimes.size,
+			generalSubagents: [...this.generalRuntimes.values()].map((entry) => ({
+				id: entry.workerId,
+				workerKey: entry.workerKey,
+				queueBusy: entry.queue.isBusy(),
+				sessionId: entry.runtime.session.sessionId,
+				sessionFile: entry.runtime.session.sessionFile,
+			})),
+		};
+	}
+
 	async stop(): Promise<void> {
 		this.stopped = true;
+		if (this.voiceSupervisorDelegate?.delegateToSubagent === this.delegateToSubagent) {
+			delete this.voiceSupervisorDelegate.delegateToSubagent;
+		}
 		await this.voiceTranscript.append("system", "Discord realtime voice session stopped.");
 		await this.store.setSubagentState(this.voiceId, "stale", {
 			activeConversationId: this.channelId,
@@ -122,6 +192,29 @@ export class DiscordVoiceSubagentCoordinator {
 				...(workerSessionFile === undefined ? {} : { sessionFile: workerSessionFile }),
 			});
 		}
+		for (const entry of this.generalRuntimes.values()) {
+			const sessionFile = entry.runtime.session.sessionFile;
+			await entry.runtime.dispose();
+			await this.store.setSubagentState(entry.workerId, "stale", {
+				activeConversationId: this.channelId,
+				activeSummary: "voice general subagent stopped",
+				...(sessionFile === undefined ? {} : { sessionFile }),
+			});
+		}
+		this.generalRuntimes.clear();
+	}
+
+	setThinkingLevel(level: ClankyThinkingLevel): number {
+		let updated = 0;
+		if (this.workerRuntime !== undefined) {
+			this.workerRuntime.session.setThinkingLevel(level);
+			updated += 1;
+		}
+		for (const entry of this.generalRuntimes.values()) {
+			entry.runtime.session.setThinkingLevel(level);
+			updated += 1;
+		}
+		return updated;
 	}
 
 	async markFailed(error: unknown): Promise<void> {
@@ -224,12 +317,27 @@ export class DiscordVoiceSubagentCoordinator {
 
 	private async ensureWorkerRuntime(): Promise<AgentSessionRuntime> {
 		if (this.workerRuntime !== undefined) return this.workerRuntime;
+		if (this.workerRuntimePromise !== undefined) return await this.workerRuntimePromise;
+		const promise = this.createWorkerRuntime();
+		this.workerRuntimePromise = promise;
+		try {
+			return await promise;
+		} finally {
+			if (this.workerRuntimePromise === promise) this.workerRuntimePromise = undefined;
+		}
+	}
+
+	private async createWorkerRuntime(): Promise<AgentSessionRuntime> {
 		const sessionManager = await this.createWorkerSessionManager();
 		const runtime = await createAgentSessionRuntime(this.createRuntime, {
 			cwd: this.cwd,
 			agentDir: this.agentDir,
 			sessionManager,
 		});
+		if (this.stopped) {
+			await runtime.dispose();
+			throw new Error("voice worker stopped during startup");
+		}
 		this.workerRuntime = runtime;
 		await this.store.upsertSubagent({
 			id: this.workerId,
@@ -240,9 +348,121 @@ export class DiscordVoiceSubagentCoordinator {
 			activeConversationId: this.channelId,
 			activeSummary: "worker runtime ready",
 			...(runtime.session.sessionFile === undefined ? {} : { sessionFile: runtime.session.sessionFile }),
+			thinkingLevel: runtime.session.thinkingLevel,
 			pid: process.pid,
 		});
 		return runtime;
+	}
+
+	private async delegateToGeneralSubagent(input: VoiceSupervisorDelegateInput): Promise<VoiceSupervisorDelegateResult> {
+		const title = input.title.trim();
+		const prompt = input.prompt.trim();
+		if (title.length === 0) throw new Error("voice_delegate_to_subagent requires a non-empty title.");
+		if (prompt.length === 0) throw new Error("voice_delegate_to_subagent requires a non-empty prompt.");
+		const workerKey = normalizeGeneralSubagentWorkerKey(input.workerKey ?? title);
+		const workerId = `voice-general:${this.scopeId}:${workerKey}`;
+		const queuedAt = new Date().toISOString();
+		const entry = await this.ensureGeneralSubagentRuntime(workerId, workerKey, title);
+		return await entry.queue.enqueue(async () => {
+			await this.store.setSubagentState(workerId, "running", {
+				activeConversationId: this.channelId,
+				activeSummary: `voice delegated: ${truncateOneLine(title, 80)}`,
+				...(entry.runtime.session.sessionFile === undefined ? {} : { sessionFile: entry.runtime.session.sessionFile }),
+			});
+			try {
+				const response = await sendSubagentMessageAndWaitForAssistantText(
+					entry.runtime,
+					buildGeneralSubagentPrompt(input, {
+						guildId: this.guildId,
+						channelId: this.channelId,
+						scopeId: this.scopeId,
+						workerId,
+						workerKey,
+					}),
+					VOICE_GENERAL_SUBAGENT_TIMEOUT_MS,
+				);
+				await this.store.setSubagentState(workerId, "idle", {
+					activeConversationId: this.channelId,
+					activeSummary: `completed: ${truncateOneLine(title, 80)}`,
+					...(entry.runtime.session.sessionFile === undefined
+						? {}
+						: { sessionFile: entry.runtime.session.sessionFile }),
+				});
+				return {
+					delegated: true,
+					subagentId: workerId,
+					kind: VOICE_GENERAL_SUBAGENT_KIND,
+					title,
+					queuedAt,
+					sessionId: entry.runtime.session.sessionId,
+					...(entry.runtime.session.sessionFile === undefined
+						? {}
+						: { sessionFile: entry.runtime.session.sessionFile }),
+					response,
+				};
+			} catch (error) {
+				const message = errorMessage(error);
+				await this.store.setSubagentState(workerId, "failed", {
+					activeConversationId: this.channelId,
+					activeSummary: `failed: ${truncateOneLine(title, 80)}`,
+					...(entry.runtime.session.sessionFile === undefined
+						? {}
+						: { sessionFile: entry.runtime.session.sessionFile }),
+					lastError: message,
+				});
+				return {
+					delegated: false,
+					subagentId: workerId,
+					kind: VOICE_GENERAL_SUBAGENT_KIND,
+					title,
+					queuedAt,
+					sessionId: entry.runtime.session.sessionId,
+					...(entry.runtime.session.sessionFile === undefined
+						? {}
+						: { sessionFile: entry.runtime.session.sessionFile }),
+					error: message,
+				};
+			}
+		});
+	}
+
+	private async ensureGeneralSubagentRuntime(
+		workerId: string,
+		workerKey: string,
+		title: string,
+	): Promise<VoiceGeneralSubagentRuntimeEntry> {
+		const existing = this.generalRuntimes.get(workerId);
+		if (existing !== undefined) return existing;
+		const sessionManager = await this.createGeneralSessionManager(workerId);
+		const runtime = await createAgentSessionRuntime(this.createGeneralRuntime, {
+			cwd: this.cwd,
+			agentDir: this.agentDir,
+			sessionManager,
+		});
+		if (this.stopped) {
+			await runtime.dispose();
+			throw new Error("voice general subagent stopped during startup");
+		}
+		const entry = {
+			runtime,
+			queue: new SerialRuntimeTurnQueue(),
+			workerId,
+			workerKey,
+		};
+		this.generalRuntimes.set(workerId, entry);
+		await this.store.upsertSubagent({
+			id: workerId,
+			kind: VOICE_GENERAL_SUBAGENT_KIND,
+			scopeId: this.scopeId,
+			scopeName: `${this.voiceScopeName()} general ${workerKey}`,
+			state: "idle",
+			activeConversationId: this.channelId,
+			activeSummary: `ready for voice-delegated work: ${truncateOneLine(title, 80)}`,
+			...(runtime.session.sessionFile === undefined ? {} : { sessionFile: runtime.session.sessionFile }),
+			thinkingLevel: runtime.session.thinkingLevel,
+			pid: process.pid,
+		});
+		return entry;
 	}
 
 	private async createWorkerSessionManager(): Promise<SessionManager> {
@@ -254,6 +474,21 @@ export class DiscordVoiceSubagentCoordinator {
 			} catch (error) {
 				this.log(
 					`voice-worker-session-resume-failed worker=${this.workerId} file=${sessionFile} error=${errorMessage(error)}`,
+				);
+			}
+		}
+		return SessionManager.create(this.cwd, this.sessionDir);
+	}
+
+	private async createGeneralSessionManager(workerId: string): Promise<SessionManager> {
+		const existing = await this.store.getSubagent(workerId);
+		const sessionFile = existing?.sessionFile;
+		if (sessionFile !== undefined && (await isReadableFile(sessionFile))) {
+			try {
+				return SessionManager.open(sessionFile, this.sessionDir, this.cwd);
+			} catch (error) {
+				this.log(
+					`voice-general-session-resume-failed worker=${workerId} file=${sessionFile} error=${errorMessage(error)}`,
 				);
 			}
 		}
@@ -354,8 +589,13 @@ class SubagentTranscriptFile {
 
 function buildVoiceWorkerPrompt(prompt: string, context: { guildId: string; channelId: string }): string {
 	return [
-		"You are a dedicated Clanky subagent handling durable or tool-heavy work delegated by the Discord realtime voice agent.",
-		"You have Clanky's normal tools, skills, memory, and project context. Work independently so the main Clanky session stays unblocked.",
+		"You are the dedicated Clanky voice supervisor subagent for the active Discord voice session.",
+		"You were spawned by the Discord realtime voice agent, which owns live low-latency speech, interruption, and media control.",
+		"You are not the main Clanky foreground agent. The main Clanky agent remains the user's primary window, AgentRoom/tmux authority, and final coordinator for foreground work.",
+		"You have Clanky's normal tools, skills, memory, and project context, plus the privileged voice_delegate_to_subagent tool.",
+		"Use voice_delegate_to_subagent only when bounded work should run in a general Clanky subagent while you continue supervising voice.",
+		"General subagents are capable Clanky workers, but they cannot spawn child subagents. They can inspect subagent_status, read main_session_context, or delegate_to_main_worker when appropriate.",
+		"Use delegate_to_main_worker when work should become main foreground work for the user.",
 		"Return only the concise answer the voice agent should speak back into Discord unless the request explicitly needs more detail.",
 		"",
 		`Discord voice guild: ${context.guildId}`,
@@ -365,6 +605,48 @@ function buildVoiceWorkerPrompt(prompt: string, context: { guildId: string; chan
 		"",
 		prompt,
 	].join("\n");
+}
+
+function buildGeneralSubagentPrompt(
+	input: VoiceSupervisorDelegateInput,
+	context: {
+		guildId: string;
+		channelId: string;
+		scopeId: string;
+		workerId: string;
+		workerKey: string;
+	},
+): string {
+	return [
+		"You are a general-purpose Clanky subagent spawned by the privileged Discord voice supervisor.",
+		"You are a capable Clanky worker with the normal Clanky tools, skills, memory, and project context.",
+		"You are not the main Clanky foreground agent, and you are not the live Discord voice Realtime model.",
+		"The main Clanky agent remains the user's primary window, AgentRoom/tmux authority, and final coordinator for foreground work.",
+		"You cannot spawn child subagents. If work needs foreground ownership, use delegate_to_main_worker. If you need awareness of other workers, use subagent_status. If you need main-agent context, use main_session_context.",
+		"Work independently, return a clear result to the voice supervisor, and keep the response concise enough to summarize in voice.",
+		"",
+		`Title: ${input.title.trim()}`,
+		...(input.reason === undefined ? [] : [`Reason: ${input.reason.trim()}`]),
+		`Discord voice guild: ${context.guildId}`,
+		`Discord voice channel: ${context.channelId}`,
+		`Voice scope: ${context.scopeId}`,
+		`Subagent id: ${context.workerId}`,
+		`Subagent key: ${context.workerKey}`,
+		"",
+		"Task:",
+		"",
+		input.prompt.trim(),
+	].join("\n");
+}
+
+function normalizeGeneralSubagentWorkerKey(value: string): string {
+	const normalized = value
+		.trim()
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-+|-+$/g, "")
+		.slice(0, 48);
+	return normalized.length > 0 ? normalized : randomUUID();
 }
 
 function sendSubagentMessageAndWaitForAssistantText(

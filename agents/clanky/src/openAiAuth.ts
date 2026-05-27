@@ -89,7 +89,7 @@ function loginInstructions(): string {
 	].join("\n");
 }
 
-async function runOpenAiLogin(deps: OpenAiAuthCommandDeps, ctx: ExtensionCommandContext): Promise<void> {
+export async function runOpenAiLogin(deps: OpenAiAuthCommandDeps, ctx: ExtensionCommandContext): Promise<void> {
 	const providerId = resolveOpenAiProviderId(deps);
 	const existing = deps.authStorage.get(providerId);
 	if (existing !== undefined) {

@@ -113,6 +113,8 @@ Clanky can still create a voice-only Discord client with voice-state intents,
 join one configured voice channel through `clankvox`, transcribe each active
 Discord speaker through an individual OpenAI Realtime transcription session, and
 send labeled transcript turns into the main Realtime voice response session.
+See `docs/discord-voice-architecture.md` for the end-to-end control-plane,
+media-plane, Realtime, and Pi delegation map.
 
 Required runtime env:
 

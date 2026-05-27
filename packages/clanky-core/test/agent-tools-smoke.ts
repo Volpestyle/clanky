@@ -90,6 +90,7 @@ const handlers: ClankyAgentToolHandlers = {
 				scopeName: "Tool Guild",
 				state: "idle",
 				queueDepth: 0,
+				thinkingLevel: "medium",
 				activeSummary: "idle",
 				createdAt: "2026-01-01T00:00:00.000Z",
 				updatedAt: "2026-01-01T00:01:00.000Z",
@@ -136,12 +137,24 @@ const handlers: ClankyAgentToolHandlers = {
 		calls.push("discord-voice-status");
 		return { enabled: true, active: false };
 	},
-	discordVoiceJoin: async (input) => {
-		calls.push(`discord-voice-join:${input.guildId ?? input.guild_id}:${input.channelId ?? input.channel_id}`);
+	discordVoiceJoin: async (input, options) => {
+		const guildId = input.guildId ?? input.guild_id;
+		const channelId = input.channelId ?? input.channel_id;
+		calls.push(`discord-voice-join:${guildId}:${channelId}`);
+		options?.onProgress?.({
+			phase: "waiting_for_client_ready",
+			message: "Waiting for Discord voice client to become ready.",
+			...(guildId === undefined ? {} : { guildId }),
+			...(channelId === undefined ? {} : { channelId }),
+		});
 		return { joined: true, input };
 	},
-	discordVoiceLeave: async () => {
+	discordVoiceLeave: async (options) => {
 		calls.push("discord-voice-leave");
+		options?.onProgress?.({
+			phase: "starting_voice_bridge",
+			message: "Updating Discord voice bridge.",
+		});
 		return { joined: false };
 	},
 };
@@ -149,6 +162,7 @@ const handlers: ClankyAgentToolHandlers = {
 const tools = createClankyToolDefinitions(handlers);
 assertChatModeHelpers();
 await assertSubagentPanelCommand();
+await assertClankyCommandCompletions();
 const expectedNames = [
 	"schedule_cron",
 	"mcp_list_tools",
@@ -264,12 +278,25 @@ await executeTool(tools, "media_backend_status", {});
 
 await executeTool(tools, "discord_voice_status", {});
 
-await executeTool(tools, "discord_voice_join", {
-	guild_id: "guild-tool",
-	channel_id: "voice-tool",
-} satisfies DiscordVoiceJoinToolInput);
+const voiceJoinUpdates: string[] = [];
+await executeTool(
+	tools,
+	"discord_voice_join",
+	{
+		guild_id: "guild-tool",
+		channel_id: "voice-tool",
+	} satisfies DiscordVoiceJoinToolInput,
+	voiceJoinUpdates,
+);
+if (!voiceJoinUpdates.some((update) => update.includes("Waiting for Discord voice client"))) {
+	throw new Error(`discord_voice_join did not emit startup progress: ${JSON.stringify(voiceJoinUpdates)}`);
+}
 
-await executeTool(tools, "discord_voice_leave", {});
+const voiceLeaveUpdates: string[] = [];
+await executeTool(tools, "discord_voice_leave", {}, voiceLeaveUpdates);
+if (!voiceLeaveUpdates.some((update) => update.includes("Updating Discord voice bridge"))) {
+	throw new Error(`discord_voice_leave did not emit startup progress: ${JSON.stringify(voiceLeaveUpdates)}`);
+}
 
 await assertRecentDiscordAttachmentsLoadsMediaSources();
 
@@ -502,6 +529,7 @@ async function assertSubagentPanelCommand(): Promise<void> {
 }
 
 function subagentSessionFixture(sender: string, userText: string, assistantText: string): string {
+	const reasoningText = `checking ${sender} subagent reasoning`;
 	return [
 		JSON.stringify({
 			type: "session",
@@ -532,11 +560,63 @@ function subagentSessionFixture(sender: string, userText: string, assistantText:
 			timestamp: "2026-01-01T00:02:00.000Z",
 			message: {
 				role: "assistant",
-				content: [{ type: "text", text: assistantText }],
+				content: [
+					{
+						type: "thinking",
+						thinking: "",
+						thinkingSignature: JSON.stringify({
+							type: "reasoning",
+							encrypted_content: "do-not-render",
+							summary: [{ type: "summary_text", text: reasoningText }],
+						}),
+					},
+					{ type: "text", text: assistantText },
+				],
 			},
 		}),
 		"",
 	].join("\n");
+}
+
+async function assertClankyCommandCompletions(): Promise<void> {
+	const commands = new Map<string, Parameters<Parameters<ExtensionFactory>[0]["registerCommand"]>[1]>();
+	const completionHandlers: ClankyAgentToolHandlers = {
+		...handlers,
+		listSkills: async () => ({ skills: [] }),
+		createSkill: async (input) => ({ created: input.name }),
+	};
+	const pi = {
+		registerCommand(name: string, options: Parameters<Parameters<ExtensionFactory>[0]["registerCommand"]>[1]) {
+			commands.set(name, options);
+		},
+		on() {
+			return;
+		},
+	} as unknown as Parameters<ExtensionFactory>[0];
+	for (const factory of createClankyExtensionFactories(completionHandlers)) await factory(pi);
+	await assertCommandCompletionIncludes(commands.get("skill"), "", "add ");
+	await assertCommandCompletionIncludes(commands.get("memory"), "", "remember ");
+	await assertCommandCompletionIncludes(commands.get("memory"), "for", "forget ");
+	await assertCommandCompletionIncludes(commands.get("subagents"), "", "modal");
+	await assertCommandCompletionIncludes(commands.get("subagents"), "off", "off");
+}
+
+async function assertCommandCompletionIncludes(
+	command: Parameters<Parameters<ExtensionFactory>[0]["registerCommand"]>[1] | undefined,
+	prefix: string,
+	expectedValue: string,
+): Promise<void> {
+	if (command === undefined) throw new Error(`agent-tools-smoke: missing command for completion ${expectedValue}`);
+	const completions = await command.getArgumentCompletions?.(prefix);
+	if (!Array.isArray(completions)) {
+		throw new Error(`agent-tools-smoke: command did not return completions for prefix "${prefix}"`);
+	}
+	const values = completions.map((completion) => completion.value);
+	if (!values.includes(expectedValue)) {
+		throw new Error(
+			`agent-tools-smoke: completion for prefix "${prefix}" did not include "${expectedValue}"; got ${values.join(", ")}`,
+		);
+	}
 }
 
 async function assertSubagentPanelCommandWithSession(sessionFiles: {
@@ -553,6 +633,7 @@ async function assertSubagentPanelCommandWithSession(sessionFiles: {
 				scopeName: "First Guild",
 				state: "running",
 				queueDepth: 3,
+				thinkingLevel: "high",
 				activeSummary: "replying to First User in general",
 				sessionFile: sessionFiles.firstSessionFile,
 				createdAt: "2026-01-01T00:00:00.000Z",
@@ -565,6 +646,7 @@ async function assertSubagentPanelCommandWithSession(sessionFiles: {
 				scopeName: "Smoke Guild",
 				state: "running",
 				queueDepth: 2,
+				thinkingLevel: "medium",
 				activeSummary: "replying to Smoke User in general",
 				sessionFile: sessionFiles.selectedSessionFile,
 				createdAt: "2026-01-01T00:00:00.000Z",
@@ -639,6 +721,7 @@ async function assertSubagentPanelCommandWithSession(sessionFiles: {
 	if (
 		passivePanelLines === undefined ||
 		!passivePanelLines.join("\n").includes("Smoke Guild") ||
+		!passivePanelLines.join("\n").includes("effort medium") ||
 		!passivePanelLines.join("\n").includes("/subagents focus selects")
 	) {
 		throw new Error(`smoke: /subagents did not show the passive live panel: ${JSON.stringify(passivePanelLines)}`);
@@ -675,9 +758,14 @@ async function assertSubagentPanelCommandWithSession(sessionFiles: {
 	}
 	if (
 		detailLines === undefined ||
-		!detailLines.join("\n").includes("Conversation history (2 messages)") ||
+		!detailLines.join("\n").includes("History 3 msgs") ||
+		!detailLines.join("\n").includes("effort medium") ||
+		!detailLines.join("\n").includes("rendered lines") ||
 		!detailLines.join("\n").includes("[2026-01-01 00:01] user / Smoke User") ||
+		!detailLines.join("\n").includes("[2026-01-01 00:02] reasoning") ||
 		!detailLines.join("\n").includes("[2026-01-01 00:02] clanky") ||
+		!detailLines.join("\n").includes("checking Smoke User subagent reasoning") ||
+		detailLines.join("\n").includes("do-not-render") ||
 		!detailLines.join("\n").includes("hello discord") ||
 		!detailLines.join("\n").includes("second line") ||
 		!detailLines.join("\n").includes("hello back") ||
@@ -711,6 +799,7 @@ async function executeTool<T extends Record<string, unknown>>(
 	tools: readonly ToolDefinition[],
 	name: string,
 	input: T,
+	updates?: string[],
 ): Promise<unknown> {
 	const tool = tools.find((candidate) => candidate.name === name);
 	if (tool === undefined) throw new Error(`Tool ${name} is not registered`);
@@ -718,7 +807,16 @@ async function executeTool<T extends Record<string, unknown>>(
 		sessionManager: { getSessionId: () => "session-smoke" },
 		cwd: "/tmp/clanky-agent-tools-smoke",
 	} as unknown as Parameters<typeof tool.execute>[4];
-	const result = await tool.execute("call-id", input, new AbortController().signal, () => undefined, ctx);
+	const result = await tool.execute(
+		"call-id",
+		input,
+		new AbortController().signal,
+		(partial) => {
+			const content = partial.content[0];
+			if (content?.type === "text") updates?.push(content.text);
+		},
+		ctx,
+	);
 	if (result === undefined || typeof result !== "object" || !("details" in result)) {
 		throw new Error(`Tool ${name} returned malformed result: ${JSON.stringify(result)}`);
 	}

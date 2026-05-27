@@ -64,7 +64,10 @@ try {
 	) {
 		throw new Error(`subagent smoke: priority claim failed ${JSON.stringify(first)}`);
 	}
-	await store.setSubagentState(workerId, "running", { activeSummary: "processing high priority" });
+	await store.setSubagentState(workerId, "running", {
+		activeSummary: "processing high priority",
+		thinkingLevel: "medium",
+	});
 	const duplicate = await store.enqueueDiscordMessage({
 		workerId,
 		kind: "discord-guild",
@@ -149,12 +152,21 @@ try {
 		scopeId: "guild-smoke:voice-smoke",
 		scopeName: "Smoke Voice",
 		state: "running",
+		thinkingLevel: "low",
 		activeSummary: "listening in Discord voice",
 	});
+	const updatedThinkingRows = await store.setAllSubagentThinkingLevel("xhigh");
 	const generic = await store.listSubagents();
 	const voiceSubagent = generic.find((entry) => entry.id === "discord-voice:guild-smoke:voice-smoke");
-	if (voiceSubagent?.kind !== "discord-voice" || voiceSubagent.queueDepth !== 0) {
+	if (
+		voiceSubagent?.kind !== "discord-voice" ||
+		voiceSubagent.queueDepth !== 0 ||
+		voiceSubagent.thinkingLevel !== "xhigh"
+	) {
 		throw new Error(`subagent smoke: generic voice subagent was not listed ${JSON.stringify(generic)}`);
+	}
+	if (updatedThinkingRows < 1 || generic.some((entry) => entry.thinkingLevel !== "xhigh")) {
+		throw new Error(`subagent smoke: thinking level update mismatch ${JSON.stringify(generic)}`);
 	}
 
 	store.close();

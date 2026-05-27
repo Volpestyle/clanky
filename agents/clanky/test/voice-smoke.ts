@@ -51,6 +51,7 @@ import {
 	splitRealtimeInputAudioChunk,
 	stringifyRealtimeFunctionOutput,
 } from "../src/voice/openAiRealtimeClient.ts";
+import type { VoiceSupervisorDelegateHandle } from "../src/voiceSupervisorExtension.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -1047,7 +1048,7 @@ async function assertFakeVoiceBridgeRealtimeTools(): Promise<void> {
 		.join(",");
 	if (
 		tools !==
-		"ask_pi,list_screen_shares,media_pause,media_resume,media_status,media_stop,play_music_url,play_video_url,see_screenshare_snapshot,start_music_visualizer,start_screen_watch,stop_screen_watch"
+		"ask_pi,list_screen_shares,media_pause,media_resume,media_status,media_stop,pi_status,pi_subagents,play_music_url,play_video_url,see_screenshare_snapshot,start_music_visualizer,start_screen_watch,stop_screen_watch"
 	) {
 		throw new Error(`voice-smoke: fake voice bridge realtime tools mismatch: ${tools}`);
 	}
@@ -1133,6 +1134,64 @@ async function assertFakeVoiceBridgeRealtimeTools(): Promise<void> {
 		"ask_pi output",
 	);
 	if (askOutput.text !== "Pi voice answer.") throw new Error("voice-smoke: ask_pi output did not include Pi answer");
+
+	realtime.emit("event", {
+		type: "response.done",
+		response: {
+			output: [
+				{
+					type: "function_call",
+					name: "pi_status",
+					call_id: "call-pi-status",
+					arguments: "{}",
+				},
+			],
+		},
+	});
+	await waitUntil(
+		() => realtime.functionOutputs.some((output) => output.callId === "call-pi-status"),
+		"pi_status output",
+	);
+	const piStatusOutput = expectRecord(
+		realtime.functionOutputs.find((output) => output.callId === "call-pi-status")?.output,
+		"pi_status output",
+	);
+	const piStatusMain = expectRecord(piStatusOutput.main, "pi_status main");
+	const piStatusVoice = expectRecord(piStatusOutput.voice, "pi_status voice");
+	const piStatusSubagents = expectRecord(piStatusOutput.subagents, "pi_status subagents");
+	if (
+		piStatusOutput.ok !== true ||
+		piStatusMain.voiceDelegationTarget !== "main-runtime" ||
+		piStatusVoice.scopeId !== "guild-1:voice-1" ||
+		piStatusSubagents.available !== false
+	) {
+		throw new Error(`voice-smoke: pi_status output mismatch ${JSON.stringify(piStatusOutput)}`);
+	}
+
+	realtime.emit("event", {
+		type: "response.done",
+		response: {
+			output: [
+				{
+					type: "function_call",
+					name: "pi_subagents",
+					call_id: "call-pi-subagents",
+					arguments: '{"limit":5}',
+				},
+			],
+		},
+	});
+	await waitUntil(
+		() => realtime.functionOutputs.some((output) => output.callId === "call-pi-subagents"),
+		"pi_subagents output",
+	);
+	const piSubagentsOutput = expectRecord(
+		realtime.functionOutputs.find((output) => output.callId === "call-pi-subagents")?.output,
+		"pi_subagents output",
+	);
+	if (piSubagentsOutput.available !== false || !Array.isArray(piSubagentsOutput.subagents)) {
+		throw new Error(`voice-smoke: pi_subagents unavailable output mismatch ${JSON.stringify(piSubagentsOutput)}`);
+	}
 
 	realtime.emit("event", {
 		type: "response.done",
@@ -1327,10 +1386,12 @@ async function assertFakeVoiceBridgeRealtimeTools(): Promise<void> {
 		throw new Error("voice-smoke: voice bridge did not count speaker-attributed transcripts");
 	}
 	if (
-		stats.realtimeFunctionCallCount !== 6 ||
-		stats.realtimeFunctionCallOutputCount !== 6 ||
+		stats.realtimeFunctionCallCount !== 8 ||
+		stats.realtimeFunctionCallOutputCount !== 8 ||
 		stats.realtimeFunctionCallErrorCount !== 1 ||
-		stats.askPiCallCount !== 2
+		stats.askPiCallCount !== 2 ||
+		stats.piStatusRequestCount !== 1 ||
+		stats.piSubagentStatusRequestCount !== 1
 	) {
 		throw new Error("voice-smoke: voice bridge did not count realtime tool calls");
 	}
@@ -1548,65 +1609,95 @@ async function assertFakeVoiceBridgeSubagents(): Promise<void> {
 			services: { agentDir },
 			session: mainSession,
 		};
+		const voiceSupervisorDelegate: VoiceSupervisorDelegateHandle = {};
 		const workerPrompts: string[] = [];
+		const generalPrompts: string[] = [];
 		let workerRuntimeCreateCount = 0;
+		let generalRuntimeCreateCount = 0;
 		let workerDisposedCount = 0;
-		const createSubagentRuntime: CreateAgentSessionRuntimeFactory = async (
-			options,
-		): Promise<CreateAgentSessionRuntimeResult> => {
-			workerRuntimeCreateCount += 1;
-			const listeners = new Set<(event: AgentSessionEvent) => void>();
-			const fakeSession = {
-				isStreaming: false,
-				sessionId: options.sessionManager.getSessionId(),
-				sessionFile: options.sessionManager.getSessionFile(),
-				sessionManager: options.sessionManager,
-				extensionRunner: {
-					hasHandlers: () => false,
-					emit: async () => undefined,
-				},
-				subscribe(listener: (event: AgentSessionEvent) => void): () => void {
-					listeners.add(listener);
-					return () => listeners.delete(listener);
-				},
-				async sendUserMessage(message: string): Promise<void> {
-					workerPrompts.push(message);
-					options.sessionManager.appendMessage({
-						role: "user",
-						content: [{ type: "text", text: message }],
-					} as never);
-					queueMicrotask(() => {
-						const assistantMessage = {
-							role: "assistant",
-							stopReason: "endTurn",
-							content: [{ type: "text", text: "Worker voice answer." }],
-						};
-						const event = {
-							type: "message_end",
-							message: assistantMessage,
-						} as unknown as AgentSessionEvent;
-						options.sessionManager.appendMessage(assistantMessage as never);
-						for (const listener of listeners) listener(event);
-					});
-				},
-				dispose(): void {
-					workerDisposedCount += 1;
-				},
-			};
-			return {
-				session: fakeSession as unknown as CreateAgentSessionRuntimeResult["session"],
-				extensionsResult: {
-					extensions: [],
-					errors: [],
-					runtime: {},
-				} as unknown as CreateAgentSessionRuntimeResult["extensionsResult"],
-				services: {
-					cwd: options.cwd,
-					agentDir: options.agentDir,
-				} as unknown as CreateAgentSessionRuntimeResult["services"],
-				diagnostics: [],
+		let generalDisposedCount = 0;
+		const createFakeSubagentRuntimeFactory = (input: {
+			answer: string;
+			prompts: string[];
+			onCreate: () => void;
+			onDispose: () => void;
+		}): CreateAgentSessionRuntimeFactory => {
+			return async (options): Promise<CreateAgentSessionRuntimeResult> => {
+				input.onCreate();
+				const listeners = new Set<(event: AgentSessionEvent) => void>();
+				const fakeSession = {
+					isStreaming: false,
+					sessionId: options.sessionManager.getSessionId(),
+					sessionFile: options.sessionManager.getSessionFile(),
+					sessionManager: options.sessionManager,
+					extensionRunner: {
+						hasHandlers: () => false,
+						emit: async () => undefined,
+					},
+					subscribe(listener: (event: AgentSessionEvent) => void): () => void {
+						listeners.add(listener);
+						return () => listeners.delete(listener);
+					},
+					setThinkingLevel(): void {},
+					async sendUserMessage(message: string): Promise<void> {
+						input.prompts.push(message);
+						options.sessionManager.appendMessage({
+							role: "user",
+							content: [{ type: "text", text: message }],
+						} as never);
+						queueMicrotask(() => {
+							const assistantMessage = {
+								role: "assistant",
+								stopReason: "endTurn",
+								content: [{ type: "text", text: input.answer }],
+							};
+							const event = {
+								type: "message_end",
+								message: assistantMessage,
+							} as unknown as AgentSessionEvent;
+							options.sessionManager.appendMessage(assistantMessage as never);
+							for (const listener of listeners) listener(event);
+						});
+					},
+					dispose(): void {
+						input.onDispose();
+					},
+				};
+				return {
+					session: fakeSession as unknown as CreateAgentSessionRuntimeResult["session"],
+					extensionsResult: {
+						extensions: [],
+						errors: [],
+						runtime: {},
+					} as unknown as CreateAgentSessionRuntimeResult["extensionsResult"],
+					services: {
+						cwd: options.cwd,
+						agentDir: options.agentDir,
+					} as unknown as CreateAgentSessionRuntimeResult["services"],
+					diagnostics: [],
+				};
 			};
 		};
+		const createVoiceSubagentRuntime = createFakeSubagentRuntimeFactory({
+			answer: "Worker voice answer.",
+			prompts: workerPrompts,
+			onCreate: () => {
+				workerRuntimeCreateCount += 1;
+			},
+			onDispose: () => {
+				workerDisposedCount += 1;
+			},
+		});
+		const createSubagentRuntime = createFakeSubagentRuntimeFactory({
+			answer: "General subagent answer.",
+			prompts: generalPrompts,
+			onCreate: () => {
+				generalRuntimeCreateCount += 1;
+			},
+			onDispose: () => {
+				generalDisposedCount += 1;
+			},
+		});
 		const handle = await startAgentDiscordVoiceBridge({
 			runtime: mainRuntime as never,
 			client: new FakeVoiceDiscordClient() as never,
@@ -1625,9 +1716,11 @@ async function assertFakeVoiceBridgeSubagents(): Promise<void> {
 				openAiRealtimeVoice: "marin",
 			},
 			createSubagentRuntime,
+			createVoiceSubagentRuntime,
 			subagentStore: store,
 			subagentSessionDir: paths.subagentSessionsDir,
 			subagentCwd: workDir,
+			voiceSupervisorDelegate,
 			dependencies: {
 				createRealtime() {
 					return realtime;
@@ -1647,6 +1740,12 @@ async function assertFakeVoiceBridgeSubagents(): Promise<void> {
 			voiceSubagent.state !== "running"
 		) {
 			throw new Error(`voice-smoke: voice subagent was not registered ${JSON.stringify(summaries)}`);
+		}
+		await waitUntil(() => workerRuntimeCreateCount === 1, "prewarmed voice worker runtime");
+		summaries = await store.listSubagents();
+		const prewarmedWorker = summaries.find((summary) => summary.id === "voice-worker:guild-1:voice-1");
+		if (prewarmedWorker?.state !== "idle" || prewarmedWorker.sessionFile === undefined) {
+			throw new Error(`voice-smoke: voice worker was not prewarmed ${JSON.stringify(summaries)}`);
 		}
 		const voiceSessionFile = voiceSubagent.sessionFile;
 		realtime.emit("transcript", {
@@ -1696,6 +1795,94 @@ async function assertFakeVoiceBridgeSubagents(): Promise<void> {
 		) {
 			throw new Error(`voice-smoke: worker subagent was not tracked ${JSON.stringify(summaries)}`);
 		}
+		if (voiceSupervisorDelegate.delegateToSubagent === undefined) {
+			throw new Error("voice-smoke: voice supervisor delegate was not installed");
+		}
+		const generalResult = await voiceSupervisorDelegate.delegateToSubagent({
+			title: "Check bounded detail",
+			prompt: "inspect the project detail",
+			workerKey: "detail-checker",
+			reason: "voice supervisor needs a bounded helper",
+		});
+		if (
+			generalResult.delegated !== true ||
+			generalResult.response !== "General subagent answer." ||
+			generalResult.subagentId !== "voice-general:guild-1:voice-1:detail-checker" ||
+			generalRuntimeCreateCount !== 1
+		) {
+			throw new Error(`voice-smoke: voice supervisor general delegation failed ${JSON.stringify(generalResult)}`);
+		}
+		if (
+			!generalPrompts[0]?.includes("You cannot spawn child subagents") ||
+			!generalPrompts[0]?.includes("inspect the project detail")
+		) {
+			throw new Error(`voice-smoke: general subagent prompt missed hierarchy ${JSON.stringify(generalPrompts)}`);
+		}
+		summaries = await store.listSubagents();
+		const generalSubagent = summaries.find((summary) => summary.id === "voice-general:guild-1:voice-1:detail-checker");
+		if (
+			generalSubagent?.kind !== "voice-general" ||
+			generalSubagent.sessionFile === undefined ||
+			generalSubagent.state !== "idle"
+		) {
+			throw new Error(`voice-smoke: general voice subagent was not tracked ${JSON.stringify(summaries)}`);
+		}
+		realtime.emit("event", {
+			type: "response.done",
+			response: {
+				output: [
+					{
+						type: "function_call",
+						name: "pi_status",
+						call_id: "call-subagent-status",
+						arguments: "{}",
+					},
+				],
+			},
+		});
+		await waitUntil(
+			() => realtime.functionOutputs.some((candidate) => candidate.callId === "call-subagent-status"),
+			"subagent pi_status output",
+		);
+		const statusOutput = expectRecord(
+			realtime.functionOutputs.find((candidate) => candidate.callId === "call-subagent-status")?.output,
+			"subagent pi_status output",
+		);
+		const statusSubagents = expectRecord(statusOutput.subagents, "subagent pi_status subagents");
+		if (statusSubagents.available !== true || statusSubagents.filtered !== 3 || statusSubagents.returned !== 3) {
+			throw new Error(`voice-smoke: pi_status did not include active subagents ${JSON.stringify(statusOutput)}`);
+		}
+		realtime.emit("event", {
+			type: "response.done",
+			response: {
+				output: [
+					{
+						type: "function_call",
+						name: "pi_subagents",
+						call_id: "call-subagent-filter",
+						arguments: '{"kind":"voice-worker","state":"idle","limit":1}',
+					},
+				],
+			},
+		});
+		await waitUntil(
+			() => realtime.functionOutputs.some((candidate) => candidate.callId === "call-subagent-filter"),
+			"pi_subagents filtered output",
+		);
+		const filteredOutput = expectRecord(
+			realtime.functionOutputs.find((candidate) => candidate.callId === "call-subagent-filter")?.output,
+			"pi_subagents filtered output",
+		);
+		if (filteredOutput.available !== true || filteredOutput.filtered !== 1 || filteredOutput.returned !== 1) {
+			throw new Error(`voice-smoke: pi_subagents did not filter worker status ${JSON.stringify(filteredOutput)}`);
+		}
+		const filteredSubagents = filteredOutput.subagents;
+		if (
+			!Array.isArray(filteredSubagents) ||
+			expectRecord(filteredSubagents[0], "filtered subagent").id !== workerSubagent.id
+		) {
+			throw new Error(`voice-smoke: pi_subagents did not return the worker ${JSON.stringify(filteredOutput)}`);
+		}
 		const workerTranscript = await readFile(workerSubagent.sessionFile, "utf8");
 		if (
 			!workerTranscript.includes("check durable project state") ||
@@ -1707,10 +1894,20 @@ async function assertFakeVoiceBridgeSubagents(): Promise<void> {
 		if (workerDisposedCount !== 1) {
 			throw new Error(`voice-smoke: worker runtime was not disposed ${workerDisposedCount}`);
 		}
+		if (generalDisposedCount !== 1) {
+			throw new Error(`voice-smoke: general runtime was not disposed ${generalDisposedCount}`);
+		}
 		summaries = await store.listSubagents();
 		const stoppedVoiceSubagent = summaries.find((summary) => summary.id === "discord-voice:guild-1:voice-1");
 		const stoppedWorkerSubagent = summaries.find((summary) => summary.id === "voice-worker:guild-1:voice-1");
-		if (stoppedVoiceSubagent?.state !== "stale" || stoppedWorkerSubagent?.state !== "stale") {
+		const stoppedGeneralSubagent = summaries.find(
+			(summary) => summary.id === "voice-general:guild-1:voice-1:detail-checker",
+		);
+		if (
+			stoppedVoiceSubagent?.state !== "stale" ||
+			stoppedWorkerSubagent?.state !== "stale" ||
+			stoppedGeneralSubagent?.state !== "stale"
+		) {
 			throw new Error(`voice-smoke: stopped voice subagents were not stale ${JSON.stringify(summaries)}`);
 		}
 	} finally {

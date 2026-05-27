@@ -12,6 +12,7 @@ export interface ClankvoxLaunchOptions {
 	cwd?: string;
 	args?: string[];
 	timeoutMs?: number;
+	log?: (line: string) => void;
 }
 
 export interface ClankvoxSpawnOptions extends ClankvoxLaunchOptions {
@@ -106,8 +107,9 @@ export class ClankvoxIpcClient extends EventEmitter {
 	private readonly guildId: string;
 	private readonly channelId: string;
 	private readonly guild: ClankvoxGuildLike;
-	private child: ChildProcessByStdio<Writable, Readable, null> | undefined;
+	private child: ChildProcessByStdio<Writable, Readable, Readable> | undefined;
 	private stdoutBuffer = Buffer.alloc(0);
+	private stderrBuffer = "";
 	private adapterProxy: ClankvoxVoiceAdapterProxy | undefined;
 	private destroyed = false;
 	private lastVoiceSessionId: string | undefined;
@@ -348,11 +350,14 @@ export class ClankvoxIpcClient extends EventEmitter {
 				OPUS_NO_PKG_CONFIG: "1",
 				CMAKE_POLICY_VERSION_MINIMUM: "3.5",
 			},
-			stdio: ["pipe", "pipe", "inherit"],
+			stdio: ["pipe", "pipe", "pipe"],
 		});
 		this.child = child;
 		child.stdout.on("data", (data: Buffer) => this.processStdoutChunk(data));
+		child.stderr.on("data", (data: Buffer) => this.processStderrChunk(data, options.log));
+		child.stderr.once("end", () => this.flushStderrBuffer(options.log));
 		child.once("exit", (code, signal) => {
+			this.flushStderrBuffer(options.log);
 			if (!this.destroyed) this.emit("crashed", { code, signal });
 		});
 		this.setupAdapterProxy();
@@ -405,6 +410,27 @@ export class ClankvoxIpcClient extends EventEmitter {
 				this.handleBinaryAudio(payload);
 			}
 		}
+	}
+
+	private processStderrChunk(data: Buffer, log: ((line: string) => void) | undefined): void {
+		if (log === undefined) return;
+		this.stderrBuffer += data.toString("utf8");
+		const lines = this.stderrBuffer.split(/\r?\n/);
+		this.stderrBuffer = lines.pop() ?? "";
+		for (const line of lines) {
+			const trimmed = line.trimEnd();
+			if (trimmed.length > 0) log(trimmed);
+		}
+	}
+
+	private flushStderrBuffer(log: ((line: string) => void) | undefined): void {
+		if (log === undefined || this.stderrBuffer.length === 0) {
+			this.stderrBuffer = "";
+			return;
+		}
+		const line = this.stderrBuffer.trimEnd();
+		this.stderrBuffer = "";
+		if (line.length > 0) log(line);
 	}
 
 	private handleJsonMessage(payload: Buffer): void {

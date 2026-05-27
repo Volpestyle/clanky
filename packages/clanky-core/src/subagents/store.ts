@@ -77,6 +77,7 @@ export interface UpsertSubagentInput {
 	activeConversationId?: string;
 	activeSummary?: string;
 	sessionFile?: string;
+	thinkingLevel?: string;
 	pid?: number;
 	lastHeartbeatAt?: string;
 	lastError?: string;
@@ -94,6 +95,7 @@ export interface ClankySubagentSummary {
 	activeConversationId?: string;
 	activeSummary?: string;
 	sessionFile?: string;
+	thinkingLevel?: string;
 	pid?: number;
 	lastHeartbeatAt?: string;
 	lastError?: string;
@@ -275,13 +277,14 @@ export class DiscordSubagentStore {
 					active_conversation_id,
 					active_summary,
 					session_file,
+					thinking_level,
 					pid,
 					last_heartbeat_at,
 					last_error,
 					created_at,
 					updated_at
 				)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT(id) DO UPDATE SET
 					kind = excluded.kind,
 					scope_id = excluded.scope_id,
@@ -299,6 +302,7 @@ export class DiscordSubagentStore {
 						ELSE excluded.active_summary
 					END,
 					session_file = COALESCE(excluded.session_file, subagents.session_file),
+					thinking_level = COALESCE(excluded.thinking_level, subagents.thinking_level),
 					pid = COALESCE(excluded.pid, subagents.pid),
 					last_heartbeat_at = COALESCE(excluded.last_heartbeat_at, subagents.last_heartbeat_at),
 					last_error = excluded.last_error,
@@ -313,6 +317,7 @@ export class DiscordSubagentStore {
 				input.activeConversationId ?? null,
 				input.activeSummary ?? null,
 				input.sessionFile ?? null,
+				input.thinkingLevel ?? null,
 				input.pid ?? null,
 				input.lastHeartbeatAt ?? now,
 				input.lastError ?? null,
@@ -328,6 +333,7 @@ export class DiscordSubagentStore {
 			activeConversationId?: string;
 			activeSummary?: string;
 			sessionFile?: string;
+			thinkingLevel?: string;
 			lastError?: string;
 		} = {},
 	): Promise<void> {
@@ -340,6 +346,7 @@ export class DiscordSubagentStore {
 					active_conversation_id = ?,
 					active_summary = ?,
 					session_file = COALESCE(?, session_file),
+					thinking_level = COALESCE(?, thinking_level),
 					last_heartbeat_at = ?,
 					last_error = ?,
 					updated_at = ?
@@ -350,11 +357,24 @@ export class DiscordSubagentStore {
 				details.activeConversationId ?? null,
 				details.activeSummary ?? null,
 				details.sessionFile ?? null,
+				details.thinkingLevel ?? null,
 				now,
 				details.lastError ?? null,
 				now,
 				id,
 			);
+	}
+
+	async setAllSubagentThinkingLevel(thinkingLevel: string, now = new Date()): Promise<number> {
+		await this.ensure();
+		const result = this.database()
+			.prepare(`
+				UPDATE subagents
+				SET thinking_level = ?,
+					updated_at = ?
+			`)
+			.run(thinkingLevel, now.toISOString()) as SqliteRunResult;
+		return result.changes;
 	}
 
 	async getSubagent(id: string): Promise<ClankySubagentSummary | undefined> {
@@ -437,6 +457,7 @@ export class DiscordSubagentStore {
 				active_conversation_id TEXT,
 				active_summary TEXT,
 				session_file TEXT,
+				thinking_level TEXT,
 				pid INTEGER,
 				last_heartbeat_at TEXT,
 				last_error TEXT,
@@ -480,6 +501,7 @@ export class DiscordSubagentStore {
 		`);
 		ensureColumn(db, "discord_inbox", "conversation_thread_id", "TEXT");
 		ensureColumn(db, "discord_inbox", "conversation_parent_id", "TEXT");
+		ensureColumn(db, "subagents", "thinking_level", "TEXT");
 	}
 
 	close(): void {
@@ -636,6 +658,8 @@ function readSubagentRow(row: Record<string, unknown>): ClankySubagentSummary | 
 	if (activeSummary !== undefined) summary.activeSummary = activeSummary;
 	const sessionFile = readString(row, "session_file");
 	if (sessionFile !== undefined) summary.sessionFile = sessionFile;
+	const thinkingLevel = readString(row, "thinking_level");
+	if (thinkingLevel !== undefined) summary.thinkingLevel = thinkingLevel;
 	const pid = readNumber(row, "pid");
 	if (pid !== undefined) summary.pid = pid;
 	const lastHeartbeatAt = readString(row, "last_heartbeat_at");

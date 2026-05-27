@@ -15,8 +15,10 @@
  * still goes through `@agentroom/chat-discord`.
  */
 import {
+	type ClankyCommandCompletionSpec,
 	type ClankyDiscordCredentialKind,
 	type ClankyDiscordCredentialPayload,
+	completeClankyCommandArgument,
 	DEFAULT_CLANKY_DISCORD_PROVIDER_ID,
 	DEFAULT_ELEVENLABS_PROVIDER_ID,
 	getElevenLabsCredentialStatus,
@@ -25,7 +27,7 @@ import {
 	saveStoredDiscordCredential,
 } from "@clanky/core";
 import type { AuthStorage, ExtensionCommandContext, ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import type { ClankyDiscordGatewayController } from "./discordGatewayController.ts";
+import type { ClankyDiscordGatewayController, DiscordVoiceStartProgress } from "./discordGatewayController.ts";
 import type {
 	DiscordVoiceSettingsAccessor,
 	DiscordVoiceTtsProvider,
@@ -47,6 +49,154 @@ const ELEVENLABS_OUTPUT_FORMAT_OPTIONS: ElevenLabsPcmOutputFormat[] = [
 	"pcm_24000",
 	"pcm_44100",
 ];
+const DISCORD_VOICE_LOADING_UI_KEY = "clanky-discord-voice-loading";
+const DISCORD_VOICE_LOADING_FRAMES = ["-", "\\", "|", "/"];
+const DISCORD_VOICE_COMMAND_COMPLETIONS = [
+	{ value: "setup", description: "Open the Discord voice setup UI.", aliases: ["configure", "ui"] },
+	{ value: "status", description: "Show stored voice settings and live bridge status." },
+	{ value: "enable", description: "Enable dynamic Discord voice access without pinning a channel." },
+	{
+		value: "enable ",
+		label: "enable <guild-id> <voice-channel-id>",
+		description: "Enable voice and pin a Discord voice channel target.",
+	},
+	{
+		value: "join ",
+		label: "join <guild-id> <voice-channel-id>",
+		description: "Pin and join a Discord voice channel.",
+		aliases: ["target "],
+	},
+	{
+		value: "allow-server ",
+		label: "allow-server <guild-id> [...]",
+		description: "Allow Discord voice joins for specific servers.",
+		aliases: ["allow-servers ", "server ", "servers ", "guild ", "guilds "],
+	},
+	{
+		value: "allow-server all",
+		description: "Clear the server allowlist so all accessible servers are allowed.",
+		aliases: ["allow-server clear", "allow-server none"],
+	},
+	{
+		value: "allow-channel ",
+		label: "allow-channel <voice-channel-id> [...]",
+		description: "Allow Discord voice joins for specific channels.",
+		aliases: ["allow-channels ", "allow ", "allowlist "],
+	},
+	{
+		value: "allow-channel all",
+		description: "Clear the channel allowlist so all accessible voice channels are allowed.",
+		aliases: ["allow-channel clear", "allow-channel none", "allow all"],
+	},
+	{ value: "set guild ", label: "set guild <guild-id>", description: "Store the pinned Discord guild id." },
+	{
+		value: "set channel ",
+		label: "set channel <voice-channel-id>",
+		description: "Store the pinned Discord voice channel id.",
+	},
+	{
+		value: "set allowed-servers ",
+		label: "set allowed-servers <guild-id> [...]",
+		description: "Replace the server allowlist.",
+		aliases: ["set allowed-guilds ", "set servers ", "set guilds "],
+	},
+	{
+		value: "set allowed-servers clear",
+		description: "Clear the server allowlist.",
+		aliases: ["set allowed-servers all", "set allowed-servers none"],
+	},
+	{
+		value: "set allowed-channels ",
+		label: "set allowed-channels <voice-channel-id> [...]",
+		description: "Replace the voice channel allowlist.",
+		aliases: ["set allowed ", "set allowlist ", "set channels "],
+	},
+	{
+		value: "set allowed-channels clear",
+		description: "Clear the voice channel allowlist.",
+		aliases: ["set allowed-channels all", "set allowed-channels none"],
+	},
+	{
+		value: "set model ",
+		label: "set model <openai-realtime-model>",
+		description: "Override the OpenAI Realtime model for Discord voice.",
+	},
+	{
+		value: "set voice ",
+		label: "set voice <openai-realtime-voice>",
+		description: "Override the OpenAI Realtime audio voice.",
+	},
+	{ value: "set tts-provider elevenlabs", description: "Use ElevenLabs speech for Discord voice output." },
+	{ value: "set tts-provider openai", description: "Use OpenAI Realtime audio for Discord voice output." },
+	{
+		value: "set tts-provider default",
+		description: "Clear the speech provider override.",
+		aliases: ["set tts-provider clear"],
+	},
+	{
+		value: "set elevenlabs-voice ",
+		label: "set elevenlabs-voice <voice-id>",
+		description: "Store the ElevenLabs voice id used for speech.",
+		aliases: ["set elevenlabs-voice-id "],
+	},
+	{
+		value: "set elevenlabs-voice clear",
+		description: "Clear the stored ElevenLabs voice id.",
+		aliases: ["set elevenlabs-voice default"],
+	},
+	{
+		value: "set elevenlabs-model eleven_flash_v2_5",
+		description: "Use the default low-latency ElevenLabs speech model.",
+	},
+	{
+		value: "set elevenlabs-model ",
+		label: "set elevenlabs-model <model-id>",
+		description: "Override the ElevenLabs speech model.",
+	},
+	{
+		value: "set elevenlabs-model default",
+		description: "Clear the ElevenLabs model override.",
+		aliases: ["set elevenlabs-model clear"],
+	},
+	...ELEVENLABS_OUTPUT_FORMAT_OPTIONS.map((format) => ({
+		value: `set elevenlabs-output-format ${format}`,
+		description: "Set the ElevenLabs PCM output format.",
+	})),
+	{
+		value: "set elevenlabs-output-format default",
+		description: "Clear the ElevenLabs output format override.",
+		aliases: ["set elevenlabs-output-format clear"],
+	},
+	{
+		value: "set elevenlabs-base-url ",
+		label: "set elevenlabs-base-url <url>",
+		description: "Override the ElevenLabs API base URL.",
+		aliases: ["set elevenlabs-url "],
+	},
+	{
+		value: "set elevenlabs-base-url default",
+		description: "Clear the ElevenLabs base URL override.",
+		aliases: ["set elevenlabs-base-url clear"],
+	},
+	{ value: "set reasoning minimal", description: "Set Realtime reasoning effort to minimal." },
+	{ value: "set reasoning low", description: "Set Realtime reasoning effort to low." },
+	{ value: "set reasoning medium", description: "Set Realtime reasoning effort to medium." },
+	{ value: "set reasoning high", description: "Set Realtime reasoning effort to high." },
+	{ value: "set reasoning xhigh", description: "Set Realtime reasoning effort to xhigh." },
+	{
+		value: "set reasoning default",
+		description: "Clear the Realtime reasoning effort override.",
+		aliases: ["set reasoning clear"],
+	},
+	{
+		value: "set frame-interval ",
+		label: "set frame-interval <milliseconds>",
+		description: "Set the screen-share frame auto-attach interval.",
+		aliases: ["set frame_interval "],
+	},
+	{ value: "clear", description: "Clear all stored Discord voice settings." },
+	{ value: "disable", description: "Disable Discord voice access." },
+] satisfies readonly ClankyCommandCompletionSpec[];
 
 interface DiscordIdentity {
 	id: string;
@@ -196,7 +346,7 @@ function loginInstructions(): string {
 	].join("\n");
 }
 
-async function runDiscordLogin(deps: DiscordAuthCommandDeps, ctx: ExtensionCommandContext): Promise<void> {
+export async function runDiscordLogin(deps: DiscordAuthCommandDeps, ctx: ExtensionCommandContext): Promise<void> {
 	const { ui } = ctx;
 
 	ui.notify(loginInstructions());
@@ -562,7 +712,7 @@ function formatDiscordVoiceCommandStatus(deps: DiscordAuthCommandDeps): string {
 	return lines.join("\n");
 }
 
-async function runDiscordVoiceCommand(
+export async function runDiscordVoiceCommand(
 	deps: DiscordAuthCommandDeps,
 	args: string,
 	ctx: ExtensionCommandContext,
@@ -711,7 +861,7 @@ async function runDiscordVoiceJoin(
 	if (configureAdvanced) next = await collectDiscordVoiceAdvancedSettings(ctx, next);
 	deps.voiceSettings?.write(next);
 	const lines = [`Discord voice enabled for guild ${guildId}, channel ${channelId}.`];
-	await restartDiscordBridgeAfterVoiceSettingsChange(deps, lines);
+	await restartDiscordBridgeAfterVoiceSettingsChange(deps, lines, ctx);
 	ctx.ui.notify(lines.join("\n"));
 }
 
@@ -779,7 +929,7 @@ async function runDiscordVoiceAdvancedWizard(
 	}
 	deps.voiceSettings?.write(next);
 	const lines = ["Discord voice advanced settings updated."];
-	await restartDiscordBridgeAfterVoiceSettingsChange(deps, lines);
+	await restartDiscordBridgeAfterVoiceSettingsChange(deps, lines, ctx);
 	ctx.ui.notify(lines.join("\n"));
 }
 
@@ -838,7 +988,7 @@ async function runDiscordVoiceAllowedGuildsWizard(
 	if (line === undefined) return;
 	deps.voiceSettings?.write(next);
 	const lines = [line];
-	await restartDiscordBridgeAfterVoiceSettingsChange(deps, lines);
+	await restartDiscordBridgeAfterVoiceSettingsChange(deps, lines, ctx);
 	ctx.ui.notify(lines.join("\n"));
 }
 
@@ -897,7 +1047,7 @@ async function runDiscordVoiceAllowedChannelsWizard(
 	if (line === undefined) return;
 	deps.voiceSettings?.write(next);
 	const lines = [line];
-	await restartDiscordBridgeAfterVoiceSettingsChange(deps, lines);
+	await restartDiscordBridgeAfterVoiceSettingsChange(deps, lines, ctx);
 	ctx.ui.notify(lines.join("\n"));
 }
 
@@ -921,7 +1071,7 @@ async function runDiscordVoiceEnable(
 				? `allowed voice channels (${next.allowedChannelIds.join(", ")})`
 				: "all accessible voice channels";
 		const lines = [`Discord voice access enabled for ${serverScope} and ${channelScope}.`];
-		await restartDiscordBridgeAfterVoiceSettingsChange(deps, lines);
+		await restartDiscordBridgeAfterVoiceSettingsChange(deps, lines, ctx);
 		ctx.ui.notify(lines.join("\n"));
 		return;
 	}
@@ -954,7 +1104,7 @@ async function runDiscordVoiceAllowGuilds(
 		lines.push(`Discord voice server allowlist set to ${next.allowedGuildIds.join(", ")}.`);
 	}
 	deps.voiceSettings?.write(next);
-	await restartDiscordBridgeAfterVoiceSettingsChange(deps, lines);
+	await restartDiscordBridgeAfterVoiceSettingsChange(deps, lines, ctx);
 	ctx.ui.notify(lines.join("\n"));
 }
 
@@ -984,7 +1134,7 @@ async function runDiscordVoiceAllowChannels(
 		lines.push(`Discord voice channel allowlist set to ${next.allowedChannelIds.join(", ")}.`);
 	}
 	deps.voiceSettings?.write(next);
-	await restartDiscordBridgeAfterVoiceSettingsChange(deps, lines);
+	await restartDiscordBridgeAfterVoiceSettingsChange(deps, lines, ctx);
 	ctx.ui.notify(lines.join("\n"));
 }
 
@@ -992,7 +1142,7 @@ async function runDiscordVoiceDisable(deps: DiscordAuthCommandDeps, ctx: Extensi
 	const current = deps.voiceSettings?.read() ?? { enabled: false };
 	deps.voiceSettings?.write({ ...current, enabled: false });
 	const lines = ["Discord voice disabled in profile settings."];
-	await restartDiscordBridgeAfterVoiceSettingsChange(deps, lines);
+	await restartDiscordBridgeAfterVoiceSettingsChange(deps, lines, ctx);
 	ctx.ui.notify(lines.join("\n"));
 }
 
@@ -1131,7 +1281,7 @@ async function runDiscordVoiceSet(
 	}
 	deps.voiceSettings?.write(next);
 	const lines = [line];
-	await restartDiscordBridgeAfterVoiceSettingsChange(deps, lines);
+	await restartDiscordBridgeAfterVoiceSettingsChange(deps, lines, ctx);
 	ctx.ui.notify(lines.join("\n"));
 }
 
@@ -1323,7 +1473,7 @@ async function runDiscordVoiceClear(deps: DiscordAuthCommandDeps, ctx: Extension
 	}
 	const removed = deps.voiceSettings?.clear() === true;
 	const lines = [removed ? "Stored Discord voice settings cleared." : "No stored Discord voice settings to clear."];
-	await restartDiscordBridgeAfterVoiceSettingsChange(deps, lines);
+	await restartDiscordBridgeAfterVoiceSettingsChange(deps, lines, ctx);
 	ctx.ui.notify(lines.join("\n"));
 }
 
@@ -1342,24 +1492,92 @@ async function readDiscordVoiceValue(
 async function restartDiscordBridgeAfterVoiceSettingsChange(
 	deps: DiscordAuthCommandDeps,
 	lines: string[],
+	ctx: ExtensionCommandContext,
 ): Promise<void> {
 	if (deps.gatewayController === undefined) {
 		lines.push("Restart Clanky to apply the voice setting.");
 		return;
 	}
+	const loadingUi = createDiscordVoiceLoadingUi(ctx);
 	try {
-		await deps.gatewayController.restart();
+		await deps.gatewayController.restartVoice({
+			onProgress: (progress) => loadingUi.update(progress),
+		});
 		const status = deps.gatewayController.status();
 		const voiceConfigError = readStatusString(status, "voiceConfigError");
 		if (voiceConfigError === undefined) {
-			lines.push("Discord bridge restarted with the updated voice setting.");
+			lines.push("Discord voice client started with the updated setting.");
 		} else {
-			lines.push(`Discord bridge restarted, but voice is inactive: ${voiceConfigError}`);
+			lines.push(`Discord voice setting applied, but voice is inactive: ${voiceConfigError}`);
 		}
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		lines.push(`Failed to restart Discord bridge: ${message}. Fix the setting or restart Clanky to recover.`);
+		lines.push(`Failed to start Discord voice client: ${message}. Fix the setting or restart Clanky to recover.`);
+	} finally {
+		loadingUi.stop();
 	}
+}
+
+function createDiscordVoiceLoadingUi(ctx: ExtensionCommandContext): {
+	update(progress: DiscordVoiceStartProgress): void;
+	stop(): void;
+} {
+	let latest: DiscordVoiceStartProgress = {
+		phase: "resolving_config",
+		message: "Preparing Discord voice client.",
+	};
+	let frame = 0;
+	const startedAt = Date.now();
+	const render = () => {
+		const elapsed = formatElapsed(Date.now() - startedAt);
+		const spinner = DISCORD_VOICE_LOADING_FRAMES[frame % DISCORD_VOICE_LOADING_FRAMES.length] ?? "-";
+		frame += 1;
+		const target = formatDiscordVoiceProgressTarget(latest);
+		const statusText = `discord voice ${spinner} ${latest.message} (${elapsed})`;
+		ctx.ui.setStatus?.(DISCORD_VOICE_LOADING_UI_KEY, statusText);
+		ctx.ui.setWidget?.(
+			DISCORD_VOICE_LOADING_UI_KEY,
+			[
+				"Discord Voice",
+				`${spinner} ${latest.message}`,
+				`Phase: ${latest.phase.replace(/_/g, " ")}`,
+				...(target === undefined ? [] : [target]),
+				`Elapsed: ${elapsed}`,
+				"Logs: /voice-logs",
+			],
+			{ placement: "belowEditor" },
+		);
+	};
+	const timer = setInterval(render, 250);
+	timer.unref?.();
+	render();
+	return {
+		update(progress) {
+			latest = progress;
+			render();
+		},
+		stop() {
+			clearInterval(timer);
+			ctx.ui.setStatus?.(DISCORD_VOICE_LOADING_UI_KEY, undefined);
+			ctx.ui.setWidget?.(DISCORD_VOICE_LOADING_UI_KEY, undefined);
+		},
+	};
+}
+
+function formatDiscordVoiceProgressTarget(progress: DiscordVoiceStartProgress): string | undefined {
+	const parts = [
+		progress.guildId === undefined ? undefined : `guild ${progress.guildId}`,
+		progress.channelId === undefined ? undefined : `channel ${progress.channelId}`,
+	].filter((part): part is string => part !== undefined);
+	return parts.length === 0 ? undefined : `Target: ${parts.join(", ")}`;
+}
+
+function formatElapsed(ms: number): string {
+	const seconds = Math.max(0, Math.floor(ms / 1000));
+	if (seconds < 60) return `${seconds}s`;
+	const minutes = Math.floor(seconds / 60);
+	const rest = seconds % 60;
+	return `${minutes}m ${rest}s`;
 }
 
 function cleanArg(value: string | undefined): string | undefined {
@@ -1523,6 +1741,7 @@ export function createDiscordAuthExtensionFactory(deps: DiscordAuthCommandDeps):
 		});
 		pi.registerCommand("discord-voice", {
 			description: "Manage Clanky's Discord voice access from the TUI",
+			getArgumentCompletions: (prefix) => completeClankyCommandArgument(prefix, DISCORD_VOICE_COMMAND_COMPLETIONS),
 			handler: async (args, ctx) => {
 				try {
 					await runDiscordVoiceCommand(deps, args, ctx);

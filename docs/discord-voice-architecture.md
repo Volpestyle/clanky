@@ -20,11 +20,19 @@ flowchart TB
 
   subgraph delegation["Delegation and media"]
     direction LR
-    pi["ask_pi to Pi worker"] --> toolReturn["tool output"]
+    pi["ask_pi to warm voice supervisor"] --> supervisor["voice worker subagent"]
+    supervisor --> general["voice-general subagents"]
+    supervisor --> mainAgent["main Clanky handoff"]
+    general --> supervisor
+    mainAgent --> supervisor
+    supervisor --> toolReturn["tool output"]
+    statusTools["pi_status / pi_subagents"] --> controlState["runtime queue + subagent store"]
+    controlState --> toolReturn
     mediaTools["media and screen tools"] --> toolReturn
   end
 
   toolChoice -->|ask_pi| pi
+  toolChoice -->|status| statusTools
   toolChoice -->|media or stream| mediaTools
   toolChoice -->|no tool| speechChoice
   toolReturn --> speechChoice{"speech provider"}
@@ -80,7 +88,9 @@ commands.
 
 `AgentDiscordVoiceBridge.start()` connects the pieces: stream discovery,
 Realtime response session, `clankvox` IPC, per-speaker transcription manager,
-tool handlers, optional ElevenLabs client, and voice worker recording.
+tool handlers, optional ElevenLabs client, and voice worker recording. When a
+subagent runtime factory is available, it also prewarms the voice worker so the
+first `ask_pi` turn does not pay the worker creation cost.
 
 ## Inbound Audio
 
@@ -117,11 +127,40 @@ normalizes streaming and completed function-call events, dedupes call ids,
 executes the local handler, sends the function output back to Realtime, and
 then asks Realtime to continue the response.
 
-The core tool is `ask_pi`. It passes the voice context to Pi for longer
+The core work tool is `ask_pi`. It passes the voice context to Pi for longer
 reasoning, repo-aware work, skills, and normal Clanky tool use. If a voice
-worker subagent is configured, `ask_pi` goes through
-`discordVoiceSubagentCoordinator.ts`; otherwise it uses the main runtime through
-a serial queue so voice requests do not race each other.
+worker subagent is configured, `ask_pi` goes through the always-warm voice
+supervisor in `discordVoiceSubagentCoordinator.ts`; otherwise it uses the main
+runtime through a serial queue so voice requests do not race each other.
+
+The voice supervisor is a real Clanky subagent: it uses the same runtime
+factory shape as the main agent, with the subagent effort default. Its context
+explicitly says that it is below the main foreground Clanky agent, that the
+main agent owns the user's primary window, AgentRoom/tmux authority, and final
+foreground coordination, and that the Realtime voice model owns live speech and
+media.
+
+Only the voice supervisor gets the privileged `voice_delegate_to_subagent`
+tool. That tool runs a `voice-general` subagent for bounded helper work. Those
+general workers get normal Clanky tools, skills, memory, `main_session_context`,
+`subagent_status`, and `delegate_to_main_worker`, but they do not receive the
+child-spawn tool. Ordinary Discord text subagents also do not receive it.
+
+The voice model does not mirror every tool that the main Pi agent can use.
+That would duplicate authorization, tool schemas, and runtime policy in the
+low-latency Realtime session. Instead, voice has a small control surface:
+
+- `ask_pi` delegates work to the Pi layer.
+- `pi_status` reports the main runtime queue, current voice bridge state, and
+  a concise subagent summary.
+- `pi_subagents` lists tracked subagents and workers, with filters for kind,
+  state, stale entries, and result limit.
+
+Those status tools read the same runtime queue and `DiscordSubagentStore` that
+the text gateway and subagent coordinator already use. They are meant for
+questions like "what is the main agent doing?", "is the voice worker busy?",
+or "did a subagent fail?" without creating a new Pi turn just to inspect local
+state.
 
 Media tools are intentionally URL-first:
 

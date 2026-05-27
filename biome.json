@@ -1,12 +1,17 @@
 {
 	"$schema": "https://biomejs.dev/schemas/2.3.5/schema.json",
 	"files": {
-		"includes": ["**", "!agents/clanky/src/voice/clankvox/target"]
+		"includes": ["**", "!agents/clanky/src/voice/clankvox/target", "!apps/docs/dist"]
 	},
 	"formatter": {
 		"enabled": true,
 		"indentStyle": "tab",
 		"lineWidth": 120
+	},
+	"css": {
+		"parser": {
+			"tailwindDirectives": true
+		}
 	},
 	"linter": {
 		"enabled": true,
