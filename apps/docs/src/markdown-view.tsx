@@ -1,18 +1,19 @@
 import type { Token, Tokens } from "marked";
 import mermaid from "mermaid";
-import { type MouseEvent, type ReactNode, useEffect, useId, useRef } from "react";
+import { type MouseEvent, type ReactNode, useEffect, useId, useRef, useState } from "react";
 
 import { type Doc, docsBySource } from "@/content";
 import { createSlugger, parseMarkdown } from "@/markdown";
 
 let mermaidRenderSerial = 0;
 
-mermaid.initialize({
-	startOnLoad: false,
-	securityLevel: "strict",
-	theme: "base",
-	fontFamily: "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif",
-});
+const MERMAID_FONT_FAMILY =
+	"Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+
+function readMermaidTheme(): "default" | "dark" {
+	if (typeof document === "undefined") return "default";
+	return document.documentElement.classList.contains("dark") ? "dark" : "default";
+}
 
 type MarkdownViewProps = {
 	currentDoc: Doc;
@@ -199,6 +200,14 @@ type MermaidDiagramProps = {
 function MermaidDiagram({ source }: MermaidDiagramProps) {
 	const containerRef = useRef<HTMLElement | null>(null);
 	const generatedId = useId();
+	const [theme, setTheme] = useState<"default" | "dark">(readMermaidTheme);
+
+	useEffect(() => {
+		const html = document.documentElement;
+		const observer = new MutationObserver(() => setTheme(readMermaidTheme()));
+		observer.observe(html, { attributes: true, attributeFilter: ["class"] });
+		return () => observer.disconnect();
+	}, []);
 
 	useEffect(() => {
 		const container = containerRef.current;
@@ -219,6 +228,12 @@ function MermaidDiagram({ source }: MermaidDiagramProps) {
 
 		async function renderDiagram() {
 			try {
+				mermaid.initialize({
+					startOnLoad: false,
+					securityLevel: "strict",
+					theme,
+					fontFamily: MERMAID_FONT_FAMILY,
+				});
 				const { svg, bindFunctions } = await mermaid.render(renderId, source);
 				if (cancelled) {
 					return;
@@ -256,7 +271,7 @@ function MermaidDiagram({ source }: MermaidDiagramProps) {
 		return () => {
 			cancelled = true;
 		};
-	}, [generatedId, source]);
+	}, [generatedId, source, theme]);
 
 	return (
 		<figure className="docs-mermaid" data-docs-mermaid="pending" ref={containerRef}>
