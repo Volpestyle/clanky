@@ -1,6 +1,7 @@
 import {
 	ArrowRightIcon,
 	BookOpenTextIcon,
+	CheckIcon,
 	CornerDownLeftIcon,
 	FileTextIcon,
 	HashIcon,
@@ -33,9 +34,11 @@ const RECENTS_LIMIT = 6;
 
 const groupIcons = {
 	Start: BookOpenTextIcon,
+	Setup: CheckIcon,
 	Operations: TerminalSquareIcon,
-	Planning: SparklesIcon,
-	Evidence: ShieldCheckIcon,
+	Reference: FileTextIcon,
+	Advanced: ShieldCheckIcon,
+	Maintainer: SparklesIcon,
 } satisfies Record<DocGroup, typeof BookOpenTextIcon>;
 
 type SearchPaletteProps = {

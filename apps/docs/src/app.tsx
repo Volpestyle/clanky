@@ -24,13 +24,15 @@ import { MarkdownView } from "@/markdown-view";
 import { search } from "@/search";
 import { SearchPalette } from "@/search-palette";
 
-const groups: DocGroup[] = ["Start", "Operations", "Planning", "Evidence"];
+const groups: DocGroup[] = ["Start", "Setup", "Operations", "Reference", "Advanced", "Maintainer"];
 
 const groupIcons = {
 	Start: BookOpenTextIcon,
+	Setup: CheckIcon,
 	Operations: TerminalSquareIcon,
-	Planning: SparklesIcon,
-	Evidence: ShieldCheckIcon,
+	Reference: FileTextIcon,
+	Advanced: ShieldCheckIcon,
+	Maintainer: SparklesIcon,
 } satisfies Record<DocGroup, typeof BookOpenTextIcon>;
 
 export function App() {

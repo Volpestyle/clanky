@@ -5,6 +5,10 @@ state, memory, Linear stores, and bundled skills. It does not run its own
 daemon, scheduler, HTTP server, WebSocket server, or multi-agent room
 system.
 
+New to Clanky? Start with [docs/start-here.md](docs/start-here.md), then read
+[docs/pi-foundation.md](docs/pi-foundation.md). The upstream Pi harness docs
+live at [pi.dev/docs/latest](https://pi.dev/docs/latest).
+
 AgentRoom is the room/runtime daemon. Clanky works naturally inside any
 AgentRoom because AgentRoom can launch it as a normal Pi harness command and
 audit the room send/read flow around it.
