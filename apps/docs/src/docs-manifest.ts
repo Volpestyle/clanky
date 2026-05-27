@@ -1,4 +1,4 @@
-import type { DocGroup, DocMeta, DocsSiteInfo } from "@volpestyle/agent-docs";
+import type { DocGroup, DocMeta, DocsSiteInfo } from "@volpestyle/night-compiler";
 
 export const site: DocsSiteInfo = {
 	id: "clanky-docs",
@@ -39,6 +39,7 @@ export const site: DocsSiteInfo = {
 			description: "Rust media-plane docs for the bundled Clanky voice and Go Live transport module.",
 			parentId: "clanky-docs",
 			relationLabel: "voice/media module",
+			metaLabel: "Clanky submodule",
 		},
 	],
 };

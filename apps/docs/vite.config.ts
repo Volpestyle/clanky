@@ -10,10 +10,14 @@ export default defineConfig({
 		alias: {
 			"@": fileURLToPath(new URL("./src", import.meta.url)),
 		},
+		dedupe: ["react", "react-dom"],
+	},
+	optimizeDeps: {
+		exclude: ["@volpestyle/night-compiler"],
 	},
 	server: {
 		fs: {
-			allow: ["../.."],
+			allow: ["../..", "../../../docs/packages/night-compiler"],
 		},
 	},
 });

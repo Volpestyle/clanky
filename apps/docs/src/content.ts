@@ -14,7 +14,7 @@ import startHere from "../../../docs/start-here.md?raw";
 import troubleshooting from "../../../docs/troubleshooting.md?raw";
 import usingClanky from "../../../docs/using-clanky.md?raw";
 import readme from "../../../README.md?raw";
-import { defineDocsConfig } from "@volpestyle/agent-docs";
+import { defineDocsConfig } from "@volpestyle/night-compiler";
 import { defaultDocSlug, docsMeta, groups, site } from "./docs-manifest";
 
 const markdownBySource = {

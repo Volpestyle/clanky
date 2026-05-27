@@ -14,7 +14,7 @@
 	"dependencies": {
 		"react": "^19.2.6",
 		"react-dom": "^19.2.6",
-		"@volpestyle/agent-docs": "workspace:*"
+		"@volpestyle/night-compiler": "link:../../../docs/packages/night-compiler"
 	},
 	"devDependencies": {
 		"@tailwindcss/vite": "^4.3.0",
