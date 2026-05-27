@@ -13,7 +13,7 @@ await generateLlmsFiles({
 	groups,
 	llms: {
 		...site.llms,
-		baseUrl: (process.env.LLMS_BASE_URL ?? site.llms?.baseUrl ?? "https://volpestyle.github.io/clanky").replace(
+		baseUrl: (process.env.LLMS_BASE_URL ?? site.llms?.baseUrl ?? "https://volpestyle.github.io/docs/clanky").replace(
 			/\/$/,
 			"",
 		),
