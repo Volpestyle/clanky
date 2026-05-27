@@ -184,6 +184,7 @@ const handlers: ClankyAgentToolHandlers = {
 };
 
 const tools = createClankyToolDefinitions(handlers);
+const mainRuntimeTools = createClankyToolDefinitions(handlers, { includeMainWorkerDelegation: false });
 assertChatModeHelpers();
 await assertSubagentPanelCommand();
 await assertClankyCommandCompletions();
@@ -214,6 +215,9 @@ const expectedNames = [
 	"discord_voice_leave",
 ];
 assertToolNames(tools, expectedNames);
+if (mainRuntimeTools.some((tool) => tool.name === "delegate_to_main_worker")) {
+	throw new Error("agent-tools smoke: main runtime tools should not include delegate_to_main_worker");
+}
 await assertOpenAiWebSearchUsesStoredCredential();
 
 await executeTool(tools, "schedule_cron", {

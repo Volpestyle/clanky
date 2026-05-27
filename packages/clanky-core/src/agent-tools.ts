@@ -528,6 +528,10 @@ export interface ClankyAgentToolHandlers {
 	discordVoiceLeave?: (options?: DiscordVoiceOperationOptions) => Promise<unknown>;
 }
 
+export interface CreateClankyToolDefinitionsOptions {
+	includeMainWorkerDelegation?: boolean;
+}
+
 export interface SendSubagentMessageInput {
 	id: string;
 	text: string;
@@ -2616,8 +2620,12 @@ function formatMcpArgsSummary(args: unknown, maxLength: number): string {
 	return `${joined.slice(0, maxLength - 1)}…`;
 }
 
-export function createClankyToolDefinitions(handlers: ClankyAgentToolHandlers): ToolDefinition[] {
+export function createClankyToolDefinitions(
+	handlers: ClankyAgentToolHandlers,
+	options: CreateClankyToolDefinitionsOptions = {},
+): ToolDefinition[] {
 	const tools: ToolDefinition[] = [];
+	const includeMainWorkerDelegation = options.includeMainWorkerDelegation ?? true;
 	const scheduleCron = handlers.scheduleCron;
 	if (scheduleCron !== undefined) {
 		tools.push(
@@ -2854,20 +2862,20 @@ export function createClankyToolDefinitions(handlers: ClankyAgentToolHandlers): 
 			}),
 		);
 	}
-	const delegateToMainWorker = handlers.delegateToMainWorker;
+	const delegateToMainWorker = includeMainWorkerDelegation ? handlers.delegateToMainWorker : undefined;
 	if (delegateToMainWorker !== undefined) {
 		tools.push(
 			defineTool({
 				name: "delegate_to_main_worker",
 				label: "Delegate To Main Worker",
 				description:
-					"Hand off durable or long-running work from a Clanky subagent to the main Clanky worker without blocking the external reply loop.",
+					"Hand off durable or long-running work from a Clanky subagent to the existing main Clanky foreground session. This does not create or spawn a subagent.",
 				promptSnippet:
-					"delegate_to_main_worker: hand off work likely to take more than a minute or two, then reply briefly in the external channel.",
+					"delegate_to_main_worker: hand off work to the existing main Clanky session; this is not a subagent spawn.",
 				promptGuidelines: [
 					"Use when an external request needs coding, deep research, multi-step operations, or other work likely to take more than 1-2 minutes.",
 					"Include enough context in prompt for the main worker to proceed without rereading the external conversation.",
-					"After delegating, tell the user that the main worker has picked it up; do not also do the long task yourself.",
+					"After delegating, tell the user that the existing main session has picked it up; do not call it a new subagent or imply a worker was spawned.",
 				],
 				parameters: delegateToMainWorkerSchema,
 				async execute(_toolCallId, params) {

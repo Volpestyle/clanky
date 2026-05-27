@@ -98,6 +98,9 @@ async function main(): Promise<void> {
 		if (runtime.services === undefined) {
 			throw new Error("smoke: runtime.services was undefined");
 		}
+		if (runtime.session.getToolDefinition("delegate_to_main_worker") !== undefined) {
+			throw new Error("smoke: main runtime should not expose delegate_to_main_worker");
+		}
 		if (paths.homeDir !== homeDir) {
 			throw new Error(`smoke: paths.homeDir ${paths.homeDir} did not match ${homeDir}`);
 		}
@@ -110,6 +113,9 @@ async function main(): Promise<void> {
 		});
 		try {
 			assertClankyRuntimeDefaults(subagentResult, DEFAULT_CLANKY_SUBAGENT_THINKING_LEVEL, "subagent runtime");
+			if (subagentResult.session.getToolDefinition("delegate_to_main_worker") === undefined) {
+				throw new Error("smoke: subagent runtime should expose delegate_to_main_worker");
+			}
 		} finally {
 			subagentResult.session.dispose();
 		}

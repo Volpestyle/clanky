@@ -11,6 +11,8 @@ export interface DelegateToMainWorkerOptions {
 
 export interface DelegateToMainWorkerResult {
 	delegated: boolean;
+	target: "main";
+	spawnedSubagent: false;
 	sessionId?: string;
 	mode?: "followUp" | "start";
 	autoPrompt?: boolean;
@@ -33,6 +35,8 @@ export function delegateToMainWorker(
 	if (runtime === undefined) {
 		return {
 			delegated: false,
+			target: "main",
+			spawnedSubagent: false,
 			title,
 			queuedAt,
 			error: "main Clanky runtime is not bound",
@@ -47,6 +51,8 @@ export function delegateToMainWorker(
 	});
 	return {
 		delegated: true,
+		target: "main",
+		spawnedSubagent: false,
 		sessionId: runtime.session.sessionId,
 		mode,
 		autoPrompt: true,
@@ -58,14 +64,16 @@ export function delegateToMainWorker(
 
 function formatMainWorkerDelegationPrompt(input: DelegateToMainWorkerToolInput, queuedAt: string): string {
 	return [
-		"Discord subagent delegated work to main Clanky.",
+		"A Clanky subagent handed work to the existing main Clanky foreground session.",
+		"This handoff did not create or spawn a new subagent.",
 		"",
 		`Title: ${input.title.trim()}`,
 		`Queued at: ${queuedAt}`,
 		...(input.source === undefined ? [] : [`Source: ${input.source.trim()}`]),
 		...(input.reason === undefined ? [] : [`Reason: ${input.reason.trim()}`]),
 		"",
-		"The Discord subagent should stay free for short replies. Take over this work if it is appropriate.",
+		"The subagent should stay free for short replies. Take over this work if it is appropriate.",
+		"Do not describe this as a successful subagent spawn unless you separately verify a distinct subagent session.",
 		"",
 		"Task:",
 		input.prompt.trim(),

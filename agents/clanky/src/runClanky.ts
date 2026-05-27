@@ -216,6 +216,7 @@ function buildRuntimeFactory(opts: {
 	discordVoiceSettings: DiscordVoiceSettingsStore;
 	env: NodeJS.ProcessEnv;
 	defaultThinkingLevel: () => ClankyThinkingLevel;
+	includeMainWorkerDelegationTool?: boolean;
 	additionalExtensionFactories?: ExtensionFactory[];
 }): CreateAgentSessionRuntimeFactory {
 	const {
@@ -228,6 +229,7 @@ function buildRuntimeFactory(opts: {
 		discordVoiceSettings,
 		env,
 		defaultThinkingLevel,
+		includeMainWorkerDelegationTool = true,
 		additionalExtensionFactories = [],
 	} = opts;
 	const handlers = createClankyHandlers(paths, stores, {
@@ -316,7 +318,9 @@ function buildRuntimeFactory(opts: {
 		const fromServicesOptions: Parameters<typeof createAgentSessionFromServices>[0] = {
 			services,
 			sessionManager,
-			customTools: createClankyToolDefinitions(handlers),
+			customTools: createClankyToolDefinitions(handlers, {
+				includeMainWorkerDelegation: includeMainWorkerDelegationTool,
+			}),
 		};
 		if (sessionStartEvent !== undefined) fromServicesOptions.sessionStartEvent = sessionStartEvent;
 
@@ -569,6 +573,7 @@ export async function createClankyRuntime(options: RunClankyOptions = {}) {
 	const createRuntime = buildRuntimeFactory({
 		...runtimeFactoryOptions,
 		defaultThinkingLevel: () => runtimeDefaults.mainThinkingLevel,
+		includeMainWorkerDelegationTool: false,
 		additionalExtensionFactories: [
 			createClankyWelcomeExtensionFactory({
 				authStorage,
