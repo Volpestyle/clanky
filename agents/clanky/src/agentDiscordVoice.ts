@@ -1,6 +1,12 @@
 import { appendFile } from "node:fs/promises";
 import type { DiscordGatewayClient } from "@agentroom/chat-discord";
-import { type DiscordSubagentStore, resolveElevenLabsApiKeySync, resolveOpenAiApiKeySync } from "@clanky/core";
+import {
+	type ClankySubagentState,
+	type ClankySubagentSummary,
+	type DiscordSubagentStore,
+	resolveElevenLabsApiKeySync,
+	resolveOpenAiApiKeySync,
+} from "@clanky/core";
 import type {
 	AgentSessionEvent,
 	AgentSessionRuntime,
@@ -8,6 +14,7 @@ import type {
 	CreateAgentSessionRuntimeFactory,
 } from "@earendil-works/pi-coding-agent";
 import { type ClankyAgentDiscordGatewayConfig, resolveAgentDiscordCredentialConfig } from "./agentDiscordGateway.ts";
+import type { ClankyThinkingLevel } from "./clankyDefaults.ts";
 import type { DiscordVoiceTtsProvider, StoredDiscordVoiceSettings } from "./discordVoiceSettings.ts";
 import { DiscordVoiceSubagentCoordinator } from "./discordVoiceSubagentCoordinator.ts";
 import { DEFAULT_DISCORD_WAKE_NAMES, dedupeWakeNames, parseDiscordWakeNamesFromEnv } from "./discordWakeNames.ts";
@@ -51,9 +58,11 @@ import {
 	type OpenAiRealtimeTranscriptionConnectOptions,
 	type OpenAiRealtimeTranscriptionDelay,
 } from "./voice/openAiRealtimeClient.ts";
+import type { VoiceSupervisorDelegateHandle } from "./voiceSupervisorExtension.ts";
 
 type JsonRecord = Record<string, unknown>;
 type TimerHandle = ReturnType<typeof setTimeout>;
+type VoicePiDelegationTarget = "main-runtime" | "voice-worker";
 
 export interface ClankyAgentDiscordVoiceConfig {
 	enabled: boolean;
@@ -96,9 +105,11 @@ export interface StartAgentDiscordVoiceBridgeInput {
 	config?: ClankyAgentDiscordVoiceConfig;
 	runtimeTurnQueue?: RuntimeTurnQueue;
 	createSubagentRuntime?: CreateAgentSessionRuntimeFactory;
+	createVoiceSubagentRuntime?: CreateAgentSessionRuntimeFactory;
 	subagentStore?: DiscordSubagentStore;
 	subagentSessionDir?: string;
 	subagentCwd?: string;
+	voiceSupervisorDelegate?: VoiceSupervisorDelegateHandle;
 	bridgeLogPath?: string;
 	voiceLogPath?: string;
 	dependencies?: ClankyAgentDiscordVoiceDependencies;
@@ -108,6 +119,7 @@ export interface ClankyAgentDiscordVoiceHandle {
 	stop(): Promise<void>;
 	status(): JsonRecord;
 	requestTextUtterance(text: string): void;
+	setSubagentThinkingLevel?(level: ClankyThinkingLevel): number;
 }
 
 interface DiscordVoiceClient extends DiscordGatewayClient {
@@ -159,6 +171,8 @@ interface VoiceBridgeStats {
 	speakerTranscriptionErrorCount: number;
 	speakerTranscriptionSocketCloseCount: number;
 	askPiCallCount: number;
+	piStatusRequestCount: number;
+	piSubagentStatusRequestCount: number;
 	screenShareListCount: number;
 	screenWatchRequestCount: number;
 	screenWatchUnsupportedCount: number;
@@ -374,6 +388,8 @@ function createVoiceBridgeStats(): VoiceBridgeStats {
 		speakerTranscriptionErrorCount: 0,
 		speakerTranscriptionSocketCloseCount: 0,
 		askPiCallCount: 0,
+		piStatusRequestCount: 0,
+		piSubagentStatusRequestCount: 0,
 		screenShareListCount: 0,
 		screenWatchRequestCount: 0,
 		screenWatchUnsupportedCount: 0,
@@ -578,7 +594,8 @@ export async function startAgentDiscordVoiceBridge(
 		input.subagentSessionDir !== undefined
 			? new DiscordVoiceSubagentCoordinator({
 					store: input.subagentStore,
-					createRuntime: input.createSubagentRuntime,
+					createRuntime: input.createVoiceSubagentRuntime ?? input.createSubagentRuntime,
+					createGeneralRuntime: input.createSubagentRuntime,
 					agentDir: input.runtime.services.agentDir,
 					cwd: input.subagentCwd ?? input.runtime.cwd,
 					sessionDir: input.subagentSessionDir,
@@ -590,6 +607,9 @@ export async function startAgentDiscordVoiceBridge(
 						? {}
 						: { reasoningEffort: config.openAiRealtimeReasoningEffort }),
 					...(input.bridgeLogPath === undefined ? {} : { bridgeLogPath: input.bridgeLogPath }),
+					...(input.voiceSupervisorDelegate === undefined
+						? {}
+						: { voiceSupervisorDelegate: input.voiceSupervisorDelegate }),
 				})
 			: undefined;
 	const bridge = new AgentDiscordVoiceBridge(
@@ -600,6 +620,7 @@ export async function startAgentDiscordVoiceBridge(
 		input.runtimeTurnQueue ?? new SerialRuntimeTurnQueue(),
 		resolveVoiceDependencies(input.dependencies),
 		subagents,
+		input.subagentStore,
 		input.voiceLogPath,
 	);
 	await bridge.start();
@@ -643,6 +664,10 @@ class AgentDiscordVoiceDynamicHandle implements ClankyAgentDiscordVoiceHandle {
 		throw new Error("Discord voice is enabled, but Clanky has not joined a voice channel.");
 	}
 
+	setSubagentThinkingLevel(_level: ClankyThinkingLevel): number {
+		return 0;
+	}
+
 	status(): JsonRecord {
 		return {
 			active: false,
@@ -681,6 +706,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 	private readonly runtimeTurnQueue: RuntimeTurnQueue;
 	private readonly dependencies: ResolvedVoiceDependencies;
 	private readonly subagents: DiscordVoiceSubagentCoordinator | undefined;
+	private readonly subagentStore: DiscordSubagentStore | undefined;
 	private readonly voiceLogPath: string | undefined;
 	private realtime: VoiceRealtimeClientLike | undefined;
 	private vox: VoiceVoxClientLike | undefined;
@@ -720,6 +746,12 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 	private realtimeResponseActive = false;
 	private realtimeToolResponsePending = false;
 	private voiceLogFailureReported = false;
+	private piRequestActiveCount = 0;
+	private piRequestLastStartedAt: string | undefined;
+	private piRequestLastFinishedAt: string | undefined;
+	private piRequestLastPrompt: string | undefined;
+	private piRequestLastError: string | undefined;
+	private piRequestLastTarget: VoicePiDelegationTarget | undefined;
 
 	constructor(
 		runtime: AgentSessionRuntime,
@@ -729,6 +761,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		runtimeTurnQueue: RuntimeTurnQueue,
 		dependencies: ResolvedVoiceDependencies,
 		subagents: DiscordVoiceSubagentCoordinator | undefined,
+		subagentStore: DiscordSubagentStore | undefined,
 		voiceLogPath: string | undefined,
 	) {
 		this.runtime = runtime;
@@ -738,6 +771,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		this.runtimeTurnQueue = runtimeTurnQueue;
 		this.dependencies = dependencies;
 		this.subagents = subagents;
+		this.subagentStore = subagentStore;
 		this.voiceLogPath = voiceLogPath;
 	}
 
@@ -800,6 +834,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			}
 			await realtime.connect(connectOptions);
 			await this.subagents?.updateStatus("listening in Discord voice");
+			this.subagents?.prewarmWorker();
 		} catch (error) {
 			await this.subagents?.markFailed(error).catch(() => undefined);
 			this.streamDiscovery?.stop();
@@ -855,6 +890,10 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		this.realtime.requestTextUtterance(prompt);
 	}
 
+	setSubagentThinkingLevel(level: ClankyThinkingLevel): number {
+		return this.subagents?.setThinkingLevel(level) ?? 0;
+	}
+
 	private logVoice(level: "info" | "warn" | "error", event: string, details?: JsonRecord): void {
 		this.logVoiceLine(`[${level}] ${event}${formatVoiceLogDetails(details)}`);
 	}
@@ -900,6 +939,11 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			requestedStreamWatchKey: this.requestedStreamWatchKey,
 			activeStreamWatchKey: this.activeStreamWatchKey,
 			activeVideoUserId: this.activeVideoUserId,
+			pi: {
+				main: this.piMainRuntimeStatus(),
+				voice: this.piVoiceRuntimeStatus(),
+				subagentStoreAvailable: this.subagentStore !== undefined,
+			},
 			media: {
 				speech: {
 					provider: this.config.ttsProvider ?? "openai",
@@ -917,6 +961,114 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			},
 			speakerTranscription: this.speakerTranscription?.status(),
 			stats: { ...this.stats },
+		};
+	}
+
+	private async piStatus(): Promise<JsonRecord> {
+		this.stats.piStatusRequestCount += 1;
+		return {
+			ok: true,
+			main: this.piMainRuntimeStatus(),
+			voice: this.piVoiceRuntimeStatus(),
+			subagents: await this.readSubagentStatus({
+				includeStale: false,
+				limit: 10,
+			}),
+		};
+	}
+
+	private async piSubagentsStatus(args: JsonRecord): Promise<JsonRecord> {
+		this.stats.piSubagentStatusRequestCount += 1;
+		const stateInput = stringValue(args.state);
+		const state = parseSubagentStateFilter(args.state);
+		if (stateInput.length > 0 && state === undefined) {
+			throw new Error("pi_subagents.state must be one of idle, queued, running, failed, or stale.");
+		}
+		const kind = stringValue(args.kind);
+		return await this.readSubagentStatus({
+			...(kind.length === 0 ? {} : { kind }),
+			...(state === undefined ? {} : { state }),
+			includeStale: booleanValue(args.includeStale ?? args.include_stale, false),
+			limit: boundedIntegerValue(args.limit, 20, 1, 100),
+		});
+	}
+
+	private piMainRuntimeStatus(): JsonRecord {
+		const queueBusy = this.runtimeTurnQueue.isBusy();
+		const session = this.runtime.session;
+		return {
+			state: queueBusy || this.piRequestActiveCount > 0 ? "busy" : "idle",
+			queueBusy,
+			sessionStreaming: session.isStreaming === true,
+			sessionId: session.sessionId,
+			sessionFile: session.sessionFile,
+			cwd: this.runtime.cwd,
+			voiceDelegationTarget: this.voiceDelegationTarget(),
+			activeVoiceRequests: this.piRequestActiveCount,
+			lastVoiceRequestTarget: this.piRequestLastTarget,
+			lastVoiceRequestStartedAt: this.piRequestLastStartedAt,
+			lastVoiceRequestFinishedAt: this.piRequestLastFinishedAt,
+			lastVoiceRequestPrompt: this.piRequestLastPrompt,
+			lastVoiceRequestError: this.piRequestLastError,
+		};
+	}
+
+	private piVoiceRuntimeStatus(): JsonRecord {
+		const scopeId = this.voiceScopeId();
+		return {
+			state: this.realtime === undefined ? "stopped" : this.realtimeResponseActive ? "responding" : "listening",
+			guildId: this.config.guildId,
+			channelId: this.config.channelId,
+			scopeId,
+			voiceSubagentId: `discord-voice:${scopeId}`,
+			workerSubagentId: `voice-worker:${scopeId}`,
+			model: this.config.openAiRealtimeModel,
+			voice: this.config.openAiRealtimeVoice,
+			realtimeConnected: this.realtime !== undefined,
+			voxAlive: this.vox?.isAlive === true,
+			supervisor: this.subagents?.status(),
+			speakerTranscription: this.speakerTranscription?.status(),
+			media: {
+				musicStatus: this.musicStatus,
+				streamPublishActive: this.streamPublish.active,
+				streamPublishPaused: this.streamPublish.paused,
+			},
+		};
+	}
+
+	private async readSubagentStatus(options: {
+		kind?: string;
+		state?: ClankySubagentState;
+		includeStale: boolean;
+		limit: number;
+	}): Promise<JsonRecord> {
+		if (this.subagentStore === undefined) {
+			return {
+				available: false,
+				reason: "subagent_store_unavailable",
+				total: 0,
+				filtered: 0,
+				returned: 0,
+				subagents: [],
+			};
+		}
+		const summaries = await this.subagentStore.listSubagents();
+		const filtered = summaries.filter((summary) => subagentMatchesStatusFilter(summary, options));
+		const limited = filtered.slice(0, options.limit);
+		return {
+			available: true,
+			total: summaries.length,
+			filtered: filtered.length,
+			returned: limited.length,
+			limit: options.limit,
+			filters: {
+				kind: options.kind,
+				state: options.state,
+				includeStale: options.includeStale,
+			},
+			countsByState: countSubagentsByState(summaries),
+			countsByKind: countSubagentsByKind(summaries),
+			subagents: limited.map(formatSubagentSummary),
 		};
 	}
 
@@ -1366,6 +1518,12 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 				return { text: await this.askPi(prompt) };
 			});
 		}
+		if (call.name === "pi_status") {
+			return await this.piStatus();
+		}
+		if (call.name === "pi_subagents") {
+			return await this.piSubagentsStatus(args);
+		}
 		if (call.name === "list_screen_shares") {
 			return this.listScreenShares();
 		}
@@ -1441,7 +1599,20 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 
 	private async askPi(prompt: string): Promise<string> {
 		if (prompt.trim().length === 0) throw new Error("ask_pi requires prompt.");
-		if (this.subagents !== undefined) return await this.subagents.askWorker(prompt);
+		const target = this.voiceDelegationTarget();
+		this.recordPiRequestStarted(prompt, target);
+		try {
+			const text =
+				this.subagents !== undefined ? await this.subagents.askWorker(prompt) : await this.askMainRuntime(prompt);
+			this.recordPiRequestFinished(undefined);
+			return text;
+		} catch (error) {
+			this.recordPiRequestFinished(error);
+			throw error;
+		}
+	}
+
+	private async askMainRuntime(prompt: string): Promise<string> {
 		const message = [
 			"Discord voice request:",
 			"",
@@ -1452,6 +1623,29 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		return await this.runtimeTurnQueue.enqueue(async () => {
 			return await sendUserMessageAndWaitForAssistantText(this.runtime, message, PI_TOOL_TIMEOUT_MS);
 		});
+	}
+
+	private recordPiRequestStarted(prompt: string, target: VoicePiDelegationTarget): void {
+		this.piRequestActiveCount += 1;
+		this.piRequestLastStartedAt = new Date().toISOString();
+		this.piRequestLastFinishedAt = undefined;
+		this.piRequestLastPrompt = truncateStatusText(prompt.trim(), 200);
+		this.piRequestLastError = undefined;
+		this.piRequestLastTarget = target;
+	}
+
+	private recordPiRequestFinished(error: unknown): void {
+		this.piRequestActiveCount = Math.max(0, this.piRequestActiveCount - 1);
+		this.piRequestLastFinishedAt = new Date().toISOString();
+		this.piRequestLastError = error === undefined ? undefined : errorMessage(error);
+	}
+
+	private voiceDelegationTarget(): VoicePiDelegationTarget {
+		return this.subagents === undefined ? "main-runtime" : "voice-worker";
+	}
+
+	private voiceScopeId(): string {
+		return `${this.config.guildId}:${this.config.channelId}`;
 	}
 
 	private playMusicUrl(args: JsonRecord): JsonRecord {
@@ -1940,6 +2134,9 @@ function buildRealtimeInstructions(
 		"You receive labeled text transcripts from individual Discord speakers; use those speaker names when attribution matters.",
 		"Keep replies short enough for spoken conversation, and avoid reading long tool output verbatim.",
 		"Use ask_pi for durable work, memory-backed answers, coding tasks, Linear, MCP, or anything that should go through the Pi agent runtime.",
+		"Use pi_status when users ask what Clanky, Pi, the voice bridge, or the main runtime is doing.",
+		"Use pi_subagents when users ask about workers, subagents, queue depth, active work, session files, or failures.",
+		"The voice session has a small control surface by design; do not mirror main Pi tools directly. Delegate work with ask_pi and inspect state with pi_status or pi_subagents.",
 		"Use list_screen_shares when you need to inspect active Discord Go Live streams before choosing one.",
 		"Use start_screen_watch when a user asks you to look at a Discord Go Live screen share.",
 		"Use stop_screen_watch when the active Discord Go Live screen watch is no longer needed or before changing context.",
@@ -1971,6 +2168,46 @@ function buildVoiceTools(): OpenAiRealtimeTool[] {
 					prompt: { type: "string", description: "The user request and any voice-channel context needed by Pi." },
 				},
 				required: ["prompt"],
+				additionalProperties: false,
+			},
+		},
+		{
+			type: "function",
+			name: "pi_status",
+			description:
+				"Return current Clanky main runtime, voice bridge, and subagent status for questions about what Clanky is doing.",
+			parameters: {
+				type: "object",
+				properties: {},
+				additionalProperties: false,
+			},
+		},
+		{
+			type: "function",
+			name: "pi_subagents",
+			description:
+				"List tracked Clanky subagents and workers, including queue depth, active work, session files, and failures.",
+			parameters: {
+				type: "object",
+				properties: {
+					kind: {
+						type: "string",
+						description: "Optional exact subagent kind filter, such as discord-voice or voice-worker.",
+					},
+					state: {
+						type: "string",
+						enum: ["idle", "queued", "running", "failed", "stale"],
+						description: "Optional subagent state filter.",
+					},
+					includeStale: {
+						type: "boolean",
+						description: "Include stale/stopped subagents. Defaults to false unless state is stale.",
+					},
+					limit: {
+						type: "number",
+						description: "Maximum subagents to return, from 1 to 100. Defaults to 20.",
+					},
+				},
 				additionalProperties: false,
 			},
 		},
@@ -2324,6 +2561,84 @@ function booleanValue(value: unknown, fallback: boolean): boolean {
 		if (normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off") return false;
 	}
 	return fallback;
+}
+
+function boundedIntegerValue(value: unknown, fallback: number, min: number, max: number): number {
+	const parsed =
+		typeof value === "number" ? value : typeof value === "string" && value.trim().length > 0 ? Number(value) : NaN;
+	if (!Number.isFinite(parsed)) return fallback;
+	const integer = Math.trunc(parsed);
+	if (integer < min) return min;
+	if (integer > max) return max;
+	return integer;
+}
+
+function parseSubagentStateFilter(value: unknown): ClankySubagentState | undefined {
+	const normalized = stringValue(value).toLowerCase();
+	if (
+		normalized === "idle" ||
+		normalized === "queued" ||
+		normalized === "running" ||
+		normalized === "failed" ||
+		normalized === "stale"
+	) {
+		return normalized;
+	}
+	return undefined;
+}
+
+function subagentMatchesStatusFilter(
+	summary: ClankySubagentSummary,
+	options: { kind?: string; state?: ClankySubagentState; includeStale: boolean },
+): boolean {
+	if (!options.includeStale && options.state !== "stale" && summary.state === "stale") return false;
+	if (options.kind !== undefined && summary.kind !== options.kind) return false;
+	if (options.state !== undefined && summary.state !== options.state) return false;
+	return true;
+}
+
+function countSubagentsByState(summaries: ClankySubagentSummary[]): Record<ClankySubagentState, number> {
+	const counts: Record<ClankySubagentState, number> = {
+		idle: 0,
+		queued: 0,
+		running: 0,
+		failed: 0,
+		stale: 0,
+	};
+	for (const summary of summaries) counts[summary.state] += 1;
+	return counts;
+}
+
+function countSubagentsByKind(summaries: ClankySubagentSummary[]): Record<string, number> {
+	const counts: Record<string, number> = {};
+	for (const summary of summaries) counts[summary.kind] = (counts[summary.kind] ?? 0) + 1;
+	return counts;
+}
+
+function formatSubagentSummary(summary: ClankySubagentSummary): JsonRecord {
+	return {
+		id: summary.id,
+		kind: summary.kind,
+		scopeId: summary.scopeId,
+		scopeName: summary.scopeName,
+		state: summary.state,
+		queueDepth: summary.queueDepth,
+		thinkingLevel: summary.thinkingLevel,
+		activeConversationId: summary.activeConversationId,
+		activeSummary: summary.activeSummary,
+		sessionFile: summary.sessionFile,
+		pid: summary.pid,
+		lastHeartbeatAt: summary.lastHeartbeatAt,
+		lastError: summary.lastError,
+		createdAt: summary.createdAt,
+		updatedAt: summary.updatedAt,
+	};
+}
+
+function truncateStatusText(text: string, maxChars: number): string {
+	if (text.length <= maxChars) return text;
+	if (maxChars <= 3) return text.slice(0, maxChars);
+	return `${text.slice(0, maxChars - 3)}...`;
 }
 
 function normalizeVisualizerMode(value: string): string {

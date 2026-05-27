@@ -13,7 +13,7 @@
  *
  * Run via: pnpm exec tsx agents/clanky/test/runtime-smoke.ts
  */
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -61,6 +61,8 @@ import {
 	DEFAULT_CLANKY_SUBAGENT_THINKING_LEVEL,
 } from "../src/runClanky.ts";
 import { SerialRuntimeTurnQueue } from "../src/runtimeTurnQueue.ts";
+import { createClankySetupExtensionFactory } from "../src/setupWizard.ts";
+import { createClankyVoiceLogsExtensionFactory, readVoiceLogTail } from "../src/voiceLogs.ts";
 import { createXAiAuthExtensionFactory } from "../src/xAiAuth.ts";
 
 async function main(): Promise<void> {
@@ -77,6 +79,8 @@ async function main(): Promise<void> {
 	await assertOpenAiAuthExtensionCommands();
 	await assertXAiAuthExtensionCommands();
 	await assertClankyEffortExtensionCommand();
+	await assertClankySetupExtensionCommand();
+	await assertClankyVoiceLogsExtensionCommand();
 	await assertDiscordGatewayControllerStartup();
 	const tmpRoot = await mkdtemp(join(tmpdir(), "clanky-agent-smoke-"));
 	const homeDir = join(tmpRoot, "home");
@@ -865,6 +869,9 @@ async function assertDiscordAuthExtensionCommands(): Promise<void> {
 	});
 	let restarts = 0;
 	const notifications: string[] = [];
+	const voiceLoadingWidgets: Array<string[] | undefined> = [];
+	const voiceLoadingStatuses: Array<string | undefined> = [];
+	const voiceProgressPhases: string[] = [];
 	const commands: Record<string, RegisteredCommand> = {};
 	let voiceSettingsState: StoredDiscordVoiceSettings | undefined;
 	const getRestarts = () => restarts;
@@ -890,6 +897,17 @@ async function assertDiscordAuthExtensionCommands(): Promise<void> {
 		gatewayController: {
 			async restart() {
 				restarts += 1;
+			},
+			async restartVoice(options?: { onProgress?: (progress: { phase: string; message: string }) => void }) {
+				restarts += 1;
+				for (const progress of [
+					{ phase: "waiting_for_client_ready", message: "Waiting for Discord voice client to become ready." },
+					{ phase: "starting_voice_bridge", message: "Starting Discord voice bridge." },
+					{ phase: "ready", message: "Discord voice client is ready." },
+				]) {
+					voiceProgressPhases.push(progress.phase);
+					options?.onProgress?.(progress);
+				}
 			},
 			status() {
 				return {
@@ -947,6 +965,12 @@ async function assertDiscordAuthExtensionCommands(): Promise<void> {
 			notify(message: string) {
 				notifications.push(message);
 			},
+			setStatus(_key: string, value: string | undefined) {
+				voiceLoadingStatuses.push(value);
+			},
+			setWidget(_key: string, value: string[] | undefined) {
+				voiceLoadingWidgets.push(value);
+			},
 		},
 	};
 	const statusCommand = commands["discord-status"];
@@ -968,9 +992,23 @@ async function assertDiscordAuthExtensionCommands(): Promise<void> {
 
 	const voiceCommand = commands["discord-voice"];
 	if (voiceCommand === undefined) throw new Error("smoke: /discord-voice command was not registered");
+	await assertCommandCompletionIncludes(voiceCommand, "", "set tts-provider elevenlabs");
+	await assertCommandCompletionIncludes(voiceCommand, "eleven", "set elevenlabs-voice ");
+	await assertCommandCompletionIncludes(voiceCommand, "set tts-provider ", "set tts-provider openai");
 	await voiceCommand.handler("", ctx);
 	if (getRestarts() !== 1) {
 		throw new Error(`smoke: /discord-voice wizard should hot-restart bridge once, got ${restarts}`);
+	}
+	if (!voiceProgressPhases.includes("waiting_for_client_ready") || !voiceProgressPhases.includes("ready")) {
+		throw new Error(`smoke: /discord-voice did not report voice startup progress: ${voiceProgressPhases.join(",")}`);
+	}
+	if (!voiceLoadingWidgets.some((widget) => widget?.join("\n").includes("Waiting for Discord voice client"))) {
+		throw new Error(
+			`smoke: /discord-voice did not render voice loading widget: ${JSON.stringify(voiceLoadingWidgets)}`,
+		);
+	}
+	if (voiceLoadingWidgets.at(-1) !== undefined || voiceLoadingStatuses.at(-1) !== undefined) {
+		throw new Error("smoke: /discord-voice loading UI was not cleared");
 	}
 	const wizardVoiceSettings = getVoiceSettings();
 	if (
@@ -1217,6 +1255,8 @@ async function assertClankyEffortExtensionCommand(): Promise<void> {
 
 	const effort = commands.effort;
 	if (effort === undefined) throw new Error("smoke: /effort command was not registered");
+	await assertCommandCompletionIncludes(effort, "", "status");
+	await assertCommandCompletionIncludes(effort, "subagents ", "subagents high");
 	const ctx = {
 		ui: {
 			notify(message: string) {
@@ -1260,12 +1300,149 @@ async function assertClankyEffortExtensionCommand(): Promise<void> {
 	}
 }
 
+async function assertClankySetupExtensionCommand(): Promise<void> {
+	const authStorage = AuthStorage.inMemory();
+	saveStoredOpenAiApiKey(authStorage, "stored-openai-key");
+	saveStoredDiscordCredential(authStorage, {
+		token: "stored-discord-token",
+		credentialKind: "bot-token",
+		identity: { id: "222", username: "stored-bot" },
+	});
+	saveStoredElevenLabsApiKey(authStorage, "stored-elevenlabs-key");
+	saveStoredXAiApiKey(authStorage, "stored-xai-key");
+	const paths = resolveClankyPaths({ homeDir: join(tmpdir(), "clanky-setup-smoke") });
+	const notifications: string[] = [];
+	const commands: Record<string, RegisteredCommand> = {};
+	let voiceSettingsState: StoredDiscordVoiceSettings | undefined = {
+		enabled: true,
+		guildId: "guild-1",
+		channelId: "voice-1",
+	};
+	const factory = createClankySetupExtensionFactory({
+		paths,
+		authStorage,
+		discordProviderId: DEFAULT_CLANKY_DISCORD_PROVIDER_ID,
+		gatewayController: {} as never,
+		voiceSettings: {
+			path: "/tmp/clanky-discord-voice.json",
+			read() {
+				return voiceSettingsState;
+			},
+			write(settings: StoredDiscordVoiceSettings) {
+				voiceSettingsState = settings;
+			},
+			clear() {
+				const hadSettings = voiceSettingsState !== undefined;
+				voiceSettingsState = undefined;
+				return hadSettings;
+			},
+		},
+	});
+	factory({
+		registerCommand(name: string, command: RegisteredCommand) {
+			commands[name] = command;
+		},
+	} as never);
+	const setup = commands.setup;
+	if (setup === undefined) throw new Error("smoke: /setup command was not registered");
+	await assertCommandCompletionIncludes(setup, "", "status");
+	await assertCommandCompletionIncludes(setup, "new", "new-user");
+	const ctx = {
+		ui: {
+			notify(message: string) {
+				notifications.push(message);
+			},
+		},
+	} as unknown as ExtensionCommandContext;
+
+	await setup.handler("status", ctx);
+	const status = notifications.at(-1);
+	if (
+		status === undefined ||
+		!status.includes("Clanky setup") ||
+		!status.includes("OpenAI:") ||
+		!status.includes("Discord text: stored bot-token as stored-bot") ||
+		!status.includes("Discord voice: enabled") ||
+		!status.includes("ElevenLabs:") ||
+		!status.includes("xAI media:")
+	) {
+		throw new Error(`smoke: /setup status summary was incomplete: ${status}`);
+	}
+
+	await setup.handler("fresh", ctx);
+	if (!notifications.at(-1)?.includes("pnpm dev:setup:fresh")) {
+		throw new Error("smoke: /setup fresh did not print the fresh-user command");
+	}
+}
+
+async function assertClankyVoiceLogsExtensionCommand(): Promise<void> {
+	const tmpRoot = await mkdtemp(join(tmpdir(), "clanky-voice-logs-smoke-"));
+	try {
+		const voiceLogPath = join(tmpRoot, "discord-voice.log");
+		await writeFile(voiceLogPath, ["first voice line", "second voice line", ""].join("\n"));
+		const commands: Record<string, RegisteredCommand> = {};
+		const notifications: string[] = [];
+		const factory = createClankyVoiceLogsExtensionFactory({ voiceLogPath });
+		factory({
+			registerCommand(name: string, command: RegisteredCommand) {
+				commands[name] = command;
+			},
+		} as never);
+		const command = commands["voice-logs"];
+		if (command === undefined || commands.voice_logs === undefined) {
+			throw new Error("smoke: /voice-logs command aliases were not registered");
+		}
+		await assertCommandCompletionIncludes(command, "", "tail");
+		await assertCommandCompletionIncludes(command, "cl", "clear");
+		const ctx = {
+			hasUI: false,
+			ui: {
+				notify(message: string) {
+					notifications.push(message);
+				},
+			},
+		} as unknown as ExtensionCommandContext;
+
+		await command.handler("tail", ctx);
+		const output = notifications.at(-1);
+		if (output === undefined || !output.includes(voiceLogPath) || !output.includes("second voice line")) {
+			throw new Error(`smoke: /voice-logs tail did not show log tail: ${output}`);
+		}
+		const missing = await readVoiceLogTail(join(tmpRoot, "missing.log"));
+		if (missing.length !== 0) throw new Error("smoke: missing voice log should read as an empty tail");
+	} finally {
+		await rm(tmpRoot, { recursive: true, force: true });
+	}
+}
+
 function assertStringEquals(actual: string | undefined, expected: string, message: string): void {
 	if (actual !== expected) throw new Error(message);
 }
 
 interface RegisteredCommand {
+	getArgumentCompletions?: (argumentPrefix: string) => unknown[] | null | Promise<unknown[] | null>;
 	handler(args: unknown, ctx: unknown): unknown | Promise<unknown>;
+}
+
+async function assertCommandCompletionIncludes(
+	command: RegisteredCommand,
+	prefix: string,
+	expectedValue: string,
+): Promise<void> {
+	const completions = await command.getArgumentCompletions?.(prefix);
+	if (!Array.isArray(completions)) {
+		throw new Error(`smoke: command did not return completions for prefix "${prefix}"`);
+	}
+	const values = completions.flatMap((completion) => {
+		if (typeof completion !== "object" || completion === null) return [];
+		const value = (completion as Record<string, unknown>).value;
+		return typeof value === "string" ? [value] : [];
+	});
+	if (!values.includes(expectedValue)) {
+		throw new Error(
+			`smoke: completion for prefix "${prefix}" did not include "${expectedValue}"; got ${values.join(", ")}`,
+		);
+	}
 }
 
 function testControllerPaths() {
@@ -1274,7 +1451,9 @@ function testControllerPaths() {
 
 async function assertDiscordGatewayControllerStartup(): Promise<void> {
 	await assertControllerSharedChatAndVoiceStartup();
+	await assertControllerWaitsForSharedClientReady();
 	await assertControllerVoiceOnlyStartup();
+	await assertControllerVoiceRestartKeepsTextBridge();
 	await assertControllerStoredVoiceConfigErrorDoesNotBlockTextBridge();
 	await assertControllerEnvVoiceConfigErrorStillFailsFast();
 	await assertControllerSharedVoiceFailureCleanup();
@@ -1350,6 +1529,53 @@ async function assertControllerSharedChatAndVoiceStartup(): Promise<void> {
 	}
 }
 
+async function assertControllerWaitsForSharedClientReady(): Promise<void> {
+	const authStorage = AuthStorage.inMemory();
+	const calls = createControllerCallRecorder();
+	calls.sharedClient.ready = false;
+	const controller = new ClankyDiscordGatewayController({
+		authStorage,
+		paths: testControllerPaths(),
+		env: {
+			CLANKY_DISCORD_TOKEN: "discord-token",
+			CLANKY_DISCORD_VOICE_ENABLED: "1",
+			CLANKY_DISCORD_VOICE_GUILD_ID: "guild-1",
+			CLANKY_DISCORD_VOICE_CHANNEL_ID: "voice-1",
+			OPENAI_API_KEY: "openai-key",
+		},
+		dependencies: {
+			createClient(options) {
+				calls.createdClientOptions.push(options ?? {});
+				return calls.sharedClient as never;
+			},
+			async startGateway() {
+				calls.startGatewayCalls += 1;
+				setTimeout(() => {
+					calls.sharedClient.ready = true;
+				}, 0);
+				return {
+					client: calls.sharedClient as never,
+					setSubagentThinkingLevel: () => 0,
+					async stop() {
+						calls.textStops += 1;
+					},
+				};
+			},
+			async startVoice(input) {
+				calls.startVoiceCalls += 1;
+				if (!input.client.isReady()) throw new Error("smoke: voice started before shared client was ready");
+				return createFakeVoiceHandle(calls);
+			},
+		},
+	});
+	controller.bindRuntime({} as never);
+	await controller.start();
+	if (calls.startGatewayCalls !== 1 || calls.startVoiceCalls !== 1) {
+		throw new Error("smoke: ready wait should allow shared voice startup after client becomes ready");
+	}
+	await controller.stop();
+}
+
 async function assertControllerVoiceOnlyStartup(): Promise<void> {
 	const authStorage = AuthStorage.inMemory();
 	const calls = createControllerCallRecorder();
@@ -1408,6 +1634,80 @@ async function assertControllerVoiceOnlyStartup(): Promise<void> {
 	await controller.stop();
 	if (calls.voiceStops !== 1 || calls.textStops !== 0 || calls.sharedClient.destroyCalls !== 1) {
 		throw new Error("smoke: voice-only path stop should stop voice and destroy voice-only client");
+	}
+}
+
+async function assertControllerVoiceRestartKeepsTextBridge(): Promise<void> {
+	const authStorage = AuthStorage.inMemory();
+	const calls = createControllerCallRecorder();
+	const voiceOnlyClient = new FakeControllerDiscordClient();
+	let voiceSettings: StoredDiscordVoiceSettings | undefined;
+	const controller = new ClankyDiscordGatewayController({
+		authStorage,
+		paths: testControllerPaths(),
+		env: {
+			CLANKY_DISCORD_TOKEN: "discord-token",
+			OPENAI_API_KEY: "openai-key",
+		},
+		readVoiceSettings: () => voiceSettings,
+		dependencies: {
+			createClient(options) {
+				calls.createdClientOptions.push(options ?? {});
+				return voiceOnlyClient as never;
+			},
+			async loginClient(client, config) {
+				calls.loginCalls += 1;
+				if ((client as unknown) !== voiceOnlyClient) throw new Error("smoke: voice restart logged in the wrong client");
+				if (config.token !== "discord-token") throw new Error("smoke: voice restart used wrong Discord token");
+				voiceOnlyClient.ready = true;
+			},
+			async startGateway(input) {
+				calls.startGatewayCalls += 1;
+				if (input.client !== undefined) throw new Error("smoke: text-only startup should not precreate voice client");
+				return {
+					client: calls.sharedClient as never,
+					setSubagentThinkingLevel: () => 0,
+					async stop() {
+						calls.textStops += 1;
+					},
+				};
+			},
+			async startVoice(input) {
+				calls.startVoiceCalls += 1;
+				if ((input.client as unknown) !== voiceOnlyClient) {
+					throw new Error("smoke: voice restart should use a voice-only client without stopping text");
+				}
+				return createFakeVoiceHandle(calls);
+			},
+		},
+	});
+	controller.bindRuntime({} as never);
+	await controller.start();
+	if (calls.startGatewayCalls !== 1 || calls.startVoiceCalls !== 0 || calls.createdClientOptions.length !== 0) {
+		throw new Error("smoke: text-only controller startup should start only the text gateway");
+	}
+
+	voiceSettings = { enabled: true, guildId: "guild-1", channelId: "voice-1" };
+	await controller.restartVoice();
+	const created = calls.createdClientOptions[0];
+	const status = controller.status();
+	if (created === undefined || created.voice !== true || created.chat !== false) {
+		throw new Error("smoke: voice restart should create a voice-only Discord client");
+	}
+	const startVoiceCalls = Number(calls.startVoiceCalls);
+	if (calls.startGatewayCalls !== 1 || calls.textStops !== 0 || calls.loginCalls !== 1 || startVoiceCalls !== 1) {
+		throw new Error("smoke: voice restart should not restart the text gateway");
+	}
+	if (status.textBridgeActive !== true || status.voiceBridgeActive !== true || status.voiceOnlyClientActive !== true) {
+		throw new Error(`smoke: voice restart status mismatch: ${JSON.stringify(status)}`);
+	}
+
+	await controller.stop();
+	const voiceStops = Number(calls.voiceStops);
+	const textStops = Number(calls.textStops);
+	const destroyCalls = Number(voiceOnlyClient.destroyCalls);
+	if (voiceStops !== 1 || textStops !== 1 || destroyCalls !== 1) {
+		throw new Error("smoke: stop after voice restart should stop voice, text, and voice-only client");
 	}
 }
 

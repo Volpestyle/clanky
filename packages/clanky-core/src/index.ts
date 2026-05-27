@@ -12,6 +12,8 @@ export {
 	type DiscordRecentAttachmentsToolInput,
 	type DiscordSendMessageToolInput,
 	type DiscordVoiceJoinToolInput,
+	type DiscordVoiceOperationOptions,
+	type DiscordVoiceOperationProgress,
 	type ExternalMcpCallToolInput,
 	type ExternalMcpListToolsInput,
 	type LinearCreateIssueToolInput,
@@ -40,6 +42,11 @@ export {
 	shouldStartAgentChatGateway,
 	shouldStartStandaloneChatGateway,
 } from "./chat-mode.ts";
+export {
+	type ClankyCommandCompletion,
+	type ClankyCommandCompletionSpec,
+	completeClankyCommandArgument,
+} from "./command-completions.ts";
 export {
 	addDiscordReaction,
 	type DiscordAddReactionInput,

@@ -76,7 +76,7 @@ function loginInstructions(): string {
 	].join("\n");
 }
 
-async function runXAiLogin(deps: XAiAuthCommandDeps, ctx: ExtensionCommandContext): Promise<void> {
+export async function runXAiLogin(deps: XAiAuthCommandDeps, ctx: ExtensionCommandContext): Promise<void> {
 	const providerId = resolveXAiProviderId(deps);
 	const existing = deps.authStorage.get(providerId);
 	if (existing !== undefined) {

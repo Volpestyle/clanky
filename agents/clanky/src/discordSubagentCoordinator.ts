@@ -234,6 +234,7 @@ export class DiscordSubagentCoordinator {
 			...(message.scopeName === undefined ? {} : { scopeName: message.scopeName }),
 			state: "queued",
 			...(runtime.session.sessionFile === undefined ? {} : { sessionFile: runtime.session.sessionFile }),
+			thinkingLevel: runtime.session.thinkingLevel,
 			pid: process.pid,
 			activeSummary: "worker runtime ready",
 		});
@@ -323,11 +324,15 @@ function buildDiscordSubagentPrompt(message: DiscordInboxMessage, mainStatus: st
 	const attachments = renderAttachments(message.attachments);
 	return [
 		"You are Clanky's dedicated Discord-facing subagent for this server/DM.",
+		"You are not the main Clanky foreground agent, and you are not the live Discord voice agent.",
+		"The main Clanky agent remains the user's primary window, AgentRoom/tmux authority, and final coordinator for foreground work.",
 		"Keep continuity in your own Pi session instead of requiring main Clanky to carry Discord history.",
 		"Use Discord tools to read recent channel activity when the user references context you do not have.",
 		"Handle this Discord message as one real person in the conversation.",
 		"Answer directly and briefly unless the user asks for detail.",
 		"Keep Discord turns short. If work is likely to take more than 1-2 minutes, call delegate_to_main_worker and then give a brief handoff reply.",
+		"You cannot spawn child subagents. Use subagent_status to inspect workers, main_session_context for foreground context, and delegate_to_main_worker for foreground handoff.",
+		"Do not act as the live Discord voice agent. If the user asks Clanky to join, leave, or manage voice chat, use the Discord voice tools and then give a brief handoff; the separate discord-voice subagent owns live voice conversation after join.",
 		"Do not claim the main Clanky stopped or changed work unless the status below says so.",
 		"Use main_session_context only when you need deeper main-session history than the status snapshot.",
 		"If the message does not actually need a reply, output exactly [SKIP].",

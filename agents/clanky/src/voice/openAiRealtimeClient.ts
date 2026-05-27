@@ -286,7 +286,7 @@ export class OpenAiRealtimeTranscriptionClient extends EventEmitter {
 			model: options.model.trim(),
 			sampleRate: normalizeSampleRate(options.sampleRate),
 		};
-		const ws = await this.openSocket(buildRealtimeUrl(this.baseUrl, this.session.model));
+		const ws = await this.openSocket(buildRealtimeTranscriptionUrl(this.baseUrl));
 		this.ws = ws;
 		ws.on("message", (data) => this.handleIncoming(data));
 		ws.on("error", (error) => {
@@ -396,6 +396,14 @@ function buildRealtimeUrl(baseUrl: string, model: string): string {
 	return url.toString();
 }
 
+export function buildRealtimeTranscriptionUrl(baseUrl: string): string {
+	const url = new URL(baseUrl);
+	url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
+	url.pathname = `${url.pathname.replace(/\/+$/, "")}/realtime`;
+	url.searchParams.set("intent", "transcription");
+	return url.toString();
+}
+
 function parseJsonRecord(data: WebSocket.RawData): JsonRecord | undefined {
 	try {
 		const parsed = JSON.parse(Buffer.isBuffer(data) ? data.toString("utf8") : String(data));
@@ -414,14 +422,14 @@ export function buildRealtimeSessionUpdateEvent(session: OpenAiRealtimeConnectOp
 	const outputModality = session.responseOutputModality ?? "audio";
 	const audio: JsonRecord = {
 		input: {
-			format: session.inputAudioFormat ?? "pcm16",
+			format: realtimeAudioFormat(session.inputAudioFormat),
 			transcription: { model: session.inputTranscriptionModel ?? "gpt-4o-mini-transcribe" },
 			turn_detection: null,
 		},
 	};
 	if (outputModality === "audio") {
 		audio.output = {
-			format: session.outputAudioFormat ?? "pcm16",
+			format: realtimeAudioFormat(session.outputAudioFormat),
 			voice: session.voice,
 		};
 	}
@@ -438,6 +446,11 @@ export function buildRealtimeSessionUpdateEvent(session: OpenAiRealtimeConnectOp
 			...(session.reasoningEffort !== undefined ? { reasoning: { effort: session.reasoningEffort } } : {}),
 		},
 	};
+}
+
+function realtimeAudioFormat(format: "pcm16" | undefined): JsonRecord {
+	if (format !== undefined && format !== "pcm16") throw new Error(`Unsupported realtime audio format: ${format}`);
+	return { type: "audio/pcm", rate: 24_000 };
 }
 
 export function buildRealtimeTranscriptionSessionUpdateEvent(

@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { basename } from "node:path";
 import {
 	type AgentToolResult,
 	type BeforeProviderRequestEvent,
@@ -11,6 +12,7 @@ import {
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
+import { type ClankyCommandCompletionSpec, completeClankyCommandArgument } from "./command-completions.ts";
 import type {
 	DiscordAddReactionInput,
 	DiscordListChannelsInput,
@@ -405,6 +407,17 @@ export type DiscordListEmojisToolInput = Static<typeof discordListEmojisSchema>;
 export type DiscordAddReactionToolInput = Static<typeof discordAddReactionSchema>;
 export type DiscordVoiceJoinToolInput = Static<typeof discordVoiceJoinSchema>;
 
+export interface DiscordVoiceOperationProgress {
+	phase: string;
+	message: string;
+	guildId?: string;
+	channelId?: string;
+}
+
+export interface DiscordVoiceOperationOptions {
+	onProgress?: (progress: DiscordVoiceOperationProgress) => void;
+}
+
 export interface ClankyBeforeProviderRequestInput {
 	sessionId: string;
 	payload: BeforeProviderRequestEvent["payload"];
@@ -452,8 +465,8 @@ export interface ClankyAgentToolHandlers {
 	discordListEmojis?: (input: DiscordListEmojisInput) => Promise<unknown>;
 	discordAddReaction?: (input: DiscordAddReactionInput) => Promise<unknown>;
 	discordVoiceStatus?: () => Promise<unknown>;
-	discordVoiceJoin?: (input: DiscordVoiceJoinToolInput) => Promise<unknown>;
-	discordVoiceLeave?: () => Promise<unknown>;
+	discordVoiceJoin?: (input: DiscordVoiceJoinToolInput, options?: DiscordVoiceOperationOptions) => Promise<unknown>;
+	discordVoiceLeave?: (options?: DiscordVoiceOperationOptions) => Promise<unknown>;
 }
 
 const CLANKY_MEMORY_PACKET_MESSAGE = "clanky.memory_packet";
@@ -465,8 +478,34 @@ const SUBAGENT_PANEL_STATUS_KEY = "clanky-subagents";
 const SUBAGENT_PANEL_REFRESH_MS = 2000;
 const SUBAGENT_PANEL_MAX_ROWS = 7;
 const SUBAGENT_BROWSER_REFRESH_MS = 2000;
-const SUBAGENT_BROWSER_MAX_ROWS = 9;
-const SUBAGENT_TRANSCRIPT_MAX_ROWS = 20;
+const SUBAGENT_BROWSER_MAX_ROWS = 14;
+const SUBAGENT_TRANSCRIPT_MAX_ROWS = 22;
+const SUBAGENT_MODAL_WIDTH = "96%";
+const SUBAGENT_MODAL_MAX_HEIGHT = "94%";
+const SUBAGENT_MODAL_MIN_WIDTH = 72;
+
+const SUBAGENT_COMMAND_COMPLETIONS = [
+	{ value: "focus", description: "Focus the live subagent panel for keyboard selection." },
+	{ value: "chat", description: "Open the selected subagent transcript." },
+	{ value: "modal", description: "Open the subagent browser modal." },
+	{ value: "panel", description: "Show the live subagent panel." },
+	{ value: "hide", description: "Hide the live subagent panel." },
+	{ value: "status", description: "Show a one-shot subagent status summary." },
+	{ value: "json", description: "Dump raw subagent status data." },
+	{ value: "toggle", description: "Toggle the live subagent panel." },
+	{ value: "list", description: "Show the live subagent panel.", aliases: ["show", "on"] },
+	{ value: "open", description: "Open the subagent browser modal.", aliases: ["browse"] },
+	{ value: "off", description: "Hide the live subagent panel." },
+] satisfies readonly ClankyCommandCompletionSpec[];
+
+const MEMORY_COMMAND_COMPLETIONS = [
+	{ value: "view ", label: "view [query]", description: "Search or list Clanky memory." },
+	{ value: "remember ", label: "remember <claim>", description: "Store a confirmed project memory claim." },
+	{ value: "forget ", label: "forget <memory-id>", description: "Forget one memory atom by id." },
+	{ value: "export", description: "Export Clanky memory." },
+	{ value: "on", description: "Enable local user memory." },
+	{ value: "off", description: "Disable local user memory." },
+] satisfies readonly ClankyCommandCompletionSpec[];
 
 export function createClankyExtensionFactories(handlers: ClankyAgentToolHandlers): ExtensionFactory[] {
 	const indexMessage = handlers.indexMessage;
@@ -661,9 +700,9 @@ class SubagentPanelController {
 			{
 				overlay: true,
 				overlayOptions: {
-					width: "88%",
-					minWidth: 72,
-					maxHeight: "85%",
+					width: SUBAGENT_MODAL_WIDTH,
+					minWidth: SUBAGENT_MODAL_MIN_WIDTH,
+					maxHeight: SUBAGENT_MODAL_MAX_HEIGHT,
 					anchor: "center",
 					margin: 1,
 				},
@@ -693,9 +732,9 @@ class SubagentPanelController {
 			{
 				overlay: true,
 				overlayOptions: {
-					width: "88%",
-					minWidth: 72,
-					maxHeight: "85%",
+					width: SUBAGENT_MODAL_WIDTH,
+					minWidth: SUBAGENT_MODAL_MIN_WIDTH,
+					maxHeight: SUBAGENT_MODAL_MAX_HEIGHT,
 					anchor: "center",
 					margin: 1,
 				},
@@ -857,7 +896,7 @@ class SubagentPanelController {
 }
 
 interface SubagentTranscriptMessage {
-	role: "user" | "assistant" | "tool" | "system";
+	role: "user" | "assistant" | "reasoning" | "tool" | "system";
 	text: string;
 	timestamp?: string;
 	speaker?: string;
@@ -881,6 +920,8 @@ class SubagentBrowserComponent {
 	private mode: "list" | "detail" = "list";
 	private detailSubagentId: string | undefined;
 	private detailScroll = 0;
+	private detailMaxScroll = 0;
+	private detailFollowTail = true;
 	private transcript: SubagentTranscriptMessage[] = [];
 	private detailError: string | undefined;
 	private refreshRunning = false;
@@ -903,6 +944,7 @@ class SubagentBrowserComponent {
 		if (this.mode === "detail") {
 			this.detailSubagentId = this.selectedSummary()?.id;
 			this.detailScroll = Number.MAX_SAFE_INTEGER;
+			this.detailFollowTail = true;
 		}
 		this.ensureSelectedVisible();
 		this.timer = setInterval(() => {
@@ -963,6 +1005,30 @@ class SubagentBrowserComponent {
 			this.requestRender();
 			return;
 		}
+		if (isPageUpKey(data)) {
+			this.selectedIndex = Math.max(0, this.selectedIndex - this.listPageSize());
+			this.ensureSelectedVisible();
+			this.requestRender();
+			return;
+		}
+		if (isPageDownKey(data) || data === " ") {
+			this.selectedIndex = Math.min(Math.max(0, this.summaries.length - 1), this.selectedIndex + this.listPageSize());
+			this.ensureSelectedVisible();
+			this.requestRender();
+			return;
+		}
+		if (isHomeKey(data) || data === "g") {
+			this.selectedIndex = 0;
+			this.ensureSelectedVisible();
+			this.requestRender();
+			return;
+		}
+		if (isEndKey(data) || data === "G") {
+			this.selectedIndex = Math.max(0, this.summaries.length - 1);
+			this.ensureSelectedVisible();
+			this.requestRender();
+			return;
+		}
 		if (isEnterKey(data)) {
 			void this.openSelected();
 		}
@@ -970,32 +1036,38 @@ class SubagentBrowserComponent {
 
 	private handleDetailInput(data: string): void {
 		if (isUpKey(data) || data === "k") {
-			this.detailScroll = Math.max(0, this.detailScroll - 1);
-			this.requestRender();
+			this.scrollDetailBy(-1);
 			return;
 		}
 		if (isDownKey(data) || data === "j") {
-			this.detailScroll += 1;
-			this.requestRender();
+			this.scrollDetailBy(1);
 			return;
 		}
-		if (isPageUpKey(data)) {
-			this.detailScroll = Math.max(0, this.detailScroll - 8);
-			this.requestRender();
+		if (isPageUpKey(data) || data === "b") {
+			this.scrollDetailBy(-this.detailPageSize());
 			return;
 		}
-		if (isPageDownKey(data)) {
-			this.detailScroll += 8;
-			this.requestRender();
+		if (isPageDownKey(data) || data === " " || data === "f") {
+			this.scrollDetailBy(this.detailPageSize());
 			return;
 		}
-		if (data === "g") {
+		if (isCtrlUKey(data) || data === "u") {
+			this.scrollDetailBy(-this.detailHalfPageSize());
+			return;
+		}
+		if (isCtrlDKey(data) || data === "d") {
+			this.scrollDetailBy(this.detailHalfPageSize());
+			return;
+		}
+		if (isHomeKey(data) || data === "g") {
+			this.detailFollowTail = false;
 			this.detailScroll = 0;
 			this.requestRender();
 			return;
 		}
-		if (data === "G") {
-			this.detailScroll = Number.MAX_SAFE_INTEGER;
+		if (isEndKey(data) || data === "G") {
+			this.detailFollowTail = true;
+			this.detailScroll = this.detailMaxScroll;
 			this.requestRender();
 			return;
 		}
@@ -1032,7 +1104,16 @@ class SubagentBrowserComponent {
 		this.mode = "detail";
 		this.detailSubagentId = selected.id;
 		this.detailScroll = Number.MAX_SAFE_INTEGER;
+		this.detailFollowTail = true;
 		await this.loadSelectedTranscript();
+		this.requestRender();
+	}
+
+	private scrollDetailBy(delta: number): void {
+		const current = this.detailFollowTail ? this.detailMaxScroll : Math.min(this.detailScroll, this.detailMaxScroll);
+		const next = Math.min(Math.max(0, current + delta), this.detailMaxScroll);
+		this.detailScroll = next;
+		this.detailFollowTail = delta > 0 && next >= this.detailMaxScroll;
 		this.requestRender();
 	}
 
@@ -1083,13 +1164,13 @@ class SubagentBrowserComponent {
 		this.ensureSelectedVisible();
 		const lines = [
 			`Subagents  ${counts.running} running  ${counts.queued} queued  ${counts.failed} failed`,
-			"Up/Down select  Enter open chat  r refresh  Esc/q close",
+			"Up/Down select  PgUp/PgDn page  Home/End jump  Enter open chat  r refresh  Esc/q close",
 			"",
 		];
 		if (this.summaries.length === 0) {
 			lines.push("No Clanky subagents yet.");
 		} else {
-			lines.push("  state     queue  scope / active work");
+			lines.push("  state     queue  effort   scope / active work");
 			const visibleSummaries = this.summaries.slice(this.listScroll, this.listScroll + SUBAGENT_BROWSER_MAX_ROWS);
 			for (const [visibleIndex, summary] of visibleSummaries.entries()) {
 				const index = this.listScroll + visibleIndex;
@@ -1109,30 +1190,49 @@ class SubagentBrowserComponent {
 		const selected = this.selectedSummary();
 		const contentWidth = Math.max(20, width - 4);
 		const title = selected === undefined ? "Subagent" : `Subagent ${selected.scopeName ?? selected.scopeId}`;
-		const lines = [truncatePlain(title, contentWidth), "Up/Down scroll  PgUp/PgDn page  r refresh  Esc/q back", ""];
-		if (selected !== undefined) {
-			lines.push(formatSubagentBrowserRow(selected, contentWidth));
-			lines.push("");
-		}
+		const lines = [
+			truncatePlain(title, contentWidth),
+			selected === undefined ? "No subagent selected." : formatSubagentDetailMeta(selected, contentWidth),
+			"j/k scroll  PgUp/PgDn page  g/G top/bottom  r refresh  Esc/q back",
+		];
 		if (this.detailError !== undefined) {
+			lines.push("");
 			lines.push(`No transcript: ${this.detailError}`);
 		} else if (this.transcript.length === 0) {
+			lines.push("");
 			lines.push("No transcript messages yet.");
 		} else {
-			lines.push(`Conversation history (${this.transcript.length} messages)`);
-			lines.push("");
 			const rendered = renderTranscriptRows(this.transcript, contentWidth);
 			const maxScroll = Math.max(0, rendered.length - SUBAGENT_TRANSCRIPT_MAX_ROWS);
-			this.detailScroll = Math.min(Math.max(0, this.detailScroll), maxScroll);
-			lines.push(...rendered.slice(this.detailScroll, this.detailScroll + SUBAGENT_TRANSCRIPT_MAX_ROWS));
-			if (rendered.length > SUBAGENT_TRANSCRIPT_MAX_ROWS) {
-				lines.push("");
-				lines.push(
-					`${this.detailScroll + 1}-${Math.min(rendered.length, this.detailScroll + SUBAGENT_TRANSCRIPT_MAX_ROWS)} of ${rendered.length}`,
-				);
+			this.detailMaxScroll = maxScroll;
+			if (this.detailFollowTail || this.detailScroll === Number.MAX_SAFE_INTEGER) {
+				this.detailScroll = maxScroll;
+				this.detailFollowTail = true;
+			} else {
+				this.detailScroll = Math.min(Math.max(0, this.detailScroll), maxScroll);
 			}
+			const end = Math.min(rendered.length, this.detailScroll + SUBAGENT_TRANSCRIPT_MAX_ROWS);
+			lines.push(
+				`History ${this.transcript.length} msgs  lines ${this.detailScroll + 1}-${end}/${rendered.length}${this.detailFollowTail ? "  tail" : ""}`,
+			);
+			lines.push("");
+			lines.push(...rendered.slice(this.detailScroll, end));
+			lines.push("");
+			lines.push(renderSubagentDetailFooter(this.detailScroll, end, rendered.length, this.detailFollowTail));
 		}
 		return renderPlainBox(lines, width, this.theme);
+	}
+
+	private listPageSize(): number {
+		return Math.max(1, SUBAGENT_BROWSER_MAX_ROWS - 2);
+	}
+
+	private detailPageSize(): number {
+		return Math.max(1, SUBAGENT_TRANSCRIPT_MAX_ROWS - 4);
+	}
+
+	private detailHalfPageSize(): number {
+		return Math.max(1, Math.floor(this.detailPageSize() / 2));
 	}
 }
 
@@ -1158,8 +1258,23 @@ function registerClankyCommands(
 		});
 	}
 	if (handlers.listSkills !== undefined || handlers.createSkill !== undefined) {
+		const skillCompletions = [
+			...(handlers.listSkills === undefined
+				? []
+				: [{ value: "list", description: "List loaded Clanky skills." } satisfies ClankyCommandCompletionSpec]),
+			...(handlers.createSkill === undefined
+				? []
+				: [
+						{
+							value: "add ",
+							label: "add <name>",
+							description: "Create a profile-local Clanky skill.",
+						} satisfies ClankyCommandCompletionSpec,
+					]),
+		];
 		pi.registerCommand("skill", {
 			description: "List or create Clanky skills",
+			getArgumentCompletions: (prefix) => completeClankyCommandArgument(prefix, skillCompletions),
 			handler: async (args, ctx) => {
 				const trimmed = args.trim();
 				if (trimmed === "" || trimmed === "list") {
@@ -1234,6 +1349,7 @@ function registerClankyCommands(
 	if (handlers.listSubagents !== undefined) {
 		pi.registerCommand("subagents", {
 			description: "Toggle the live Clanky subagent panel",
+			getArgumentCompletions: (prefix) => completeClankyCommandArgument(prefix, SUBAGENT_COMMAND_COMPLETIONS),
 			handler: async (args, ctx) => {
 				await subagentPanel?.handleCommand(args, ctx);
 			},
@@ -1293,7 +1409,7 @@ function formatSubagentPanelLines(
 				? "Up/Down select  Enter modal  Esc release"
 				: "/subagents focus selects  /subagents hides  /subagents modal opens browser",
 		),
-		ctx.ui.theme.fg("dim", "state     queue  scope / active work"),
+		ctx.ui.theme.fg("dim", "state     queue  effort   scope / active work"),
 	];
 	const scroll = Math.min(Math.max(0, options.scroll ?? 0), Math.max(0, ordered.length - SUBAGENT_PANEL_MAX_ROWS));
 	const selectedIndex = options.selectedIndex ?? -1;
@@ -1319,18 +1435,39 @@ function formatSubagentPanelRow(
 	const marker = selected && focused ? ">" : subagent.state === "running" ? "*" : " ";
 	const state = formatSubagentState(subagent.state, ctx);
 	const queue = subagent.queueDepth > 0 ? String(subagent.queueDepth).padStart(5) : ctx.ui.theme.fg("dim", "    -");
-	const scope = truncatePlain(subagent.scopeName ?? subagent.scopeId, 28);
-	const summary = truncatePlain(subagent.activeSummary ?? "idle", 44);
+	const effort = ctx.ui.theme.fg("dim", formatSubagentEffort(subagent.thinkingLevel).padEnd(8));
+	const scope = truncatePlain(subagent.scopeName ?? subagent.scopeId, 24);
+	const summary = truncatePlain(subagent.activeSummary ?? "idle", 40);
 	const age = ctx.ui.theme.fg("dim", formatRelativeAge(subagent.updatedAt));
-	return `${marker} ${state} ${queue}  ${scope} - ${summary} ${age}`;
+	return `${marker} ${state} ${queue}  ${effort} ${scope} - ${summary} ${age}`;
 }
 
 function formatSubagentBrowserRow(subagent: ClankySubagentSummary, width: number): string {
 	const queue = subagent.queueDepth > 0 ? String(subagent.queueDepth).padStart(5) : "    -";
+	const effort = formatSubagentEffort(subagent.thinkingLevel).padEnd(8);
 	const scope = truncatePlain(subagent.scopeName ?? subagent.scopeId, 24);
-	const summary = truncatePlain(subagent.activeSummary ?? "idle", Math.max(12, width - 45));
-	const line = `${subagent.state.padEnd(8)} ${queue}  ${scope.padEnd(24)}  ${summary}  ${formatRelativeAge(subagent.updatedAt)}`;
+	const summary = truncatePlain(subagent.activeSummary ?? "idle", Math.max(12, width - 55));
+	const line = `${subagent.state.padEnd(8)} ${queue}  ${effort} ${scope.padEnd(24)}  ${summary}  ${formatRelativeAge(subagent.updatedAt)}`;
 	return truncatePlain(line, width);
+}
+
+function formatSubagentDetailMeta(subagent: ClankySubagentSummary, width: number): string {
+	const queue = subagent.queueDepth > 0 ? `queue ${subagent.queueDepth}` : "queue empty";
+	const effort = `effort ${subagent.thinkingLevel ?? "unknown"}`;
+	const age = `updated ${formatRelativeAge(subagent.updatedAt)} ago`;
+	const session = subagent.sessionFile === undefined ? "no session file" : basename(subagent.sessionFile);
+	const summary = subagent.activeSummary ?? "idle";
+	return truncatePlain(`${subagent.state}  ${queue}  ${effort}  ${age}  ${session}  ${summary}`, width);
+}
+
+function formatSubagentEffort(thinkingLevel: string | undefined): string {
+	return thinkingLevel === undefined ? "effort -" : `effort ${thinkingLevel}`;
+}
+
+function renderSubagentDetailFooter(start: number, end: number, total: number, followTail: boolean): string {
+	if (total <= SUBAGENT_TRANSCRIPT_MAX_ROWS) return `${total} rendered line${total === 1 ? "" : "s"}`;
+	const position = start <= 0 ? "top" : end >= total ? "bottom" : "scroll";
+	return `${position} ${start + 1}-${end}/${total}${followTail ? "  following tail" : ""}`;
 }
 
 function formatSubagentState(state: ClankySubagentState, ctx: ExtensionContext): string {
@@ -1382,6 +1519,13 @@ function formatRelativeAge(timestamp: string): string {
 	const hours = Math.floor(minutes / 60);
 	if (hours < 48) return `${hours}h`;
 	return `${Math.floor(hours / 24)}d`;
+}
+
+function formatShortDuration(ms: number): string {
+	const seconds = Math.max(0, Math.floor(ms / 1000));
+	if (seconds < 60) return `${seconds}s`;
+	const minutes = Math.floor(seconds / 60);
+	return `${minutes}m ${seconds % 60}s`;
 }
 
 function truncatePlain(value: string, maxLength: number): string {
@@ -1454,7 +1598,7 @@ function renderSessionMessageEntry(entry: SessionMessageEntry): SubagentTranscri
 		const messages = assistantContentMessages(content);
 		return messages.map((message) => ({ ...message, timestamp: entry.timestamp }));
 	}
-	if (role === "tool") {
+	if (role === "tool" || role === "toolResult") {
 		return [
 			{
 				role: "tool",
@@ -1482,22 +1626,53 @@ function assistantContentMessages(content: unknown): Array<Omit<SubagentTranscri
 		return text.length === 0 ? [] : [{ role: "assistant", text }];
 	}
 	const messages: Array<Omit<SubagentTranscriptMessage, "timestamp">> = [];
-	const assistantText = content
-		.flatMap((part) => {
-			if (!isRecord(part)) return [];
-			if (part.type === "text" && typeof part.text === "string") return [part.text];
-			return [];
-		})
-		.join("\n")
-		.trim();
-	if (assistantText.length > 0) messages.push({ role: "assistant", text: assistantText });
 	for (const part of content) {
 		if (!isRecord(part)) continue;
+		if (part.type === "thinking") {
+			const text = assistantReasoningText(part);
+			if (text.length > 0) messages.push({ role: "reasoning", text });
+			continue;
+		}
+		if (part.type === "text" && typeof part.text === "string") {
+			const text = part.text.trim();
+			if (text.length > 0) messages.push({ role: "assistant", text });
+			continue;
+		}
 		if (part.type === "toolCall" && typeof part.name === "string") {
 			messages.push({ role: "tool", text: `tool call: ${part.name}` });
 		}
 	}
 	return messages;
+}
+
+function assistantReasoningText(part: Record<string, unknown>): string {
+	const direct = typeof part.thinking === "string" ? part.thinking.trim() : "";
+	if (direct.length > 0) return direct;
+	return reasoningSummaryText(part.thinkingSignature);
+}
+
+function reasoningSummaryText(signature: unknown): string {
+	if (typeof signature !== "string") return "";
+	try {
+		const parsed = JSON.parse(signature) as unknown;
+		if (!isRecord(parsed)) return "";
+		return reasoningSummaryEntries(parsed.summary);
+	} catch {
+		return "";
+	}
+}
+
+function reasoningSummaryEntries(summary: unknown): string {
+	if (!Array.isArray(summary)) return "";
+	return summary
+		.flatMap((entry) => {
+			if (!isRecord(entry)) return [];
+			if (entry.type === "summary_text" && typeof entry.text === "string") return [entry.text.trim()];
+			return [];
+		})
+		.filter((text) => text.length > 0)
+		.join("\n")
+		.trim();
 }
 
 function extractDiscordMessageFromPrompt(text: string): { speaker?: string; text: string } {
@@ -1553,6 +1728,7 @@ function formatTranscriptHeader(message: SubagentTranscriptMessage, width: numbe
 
 function formatTranscriptRole(role: SubagentTranscriptMessage["role"]): string {
 	if (role === "assistant") return "clanky";
+	if (role === "reasoning") return "reasoning";
 	return role;
 }
 
@@ -1654,6 +1830,22 @@ function isPageDownKey(data: string): boolean {
 	return data === "\u001b[6~";
 }
 
+function isHomeKey(data: string): boolean {
+	return data === "\u001b[H" || data === "\u001b[1~" || data === "\u001b[7~";
+}
+
+function isEndKey(data: string): boolean {
+	return data === "\u001b[F" || data === "\u001b[4~" || data === "\u001b[8~";
+}
+
+function isCtrlUKey(data: string): boolean {
+	return data === "\u0015";
+}
+
+function isCtrlDKey(data: string): boolean {
+	return data === "\u0004";
+}
+
 function isEnterKey(data: string): boolean {
 	return data === "\r" || data === "\n";
 }
@@ -1726,6 +1918,7 @@ function registerMemoryCommands(pi: Parameters<ExtensionFactory>[0], handlers: C
 	}
 	pi.registerCommand("memory", {
 		description: "View, remember, forget, export, or configure Clanky memory",
+		getArgumentCompletions: (prefix) => completeClankyCommandArgument(prefix, memoryCommandCompletions(handlers)),
 		handler: async (args, ctx) => {
 			ctx.ui.notify(await runMemoryCommand(args, ctx, handlers));
 		},
@@ -1751,6 +1944,18 @@ function registerMemoryCommands(pi: Parameters<ExtensionFactory>[0], handlers: C
 			},
 		});
 	}
+}
+
+function memoryCommandCompletions(handlers: ClankyAgentToolHandlers): ClankyCommandCompletionSpec[] {
+	return MEMORY_COMMAND_COMPLETIONS.filter((completion) => {
+		const command = completion.value.trim().split(/\s+/, 1)[0];
+		if (command === "view") return handlers.memorySearch !== undefined;
+		if (command === "remember") return handlers.memoryRemember !== undefined;
+		if (command === "forget") return handlers.memoryForget !== undefined;
+		if (command === "export") return handlers.memoryExport !== undefined;
+		if (command === "on" || command === "off") return handlers.memoryConsent !== undefined;
+		return true;
+	});
 }
 
 async function runMemoryCommand(
@@ -2357,10 +2562,23 @@ export function createClankyToolDefinitions(handlers: ClankyAgentToolHandlers): 
 				promptGuidelines: [
 					"Use discord_list_guilds and discord_list_channels first when the target guild or voice channel id is ambiguous.",
 					"Respect user intent and the configured voice allowlists; the tool rejects servers or channels outside the allowlists.",
+					"After a successful join, treat this as a handoff: the separate discord-voice subagent owns live voice conversation, while the text Discord subagent should only send a brief confirmation if useful.",
 				],
 				parameters: discordVoiceJoinSchema,
-				async execute(_toolCallId, params) {
-					return toolResult(await discordVoiceJoin(params));
+				async execute(_toolCallId, params, _signal, onUpdate) {
+					const startedAt = Date.now();
+					const emitProgress = (progress: DiscordVoiceOperationProgress) => {
+						onUpdate?.(discordVoiceProgressToolResult("join", progress, startedAt));
+					};
+					emitProgress({
+						phase: "saving_settings",
+						message: "Saving Discord voice target before starting the client.",
+						...(typeof params.guildId === "string" ? { guildId: params.guildId } : {}),
+						...(typeof params.guild_id === "string" ? { guildId: params.guild_id } : {}),
+						...(typeof params.channelId === "string" ? { channelId: params.channelId } : {}),
+						...(typeof params.channel_id === "string" ? { channelId: params.channel_id } : {}),
+					});
+					return toolResult(await discordVoiceJoin(params, { onProgress: emitProgress }));
 				},
 			}),
 		);
@@ -2373,9 +2591,20 @@ export function createClankyToolDefinitions(handlers: ClankyAgentToolHandlers): 
 				label: "Discord Voice Leave",
 				description: "Leave Clanky's currently pinned Discord voice channel while keeping voice access enabled.",
 				promptSnippet: "discord_voice_leave: leave the active Discord voice channel without disabling voice access.",
+				promptGuidelines: [
+					"After a successful leave, the text Discord subagent may send a brief confirmation, but it should not act as the voice agent.",
+				],
 				parameters: Type.Object({}),
-				async execute() {
-					return toolResult(await discordVoiceLeave());
+				async execute(_toolCallId, _params, _signal, onUpdate) {
+					const startedAt = Date.now();
+					const emitProgress = (progress: DiscordVoiceOperationProgress) => {
+						onUpdate?.(discordVoiceProgressToolResult("leave", progress, startedAt));
+					};
+					emitProgress({
+						phase: "saving_settings",
+						message: "Saving Discord voice leave request before updating the client.",
+					});
+					return toolResult(await discordVoiceLeave({ onProgress: emitProgress }));
 				},
 			}),
 		);
@@ -2616,6 +2845,41 @@ function normalizeMemoryForgetToolInput(input: MemoryForgetToolInput): ForgetMem
 function toolResult(details: unknown): AgentToolResult<unknown> {
 	return {
 		content: [{ type: "text", text: JSON.stringify(details ?? null, null, "\t") }],
+		details,
+	};
+}
+
+function discordVoiceProgressToolResult(
+	operation: "join" | "leave",
+	progress: DiscordVoiceOperationProgress,
+	startedAt: number,
+): AgentToolResult<{
+	operation: "join" | "leave";
+	phase: string;
+	message: string;
+	elapsedMs: number;
+	guildId?: string;
+	channelId?: string;
+}> {
+	const elapsedMs = Math.max(0, Date.now() - startedAt);
+	const details = {
+		operation,
+		phase: progress.phase,
+		message: progress.message,
+		elapsedMs,
+		...(progress.guildId === undefined ? {} : { guildId: progress.guildId }),
+		...(progress.channelId === undefined ? {} : { channelId: progress.channelId }),
+	};
+	const lines = [
+		`Discord voice ${operation}`,
+		progress.message,
+		`phase: ${progress.phase.replace(/_/g, " ")}`,
+		...(progress.guildId === undefined ? [] : [`guild: ${progress.guildId}`]),
+		...(progress.channelId === undefined ? [] : [`channel: ${progress.channelId}`]),
+		`elapsed: ${formatShortDuration(elapsedMs)}`,
+	];
+	return {
+		content: [{ type: "text", text: lines.join("\n") }],
 		details,
 	};
 }

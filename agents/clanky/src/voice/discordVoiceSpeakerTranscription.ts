@@ -54,6 +54,7 @@ interface SpeakerSession {
 	pendingAudio: Buffer[];
 	draining: Promise<void> | undefined;
 	commitRequested: boolean;
+	sentAudioBytes: number;
 	active: boolean;
 	closed: boolean;
 	idleTimer: TimerHandle | undefined;
@@ -62,6 +63,7 @@ interface SpeakerSession {
 const DEFAULT_SILENCE_DURATION_MS = 700;
 const DEFAULT_SAMPLE_RATE = 24_000;
 const DEFAULT_IDLE_CLOSE_MS = 120_000;
+const MIN_COMMIT_AUDIO_MS = 100;
 
 export class DiscordVoiceSpeakerTranscriptionManager {
 	private readonly realtimeOptions: OpenAiRealtimeClientOptions;
@@ -74,6 +76,7 @@ export class DiscordVoiceSpeakerTranscriptionManager {
 	private readonly onSocketClosed: ((userId: string, event: JsonRecord) => void) | undefined;
 	private readonly silenceDurationMs: number;
 	private readonly sampleRate: number;
+	private readonly minimumCommitAudioBytes: number;
 	private readonly idleCloseMs: number;
 	private readonly setTimer: (callback: () => void, delayMs: number) => TimerHandle;
 	private readonly clearTimer: (handle: TimerHandle) => void;
@@ -94,6 +97,7 @@ export class DiscordVoiceSpeakerTranscriptionManager {
 		this.onSocketClosed = options.onSocketClosed;
 		this.silenceDurationMs = normalizeDuration(options.silenceDurationMs, DEFAULT_SILENCE_DURATION_MS, 100, 5_000);
 		this.sampleRate = normalizeSampleRate(options.sampleRate);
+		this.minimumCommitAudioBytes = minimumPcm16MonoAudioBytes(this.sampleRate, MIN_COMMIT_AUDIO_MS);
 		this.idleCloseMs = normalizeDuration(options.idleCloseMs, DEFAULT_IDLE_CLOSE_MS, 1_000, 10 * 60_000);
 		this.setTimer = options.setTimer ?? setTimeout;
 		this.clearTimer = options.clearTimer ?? clearTimeout;
@@ -181,6 +185,7 @@ export class DiscordVoiceSpeakerTranscriptionManager {
 			pendingAudio: [],
 			draining: undefined,
 			commitRequested: false,
+			sentAudioBytes: 0,
 			active: false,
 			closed: false,
 			idleTimer: undefined,
@@ -226,11 +231,17 @@ export class DiscordVoiceSpeakerTranscriptionManager {
 			session.connected = true;
 			while (!session.closed && session.pendingAudio.length > 0) {
 				const audio = session.pendingAudio.shift();
-				if (audio !== undefined) session.realtime.appendInputAudioPcm(audio);
+				if (audio !== undefined) {
+					session.realtime.appendInputAudioPcm(audio);
+					session.sentAudioBytes += audio.length;
+				}
 			}
 			if (!session.closed && session.commitRequested) {
 				session.commitRequested = false;
-				session.realtime.commitInputAudioBuffer();
+				if (session.sentAudioBytes >= this.minimumCommitAudioBytes) {
+					session.realtime.commitInputAudioBuffer();
+				}
+				session.sentAudioBytes = 0;
 				if (!session.active) this.scheduleIdleClose(session);
 			}
 		} catch (error) {
@@ -275,4 +286,8 @@ function normalizeSampleRate(value: number | undefined): number {
 
 function normalizeDuration(value: number | undefined, fallback: number, min: number, max: number): number {
 	return Math.max(min, Math.min(max, Math.floor(Number(value) || fallback)));
+}
+
+function minimumPcm16MonoAudioBytes(sampleRate: number, durationMs: number): number {
+	return Math.ceil((sampleRate * 2 * durationMs) / 1_000);
 }
