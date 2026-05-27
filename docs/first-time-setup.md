@@ -85,6 +85,11 @@ Inside Clanky:
 chat gateway ownership. Use it whenever you are not sure which profile you are
 editing.
 
+Clanky uses profile-local durable stores rather than a single room YAML file.
+The TUI setup commands write the active profile, while env vars remain
+launch-time overrides. See [Configuration Model](configuration.md) for the
+source-of-truth rules and the AgentRoom boundary.
+
 ## Model Auth
 
 Clanky can use Pi's normal `/login` flow or Clanky's profile-local OpenAI key

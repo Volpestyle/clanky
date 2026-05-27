@@ -624,6 +624,7 @@ async function assertSubagentPanelCommandWithSession(sessionFiles: {
 	selectedSessionFile: string;
 }): Promise<void> {
 	const commands = new Map<string, Parameters<Parameters<ExtensionFactory>[0]["registerCommand"]>[1]>();
+	const sentSubagentMessages: Array<{ id: string; text: string }> = [];
 	const factories = createClankyExtensionFactories({
 		listSubagents: async () => [
 			{
@@ -653,6 +654,10 @@ async function assertSubagentPanelCommandWithSession(sessionFiles: {
 				updatedAt: "2026-01-01T00:01:00.000Z",
 			},
 		],
+		sendSubagentMessage: async (input) => {
+			sentSubagentMessages.push(input);
+			return { accepted: true, mode: "start", sessionId: "session-selected" };
+		},
 	});
 	const pi = {
 		registerCommand(name: string, options: Parameters<Parameters<ExtensionFactory>[0]["registerCommand"]>[1]) {
@@ -688,6 +693,10 @@ async function assertSubagentPanelCommandWithSession(sessionFiles: {
 					handleInput?(data: string): void;
 					dispose?(): void;
 				};
+				await new Promise((resolve) => setTimeout(resolve, 10));
+				detailLines = component.render(100);
+				component.handleInput?.("ping from tui");
+				component.handleInput?.("\r");
 				await new Promise((resolve) => setTimeout(resolve, 10));
 				detailLines = component.render(100);
 				component.dispose?.();
@@ -772,6 +781,15 @@ async function assertSubagentPanelCommandWithSession(sessionFiles: {
 		!detailLines.join("\n").includes("next step done")
 	) {
 		throw new Error(`smoke: /subagents enter did not render transcript: ${JSON.stringify(detailLines)}`);
+	}
+	if (
+		sentSubagentMessages.length !== 1 ||
+		sentSubagentMessages[0]?.id !== "discord-guild:guild-smoke" ||
+		sentSubagentMessages[0]?.text !== "ping from tui"
+	) {
+		throw new Error(
+			`smoke: /subagents composer did not send selected message: ${JSON.stringify(sentSubagentMessages)}`,
+		);
 	}
 	await subagents.handler("panel", ctx);
 	const panelLines = widgets.get("clanky-subagents");

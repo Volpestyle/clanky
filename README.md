@@ -28,6 +28,18 @@ For a personal Clanky, the intuitive setup is agent-owned Discord plus optional
 AgentRoom participation for coordinating with other agents. For a shared
 multi-agent public channel, use a room-owned connector with webhook attribution.
 
+## Configuration Model
+
+Clanky is configured through the active profile, not through AgentRoom's room
+YAML. The TUI setup commands edit profile-local stores such as `auth.json`,
+`discord-voice.json`, and `models.json`; launch env vars remain explicit
+overrides for CI, AgentRoom launches, and one-off sessions.
+
+AgentRoom's `.agentroom/config.yaml` owns room topology and room-owned
+connectors. Clanky's profile owns personal credentials, memory, sessions,
+skills, and agent-owned chat settings. See `docs/configuration.md` for the
+source-of-truth and override rules.
+
 ## Discord Setup (Agent-Owned)
 
 The primary path is the interactive login from inside the Clanky TUI:
