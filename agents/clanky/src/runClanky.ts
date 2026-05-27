@@ -7,6 +7,7 @@ import {
 	createClankyToolDefinitions,
 	type DiscordVoiceJoinToolInput,
 	type DiscordVoiceOperationOptions,
+	getOpenAiCredentialStatus,
 	loadClankySkills,
 	loadStoredDiscordCredential,
 	resolveClankyPaths,
@@ -64,6 +65,8 @@ export interface RunClankyOptions {
 }
 
 const STARTUP_PROGRESS_FRAMES = ["-", "\\", "|", "/"];
+const CLANKY_VOICE_STATUS_UI_KEY = "clanky-voice";
+const CLANKY_VOICE_STATUS_REFRESH_MS = 2000;
 const EFFORT_TARGET_COMPLETIONS = [
 	{ target: "main", label: "main" },
 	{ target: "subagents", label: "subagents" },
@@ -439,6 +442,81 @@ function formatEffortUpdate(
 	return lines.join("\n");
 }
 
+function createClankyWelcomeExtensionFactory(input: { authStorage: AuthStorage; profile: string }): ExtensionFactory {
+	return (pi) => {
+		pi.on("session_start", async (_event, ctx) => {
+			if (!ctx.hasUI) return;
+			const status = getOpenAiCredentialStatus(process.env, input.authStorage);
+			if (status.available) {
+				ctx.ui.setHeader(undefined);
+				return;
+			}
+			ctx.ui.setHeader((_tui, theme) => ({
+				render(width: number): string[] {
+					const profile = truncateText(input.profile, Math.max(12, width - "Profile: ".length));
+					return [
+						"",
+						theme.bold("Clanky"),
+						theme.fg("error", "OpenAI is not configured. Type /setup to begin."),
+						theme.fg("dim", `Profile: ${profile}`),
+						"",
+					];
+				},
+				invalidate() {},
+			}));
+		});
+	};
+}
+
+function createClankyVoiceStatusExtensionFactory(gatewayController: ClankyDiscordGatewayController): ExtensionFactory {
+	return (pi) => {
+		let timer: ReturnType<typeof setInterval> | undefined;
+		pi.on("session_start", async (_event, ctx) => {
+			if (!ctx.hasUI) return;
+			const update = () => {
+				ctx.ui.setStatus(CLANKY_VOICE_STATUS_UI_KEY, formatClankyVoiceFooterStatus(gatewayController.status()));
+			};
+			update();
+			timer = setInterval(update, CLANKY_VOICE_STATUS_REFRESH_MS);
+			timer.unref?.();
+		});
+		pi.on("session_shutdown", (_event, ctx) => {
+			if (timer !== undefined) {
+				clearInterval(timer);
+				timer = undefined;
+			}
+			if (ctx.hasUI) ctx.ui.setStatus(CLANKY_VOICE_STATUS_UI_KEY, undefined);
+		});
+	};
+}
+
+function formatClankyVoiceFooterStatus(status: unknown): string | undefined {
+	if (!isRecord(status)) return undefined;
+	const voiceConfigError = readStatusString(status, "voiceConfigError");
+	if (voiceConfigError !== undefined) return "voice error";
+	const voice = readStatusRecord(status, "voice");
+	if (readStatusBoolean(status, "voiceBridgeActive") === true) {
+		const channelId = voice === undefined ? undefined : readStatusString(voice, "channelId");
+		if (
+			voice !== undefined &&
+			readStatusBoolean(voice, "active") === false &&
+			readStatusString(voice, "mode") === "dynamic"
+		) {
+			return "voice ready";
+		}
+		return channelId === undefined ? "voice live" : `voice live channel ${shortDiscordId(channelId)}`;
+	}
+	if (readStatusBoolean(status, "voiceOnlyClientActive") === true) return "voice client live";
+	if (
+		voice !== undefined &&
+		readStatusBoolean(voice, "enabled") === true &&
+		readStatusBoolean(voice, "active") === false
+	) {
+		return "voice ready";
+	}
+	return undefined;
+}
+
 /**
  * Build (but do not start) the clanky AgentSessionRuntime. Exposed primarily
  * for smoke tests that want to assert wiring without needing a TTY.
@@ -481,6 +559,11 @@ export async function createClankyRuntime(options: RunClankyOptions = {}) {
 		...runtimeFactoryOptions,
 		defaultThinkingLevel: () => runtimeDefaults.mainThinkingLevel,
 		additionalExtensionFactories: [
+			createClankyWelcomeExtensionFactory({
+				authStorage,
+				profile: paths.profile,
+			}),
+			createClankyVoiceStatusExtensionFactory(gatewayController),
 			createClankySetupExtensionFactory({
 				paths,
 				authStorage,
@@ -624,11 +707,15 @@ function shortDiscordId(id: string): string {
 	return `${id.slice(0, 4)}...${id.slice(-4)}`;
 }
 
+function truncateText(text: string, maxLength: number): string {
+	if (text.length <= maxLength) return text;
+	if (maxLength <= 3) return text.slice(0, maxLength);
+	return `${text.slice(0, maxLength - 3)}...`;
+}
+
 function truncateStartupProgressLine(line: string, columns: number | undefined): string {
 	const width = Math.max(20, (columns ?? 80) - 1);
-	if (line.length <= width) return line;
-	if (width <= 3) return line.slice(0, width);
-	return `${line.slice(0, width - 3)}...`;
+	return truncateText(line, width);
 }
 
 function formatStartupElapsed(ms: number): string {
@@ -636,4 +723,23 @@ function formatStartupElapsed(ms: number): string {
 	if (seconds < 60) return `${seconds}s`;
 	const minutes = Math.floor(seconds / 60);
 	return `${minutes}m ${seconds % 60}s`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readStatusRecord(record: Record<string, unknown>, key: string): Record<string, unknown> | undefined {
+	const value = record[key];
+	return isRecord(value) ? value : undefined;
+}
+
+function readStatusString(record: Record<string, unknown>, key: string): string | undefined {
+	const value = record[key];
+	return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function readStatusBoolean(record: Record<string, unknown>, key: string): boolean | undefined {
+	const value = record[key];
+	return typeof value === "boolean" ? value : undefined;
 }

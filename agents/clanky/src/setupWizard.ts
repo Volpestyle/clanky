@@ -33,12 +33,21 @@ type SetupChoice = "status" | "openai" | "discord" | "voice" | "elevenlabs" | "x
 
 const SETUP_COMMAND_COMPLETIONS = [
 	{ value: "status", description: "Show connector and profile setup status." },
-	{ value: "fresh", description: "Show the fresh-user setup test command.", aliases: ["new-user"] },
-	{ value: "new-user", description: "Show the fresh-user setup test command.", aliases: ["fresh"] },
 ] satisfies readonly ClankyCommandCompletionSpec[];
 
 export function createClankySetupExtensionFactory(deps: ClankySetupWizardDeps): ExtensionFactory {
 	return (pi) => {
+		pi.registerCommand("status", {
+			description: "Show Clanky profile, connector, and bridge status",
+			handler: async (_args, ctx) => {
+				try {
+					ctx.ui.notify(formatClankyStatusDashboard(deps));
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					ctx.ui.notify(`Clanky status error: ${message}`, "error");
+				}
+			},
+		});
 		pi.registerCommand("setup", {
 			description: "Open Clanky's profile-local onboarding and connector setup wizard",
 			getArgumentCompletions: (prefix) => completeClankyCommandArgument(prefix, SETUP_COMMAND_COMPLETIONS),
@@ -78,17 +87,7 @@ async function runClankySetupCommand(
 async function runClankySetupWizard(deps: ClankySetupWizardDeps, ctx: ExtensionCommandContext): Promise<void> {
 	let done = false;
 	while (!done) {
-		const choice = await ctx.ui.select(setupTitle(deps), [
-			"Status",
-			"OpenAI connector",
-			"Discord text connector",
-			"Discord voice connector",
-			"ElevenLabs voice connector",
-			"xAI media connector",
-			"AgentRoom participation",
-			"Fresh-user test command",
-			"Done",
-		]);
+		const choice = await ctx.ui.select(setupTitle(deps), setupOptions(deps));
 		switch (parseSetupChoice(choice)) {
 			case "status":
 				ctx.ui.notify(formatClankySetupStatus(deps));
@@ -157,28 +156,35 @@ function discordDeps(deps: ClankySetupWizardDeps): DiscordAuthCommandDeps {
 }
 
 function setupTitle(deps: ClankySetupWizardDeps): string {
-	const status = connectorSummary(deps);
-	return `Clanky setup - profile ${deps.paths.profile} (${status})`;
+	return `Clanky setup - ${deps.paths.profile}`;
 }
 
-function connectorSummary(deps: ClankySetupWizardDeps): string {
-	const openAi = getOpenAiCredentialStatus(process.env, deps.authStorage, DEFAULT_OPENAI_PROVIDER_ID).available
-		? "OpenAI set"
-		: "OpenAI missing";
-	const discord = hasDiscordCredential(deps) ? "Discord set" : "Discord missing";
-	const voice = deps.voiceSettings.read()?.enabled === true ? "voice enabled" : "voice off";
-	return `${openAi}, ${discord}, ${voice}`;
+function setupOptions(deps: ClankySetupWizardDeps): string[] {
+	const openAiStatus = getOpenAiCredentialStatus(process.env, deps.authStorage, DEFAULT_OPENAI_PROVIDER_ID);
+	const elevenLabsStatus = getElevenLabsCredentialStatus(process.env, deps.authStorage, DEFAULT_ELEVENLABS_PROVIDER_ID);
+	const xaiStatus = getXAiCredentialStatus(process.env, deps.authStorage, DEFAULT_XAI_PROVIDER_ID);
+	const voiceSettings = deps.voiceSettings.read();
+	return [
+		"Status",
+		`Models / OpenAI [${openAiStatus.available ? "set" : "missing"}]`,
+		`Chat / Discord text [${hasDiscordCredential(deps) ? "set" : "missing"}]`,
+		`Voice / Discord voice [${voiceSettings?.enabled === true ? "enabled" : "disabled"}]`,
+		`Voice / ElevenLabs [${elevenLabsStatus.available ? "set" : "missing"}]`,
+		`Media / xAI [${xaiStatus.available ? "set" : "missing"}]`,
+		`AgentRoom [${isAgentRoomEnrolled(process.env) ? "participating" : "not enrolled"}]`,
+		"Done",
+	];
 }
 
 function parseSetupChoice(choice: string | undefined): SetupChoice {
 	if (choice === undefined || choice === "Done") return "done";
 	if (choice === "Status") return "status";
-	if (choice === "OpenAI connector") return "openai";
-	if (choice === "Discord text connector") return "discord";
-	if (choice === "Discord voice connector") return "voice";
-	if (choice === "ElevenLabs voice connector") return "elevenlabs";
-	if (choice === "xAI media connector") return "xai";
-	if (choice === "AgentRoom participation") return "agentroom";
+	if (choice.startsWith("Models / OpenAI")) return "openai";
+	if (choice.startsWith("Chat / Discord text")) return "discord";
+	if (choice.startsWith("Voice / Discord voice")) return "voice";
+	if (choice.startsWith("Voice / ElevenLabs")) return "elevenlabs";
+	if (choice.startsWith("Media / xAI")) return "xai";
+	if (choice.startsWith("AgentRoom")) return "agentroom";
 	if (choice === "Fresh-user test command") return "fresh";
 	return "done";
 }
@@ -214,6 +220,52 @@ function formatClankySetupStatus(deps: ClankySetupWizardDeps): string {
 	return lines.join("\n");
 }
 
+function formatClankyStatusDashboard(deps: ClankySetupWizardDeps): string {
+	const openAiStatus = getOpenAiCredentialStatus(process.env, deps.authStorage, DEFAULT_OPENAI_PROVIDER_ID);
+	const elevenLabsStatus = getElevenLabsCredentialStatus(process.env, deps.authStorage, DEFAULT_ELEVENLABS_PROVIDER_ID);
+	const xaiStatus = getXAiCredentialStatus(process.env, deps.authStorage, DEFAULT_XAI_PROVIDER_ID);
+	const storedDiscord = loadStoredDiscordCredential(deps.authStorage, deps.discordProviderId);
+	const envDiscord = process.env.CLANKY_DISCORD_TOKEN?.trim();
+	const voiceSettings = deps.voiceSettings.read();
+	const bridge = deps.gatewayController.status();
+	const lines = [
+		"Clanky status",
+		`Profile: ${deps.paths.profile}`,
+		`Home: ${deps.paths.homeDir}`,
+		"",
+		"Models",
+		`OpenAI: ${openAiStatus.available ? (openAiStatus.activeSource ?? "configured") : "missing"}`,
+		`xAI media: ${xaiStatus.available ? (xaiStatus.activeSource ?? "configured") : "missing"}`,
+		"",
+		"Discord",
+		`Text credential: ${discordCredentialLabel(envDiscord, storedDiscord)}`,
+		`Text bridge: ${formatStatusActive(readStatusBoolean(bridge, "textBridgeActive"))}`,
+		`Voice settings: ${voiceSettings?.enabled === true ? "enabled" : "disabled"}`,
+		`Voice bridge: ${formatVoiceDashboardStatus(bridge)}`,
+		`ElevenLabs: ${elevenLabsStatus.available ? (elevenLabsStatus.activeSource ?? "configured") : "missing"}`,
+		"",
+		"Runtime",
+		`Chat mode: ${resolveClankyChatMode(process.env)}`,
+		`Gateway owner: ${resolveClankyChatGatewayOwner(process.env)}`,
+		`AgentRoom: ${isAgentRoomEnrolled(process.env) ? "participating" : "not enrolled"}`,
+	];
+	const nextSteps = formatStatusNextSteps(
+		openAiStatus.available,
+		hasDiscordCredential(deps),
+		voiceSettings?.enabled === true,
+	);
+	if (nextSteps.length > 0) lines.push("", "Next steps", ...nextSteps);
+	return lines.join("\n");
+}
+
+function formatStatusNextSteps(openAiAvailable: boolean, discordAvailable: boolean, voiceEnabled: boolean): string[] {
+	const lines: string[] = [];
+	if (!openAiAvailable) lines.push("- Run /setup to configure OpenAI.");
+	if (!discordAvailable) lines.push("- Run /discord-login to configure Discord text access.");
+	if (!voiceEnabled) lines.push("- Run /discord-voice setup to enable Discord voice.");
+	return lines;
+}
+
 function discordCredentialLabel(
 	envToken: string | undefined,
 	storedDiscord: ReturnType<typeof loadStoredDiscordCredential>,
@@ -231,6 +283,48 @@ function hasDiscordCredential(deps: ClankySetupWizardDeps): boolean {
 		(envToken !== undefined && envToken.length > 0) ||
 		loadStoredDiscordCredential(deps.authStorage, deps.discordProviderId) !== undefined
 	);
+}
+
+function formatVoiceDashboardStatus(status: unknown): string {
+	if (!isRecord(status)) return "unavailable";
+	const voiceConfigError = readStatusString(status, "voiceConfigError");
+	if (voiceConfigError !== undefined) return `error (${voiceConfigError})`;
+	const voice = readStatusRecord(status, "voice");
+	if (readStatusBoolean(status, "voiceBridgeActive") === true) {
+		const channelId = voice === undefined ? undefined : readStatusString(voice, "channelId");
+		const mode = voice === undefined ? undefined : readStatusString(voice, "mode");
+		if (voice !== undefined && readStatusBoolean(voice, "active") === false && mode === "dynamic") return "ready";
+		return channelId === undefined ? "active" : `active in channel ${channelId}`;
+	}
+	if (readStatusBoolean(status, "voiceOnlyClientActive") === true) return "client active";
+	return "inactive";
+}
+
+function formatStatusActive(active: boolean | undefined): string {
+	if (active === undefined) return "unknown";
+	return active ? "active" : "inactive";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readStatusRecord(record: unknown, key: string): Record<string, unknown> | undefined {
+	if (!isRecord(record)) return undefined;
+	const value = record[key];
+	return isRecord(value) ? value : undefined;
+}
+
+function readStatusString(record: unknown, key: string): string | undefined {
+	if (!isRecord(record)) return undefined;
+	const value = record[key];
+	return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function readStatusBoolean(record: unknown, key: string): boolean | undefined {
+	if (!isRecord(record)) return undefined;
+	const value = record[key];
+	return typeof value === "boolean" ? value : undefined;
 }
 
 function formatAgentRoomParticipation(deps: ClankySetupWizardDeps): string {
@@ -268,5 +362,5 @@ function formatFreshUserHelp(deps: ClankySetupWizardDeps): string {
 }
 
 function formatSetupUsage(): string {
-	return ["Usage: /setup", "", "Shortcuts:", "  /setup status", "  /setup fresh"].join("\n");
+	return ["Usage: /setup", "", "Shortcuts:", "  /setup status"].join("\n");
 }
