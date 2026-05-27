@@ -27,6 +27,7 @@ let coordinator: DiscordSubagentCoordinator | undefined;
 
 try {
 	const sentMessages: SentDiscordMessage[] = [];
+	const typingConversationIds: string[] = [];
 	const prompts: string[] = [];
 	const replies = ["first reply", "second reply", "[SKIP]"];
 	let runtimeCreateCount = 0;
@@ -66,6 +67,9 @@ try {
 			const externalMessageId = `reply-${sentMessages.length + 1}`;
 			sentMessages.push({ ...input, externalMessageId });
 			return { externalMessageId };
+		},
+		async sendTyping(input: { conversation: DiscordInboundConversation }): Promise<void> {
+			typingConversationIds.push(input.conversation.threadId ?? input.conversation.id);
 		},
 	};
 	const createRuntime: CreateAgentSessionRuntimeFactory = async (options): Promise<CreateAgentSessionRuntimeResult> => {
@@ -174,6 +178,11 @@ try {
 	}
 	if (!prompts.every((prompt) => prompt.startsWith("/skill:clanky-discord-operator "))) {
 		throw new Error(`coordinator smoke: Discord operator skill was not activated ${JSON.stringify(prompts)}`);
+	}
+	if (typingConversationIds.length < 3 || !typingConversationIds.every((id) => id === "thread-1")) {
+		throw new Error(
+			`coordinator smoke: expected typing indicators for each Discord turn ${JSON.stringify(typingConversationIds)}`,
+		);
 	}
 
 	await coordinator.stop();

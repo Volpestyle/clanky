@@ -20,6 +20,7 @@ import type {
 	DiscordInboundMessage,
 } from "./agentDiscordGateway.ts";
 import type { ClankyThinkingLevel } from "./clankyDefaults.ts";
+import { withDiscordTypingIndicator } from "./discordTyping.ts";
 
 interface DiscordMessageSender {
 	sendMessage(input: {
@@ -27,6 +28,7 @@ interface DiscordMessageSender {
 		replyToExternalMessageId: string;
 		text: string;
 	}): Promise<{ externalMessageId: string }>;
+	sendTyping?(input: { conversation: DiscordInboundConversation }): Promise<void>;
 }
 
 interface DiscordWorkerTarget {
@@ -234,8 +236,19 @@ export class DiscordSubagentCoordinator {
 			activeSummary,
 			...(runtime.session.sessionFile === undefined ? {} : { sessionFile: runtime.session.sessionFile }),
 		});
+		const conversation = inboxConversation(message);
 		try {
-			const replyText = await runSubagentTurn(runtime, buildDiscordSubagentPrompt(message, this.mainStatusText()));
+			const replyText = await withDiscordTypingIndicator(
+				this.provider,
+				conversation,
+				async () => runSubagentTurn(runtime, buildDiscordSubagentPrompt(message, this.mainStatusText())),
+				{
+					onError: (error) =>
+						this.log(
+							`typing-failed worker=${message.workerId} ext=${message.externalMessageId} error=${errorMessage(error)}`,
+						),
+				},
+			);
 			await this.store.setSubagentState(message.workerId, "running", {
 				activeConversationId: message.conversationId,
 				activeSummary,
@@ -246,7 +259,7 @@ export class DiscordSubagentCoordinator {
 				return;
 			}
 			const sent = await this.provider.sendMessage({
-				conversation: inboxConversation(message),
+				conversation,
 				replyToExternalMessageId: message.externalMessageId,
 				text: replyText,
 			});

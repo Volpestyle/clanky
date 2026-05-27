@@ -22,6 +22,7 @@ import type {
 import { createAgentDiscordClient } from "./agentDiscordClient.ts";
 import type { ClankyThinkingLevel } from "./clankyDefaults.ts";
 import { DiscordSubagentCoordinator } from "./discordSubagentCoordinator.ts";
+import { startDiscordTypingIndicator, withDiscordTypingIndicator } from "./discordTyping.ts";
 import { DEFAULT_DISCORD_WAKE_NAMES, dedupeWakeNames, parseDiscordWakeNamesFromEnv } from "./discordWakeNames.ts";
 import { type RuntimeTurnQueue, SerialRuntimeTurnQueue } from "./runtimeTurnQueue.ts";
 
@@ -451,35 +452,42 @@ class AgentDiscordBridge implements ClankyAgentDiscordGatewayHandle {
 		acceptanceReason: DiscordAcceptanceReason,
 		receivedAt: number,
 	): Promise<void> {
-		const channelId = message.conversation.id;
-		const senderId = message.sender.id;
-		await this.refreshConversationHistoryFromDiscord(message);
-		const history = this.recentConversationMessages.get(conversationHistoryKey(message.conversation)) ?? [];
-		const promptImages = await resolveDiscordPromptImages(message, history);
-		for (const failure of promptImages.failures) {
-			this.logBridge(`image-fetch-failed ext=${message.externalMessageId} ${failure}`);
-		}
-		const userPrompt = this.formatDiscordUserMessage(message, acceptanceReason, history, promptImages.references);
-		const pending: PendingDiscordReply = {
-			conversation: message.conversation,
-			replyToExternalMessageId: message.externalMessageId,
-			senderId,
-			channelId,
-			acceptanceReason,
-		};
-		this.recordInboundMessage(message);
-		this.pendingReplies.push(pending);
+		const stopTyping = startDiscordTypingIndicator(this.provider, message.conversation, {
+			onError: (error) => this.logBridge(`typing-failed ext=${message.externalMessageId} error=${errorMessage(error)}`),
+		});
 		try {
-			await this.runtimeTurnQueue.enqueuePrompt(this.runtime, userPrompt, {
-				beforePrompt: () => this.subscribeToCurrentSession(),
-				...(promptImages.images.length === 0 ? {} : { images: promptImages.images }),
-			});
-		} catch (error) {
-			this.removePendingReply(pending);
-			this.inboundReceivedAt.delete(message.externalMessageId);
-			throw error;
+			const channelId = message.conversation.id;
+			const senderId = message.sender.id;
+			await this.refreshConversationHistoryFromDiscord(message);
+			const history = this.recentConversationMessages.get(conversationHistoryKey(message.conversation)) ?? [];
+			const promptImages = await resolveDiscordPromptImages(message, history);
+			for (const failure of promptImages.failures) {
+				this.logBridge(`image-fetch-failed ext=${message.externalMessageId} ${failure}`);
+			}
+			const userPrompt = this.formatDiscordUserMessage(message, acceptanceReason, history, promptImages.references);
+			const pending: PendingDiscordReply = {
+				conversation: message.conversation,
+				replyToExternalMessageId: message.externalMessageId,
+				senderId,
+				channelId,
+				acceptanceReason,
+			};
+			this.recordInboundMessage(message);
+			this.pendingReplies.push(pending);
+			try {
+				await this.runtimeTurnQueue.enqueuePrompt(this.runtime, userPrompt, {
+					beforePrompt: () => this.subscribeToCurrentSession(),
+					...(promptImages.images.length === 0 ? {} : { images: promptImages.images }),
+				});
+			} catch (error) {
+				this.removePendingReply(pending);
+				this.inboundReceivedAt.delete(message.externalMessageId);
+				throw error;
+			}
+			this.logBridge(`forwarded-to-pi ext=${message.externalMessageId} dt=${Date.now() - receivedAt}ms`);
+		} finally {
+			stopTyping();
 		}
-		this.logBridge(`forwarded-to-pi ext=${message.externalMessageId} dt=${Date.now() - receivedAt}ms`);
 	}
 
 	async stop(): Promise<void> {
@@ -654,7 +662,10 @@ class AgentDiscordBridge implements ClankyAgentDiscordGatewayHandle {
 		task: () => Promise<string>,
 	): Promise<void> {
 		try {
-			const reply = await task();
+			const reply = await withDiscordTypingIndicator(this.provider, message.conversation, task, {
+				onError: (error) =>
+					this.logBridge(`typing-failed ext=${message.externalMessageId} type=${label} error=${errorMessage(error)}`),
+			});
 			await this.sendBridgeCommandReply(message, reply);
 			this.logBridge(`command-complete ext=${message.externalMessageId} type=${label}`);
 		} catch (error) {
@@ -1301,6 +1312,10 @@ function hasVocativeWakeToken(transcript = "", wakeToken = ""): boolean {
 
 function escapeRegex(value = ""): string {
 	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }
 
 export function extractAssistantText(event: AgentSessionEvent): string | undefined {
