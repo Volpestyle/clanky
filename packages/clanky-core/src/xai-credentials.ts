@@ -84,6 +84,20 @@ export async function resolveXAiApiKey(
 	return { value: resolved, source, providerId };
 }
 
+export function resolveXAiApiKeySync(
+	env: NodeJS.ProcessEnv = process.env,
+	authStorage?: AuthStorage,
+	providerId: string = DEFAULT_XAI_PROVIDER_ID,
+): ResolvedXAiApiKey | undefined {
+	const envCredential = resolveXAiApiKeyFromEnv(env, providerId);
+	if (envCredential !== undefined) return envCredential;
+
+	const credential = authStorage?.get(providerId);
+	if (credential?.type !== "api_key") return undefined;
+	const value = credential.key.trim();
+	return value.length > 0 ? { value, source: "stored:api_key", providerId } : undefined;
+}
+
 function resolveXAiApiKeyFromEnv(
 	env: NodeJS.ProcessEnv,
 	providerId: string = DEFAULT_XAI_PROVIDER_ID,

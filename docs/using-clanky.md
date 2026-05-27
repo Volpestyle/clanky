@@ -104,9 +104,12 @@ The voice bridge uses:
 - TypeScript for control, settings, Realtime, tools, and Pi delegation.
 - Rust `clankvox` for Discord voice transport, RTP, Opus, screen watch, and
   PCM IPC.
-- OpenAI Realtime for live reasoning and default speech.
-- Optional ElevenLabs for external TTS.
-- Pi delegation through `ask_pi` when the voice model needs durable work.
+- OpenAI Realtime by default, or xAI Grok Voice when selected, as the realtime
+  reasoning/tool agent.
+- The selected realtime agent audio by default, or ElevenLabs, as the speech
+  output provider.
+- Pi delegation through `ask_pi` when the realtime voice agent needs durable
+  work.
 
 Basic commands:
 
@@ -121,7 +124,7 @@ Basic commands:
 
 For architecture and live validation, see
 [Discord Voice Architecture](discord-voice-architecture.md) and
-[Discord Voice Live Runbook](discord-voice-live-runbook.md).
+[Discord Voice Live Runbook](qa/discord-voice-live-runbook.md).
 
 ## Web And Media Workflow
 
@@ -198,4 +201,3 @@ server name. Disable auto-adds with:
 CLANKY_AGENTROOM_MCP=0
 CLANKY_DISCORD_MCP=0
 ```
-

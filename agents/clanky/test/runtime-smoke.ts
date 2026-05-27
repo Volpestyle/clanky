@@ -228,8 +228,31 @@ function assertAgentDiscordVoiceConfig(): void {
 	if (voiceConfig?.openAiRealtimeModel !== DEFAULT_REALTIME_MODEL) {
 		throw new Error(`smoke: default realtime model mismatch, got ${voiceConfig?.openAiRealtimeModel}`);
 	}
+	if (voiceConfig.realtimeAgentProvider !== "openai") {
+		throw new Error("smoke: default realtime agent provider should be OpenAI");
+	}
 	if (voiceConfig.guildId !== "guild-1" || voiceConfig.channelId !== "channel-1") {
 		throw new Error("smoke: Discord voice guild/channel config did not round-trip");
+	}
+	const xAiVoiceConfig = resolveAgentDiscordVoiceConfig(
+		{
+			CLANKY_DISCORD_VOICE_ENABLED: "1",
+			CLANKY_DISCORD_TOKEN: "token",
+			CLANKY_DISCORD_VOICE_GUILD_ID: "guild-1",
+			CLANKY_DISCORD_VOICE_CHANNEL_ID: "channel-1",
+			OPENAI_API_KEY: "openai-key",
+			XAI_API_KEY: "xai-key",
+			CLANKY_DISCORD_VOICE_REALTIME_AGENT_PROVIDER: "xai",
+		},
+		discordConfig,
+	);
+	if (
+		xAiVoiceConfig?.realtimeAgentProvider !== "xai" ||
+		xAiVoiceConfig.xAiApiKey !== "xai-key" ||
+		xAiVoiceConfig.xAiRealtimeModel !== "grok-voice-latest" ||
+		xAiVoiceConfig.xAiRealtimeVoice !== "eve"
+	) {
+		throw new Error(`smoke: xAI realtime voice config did not resolve ${JSON.stringify(xAiVoiceConfig)}`);
 	}
 	const dynamicVoiceConfig = resolveAgentDiscordVoiceConfig(
 		{
@@ -980,7 +1003,9 @@ async function assertDiscordAuthExtensionCommands(): Promise<void> {
 		!notifications.some(
 			(message) =>
 				message.includes("Voice bridge: active.") &&
-				message.includes("Realtime model:") &&
+				message.includes("Realtime agent provider: OpenAI Realtime.") &&
+				message.includes("Realtime agent model:") &&
+				message.includes("Speech output provider: OpenAI Realtime audio.") &&
 				message.includes("Native screen watch: supported.") &&
 				message.includes("Voice stats: input audio 2, output audio 3, realtime tool calls 4, decoded frames 5.") &&
 				message.includes("Voice speakers: unique 2, max concurrent 2.") &&

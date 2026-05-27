@@ -121,7 +121,11 @@ Environment variables still override stored credentials where supported.
 | `/discord-voice allow-server <guild-id> [...]` | Configure allowed voice servers. |
 | `/discord-voice allow-channel <voice-channel-id> [...]` | Configure allowed voice channels. |
 | `/discord-voice allow <voice-channel-id> [...]` | Alias for channel allowlist. |
-| `/discord-voice set tts-provider elevenlabs` | Use ElevenLabs speech instead of OpenAI audio output. |
+| `/discord-voice set realtime-provider xai` | Use xAI Grok Voice as the realtime reasoning/tool agent. |
+| `/discord-voice set realtime-provider openai` | Use OpenAI Realtime as the realtime reasoning/tool agent. |
+| `/discord-voice set xai-model <model-id>` | Override the xAI Grok Voice realtime model. |
+| `/discord-voice set xai-voice <voice-id>` | Override the xAI Grok Voice output voice. |
+| `/discord-voice set tts-provider elevenlabs` | Use ElevenLabs as the speech output provider instead of the selected realtime agent audio. |
 | `/discord-voice set elevenlabs-voice <voice-id>` | Store ElevenLabs voice id. |
 | `/discord-voice set elevenlabs-output-format pcm_24000` | Store ElevenLabs PCM output format. |
 | `/discord-voice clear` | Clear stored voice settings. |
