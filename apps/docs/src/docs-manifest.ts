@@ -68,7 +68,8 @@ export const docsMeta: DocMeta[] = [
 	{
 		slug: "using-clanky",
 		title: "Using Clanky",
-		description: "Day-to-day TUI, memory, communication gateways, voice/media, AgentRoom, skills, and connected tool workflows.",
+		description:
+			"Day-to-day TUI, memory, communication gateways, voice/media, AgentRoom, skills, and connected tool workflows.",
 		source: "docs/using-clanky.md",
 		group: "Operations",
 	},

@@ -60,6 +60,9 @@ clanky logs --json
 | `/effort main <level>` | Set main Clanky thinking level. |
 | `/effort subagents <level>` | Set active/default subagent thinking level. |
 | `/effort all <level>` | Set both. |
+| `/auth` | List stored provider credentials in the active Clanky profile. |
+| `/auth remove <provider>` | Remove stored credentials for one provider. |
+| `/auth remove all` | Remove all stored provider credentials from the active profile. |
 
 Thinking levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`.
 
@@ -107,7 +110,8 @@ These are inherited from Pi and work inside Clanky:
 | `/elevenlabs-whoami` | Show active ElevenLabs credential source. |
 | `/elevenlabs-logout` | Remove the stored ElevenLabs credential. |
 
-Environment variables still override stored credentials where supported.
+`/auth remove` edits only the active profile `auth.json`. Environment variables
+and `models.json` request auth still override stored credentials where supported.
 
 ## Discord Voice Commands
 
@@ -196,7 +200,8 @@ are available and credentials/policy allow it:
   `discord_voice_leave`.
 - Coordination: `main_session_context`, `delegate_to_main_worker`,
   `subagent_status`.
-- Work tracking: `work_tracker_create_issue`, `work_tracker_link`.
+- Work tracking: `work_tracker_link` for binding issues created or found through
+  MCP, CLI, or tracker-specific skills.
 - MCP: `mcp_list_tools`, `mcp_call`.
 
 `task_create` and `schedule_cron` exist in the shared tool layer, but are only

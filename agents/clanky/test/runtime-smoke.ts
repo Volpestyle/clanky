@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import {
 	DEFAULT_CLANKY_DISCORD_PROVIDER_ID,
+	DEFAULT_ELEVENLABS_PROVIDER_ID,
 	DEFAULT_OPENAI_PROVIDER_ID,
 	DEFAULT_XAI_PROVIDER_ID,
 	resolveClankyPaths,
@@ -47,6 +48,7 @@ import {
 	shouldRouteDiscordMessageToSubagent,
 } from "../src/agentDiscordGateway.ts";
 import { DEFAULT_REALTIME_MODEL, resolveAgentDiscordVoiceConfig } from "../src/agentDiscordVoice.ts";
+import { createClankyAuthExtensionFactory } from "../src/authCommands.ts";
 import { createDiscordAuthExtensionFactory } from "../src/discordAuth.ts";
 import { ClankyDiscordGatewayController } from "../src/discordGatewayController.ts";
 import type { StoredDiscordVoiceSettings } from "../src/discordVoiceSettings.ts";
@@ -77,6 +79,7 @@ async function main(): Promise<void> {
 	await assertRuntimeTurnQueue();
 	await assertMainWorkerDelegation();
 	await assertDiscordAuthExtensionCommands();
+	await assertClankyAuthExtensionCommand();
 	await assertOpenAiAuthExtensionCommands();
 	await assertXAiAuthExtensionCommands();
 	await assertClankyEffortExtensionCommand();
@@ -231,8 +234,6 @@ workTracker:
   providers:
     linear:
       type: linear
-      tokenEnv: LINEAR_API_KEY
-      commandEnv: AGENTROOM_LINEAR_COMMAND
       teamId: team_123
 
 clanky:
@@ -260,7 +261,7 @@ storage:
 		if (defaults.env.CLANKY_CHAT_GATEWAY_OWNER !== "room") {
 			throw new Error("smoke: portable Clanky chat owner was not applied");
 		}
-		if (defaults.env.CLANKY_WORK_TRACKER !== "linear" || defaults.env.CLANKY_LINEAR_TEAM_ID !== "team_123") {
+		if (defaults.env.CLANKY_WORK_TRACKER !== "linear" || defaults.env.CLANKY_WORK_TRACKER_TEAM_ID !== "team_123") {
 			throw new Error(`smoke: portable work tracker env mismatch: ${JSON.stringify(defaults.env)}`);
 		}
 		const { runtime, paths } = await createClankyRuntime({ cwd });
@@ -1264,6 +1265,105 @@ async function assertDiscordAuthExtensionCommands(): Promise<void> {
 	}
 }
 
+async function assertClankyAuthExtensionCommand(): Promise<void> {
+	const authStorage = AuthStorage.inMemory();
+	saveStoredOpenAiApiKey(authStorage, "stored-openai-key");
+	saveStoredXAiApiKey(authStorage, "stored-xai-key");
+	saveStoredElevenLabsApiKey(authStorage, "stored-elevenlabs-key");
+	saveStoredDiscordCredential(authStorage, {
+		token: "stored-discord-token",
+		credentialKind: "bot-token",
+	});
+	let reloads = 0;
+	let restarts = 0;
+	const getReloads = () => reloads;
+	const getRestarts = () => restarts;
+	const notifications: string[] = [];
+	const confirmations: string[] = [];
+	const commands: Record<string, RegisteredCommand> = {};
+	const factory = createClankyAuthExtensionFactory({
+		authStorage,
+		authFilePath: "/tmp/clanky-auth.json",
+		discordProviderId: DEFAULT_CLANKY_DISCORD_PROVIDER_ID,
+		gatewayController: {
+			async restart() {
+				restarts += 1;
+			},
+		} as ClankyDiscordGatewayController,
+	});
+	factory({
+		registerCommand(name: string, command: RegisteredCommand) {
+			commands[name] = command;
+		},
+	} as never);
+	const ctx = {
+		ui: {
+			notify(message: string) {
+				notifications.push(message);
+			},
+			async confirm(title: string) {
+				confirmations.push(title);
+				return true;
+			},
+		},
+		async reload() {
+			reloads += 1;
+		},
+	} as unknown as ExtensionCommandContext;
+
+	const authCommand = commands.auth;
+	if (authCommand === undefined) throw new Error("smoke: /auth command was not registered");
+	await assertCommandCompletionIncludes(authCommand, "", "list");
+	await assertCommandCompletionIncludes(authCommand, "remove ", `remove ${DEFAULT_OPENAI_PROVIDER_ID}`);
+
+	await authCommand.handler("", ctx);
+	const status = notifications.at(-1);
+	if (
+		status === undefined ||
+		!status.includes(`${DEFAULT_OPENAI_PROVIDER_ID}: api_key`) ||
+		!status.includes(`${DEFAULT_XAI_PROVIDER_ID}: api_key`) ||
+		!status.includes(`${DEFAULT_ELEVENLABS_PROVIDER_ID}: api_key`) ||
+		!status.includes(`${DEFAULT_CLANKY_DISCORD_PROVIDER_ID}: api_key`)
+	) {
+		throw new Error(`smoke: /auth status did not list stored credentials: ${status}`);
+	}
+
+	await authCommand.handler(`remove ${DEFAULT_OPENAI_PROVIDER_ID}`, ctx);
+	if (authStorage.get(DEFAULT_OPENAI_PROVIDER_ID) !== undefined) {
+		throw new Error("smoke: /auth remove openai should remove stored OpenAI credentials");
+	}
+	if (getReloads() !== 1) throw new Error(`smoke: /auth remove openai should reload once, got ${reloads}`);
+	if (
+		!notifications.at(-1)?.includes(`Removed stored api_key credential for provider "${DEFAULT_OPENAI_PROVIDER_ID}"`)
+	) {
+		throw new Error("smoke: /auth remove openai did not report credential removal");
+	}
+
+	await authCommand.handler(`remove ${DEFAULT_CLANKY_DISCORD_PROVIDER_ID}`, ctx);
+	if (authStorage.get(DEFAULT_CLANKY_DISCORD_PROVIDER_ID) !== undefined) {
+		throw new Error("smoke: /auth remove clanky-discord should remove stored Discord credentials");
+	}
+	if (getRestarts() !== 1) {
+		throw new Error(`smoke: /auth remove clanky-discord should restart bridge once, got ${restarts}`);
+	}
+	if (getReloads() !== 2) throw new Error(`smoke: /auth remove clanky-discord should reload again, got ${reloads}`);
+
+	await authCommand.handler("remove all", ctx);
+	if (authStorage.list().length !== 0) {
+		throw new Error(`smoke: /auth remove all should clear stored credentials, got ${authStorage.list().join(", ")}`);
+	}
+	if (confirmations.length !== 1 || confirmations[0] !== "Remove all stored provider credentials?") {
+		throw new Error(`smoke: /auth remove all should require confirmation, got ${confirmations.join(", ")}`);
+	}
+	if (getRestarts() !== 2) {
+		throw new Error(`smoke: /auth remove all should restart bridge for ElevenLabs, got ${restarts}`);
+	}
+	if (getReloads() !== 3) throw new Error(`smoke: /auth remove all should reload once more, got ${reloads}`);
+	if (!notifications.at(-1)?.includes("Environment variables and models.json request auth were not changed.")) {
+		throw new Error("smoke: /auth remove all did not report environment/model auth caveat");
+	}
+}
+
 async function assertOpenAiAuthExtensionCommands(): Promise<void> {
 	const authStorage = AuthStorage.inMemory();
 	saveStoredOpenAiApiKey(authStorage, "stored-openai-key");
@@ -1465,6 +1565,7 @@ async function assertClankySetupExtensionCommand(): Promise<void> {
 		channelId: "voice-1",
 	};
 	const factory = createClankySetupExtensionFactory({
+		cwd: process.cwd(),
 		paths,
 		authStorage,
 		discordProviderId: DEFAULT_CLANKY_DISCORD_PROVIDER_ID,

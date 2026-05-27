@@ -38,12 +38,15 @@ Useful Pi editor patterns still apply:
 ```text
 /setup
 /setup status
+/setup agentroom
 /setup fresh
 ```
 
 Use `/setup status` when you want a compact view of profile paths, OpenAI,
 gateway ownership, current Discord adapter status, Discord voice, ElevenLabs,
-xAI, and AgentRoom participation.
+xAI, and AgentRoom participation. Use `/setup agentroom` to inspect the
+detected room config, Clanky room defaults, chat ownership, and work tracker
+defaults. Edit room-level settings from the AgentRoom TUI with `/setup`.
 
 ## Memory Workflow
 

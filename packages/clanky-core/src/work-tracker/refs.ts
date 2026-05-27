@@ -4,20 +4,6 @@ import type { ClankyPaths } from "../paths.ts";
 
 export type WorkTrackerProviderKind = "native" | "linear" | "github-issues" | "jira" | "custom";
 
-export interface WorkTrackerCreateIssueInput {
-	providerId?: string;
-	providerKind?: WorkTrackerProviderKind;
-	title: string;
-	description?: string;
-	assigneeId?: string;
-	projectId?: string;
-	stateId?: string;
-	teamId?: string;
-	priority?: number;
-	labelIds?: string[];
-	metadata?: Record<string, unknown>;
-}
-
 export interface WorkTrackerIssueRef {
 	providerId: string;
 	providerKind: WorkTrackerProviderKind;

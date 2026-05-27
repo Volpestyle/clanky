@@ -15,6 +15,7 @@ import {
 	type MemoryForgetToolInput,
 	type MemoryRememberToolInput,
 	type MemorySearchToolInput,
+	maybeInjectWorkTrackerSkill,
 	type OpenAiImageGenerateToolInput,
 	recentDiscordAttachments,
 	resolveClankyChatGatewayOwner,
@@ -26,7 +27,6 @@ import {
 	shouldStartAgentChatGateway,
 	type TaskCreateToolInput,
 	type WebSearchToolInput,
-	type WorkTrackerCreateIssueToolInput,
 	type WorkTrackerLinkToolInput,
 	type XAiImageGenerateToolInput,
 	type XAiVideoGenerateToolInput,
@@ -45,12 +45,6 @@ const handlers: ClankyAgentToolHandlers = {
 	scheduleCron: async (input) => {
 		calls.push(`schedule:${input.schedule}:${input.prompt}`);
 		return { scheduled: true, input };
-	},
-	workTrackerCreateIssue: async (input) => {
-		calls.push(`tracker-create:${input.providerKind ?? "default"}:${input.title}`);
-		return {
-			issue: { providerId: input.providerId ?? "linear", providerKind: input.providerKind ?? "linear", ...input },
-		};
 	},
 	workTrackerLink: async (input) => {
 		calls.push(
@@ -188,11 +182,11 @@ const mainRuntimeTools = createClankyToolDefinitions(handlers, { includeMainWork
 assertChatModeHelpers();
 await assertSubagentPanelCommand();
 await assertClankyCommandCompletions();
+assertWorkTrackerSkillInjection();
 const expectedNames = [
 	"schedule_cron",
 	"mcp_list_tools",
 	"mcp_call",
-	"work_tracker_create_issue",
 	"work_tracker_link",
 	"task_create",
 	"main_session_context",
@@ -228,13 +222,6 @@ await executeTool(tools, "schedule_cron", {
 	timeout_seconds: 600,
 	idempotency_key: "agent-tools-cron-smoke",
 } satisfies ScheduleCronToolInput);
-
-await executeTool(tools, "work_tracker_create_issue", {
-	provider_kind: "linear",
-	team_id: "team-1",
-	title: "Tracker smoke",
-	description: "Tracker create smoke description",
-} satisfies WorkTrackerCreateIssueToolInput);
 
 await executeTool(tools, "work_tracker_link", {
 	provider_kind: "github-issues",
@@ -351,7 +338,6 @@ await assertRecentDiscordAttachmentsLoadsMediaSources();
 
 const expectedCallPrefixes = [
 	"schedule:",
-	"tracker-create:",
 	"tracker:",
 	"mcp-call:",
 	"mcp-list:",
@@ -395,6 +381,20 @@ function assertChatModeHelpers(): void {
 	}
 	if (shouldStartAgentChatGateway({ CLANKY_CHAT_GATEWAY_OWNER: "room" })) {
 		throw new Error("Expected room-owned gateway mode to disable agent-owned gateway startup");
+	}
+}
+
+function assertWorkTrackerSkillInjection(): void {
+	const prompt = "Implement the tracker cleanup";
+	const transformed = maybeInjectWorkTrackerSkill(prompt, { CLANKY_WORK_TRACKER: "linear" });
+	if (transformed !== `/skill:clanky-work-tracker ${prompt}`) {
+		throw new Error(`Expected configured work tracker prompt to inject skill, got ${transformed}`);
+	}
+	if (maybeInjectWorkTrackerSkill(prompt, {}) !== prompt) {
+		throw new Error("Expected unconfigured work tracker prompt to remain unchanged");
+	}
+	if (maybeInjectWorkTrackerSkill("/profile", { CLANKY_WORK_TRACKER: "linear" }) !== "/profile") {
+		throw new Error("Expected slash commands to skip work tracker skill injection");
 	}
 }
 

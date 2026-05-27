@@ -1,6 +1,7 @@
 export {
 	type ClankyAgentToolHandlers,
 	type ClankyBeforeProviderRequestInput,
+	type CreateClankyExtensionFactoriesOptions,
 	createClankyExtensionFactories,
 	createClankyToolDefinitions,
 	type DelegateToMainWorkerToolInput,
@@ -24,6 +25,7 @@ export {
 	type MemorySearchToolInput,
 	maybeInjectAgentRoomOperatorSkill,
 	maybeInjectMediaOperatorSkill,
+	maybeInjectWorkTrackerSkill,
 	type OpenAiImageGenerateToolInput,
 	type ScheduleCronToolInput,
 	type SendSubagentMessageInput,
@@ -31,9 +33,9 @@ export {
 	type SubagentMessageToolInput,
 	shouldUseAgentRoomOperatorSkill,
 	shouldUseMediaOperatorSkill,
+	shouldUseWorkTrackerSkill,
 	type TaskCreateToolInput,
 	type WebSearchToolInput,
-	type WorkTrackerCreateIssueToolInput,
 	type WorkTrackerLinkToolInput,
 	type XAiImageGenerateToolInput,
 	type XAiVideoGenerateToolInput,
@@ -120,15 +122,6 @@ export {
 	resolveElevenLabsApiKeySync,
 	saveStoredElevenLabsApiKey,
 } from "./elevenlabs-credentials.ts";
-export {
-	hasLinearCredentials,
-	LinearClient,
-	type LinearClientOptions,
-	type LinearCreateIssueInput,
-	type LinearCreateIssueResult,
-	type LinearPostCommentInput,
-	type LinearPostCommentResult,
-} from "./linear/client.ts";
 export {
 	type ClankyMcpServerConfig,
 	type ClankyMcpServerStatus,
@@ -252,17 +245,8 @@ export {
 	type WebBackendStatusOptions,
 } from "./web/operator.ts";
 export {
-	type CreateWorkTrackerOutboxEntryInput,
-	type MarkWorkTrackerOutboxPostedInput,
-	type WorkTrackerOutboxEntry,
-	type WorkTrackerOutboxKind,
-	type WorkTrackerOutboxStatus,
-	WorkTrackerOutboxStore,
-} from "./work-tracker/outbox.ts";
-export {
 	type CreateWorkTrackerRefInput,
 	normalizeWorkTrackerProviderKind,
-	type WorkTrackerCreateIssueInput,
 	type WorkTrackerIssueRef,
 	type WorkTrackerProviderKind,
 	type WorkTrackerRef,

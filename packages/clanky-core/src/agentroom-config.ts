@@ -24,8 +24,6 @@ export interface PortableWorkTrackerConfig {
 
 export interface PortableWorkTrackerProviderConfig {
 	type: string;
-	tokenEnv?: string;
-	commandEnv?: string;
 	teamId?: string;
 	projectId?: string;
 	baseUrl?: string;
@@ -103,14 +101,8 @@ export function withAgentRoomPortableEnv(
 			if (next.CLANKY_WORK_TRACKER_PROVIDER_KIND === undefined) {
 				next.CLANKY_WORK_TRACKER_PROVIDER_KIND = provider.type;
 			}
-			if (provider.type === "linear" && provider.teamId !== undefined && next.CLANKY_LINEAR_TEAM_ID === undefined) {
-				next.CLANKY_LINEAR_TEAM_ID = provider.teamId;
-			}
-			if (provider.tokenEnv !== undefined && next.CLANKY_WORK_TRACKER_TOKEN_ENV === undefined) {
-				next.CLANKY_WORK_TRACKER_TOKEN_ENV = provider.tokenEnv;
-			}
-			if (provider.commandEnv !== undefined && next.CLANKY_WORK_TRACKER_COMMAND_ENV === undefined) {
-				next.CLANKY_WORK_TRACKER_COMMAND_ENV = provider.commandEnv;
+			if (provider.teamId !== undefined && next.CLANKY_WORK_TRACKER_TEAM_ID === undefined) {
+				next.CLANKY_WORK_TRACKER_TEAM_ID = provider.teamId;
 			}
 		}
 	}
@@ -175,10 +167,6 @@ function parsePortableWorkTrackerProviders(
 		const type = stringAt(provider, "type");
 		if (type === undefined || type.length === 0) continue;
 		const output: PortableWorkTrackerProviderConfig = { type };
-		const tokenEnv = stringAt(provider, "tokenEnv");
-		if (tokenEnv !== undefined) output.tokenEnv = tokenEnv;
-		const commandEnv = stringAt(provider, "commandEnv");
-		if (commandEnv !== undefined) output.commandEnv = commandEnv;
 		const teamId = stringAt(provider, "teamId");
 		if (teamId !== undefined) output.teamId = teamId;
 		const projectId = stringAt(provider, "projectId");

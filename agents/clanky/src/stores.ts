@@ -1,15 +1,8 @@
-import {
-	type ClankyPaths,
-	ClankySubagentStore,
-	MemoryStore,
-	WorkTrackerOutboxStore,
-	WorkTrackerRefStore,
-} from "@clanky/core";
+import { type ClankyPaths, ClankySubagentStore, MemoryStore, WorkTrackerRefStore } from "@clanky/core";
 
 export interface ClankyStores {
 	memory: MemoryStore;
 	workTrackerRefs: WorkTrackerRefStore;
-	workTrackerOutbox: WorkTrackerOutboxStore;
 	subagents: ClankySubagentStore;
 }
 
@@ -25,7 +18,6 @@ export function createClankyStores(paths: ClankyPaths): ClankyStores {
 	return {
 		memory: new MemoryStore(paths),
 		workTrackerRefs: new WorkTrackerRefStore(paths),
-		workTrackerOutbox: new WorkTrackerOutboxStore(paths),
 		subagents: new ClankySubagentStore(paths),
 	};
 }

@@ -75,16 +75,17 @@ Minimum credential set:
 
 ## Linear
 
-Required only for live Linear issue creation or link updates from Clanky tools.
+Required only when the installed Linear MCP, CLI, or skill is used for live
+Linear issue creation, comments, or status updates.
 
 ```bash
 LINEAR_API_KEY=... clanky --home ~/.clanky --profile personal
 ```
 
-Expected result: `work_tracker_create_issue` can create Linear issues when
-Linear is the selected provider, and `work_tracker_link` can persist tracker
-refs. If tracker credentials are unavailable, Clanky should report the skipped
-tracker update explicitly rather than pretending it happened.
+Expected result: the Linear integration can create or update the issue, then
+`work_tracker_link` can persist the tracker ref. If tracker credentials or tools
+are unavailable, Clanky should report the skipped tracker update explicitly
+rather than pretending it happened.
 
 ## xAI Media
 

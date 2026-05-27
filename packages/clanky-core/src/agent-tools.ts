@@ -41,11 +41,7 @@ import type { CreateClankySkillInput } from "./skills/loader.ts";
 import { extractIndexableMessageText, type SessionIndexMessageInput } from "./state/index-db.ts";
 import type { ClankySubagentState, ClankySubagentSummary } from "./subagents/store.ts";
 import type { OpenAiWebSearchInput } from "./web/operator.ts";
-import type {
-	CreateWorkTrackerRefInput,
-	WorkTrackerCreateIssueInput,
-	WorkTrackerProviderKind,
-} from "./work-tracker/refs.ts";
+import type { CreateWorkTrackerRefInput, WorkTrackerProviderKind } from "./work-tracker/refs.ts";
 import { normalizeWorkTrackerProviderKind } from "./work-tracker/refs.ts";
 
 type ClankyMessageEndEvent = {
@@ -92,29 +88,6 @@ const workTrackerLinkSchema = Type.Object({
 	taskId: Type.Optional(Type.String()),
 	task_id: Type.Optional(Type.String()),
 	note: Type.Optional(Type.String()),
-	metadata: Type.Optional(Type.Unknown()),
-});
-
-const workTrackerCreateIssueSchema = Type.Object({
-	providerId: Type.Optional(Type.String()),
-	provider_id: Type.Optional(Type.String()),
-	providerKind: Type.Optional(workTrackerProviderKindSchema),
-	provider_kind: Type.Optional(workTrackerProviderKindSchema),
-	trackerKind: Type.Optional(workTrackerProviderKindSchema),
-	tracker_kind: Type.Optional(workTrackerProviderKindSchema),
-	teamId: Type.Optional(Type.String()),
-	team_id: Type.Optional(Type.String()),
-	title: Type.String(),
-	description: Type.Optional(Type.String()),
-	assigneeId: Type.Optional(Type.String()),
-	assignee_id: Type.Optional(Type.String()),
-	projectId: Type.Optional(Type.String()),
-	project_id: Type.Optional(Type.String()),
-	stateId: Type.Optional(Type.String()),
-	state_id: Type.Optional(Type.String()),
-	priority: Type.Optional(Type.Number()),
-	labelIds: Type.Optional(Type.Array(Type.String())),
-	label_ids: Type.Optional(Type.Array(Type.String())),
 	metadata: Type.Optional(Type.Unknown()),
 });
 
@@ -437,7 +410,6 @@ const discordVoiceJoinSchema = Type.Object({
 });
 
 export type ScheduleCronToolInput = Static<typeof scheduleCronSchema>;
-export type WorkTrackerCreateIssueToolInput = Static<typeof workTrackerCreateIssueSchema>;
 export type WorkTrackerLinkToolInput = Static<typeof workTrackerLinkSchema>;
 export type ExternalMcpCallToolInput = Static<typeof externalMcpCallSchema>;
 export type ExternalMcpListToolsInput = Static<typeof externalMcpListToolsSchema>;
@@ -481,7 +453,6 @@ export interface ClankyBeforeProviderRequestInput {
 
 export interface ClankyAgentToolHandlers {
 	scheduleCron?: (input: ScheduleCronToolInput) => Promise<unknown>;
-	workTrackerCreateIssue?: (input: WorkTrackerCreateIssueInput) => Promise<unknown>;
 	workTrackerLink?: (input: CreateWorkTrackerRefInput) => Promise<unknown>;
 	externalMcpCall?: (input: ExternalMcpCallToolInput) => Promise<unknown>;
 	externalMcpListTools?: (input: ExternalMcpListToolsInput) => Promise<unknown>;
@@ -552,6 +523,7 @@ const MEMORY_REFLECTION_MAX_CHARS = 18000;
 const WEB_OPERATOR_SKILL_NAME = "clanky-web-operator";
 const MEDIA_OPERATOR_SKILL_NAME = "clanky-media-operator";
 const AGENTROOM_OPERATOR_SKILL_NAME = "clanky-agentroom-operator";
+const WORK_TRACKER_SKILL_NAME = "clanky-work-tracker";
 const SUBAGENT_PANEL_WIDGET_KEY = "clanky-subagents";
 const SUBAGENT_PANEL_STATUS_KEY = "clanky-subagents";
 const SUBAGENT_PANEL_REFRESH_MS = 2000;
@@ -589,7 +561,15 @@ const MEMORY_COMMAND_COMPLETIONS = [
 	{ value: "off", description: "Disable local user memory." },
 ] satisfies readonly ClankyCommandCompletionSpec[];
 
-export function createClankyExtensionFactories(handlers: ClankyAgentToolHandlers): ExtensionFactory[] {
+export interface CreateClankyExtensionFactoriesOptions {
+	env?: NodeJS.ProcessEnv;
+}
+
+export function createClankyExtensionFactories(
+	handlers: ClankyAgentToolHandlers,
+	options: CreateClankyExtensionFactoriesOptions = {},
+): ExtensionFactory[] {
+	const env = options.env ?? process.env;
 	const indexMessage = handlers.indexMessage;
 	const beforeProviderRequest = handlers.beforeProviderRequest;
 	const memoryPacket = handlers.memoryPacket;
@@ -620,8 +600,12 @@ export function createClankyExtensionFactories(handlers: ClankyAgentToolHandlers
 			registerClankyCommands(pi, handlers, subagentPanel);
 			subagentPanel?.registerLifecycle(pi);
 			pi.on("input", async (event) => {
-				const transformed = maybeInjectAgentRoomOperatorSkill(
-					maybeInjectWebOperatorSkill(maybeInjectMediaOperatorSkill(event.text)),
+				const transformed = maybeInjectWorkTrackerSkill(
+					maybeInjectAgentRoomOperatorSkill(
+						maybeInjectWebOperatorSkill(maybeInjectMediaOperatorSkill(event.text, env), env),
+						env,
+					),
+					env,
 				);
 				if (transformed === event.text) return { action: "continue" };
 				if (event.images !== undefined) return { action: "transform", text: transformed, images: event.images };
@@ -2644,7 +2628,6 @@ export function createClankyToolDefinitions(
 		);
 	}
 	const workTrackerLink = handlers.workTrackerLink;
-	const workTrackerCreateIssue = handlers.workTrackerCreateIssue;
 	const externalMcpListTools = handlers.externalMcpListTools;
 	if (externalMcpListTools !== undefined) {
 		tools.push(
@@ -2741,34 +2724,17 @@ export function createClankyToolDefinitions(
 			}),
 		);
 	}
-	if (workTrackerCreateIssue !== undefined) {
-		tools.push(
-			defineTool({
-				name: "work_tracker_create_issue",
-				label: "Work Tracker Create Issue",
-				description: "Create an issue in the configured external work tracker provider.",
-				promptSnippet:
-					"work_tracker_create_issue: create tracked work through the selected tracker provider when durable tracking is requested.",
-				promptGuidelines: [
-					"Use task_create for native Clanky-only tasks.",
-					"Set provider_kind when the user names a provider such as Linear, GitHub Issues, or Jira.",
-					"Provider-specific fields such as team_id are allowed through this generic tool when the provider needs them.",
-				],
-				parameters: workTrackerCreateIssueSchema,
-				async execute(_toolCallId, params) {
-					return toolResult(await workTrackerCreateIssue(normalizeWorkTrackerCreateIssueToolInput(params)));
-				},
-			}),
-		);
-	}
 	if (workTrackerLink !== undefined) {
 		tools.push(
 			defineTool({
 				name: "work_tracker_link",
 				label: "Work Tracker Link",
-				description: "Persist a provider-neutral link between a work tracker issue and a Clanky session or task.",
-				promptSnippet: "work_tracker_link: bind an external tracker issue to the current Clanky session or task.",
+				description:
+					"Persist a provider-neutral link between an external work tracker issue and a Clanky session or task.",
+				promptSnippet:
+					"work_tracker_link: after using MCP, CLI, or a skill to create or find tracker work, bind the external issue to the current Clanky session or task.",
 				promptGuidelines: [
+					"Use the installed tracker MCP, CLI, or skill for provider-specific create, comment, and status operations.",
 					"Use provider_kind/provider_id to distinguish Linear, GitHub Issues, Jira, or custom trackers.",
 					"Use task_create without a tracker ref when the user only wants native Clanky tracking.",
 				],
@@ -3347,6 +3313,18 @@ export function maybeInjectAgentRoomOperatorSkill(text: string, env: NodeJS.Proc
 	return `/skill:${AGENTROOM_OPERATOR_SKILL_NAME} ${text}`;
 }
 
+export function maybeInjectWorkTrackerSkill(text: string, env: NodeJS.ProcessEnv = process.env): string {
+	if (env.CLANKY_WORK_TRACKER_AUTO_SKILL === "0" || env.CLANKY_WORK_TRACKER_AUTO_SKILL === "false") return text;
+	const tracker = env.CLANKY_WORK_TRACKER?.trim() || env.CLANKY_WORK_TRACKER_PROVIDER_KIND?.trim();
+	if (tracker === undefined || tracker.length === 0 || tracker === "native") return text;
+	const trimmed = text.trimStart();
+	if (trimmed.length === 0) return text;
+	if (trimmed.startsWith("/")) return text;
+	if (trimmed.includes(`<skill name="${WORK_TRACKER_SKILL_NAME}"`)) return text;
+	if (!shouldUseWorkTrackerSkill(trimmed)) return text;
+	return `/skill:${WORK_TRACKER_SKILL_NAME} ${text}`;
+}
+
 export function shouldUseWebOperatorSkill(text: string): boolean {
 	const normalized = text.toLowerCase();
 	if (/\bhttps?:\/\/|\bwww\./i.test(text)) return true;
@@ -3400,6 +3378,14 @@ export function shouldUseAgentRoomOperatorSkill(text: string): boolean {
 		return true;
 	}
 	if (/\b(read|send|nudge|launch|stop)\b.{0,40}\b(room )?(worker|agent)\b/i.test(text)) return true;
+	return false;
+}
+
+export function shouldUseWorkTrackerSkill(text: string): boolean {
+	if (/\b(linear|jira|github issues?|tracker|ticket|issue|inbox|notification)\b/i.test(text)) return true;
+	if (/\b(task|todo|follow[- ]?up|status|roadmap|milestone)\b/i.test(text)) return true;
+	if (/\b(fix|debug|implement|build|add|change|refactor|investigate|review|ship)\b/i.test(text)) return true;
+	if (/\b(pr|pull request|commit|branch|release)\b/i.test(text)) return true;
 	return false;
 }
 
@@ -3808,31 +3794,6 @@ function normalizeScheduleCronToolInput(input: ScheduleCronToolInput): ScheduleC
 	if (output.idempotencyKey === undefined && input.idempotency_key !== undefined) {
 		output.idempotencyKey = input.idempotency_key;
 	}
-	return output;
-}
-
-function normalizeWorkTrackerCreateIssueToolInput(input: WorkTrackerCreateIssueToolInput): WorkTrackerCreateIssueInput {
-	const output: WorkTrackerCreateIssueInput = { title: input.title };
-	const providerId = input.providerId ?? input.provider_id;
-	if (providerId !== undefined) output.providerId = providerId;
-	const providerKind = normalizeWorkTrackerKind(
-		input.providerKind ?? input.provider_kind ?? input.trackerKind ?? input.tracker_kind,
-	);
-	if (providerKind !== undefined) output.providerKind = providerKind;
-	const teamId = input.teamId ?? input.team_id;
-	if (teamId !== undefined) output.teamId = teamId;
-	if (input.description !== undefined) output.description = input.description;
-	const assigneeId = input.assigneeId ?? input.assignee_id;
-	if (assigneeId !== undefined) output.assigneeId = assigneeId;
-	const projectId = input.projectId ?? input.project_id;
-	if (projectId !== undefined) output.projectId = projectId;
-	const stateId = input.stateId ?? input.state_id;
-	if (stateId !== undefined) output.stateId = stateId;
-	if (input.priority !== undefined) output.priority = input.priority;
-	const labelIds = input.labelIds ?? input.label_ids;
-	if (labelIds !== undefined) output.labelIds = labelIds;
-	const metadata = metadataRecord(input.metadata);
-	if (metadata !== undefined) output.metadata = metadata;
 	return output;
 }
 

@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { access, appendFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { ClankySubagentStore, SendSubagentMessageInput, SendSubagentMessageResult } from "@clanky/core";
+import {
+	type ClankySubagentStore,
+	maybeInjectWorkTrackerSkill,
+	type SendSubagentMessageInput,
+	type SendSubagentMessageResult,
+} from "@clanky/core";
 import {
 	type AgentSessionEvent,
 	type AgentSessionRuntime,
@@ -31,6 +36,7 @@ export interface DiscordVoiceSubagentCoordinatorOptions {
 	channelId: string;
 	model: string;
 	voice: string;
+	env?: NodeJS.ProcessEnv;
 	reasoningEffort?: string;
 	voiceSupervisorDelegate?: VoiceSupervisorDelegateHandle;
 	bridgeLogPath?: string;
@@ -74,6 +80,7 @@ export class DiscordVoiceSubagentCoordinator {
 	private readonly channelId: string;
 	private readonly model: string;
 	private readonly voice: string;
+	private readonly env: NodeJS.ProcessEnv;
 	private readonly reasoningEffort: string | undefined;
 	private readonly voiceSupervisorDelegate: VoiceSupervisorDelegateHandle | undefined;
 	private readonly bridgeLogPath: string | undefined;
@@ -101,6 +108,7 @@ export class DiscordVoiceSubagentCoordinator {
 		this.channelId = options.channelId;
 		this.model = options.model;
 		this.voice = options.voice;
+		this.env = options.env ?? process.env;
 		this.reasoningEffort = options.reasoningEffort;
 		this.voiceSupervisorDelegate = options.voiceSupervisorDelegate;
 		this.bridgeLogPath = options.bridgeLogPath;
@@ -366,10 +374,13 @@ export class DiscordVoiceSubagentCoordinator {
 		const normalizedPrompt = prompt.trim();
 		if (normalizedPrompt.length === 0) throw new Error("ask_pi requires prompt.");
 		const runtime = await this.ensureWorkerRuntime();
-		const request = buildVoiceWorkerPrompt(normalizedPrompt, {
-			guildId: this.guildId,
-			channelId: this.channelId,
-		});
+		const request = maybeInjectWorkTrackerSkill(
+			buildVoiceWorkerPrompt(normalizedPrompt, {
+				guildId: this.guildId,
+				channelId: this.channelId,
+			}),
+			this.env,
+		);
 		return await this.workerQueue.enqueue(async () => {
 			await this.store.setSubagentState(this.workerId, "running", {
 				activeConversationId: this.channelId,
@@ -452,8 +463,7 @@ export class DiscordVoiceSubagentCoordinator {
 				...(entry.runtime.session.sessionFile === undefined ? {} : { sessionFile: entry.runtime.session.sessionFile }),
 			});
 			try {
-				const response = await sendSubagentMessageAndWaitForAssistantText(
-					entry.runtime,
+				const request = maybeInjectWorkTrackerSkill(
 					buildGeneralSubagentPrompt(input, {
 						guildId: this.guildId,
 						channelId: this.channelId,
@@ -461,6 +471,11 @@ export class DiscordVoiceSubagentCoordinator {
 						workerId,
 						workerKey,
 					}),
+					this.env,
+				);
+				const response = await sendSubagentMessageAndWaitForAssistantText(
+					entry.runtime,
+					request,
 					VOICE_GENERAL_SUBAGENT_TIMEOUT_MS,
 				);
 				await this.store.setSubagentState(workerId, "idle", {
