@@ -41,6 +41,12 @@ jobs:
           corepack enable
           corepack prepare pnpm@10.33.4 --activate
 
+      - name: Prepare local file dependencies
+        run: |
+          mkdir -p ../discord_mcp
+          printf '%s\n' '{"name":"discord-mcp","version":"0.0.0","type":"module","bin":{"discord-mcp":"index.js"},"engines":{"node":">=22.19.0"},"dependencies":{"@modelcontextprotocol/sdk":"^1.29.0","tsx":"^4.22.3","zod":"^3.25.76"}}' > ../discord_mcp/package.json
+          printf '%s\n' '#!/usr/bin/env node' > ../discord_mcp/index.js
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
