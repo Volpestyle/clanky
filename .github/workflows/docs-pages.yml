@@ -10,7 +10,7 @@ on:
       - ".github/workflows/docs-pages.yml"
       - "apps/docs/**"
       - "docs/**"
-      - "packages/agent-docs/**"
+      - "packages/night-compiler/**"
       - "README.md"
       - "package.json"
       - "pnpm-lock.yaml"
@@ -44,7 +44,6 @@ jobs:
 
       - name: Prepare local file dependencies
         run: |
-          git clone --depth 1 https://github.com/Volpestyle/docs.git ../docs
           mkdir -p ../agent-room/packages/integrations/chat-discord
           printf '%s\n' '{"name":"@agentroom/chat-discord","version":"0.0.0","type":"module","exports":{".":"./index.js"},"dependencies":{"@modelcontextprotocol/sdk":"^1.29.0","ws":"^8.20.1","zod":"^4.4.3"}}' > ../agent-room/packages/integrations/chat-discord/package.json
           printf '%s\n' 'export {};' > ../agent-room/packages/integrations/chat-discord/index.js
