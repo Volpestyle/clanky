@@ -481,7 +481,7 @@ uses its own home and profile layout instead:
       work-trackers/
       subagents/
       index.db
-      cron/
+      scheduler/ (optional)
       discord-voice.json
       discord-bridge.log
       discord-voice.log
@@ -827,9 +827,10 @@ The active profile owns durable personal Clanky configuration and state:
   edited by `/discord-voice`.
 - `<profileDir>/models.json` stores custom model registry entries used by Pi's
   model selector.
-- `<profileDir>/SELF.md`, `memory/`, `sessions/`, `subagents/`,
-  `work-trackers/`, and `cron/` store profile-local memory, session,
-  multitasking, work, and scheduled job state.
+- `<profileDir>/SELF.md`, `memory/`, `sessions/`, `subagents/`, and
+  `work-trackers/` store profile-local memory, session, multitasking, and work
+  state. Scheduler state is optional and only present when that surface is
+  wired.
 
 The TUI setup and status commands edit or report these stores:
 
@@ -2003,7 +2004,7 @@ Environment variables still override stored credentials where supported.
 | `/subagents hide` | Hide the panel. |
 | `/subagents status` | Print subagent status once. |
 | `/subagents json` | Print raw subagent status. |
-| `/cron` | Show Clanky cron jobs when cron handlers are configured. |
+| `/cron` | Show configured Clanky scheduled jobs when scheduler handlers are wired. |
 
 ## Model-Facing Tool Families
 
@@ -2026,7 +2027,8 @@ are available and credentials/policy allow it:
 - MCP: `mcp_list_tools`, `mcp_call`.
 
 `task_create` and `schedule_cron` exist in the shared tool layer, but are only
-present in a runtime when their handlers are wired.
+present in a runtime when their handlers are wired. They are not part of the
+default Pi foreground-thread path.
 
 ---
 
