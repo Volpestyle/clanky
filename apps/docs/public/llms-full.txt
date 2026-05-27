@@ -8,7 +8,7 @@ Generated from the live docs site. Each section below is one page; see the headi
 
 # Start Here
 
-Source: `docs/start-here.md` - https://volpestyle.github.io/clanky/?doc=start-here
+Source: `docs/start-here.md` - https://volpestyle.github.io/docs/clanky/?doc=start-here
 
 # Start Here
 
@@ -156,14 +156,14 @@ is unsupported.
   first.
 
 For LLM ingestion, the docs site publishes
-[`llms.txt`](https://volpestyle.github.io/clanky/llms.txt) and
-[`llms-full.txt`](https://volpestyle.github.io/clanky/llms-full.txt).
+[`llms.txt`](https://volpestyle.github.io/docs/clanky/llms.txt) and
+[`llms-full.txt`](https://volpestyle.github.io/docs/clanky/llms-full.txt).
 
 ---
 
 # Overview
 
-Source: `README.md` - https://volpestyle.github.io/clanky/?doc=overview
+Source: `README.md` - https://volpestyle.github.io/docs/clanky/?doc=overview
 
 # Clanky
 
@@ -375,7 +375,7 @@ pnpm voice:native:test
 
 # Pi Foundation
 
-Source: `docs/pi-foundation.md` - https://volpestyle.github.io/clanky/?doc=pi-foundation
+Source: `docs/pi-foundation.md` - https://volpestyle.github.io/docs/clanky/?doc=pi-foundation
 
 # Pi Foundation
 
@@ -534,7 +534,7 @@ required credentials are configured.
 
 # First-Time Setup
 
-Source: `docs/first-time-setup.md` - https://volpestyle.github.io/clanky/?doc=first-time-setup
+Source: `docs/first-time-setup.md` - https://volpestyle.github.io/docs/clanky/?doc=first-time-setup
 
 # First-Time Setup
 
@@ -796,7 +796,7 @@ while active development is in progress.
 
 # Configuration Model
 
-Source: `docs/configuration.md` - https://volpestyle.github.io/clanky/?doc=configuration
+Source: `docs/configuration.md` - https://volpestyle.github.io/docs/clanky/?doc=configuration
 
 # Configuration Model
 
@@ -919,7 +919,7 @@ profile-backed store and status output.
 
 # Using Clanky
 
-Source: `docs/using-clanky.md` - https://volpestyle.github.io/clanky/?doc=using-clanky
+Source: `docs/using-clanky.md` - https://volpestyle.github.io/docs/clanky/?doc=using-clanky
 
 # Using Clanky
 
@@ -1144,7 +1144,7 @@ CLANKY_DISCORD_MCP=0
 
 # AgentRoom Integration
 
-Source: `docs/AGENTROOM.md` - https://volpestyle.github.io/clanky/?doc=agentroom
+Source: `docs/AGENTROOM.md` - https://volpestyle.github.io/docs/clanky/?doc=agentroom
 
 # AgentRoom Integration
 
@@ -1372,7 +1372,7 @@ live in [Discord Voice Live Runbook](qa/discord-voice-live-runbook.md).
 
 # Live Gates
 
-Source: `docs/qa/live-gates.md` - https://volpestyle.github.io/clanky/?doc=live-gates
+Source: `docs/qa/live-gates.md` - https://volpestyle.github.io/docs/clanky/?doc=live-gates
 
 # Clanky Live Gates
 
@@ -1496,7 +1496,7 @@ standalone and keeps its profile-local state under the configured `--home`.
 
 # Discord Voice Live Runbook
 
-Source: `docs/qa/discord-voice-live-runbook.md` - https://volpestyle.github.io/clanky/?doc=discord-voice-live-runbook
+Source: `docs/qa/discord-voice-live-runbook.md` - https://volpestyle.github.io/docs/clanky/?doc=discord-voice-live-runbook
 
 # Discord Voice Live Runbook
 
@@ -1822,7 +1822,7 @@ are satisfied. For the full Go Live run, the important counters are:
 
 # Command Reference
 
-Source: `docs/command-reference.md` - https://volpestyle.github.io/clanky/?doc=command-reference
+Source: `docs/command-reference.md` - https://volpestyle.github.io/docs/clanky/?doc=command-reference
 
 # Command Reference
 
@@ -2032,7 +2032,7 @@ present in a runtime when their handlers are wired.
 
 # Memory And Privacy
 
-Source: `docs/memory-and-privacy.md` - https://volpestyle.github.io/clanky/?doc=memory-and-privacy
+Source: `docs/memory-and-privacy.md` - https://volpestyle.github.io/docs/clanky/?doc=memory-and-privacy
 
 # Memory And Privacy
 
@@ -2172,7 +2172,7 @@ and should be treated as a live-gated capability.
 
 # Troubleshooting
 
-Source: `docs/troubleshooting.md` - https://volpestyle.github.io/clanky/?doc=troubleshooting
+Source: `docs/troubleshooting.md` - https://volpestyle.github.io/docs/clanky/?doc=troubleshooting
 
 # Troubleshooting
 
@@ -2405,7 +2405,7 @@ The broader `pnpm check` command can fail on unrelated active code changes. Use
 
 # Discord Voice Architecture
 
-Source: `docs/discord-voice-architecture.md` - https://volpestyle.github.io/clanky/?doc=discord-voice-architecture
+Source: `docs/discord-voice-architecture.md` - https://volpestyle.github.io/docs/clanky/?doc=discord-voice-architecture
 
 # Discord Voice Architecture
 

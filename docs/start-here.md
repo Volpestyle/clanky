@@ -144,5 +144,5 @@ is unsupported.
   first.
 
 For LLM ingestion, the docs site publishes
-[`llms.txt`](https://volpestyle.github.io/clanky/llms.txt) and
-[`llms-full.txt`](https://volpestyle.github.io/clanky/llms-full.txt).
+[`llms.txt`](https://volpestyle.github.io/docs/clanky/llms.txt) and
+[`llms-full.txt`](https://volpestyle.github.io/docs/clanky/llms-full.txt).
