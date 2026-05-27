@@ -24,6 +24,9 @@ Web-ready exports (PNG, all square) live in `apps/docs/public/branding/`:
 | `clanky-forest-run-1024.png` | forest run source | using-Clanky image and active companion/agent image |
 | `apple-touch-icon.png` (180×180) | with-companion master | iOS home-screen icon |
 
+Root-level copies of the README/docs images also live directly in `branding/`
+so GitHub can render Markdown links such as `/branding/clanky-logo-512.png`.
+
 ## Usage notes
 
 - All images have a pure black (`#000000`) background and look best on dark surfaces. On light backgrounds they read as a colored tile — apply `rounded-md` or similar in CSS to soften the edge.
