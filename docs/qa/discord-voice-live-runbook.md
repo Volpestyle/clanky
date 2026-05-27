@@ -1,10 +1,16 @@
 # Discord Voice Live Runbook
 
 Use this after the non-live checks pass. The harness joins a real Discord voice
-channel, connects OpenAI Realtime, and validates the counters that prove the
-voice bridge is working. OpenAI Realtime is always used for live reasoning,
-tool calls, and speaker transcription. Speech output can come from OpenAI
-Realtime audio directly or from ElevenLabs TTS.
+channel, connects the selected realtime voice agent, and validates the counters
+that prove the voice bridge is working. OpenAI Realtime is the default realtime
+reasoning/tool agent, and xAI Grok Voice can be selected as an alternate
+realtime agent. OpenAI is still used for the current Discord speaker
+transcription path. Speech output can come from the selected realtime agent
+audio directly or from ElevenLabs TTS.
+
+The xAI realtime path supports the live voice loop and tool calls, but it does
+not currently receive Discord screen-share image frames. Use OpenAI Realtime for
+the screen-watch snapshot workflow.
 
 ## Preflight
 
@@ -39,7 +45,18 @@ choose or leave a voice channel at runtime. If an allowlist is configured,
 `discord_voice_join` rejects channels outside it.
 
 By default OpenAI Realtime provides both the spoken response and the
-tool-calling brain. To use ElevenLabs voices for speech while keeping Realtime
+tool-calling brain. The `tts-provider` setting is only the speech output
+provider; it does not change the realtime reasoning/tool agent. To use xAI Grok
+Voice as the realtime reasoning/tool agent, configure xAI separately:
+
+```text
+/xai-login
+/discord-voice set realtime-provider xai
+/discord-voice set xai-model grok-voice-latest
+/discord-voice set xai-voice eve
+```
+
+To use ElevenLabs voices for speech while keeping the selected realtime agent
 for reasoning, use the `/discord-voice` advanced settings or the shortcut
 commands:
 
@@ -49,6 +66,7 @@ commands:
 /discord-voice set elevenlabs-voice <voice-id>
 /discord-voice set elevenlabs-model eleven_flash_v2_5
 /discord-voice set elevenlabs-output-format pcm_24000
+/discord-voice set eagerness 50
 ```
 
 Env config still works and overrides the TUI profile setting when present:
@@ -62,6 +80,11 @@ CLANKY_DISCORD_VOICE_CHANNEL_ID=...
 CLANKY_DISCORD_VOICE_ALLOWED_GUILD_IDS=...
 # Optional comma/space-separated channel allowlist:
 CLANKY_DISCORD_VOICE_ALLOWED_CHANNEL_IDS=...
+# Optional xAI Grok Voice realtime agent:
+CLANKY_DISCORD_VOICE_REALTIME_AGENT_PROVIDER=xai
+XAI_API_KEY=...
+CLANKY_XAI_REALTIME_MODEL=grok-voice-latest
+CLANKY_XAI_REALTIME_VOICE=eve
 # Optional ElevenLabs speech synthesis:
 CLANKY_DISCORD_VOICE_TTS_PROVIDER=elevenlabs
 ELEVENLABS_API_KEY=...
@@ -69,28 +92,35 @@ ELEVENLABS_API_KEY=...
 CLANKY_ELEVENLABS_VOICE_ID=...
 CLANKY_ELEVENLABS_MODEL=eleven_flash_v2_5
 CLANKY_ELEVENLABS_OUTPUT_FORMAT=pcm_24000
+# Optional voice participation eagerness from 0 to 100:
+CLANKY_DISCORD_VOICE_EAGERNESS=50
 ```
 
 Supported ElevenLabs PCM output formats are `pcm_16000`, `pcm_22050`,
 `pcm_24000`, and `pcm_44100`. `CLANKY_ELEVENLABS_BASE_URL` or
-`ELEVENLABS_BASE_URL` can override the API base URL. The `/discord-voice`
-advanced settings can store the ElevenLabs voice id, model, output format, and
-base URL in the active profile; `/elevenlabs-login` stores the API key.
+`ELEVENLABS_BASE_URL` can override the API base URL.
+`CLANKY_DISCORD_VOICE_PARTICIPATION_EAGERNESS` is also accepted for voice
+eagerness. The `/discord-voice` advanced settings can store the ElevenLabs
+voice id, model, output format, base URL, and participation eagerness in the
+active profile; `/elevenlabs-login` stores the API key.
 
 Credentials can come from `CLANKY_DISCORD_TOKEN` or from a stored
 `/discord-login` credential in the active Clanky profile. Bot tokens are enough
 for normal voice audio. Native Discord Go Live watching requires a user-token
 credential.
 
-OpenAI credentials are still required for the Realtime model and can come from
-`OPENAI_API_KEY`, `CLANKY_OPENAI_API_KEY`, or a stored `/openai-login` API key.
-The examples below show `OPENAI_API_KEY`; omit that line if the active profile
-already has a stored OpenAI key. ElevenLabs speech additionally requires
+OpenAI credentials are still required for speaker transcription and can come
+from `OPENAI_API_KEY`, `CLANKY_OPENAI_API_KEY`, or a stored `/openai-login` API
+key. The examples below show `OPENAI_API_KEY`; omit that line if the active
+profile already has a stored OpenAI key. xAI Grok Voice additionally requires
+`XAI_API_KEY` or a stored `/xai-login` API key when
+`CLANKY_DISCORD_VOICE_REALTIME_AGENT_PROVIDER=xai`. ElevenLabs speech
+additionally requires
 `ELEVENLABS_API_KEY`, `CLANKY_ELEVENLABS_API_KEY`, or a stored
 `/elevenlabs-login` API key.
 
-This bridge uses the OpenAI Realtime WebSocket/event transport intentionally.
-OpenAI recommends WebRTC for browser or mobile clients where the client owns a
+This bridge uses realtime WebSocket/event transports intentionally. OpenAI
+recommends WebRTC for browser or mobile clients where the client owns a
 microphone track. Here, `clankvox` already terminates Discord RTP and exposes
 PCM frames to Node, so WebSocket audio-buffer events map directly onto Discord
 input/output without adding another media peer connection.
@@ -107,7 +137,7 @@ nicknames that should also count.
 ## Music And Video Media
 
 Realtime is the live voice front-end, but Pi remains the reasoning/tool/skill
-layer. The Realtime voice bridge exposes small URL-first media controls:
+layer. The realtime voice bridge exposes small URL-first media controls:
 
 - `play_music_url`: play a resolved http(s) URL into Discord voice audio.
 - `play_video_url`: start Discord Go Live for a resolved http(s) video URL and,
@@ -150,7 +180,7 @@ CLANKY_DISCORD_VOICE_SCRIPTED_PROMPT="Use ask_pi to ask Pi for a one-sentence st
 pnpm voice:live
 ```
 
-`gpt-realtime-2` is the default Realtime model. The bridge sends
+`gpt-realtime-2` is the default realtime agent model. The bridge sends
 `reasoning.effort=low` by default for that model; override it with
 `CLANKY_OPENAI_REALTIME_REASONING_EFFORT=minimal|low|medium|high|xhigh` when
 you want to trade latency for deeper reasoning.

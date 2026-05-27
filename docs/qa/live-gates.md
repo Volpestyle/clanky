@@ -62,7 +62,7 @@ conversation IDs, or accepted wake-name follow-ups.
 Required for live voice join, speaker transcription, spoken output, Pi
 delegation from voice, and optional Discord Go Live watching.
 
-Use `docs/discord-voice-live-runbook.md`. It covers bot-token audio, user-token
+Use `discord-voice-live-runbook.md` (same directory). It covers bot-token audio, user-token
 Go Live, OpenAI Realtime speech, and ElevenLabs speech.
 
 Minimum credential set:

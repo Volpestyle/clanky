@@ -6,6 +6,9 @@
 	"scripts": {
 		"build": "tsgo --noEmit -p tsconfig.json && vite build",
 		"dev": "vite --host 127.0.0.1",
+		"generate:llms": "tsx scripts/generate-llms.ts",
+		"predev": "pnpm run generate:llms",
+		"prebuild": "pnpm run generate:llms",
 		"preview": "vite preview --host 127.0.0.1"
 	},
 	"dependencies": {
