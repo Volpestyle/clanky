@@ -441,14 +441,25 @@ impl MusicState {
     }
 }
 
+fn shell_single_quote_contents(value: &str) -> String {
+    value.replace('\'', "'\\''")
+}
+
+fn build_ytdlp_resolved_input(url: &str, format_selector: &str) -> String {
+    let quoted_url = shell_single_quote_contents(url);
+    let quoted_format = shell_single_quote_contents(format_selector);
+    format!(
+        "\"$(yt-dlp --no-warnings --quiet --no-playlist --no-live-from-start --extractor-args 'youtube:player_client=android' -f '{quoted_format}' --print urls '{quoted_url}' | sed -n '1p')\""
+    )
+}
+
 pub(crate) fn build_music_pipeline_command(url: &str, resolved_direct_url: bool) -> String {
-    let quoted_url = url.replace('\'', "'\\''");
+    let quoted_url = shell_single_quote_contents(url);
     if resolved_direct_url {
         format!("ffmpeg -nostdin -loglevel error -i '{quoted_url}' -f s16le -ar 48000 -ac 1 pipe:1")
     } else {
-        format!(
-            "yt-dlp --no-warnings --quiet --no-playlist --extractor-args 'youtube:player_client=android' -f bestaudio/best -o - '{quoted_url}' | ffmpeg -nostdin -loglevel error -i pipe:0 -f s16le -ar 48000 -ac 1 pipe:1"
-        )
+        let input = build_ytdlp_resolved_input(url, "bestaudio/best");
+        format!("ffmpeg -nostdin -loglevel error -i {input} -f s16le -ar 48000 -ac 1 pipe:1")
     }
 }
 
@@ -510,6 +521,10 @@ mod tests {
     fn unresolved_music_pipeline_command_uses_ytdlp() {
         let command = build_music_pipeline_command("https://www.youtube.com/watch?v=abc123", false);
         assert!(command.contains("yt-dlp"));
-        assert!(command.contains("| ffmpeg "));
+        assert!(command.contains("--print urls"));
+        assert!(command.contains("--no-live-from-start"));
+        assert!(command.contains("sed -n '1p'"));
+        assert!(!command.contains("-o -"));
+        assert!(command.starts_with("ffmpeg "));
     }
 }

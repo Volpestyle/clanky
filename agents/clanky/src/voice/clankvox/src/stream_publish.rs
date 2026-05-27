@@ -168,7 +168,7 @@ pub(crate) fn build_stream_publish_pipeline_command(
     url: &str,
     resolved_direct_url: bool,
 ) -> String {
-    let quoted_url = url.replace('\'', "'\\''");
+    let quoted_url = shell_single_quote_contents(url);
     let ffmpeg_tail = format!(
         "ffmpeg -nostdin -loglevel error -re -i {{input}} -an -sn -dn -vf \"scale=w={STREAM_PUBLISH_TARGET_WIDTH}:h={STREAM_PUBLISH_TARGET_HEIGHT}:force_original_aspect_ratio=decrease:flags=lanczos,pad={STREAM_PUBLISH_TARGET_WIDTH}:{STREAM_PUBLISH_TARGET_HEIGHT}:(ow-iw)/2:(oh-ih)/2:black,fps={STREAM_PUBLISH_TARGET_FPS}\" -c:v libx264 -preset veryfast -tune zerolatency -pix_fmt yuv420p -profile:v baseline -level 3.1 -g {STREAM_PUBLISH_TARGET_FPS} -keyint_min {STREAM_PUBLISH_TARGET_FPS} -sc_threshold 0 -b:v {STREAM_PUBLISH_VIDEO_BITRATE_KBPS}k -maxrate {STREAM_PUBLISH_VIDEO_BITRATE_KBPS}k -bufsize {}k -f h264 -bsf:v h264_metadata=aud=insert pipe:1",
         STREAM_PUBLISH_VIDEO_BITRATE_KBPS * 2
@@ -177,10 +177,11 @@ pub(crate) fn build_stream_publish_pipeline_command(
     if resolved_direct_url {
         ffmpeg_tail.replace("{input}", &format!("'{quoted_url}'"))
     } else {
-        format!(
-            "yt-dlp --no-warnings --quiet --no-playlist --extractor-args 'youtube:player_client=android' -f \"bestvideo[ext=mp4][vcodec*=avc1]/bestvideo[vcodec*=avc1]/bestvideo/best\" -o - '{quoted_url}' | {}",
-            ffmpeg_tail.replace("{input}", "pipe:0")
-        )
+        let input = build_ytdlp_resolved_input(
+            url,
+            "bestvideo[ext=mp4][vcodec*=avc1]/bestvideo[vcodec*=avc1]/bestvideo/best",
+        );
+        ffmpeg_tail.replace("{input}", &input)
     }
 }
 
@@ -189,7 +190,7 @@ pub(crate) fn build_stream_publish_visualizer_pipeline_command(
     resolved_direct_url: bool,
     visualizer_mode: &str,
 ) -> String {
-    let quoted_url = url.replace('\'', "'\\''");
+    let quoted_url = shell_single_quote_contents(url);
     let visualizer_filter = match visualizer_mode {
         "spectrum" => format!(
             "showspectrum=s={STREAM_PUBLISH_TARGET_WIDTH}x{STREAM_PUBLISH_TARGET_HEIGHT}:mode=combined:slide=scroll:color=intensity"
@@ -213,11 +214,21 @@ pub(crate) fn build_stream_publish_visualizer_pipeline_command(
     if resolved_direct_url {
         ffmpeg_tail.replace("{input}", &format!("'{quoted_url}'"))
     } else {
-        format!(
-            "yt-dlp --no-warnings --quiet --no-playlist --extractor-args 'youtube:player_client=android' -f 'bestaudio/best' -o - '{quoted_url}' | {}",
-            ffmpeg_tail.replace("{input}", "pipe:0")
-        )
+        let input = build_ytdlp_resolved_input(url, "bestaudio/best");
+        ffmpeg_tail.replace("{input}", &input)
     }
+}
+
+fn shell_single_quote_contents(value: &str) -> String {
+    value.replace('\'', "'\\''")
+}
+
+fn build_ytdlp_resolved_input(url: &str, format_selector: &str) -> String {
+    let quoted_url = shell_single_quote_contents(url);
+    let quoted_format = shell_single_quote_contents(format_selector);
+    format!(
+        "\"$(yt-dlp --no-warnings --quiet --no-playlist --no-live-from-start --extractor-args 'youtube:player_client=android' -f '{quoted_format}' --print urls '{quoted_url}' | sed -n '1p')\""
+    )
 }
 
 pub(crate) fn build_stream_publish_browser_pipeline_command(mime_type: &str) -> String {
@@ -1407,7 +1418,8 @@ impl AppState {
 mod tests {
     use super::{
         STREAM_PUBLISH_TARGET_FPS, build_stream_publish_browser_pipeline_command,
-        build_stream_publish_pipeline_command, drain_h264_access_units,
+        build_stream_publish_pipeline_command, build_stream_publish_visualizer_pipeline_command,
+        drain_h264_access_units,
     };
 
     #[test]
@@ -1424,7 +1436,25 @@ mod tests {
         let command =
             build_stream_publish_pipeline_command("https://www.youtube.com/watch?v=abc123", false);
         assert!(command.contains("yt-dlp"));
+        assert!(command.contains("--print urls"));
+        assert!(command.contains("--no-live-from-start"));
+        assert!(command.contains("sed -n '1p'"));
+        assert!(!command.contains("-o -"));
         assert!(command.contains("h264_metadata=aud=insert"));
+    }
+
+    #[test]
+    fn build_stream_publish_visualizer_command_uses_ytdlp_resolved_url_for_indirect_urls() {
+        let command = build_stream_publish_visualizer_pipeline_command(
+            "https://www.youtube.com/watch?v=abc123",
+            false,
+            "waves",
+        );
+        assert!(command.contains("yt-dlp"));
+        assert!(command.contains("--print urls"));
+        assert!(command.contains("--no-live-from-start"));
+        assert!(!command.contains("-o -"));
+        assert!(command.contains("showwaves"));
     }
 
     #[test]
