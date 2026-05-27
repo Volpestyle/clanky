@@ -3,7 +3,7 @@
 These checks touch real services or credentials. Run the non-live checks first:
 
 ```bash
-cd /Users/jamesvolpe/web/clanky-pi
+cd /Users/jamesvolpe/dev/agents/clanky-pi
 pnpm check
 pnpm smoke
 ```
@@ -106,7 +106,7 @@ From an initialized AgentRoom room:
 ```bash
 agent-room launch clanky \
   --harness pi \
-  --command "pnpm --dir /Users/jamesvolpe/web/clanky-pi clanky --home ./.clanky-room --profile clanky" \
+  --command "pnpm --dir /Users/jamesvolpe/dev/agents/clanky-pi clanky --home ./.clanky-room --profile clanky" \
   --cwd .
 agent-room send clanky "hello"
 agent-room read clanky --lines 40

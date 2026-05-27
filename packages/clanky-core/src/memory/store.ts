@@ -573,20 +573,22 @@ export class MemoryStore {
 
 	private listLatest(options: MemorySearchOptions): MemoryAtom[] {
 		const filters = memoryFilters(options);
+		const ranking = memoryRanking(options);
 		const rows = this.database()
 			.prepare(`
 				SELECT *
 				FROM memory_atoms
 				${filters.where}
-				ORDER BY updated_at DESC
+				ORDER BY ${ranking.sql}, confidence DESC, updated_at DESC
 				LIMIT ?
 			`)
-			.all(...filters.params, normalizedLimit(options.limit));
+			.all(...filters.params, ...ranking.params, normalizedLimit(options.limit));
 		return this.rowsToAtoms(rows);
 	}
 
 	private searchQuery(query: string, options: MemorySearchOptions): MemoryAtom[] {
 		const filters = memoryFilters(options, "a");
+		const ranking = memoryRanking(options, "a");
 		try {
 			const rows = this.database()
 				.prepare(`
@@ -595,23 +597,24 @@ export class MemoryStore {
 					JOIN memory_atoms a ON a.id = memory_atoms_fts.id
 					${filters.where}
 					${filters.where.length === 0 ? "WHERE" : "AND"} memory_atoms_fts MATCH ?
-					ORDER BY bm25(memory_atoms_fts), a.updated_at DESC
+					ORDER BY bm25(memory_atoms_fts), ${ranking.sql}, a.confidence DESC, a.updated_at DESC
 					LIMIT ?
 				`)
-				.all(...filters.params, buildFtsQuery(query), normalizedLimit(options.limit));
+				.all(...filters.params, buildFtsQuery(query), ...ranking.params, normalizedLimit(options.limit));
 			return this.rowsToAtoms(rows);
 		} catch {
 			const fallback = memoryFilters(options);
+			const fallbackRanking = memoryRanking(options);
 			const rows = this.database()
 				.prepare(`
 					SELECT *
 					FROM memory_atoms
 					${fallback.where}
 					${fallback.where.length === 0 ? "WHERE" : "AND"} lower(claim) LIKE ?
-					ORDER BY updated_at DESC
+					ORDER BY ${fallbackRanking.sql}, confidence DESC, updated_at DESC
 					LIMIT ?
 				`)
-				.all(...fallback.params, `%${query.toLowerCase()}%`, normalizedLimit(options.limit));
+				.all(...fallback.params, `%${query.toLowerCase()}%`, ...fallbackRanking.params, normalizedLimit(options.limit));
 			return this.rowsToAtoms(rows);
 		}
 	}
@@ -750,6 +753,22 @@ function memoryFilters(options: MemorySearchOptions, alias?: string): { where: s
 	}
 	return {
 		where: `WHERE ${conditions.join(" AND ")}`,
+		params,
+	};
+}
+
+function memoryRanking(options: MemorySearchOptions, alias?: string): { sql: string; params: string[] } {
+	const prefix = alias === undefined ? "" : `${alias}.`;
+	const scopes = options.scopes ?? [];
+	if (scopes.length === 0) return { sql: "0", params: [] };
+	const clauses: string[] = [];
+	const params: string[] = [];
+	for (const [index, scope] of scopes.entries()) {
+		clauses.push(`WHEN ${prefix}scope = ? AND ${prefix}subject_id = ? THEN ${index}`);
+		params.push(normalizeScope(scope.scope), normalizeSubjectId(scope.subjectId));
+	}
+	return {
+		sql: `CASE ${clauses.join(" ")} ELSE ${scopes.length} END`,
 		params,
 	};
 }

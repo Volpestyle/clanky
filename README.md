@@ -1,5 +1,7 @@
 # Clanky
 
+![Clanky](/branding/clanky-logo-512.png)
+
 Clanky is a standalone personal Pi agent. It owns its persona, profile-local
 state, memory, Linear stores, and bundled skills. It does not run its own
 daemon, scheduler, HTTP server, WebSocket server, or multi-agent room

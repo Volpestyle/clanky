@@ -13,6 +13,8 @@ import {
 	type ClankyPaths,
 	type DelegateToMainWorkerToolInput,
 	DiscordSubagentStore,
+	type MainAgentActivityToolInput,
+	type MainAgentCancelToolInput,
 	type MainSessionContextToolInput,
 	type SendSubagentMessageInput,
 	type SendSubagentMessageResult,
@@ -36,6 +38,7 @@ import {
 } from "./agentDiscordVoice.ts";
 import type { ClankyThinkingLevel } from "./clankyDefaults.ts";
 import type { StoredDiscordVoiceSettings } from "./discordVoiceSettings.ts";
+import { cancelMainAgent, MainAgentActivityMonitor, readMainAgentActivity } from "./mainAgentActivity.ts";
 import { readMainSessionContext } from "./mainSessionContext.ts";
 import { delegateToMainWorker } from "./mainWorkerDelegation.ts";
 import { type RuntimeTurnQueue, SerialRuntimeTurnQueue } from "./runtimeTurnQueue.ts";
@@ -64,6 +67,7 @@ export interface DiscordVoiceStartProgress {
 
 export interface DiscordVoiceStartOptions {
 	onProgress?: (progress: DiscordVoiceStartProgress) => void;
+	joinRequested?: boolean;
 }
 
 export interface ClankyDiscordGatewayControllerDependencies {
@@ -90,6 +94,7 @@ export class ClankyDiscordGatewayController {
 	private readonly dependencies: ResolvedClankyDiscordGatewayControllerDependencies;
 	private readonly runtimeTurnQueue: RuntimeTurnQueue;
 	private readonly subagentStore: DiscordSubagentStore;
+	private readonly mainAgentActivityMonitor = new MainAgentActivityMonitor();
 	private readonly voiceSupervisorDelegate: VoiceSupervisorDelegateHandle | undefined;
 	private runtime: AgentSessionRuntime | undefined;
 	private createRuntime: CreateAgentSessionRuntimeFactory | undefined;
@@ -131,6 +136,7 @@ export class ClankyDiscordGatewayController {
 
 	bindRuntime(runtime: AgentSessionRuntime): void {
 		this.runtime = runtime;
+		this.mainAgentActivityMonitor.bind(runtime);
 	}
 
 	bindSubagentRuntimeFactory(
@@ -166,14 +172,15 @@ export class ClankyDiscordGatewayController {
 			this.logBridge(`voice-config-skipped error=${message}`);
 			voiceConfig = undefined;
 		}
+		const shouldStartVoiceNow = shouldStartResolvedVoiceConfig(voiceConfig, options.joinRequested === true);
 		const client =
-			discordCredentials !== undefined && voiceConfig !== undefined
+			discordCredentials !== undefined && shouldStartVoiceNow
 				? this.dependencies.createClient({ voice: true, chat: discordConfig !== undefined })
 				: undefined;
 		if (client !== undefined) {
 			this.reportVoiceProgress(options, {
 				phase: "creating_client",
-				message: "Preparing Discord voice-capable client.",
+				message: "Preparing Discord client.",
 				...voiceProgressTarget(voiceConfig),
 			});
 		}
@@ -193,12 +200,13 @@ export class ClankyDiscordGatewayController {
 		if (this.bridgeLogPath !== undefined) startInput.bridgeLogPath = this.bridgeLogPath;
 		try {
 			this.handle = discordConfig === undefined ? undefined : await this.dependencies.startGateway(startInput);
-			this.handleClientSupportsVoice = this.handle !== undefined && client !== undefined;
+			this.handleClientSupportsVoice = this.handle !== undefined && client !== undefined && shouldStartVoiceNow;
 			if (
 				this.handle === undefined &&
 				client !== undefined &&
 				discordCredentials !== undefined &&
-				voiceConfig !== undefined
+				voiceConfig !== undefined &&
+				shouldStartVoiceNow
 			) {
 				this.reportVoiceProgress(options, {
 					phase: "logging_in_client",
@@ -213,7 +221,22 @@ export class ClankyDiscordGatewayController {
 			throw error;
 		}
 		const voiceClient = this.handle?.client ?? this.voiceOnlyClient;
-		if (voiceClient !== undefined && discordCredentials !== undefined && voiceConfig !== undefined) {
+		if (voiceConfig !== undefined && !shouldStartVoiceNow) {
+			this.reportVoiceProgress(options, {
+				phase: "skipped",
+				message:
+					voiceConfig.autoJoin === true
+						? "Discord voice target is incomplete; no voice channel is joined."
+						: "Discord voice is configured; startup auto-join is disabled.",
+				...voiceProgressTarget(voiceConfig),
+			});
+		}
+		if (
+			voiceClient !== undefined &&
+			discordCredentials !== undefined &&
+			voiceConfig !== undefined &&
+			shouldStartVoiceNow
+		) {
 			try {
 				this.reportVoiceProgress(options, {
 					phase: "waiting_for_client_ready",
@@ -233,6 +256,7 @@ export class ClankyDiscordGatewayController {
 					authStorage: this.authStorage,
 					config: voiceConfig,
 					runtimeTurnQueue: this.runtimeTurnQueue,
+					joinRequested: options.joinRequested === true,
 					...(this.createRuntime === undefined
 						? {}
 						: {
@@ -273,6 +297,7 @@ export class ClankyDiscordGatewayController {
 			throw new Error("ClankyDiscordGatewayController.restartVoice: runtime not bound");
 		}
 		this.voiceConfigError = undefined;
+		const wasVoiceActive = isActiveVoiceHandle(this.voiceHandle);
 		if (this.voiceHandle !== undefined) {
 			this.reportVoiceProgress(options, {
 				phase: "stopping_existing",
@@ -306,6 +331,19 @@ export class ClankyDiscordGatewayController {
 			this.reportVoiceProgress(options, {
 				phase: "skipped",
 				message: "Discord voice is not configured.",
+			});
+			return;
+		}
+		const joinRequested = options.joinRequested === true || wasVoiceActive;
+		const shouldStartVoiceNow = shouldStartResolvedVoiceConfig(voiceConfig, joinRequested);
+		if (!shouldStartVoiceNow) {
+			this.reportVoiceProgress(options, {
+				phase: "skipped",
+				message:
+					voiceConfig.autoJoin === true
+						? "Discord voice target is incomplete; no voice channel is joined."
+						: "Discord voice settings saved; no voice channel is joined.",
+				...voiceProgressTarget(voiceConfig),
 			});
 			return;
 		}
@@ -355,6 +393,7 @@ export class ClankyDiscordGatewayController {
 				authStorage: this.authStorage,
 				config: voiceConfig,
 				runtimeTurnQueue: this.runtimeTurnQueue,
+				joinRequested,
 				...(this.createRuntime === undefined
 					? {}
 					: {
@@ -403,6 +442,14 @@ export class ClankyDiscordGatewayController {
 
 	mainSessionContext(input: MainSessionContextToolInput): unknown {
 		return readMainSessionContext(this.runtime, input);
+	}
+
+	mainAgentActivity(input: MainAgentActivityToolInput): unknown {
+		return readMainAgentActivity(this.runtime, this.runtimeTurnQueue, input, this.mainAgentActivityMonitor);
+	}
+
+	async cancelMainAgent(input: MainAgentCancelToolInput): Promise<unknown> {
+		return await cancelMainAgent(this.runtime, this.runtimeTurnQueue, input);
 	}
 
 	delegateToMainWorker(input: DelegateToMainWorkerToolInput): unknown {
@@ -472,6 +519,33 @@ function isDiscordVoiceExplicitlyEnabledByEnv(env: NodeJS.ProcessEnv): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function shouldStartResolvedVoiceConfig(
+	config: ReturnType<typeof resolveAgentDiscordVoiceConfig>,
+	joinRequested: boolean,
+): boolean {
+	if (config === undefined) return false;
+	if (!hasResolvedVoiceTarget(config)) return false;
+	return joinRequested || config.autoJoin === true;
+}
+
+function hasResolvedVoiceTarget(
+	config: ReturnType<typeof resolveAgentDiscordVoiceConfig>,
+): config is NonNullable<ReturnType<typeof resolveAgentDiscordVoiceConfig>> & { guildId: string; channelId: string } {
+	return (
+		config !== undefined &&
+		typeof config.guildId === "string" &&
+		config.guildId.length > 0 &&
+		typeof config.channelId === "string" &&
+		config.channelId.length > 0
+	);
+}
+
+function isActiveVoiceHandle(handle: ClankyAgentDiscordVoiceHandle | undefined): boolean {
+	if (handle === undefined) return false;
+	const status = handle.status();
+	return !isRecord(status) || status.active !== false;
 }
 
 function voiceProgressTarget(

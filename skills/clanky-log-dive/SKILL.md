@@ -13,7 +13,7 @@ Use this skill for Clanky's own local logs and subagent state. It is for Clanky 
 
 ## Boundaries
 
-- Work from `/Users/jamesvolpe/web/clanky-pi` unless the user gives another checkout.
+- Work from `/Users/jamesvolpe/dev/clanky-pi` unless the user gives another checkout.
 - Use the default profile at `/Users/jamesvolpe/.clanky/profiles/default` unless the user asks for another profile.
 - Do not use `swarm-deepdive` for Clanky Discord voice/text subagents unless the user explicitly asks about swarm.
 - Do not delete or rewrite skills under `~/.claude` or `~/.agents` while debugging logs.

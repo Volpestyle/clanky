@@ -57,6 +57,17 @@ sensitive traits, unsupported guesses, or relationship inferences.
 The model-facing `memory_remember` tool is instructed to store memories only
 when the user explicitly asks for memory or confirms a proposed memory.
 
+Clanky does not run a post-turn memory extractor. Memory writes are manual or
+user-requested. For longer sessions, `/memory reflect` can queue a daily
+reflection pass once there is enough transcript from the last 24 hours; that
+pass asks Clanky to propose durable memories and to save only memories that
+still meet the normal confirmation and privacy rules.
+
+Accepted `memory_remember` and `memory_forget` tool results are also written
+back into the Pi session as hidden `social_memory_op` audit breadcrumbs. Those
+breadcrumbs make memory changes visible from the session tree without turning
+stored memories into higher-priority instructions.
+
 ## Memory Commands
 
 Inspect:
@@ -73,6 +84,7 @@ Write:
 
 ```text
 /memory remember <claim>
+/memory reflect
 ```
 
 Forget or disable:
@@ -118,4 +130,3 @@ profile. Use:
 OpenAI Realtime and optional ElevenLabs receive the live audio/text needed for
 voice operation. Native Go Live screen watching depends on user-token behavior
 and should be treated as a live-gated capability.
-

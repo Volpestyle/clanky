@@ -88,9 +88,10 @@ client with voice-state intents.
 
 `resolveAgentDiscordVoiceConfig()` combines environment variables, stored
 profile settings from `discord-voice.json`, stored auth entries, and default
-Realtime settings. A fixed guild/channel target starts immediately. A dynamic
-configuration starts a handle that can join later through tools or slash
-commands.
+Realtime settings. A fixed guild/channel target is a saved target, not a startup
+join request. Startup only joins it when auto-join is explicitly enabled for
+dev/live-test runs; otherwise `/discord-voice join` or the `discord_voice_join`
+tool provides the join intent.
 
 `AgentDiscordVoiceBridge.start()` connects the pieces: stream discovery,
 Realtime response session, `clankvox` IPC, per-speaker transcription manager,

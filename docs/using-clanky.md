@@ -1,5 +1,7 @@
 # Using Clanky
 
+![Clanky and companion moving through a green forest](/branding/clanky-forest-run-1024.png)
+
 Once setup is done, treat Clanky as your personal Pi agent. Start it in the repo
 or workspace you want it to work on:
 
@@ -54,6 +56,7 @@ Useful commands:
 /what_do_you_remember
 /memory view
 /memory remember <claim>
+/memory reflect
 /memory forget <id>
 /memory export
 /privacy
@@ -65,6 +68,10 @@ Useful commands:
 Memory is not the same as persona. The static persona is
 `agents/clanky/persona/SELF.md`. Profile-local self memory and remembered facts
 live under the active profile directory.
+
+Use `/memory reflect` near the end of a busy day or long session. It only runs
+when there is enough recent transcript to review, and it should propose
+memories before saving anything that lacks explicit confirmation.
 
 ## Discord Text Workflow
 
@@ -121,6 +128,10 @@ Basic commands:
 /discord-voice disable
 /voice-logs
 ```
+
+Normal startup does not join a pinned voice channel unless auto-join is enabled;
+use `/discord-voice join` or the `discord_voice_join` tool for explicit join
+intent.
 
 For architecture and live validation, see
 [Discord Voice Architecture](discord-voice-architecture.md) and

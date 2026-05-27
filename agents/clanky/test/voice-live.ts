@@ -99,7 +99,7 @@ async function main(): Promise<void> {
 				"Discord Go Live validation requires CLANKY_DISCORD_CREDENTIAL_KIND=user-token or a stored user-token /discord-login credential.",
 			);
 		}
-		await gatewayController.start();
+		await gatewayController.start({ joinRequested: true });
 		const status = gatewayController.status();
 		if (status.voiceBridgeActive !== true) {
 			throw new Error(`Discord voice bridge did not start: ${JSON.stringify(status)}`);

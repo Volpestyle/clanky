@@ -39,6 +39,10 @@ restrictions, `/discord-voice join <guild-id> <voice-channel-id>` to pin one
 active channel, or `/discord-voice status` for a quick text snapshot. These
 settings are stored in the active Clanky profile and hot-restart the Discord
 bridge when changed.
+Pinned targets do not auto-join on normal Clanky startup. Use
+`/discord-voice join` or let the model call `discord_voice_join` when someone
+clearly asks for voice. For dev/live-test startup auto-join, set
+`CLANKY_DISCORD_VOICE_AUTO_JOIN=1` or `/discord-voice set auto-join on`.
 When voice access is enabled without a pinned target, Clanky can use the
 `discord_voice_status`, `discord_voice_join`, and `discord_voice_leave` tools to
 choose or leave a voice channel at runtime. If an allowlist is configured,

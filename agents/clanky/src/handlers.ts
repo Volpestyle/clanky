@@ -13,6 +13,8 @@ import {
 	LinearClient,
 	listExternalMcpTools,
 	loadClankySkills,
+	type MainAgentActivityToolInput,
+	type MainAgentCancelToolInput,
 	type MainSessionContextToolInput,
 	resolveClankyChatGatewayOwner,
 	resolveClankyChatMode,
@@ -48,6 +50,8 @@ export function createClankyHandlers(
 	options: {
 		authStorage?: AuthStorage;
 		mainSessionContext?: (input: MainSessionContextToolInput) => Promise<unknown>;
+		mainAgentActivity?: (input: MainAgentActivityToolInput) => Promise<unknown>;
+		mainAgentCancel?: (input: MainAgentCancelToolInput) => Promise<unknown>;
 		delegateToMainWorker?: (input: DelegateToMainWorkerToolInput) => Promise<unknown>;
 		sendSubagentMessage?: (input: SendSubagentMessageInput) => Promise<SendSubagentMessageResult>;
 	} = {},
@@ -91,6 +95,8 @@ export function createClankyHandlers(
 
 		linearLink: async (input) => stores.linearLinks.link(input),
 		...(options.mainSessionContext === undefined ? {} : { mainSessionContext: options.mainSessionContext }),
+		...(options.mainAgentActivity === undefined ? {} : { mainAgentActivity: options.mainAgentActivity }),
+		...(options.mainAgentCancel === undefined ? {} : { mainAgentCancel: options.mainAgentCancel }),
 		...(options.delegateToMainWorker === undefined ? {} : { delegateToMainWorker: options.delegateToMainWorker }),
 		...(options.sendSubagentMessage === undefined ? {} : { sendSubagentMessage: options.sendSubagentMessage }),
 		webSearch: async (input, signal) =>

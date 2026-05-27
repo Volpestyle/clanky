@@ -8,6 +8,7 @@ export type DiscordVoiceRealtimeAgentProvider = "openai" | "xai";
 
 export interface StoredDiscordVoiceSettings {
 	enabled: boolean;
+	autoJoin?: boolean;
 	guildId?: string;
 	channelId?: string;
 	allowedGuildIds?: string[];
@@ -66,6 +67,7 @@ export class DiscordVoiceSettingsStore implements DiscordVoiceSettingsAccessor {
 
 export function sanitizeStoredDiscordVoiceSettings(settings: StoredDiscordVoiceSettings): StoredDiscordVoiceSettings {
 	const sanitized: StoredDiscordVoiceSettings = { enabled: settings.enabled === true };
+	if (settings.autoJoin === true) sanitized.autoJoin = true;
 	const guildId = cleanString(settings.guildId);
 	if (guildId !== undefined) sanitized.guildId = guildId;
 	const channelId = cleanString(settings.channelId);
@@ -114,6 +116,7 @@ function parseStoredDiscordVoiceSettings(value: unknown): StoredDiscordVoiceSett
 	if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
 	const record = value as Record<string, unknown>;
 	const settings: StoredDiscordVoiceSettings = { enabled: record.enabled === true };
+	if (typeof record.autoJoin === "boolean") settings.autoJoin = record.autoJoin;
 	if (typeof record.guildId === "string") settings.guildId = record.guildId;
 	if (typeof record.channelId === "string") settings.channelId = record.channelId;
 	if (Array.isArray(record.allowedGuildIds)) {

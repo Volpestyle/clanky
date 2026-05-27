@@ -9,14 +9,14 @@
 		<link rel="apple-touch-icon" sizes="180x180" href="%BASE_URL%branding/apple-touch-icon.png" />
 		<meta name="theme-color" content="#0a0608" />
 		<script>
-			(function () {
+			(() => {
 				try {
-					var saved = localStorage.getItem("clanky-docs-theme");
-					var prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+					const saved = localStorage.getItem("clanky-docs:theme");
+					const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
 					if (saved === "dark" || (!saved && prefersDark)) {
 						document.documentElement.classList.add("dark");
 					}
-				} catch (e) {}
+				} catch {}
 			})();
 		</script>
 		<meta property="og:title" content="Clanky Docs" />

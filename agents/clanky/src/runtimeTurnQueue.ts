@@ -3,11 +3,19 @@ import type { AgentSessionRuntime, PromptOptions } from "@earendil-works/pi-codi
 export interface RuntimeTurnQueue {
 	isBusy(): boolean;
 	enqueue<T>(task: () => Promise<T>): Promise<T>;
+	cancelPending(reason?: string): RuntimeTurnQueueCancelResult;
 	enqueuePrompt(
 		runtime: AgentSessionRuntime,
 		prompt: string,
 		options?: RuntimeTurnQueuePromptOptions,
 	): Promise<RuntimeTurnQueuePromptResult>;
+}
+
+export interface RuntimeTurnQueueCancelResult {
+	active: number;
+	queued: number;
+	cancelled: number;
+	reason: string;
 }
 
 export interface RuntimeTurnQueuePromptResult {
@@ -20,19 +28,50 @@ export interface RuntimeTurnQueuePromptOptions {
 	images?: PromptOptions["images"];
 }
 
+export class RuntimeTurnQueueCancelledError extends Error {
+	constructor(reason: string) {
+		super(reason);
+		this.name = "RuntimeTurnQueueCancelledError";
+	}
+}
+
 export class SerialRuntimeTurnQueue implements RuntimeTurnQueue {
 	private tail: Promise<void> = Promise.resolve();
 	private pending = 0;
+	private active = 0;
+	private cancelGeneration = 0;
+	private cancelReason = "runtime turn queue cancelled";
 
 	isBusy(): boolean {
 		return this.pending > 0;
 	}
 
+	cancelPending(reason = "runtime turn queue cancelled"): RuntimeTurnQueueCancelResult {
+		const queued = Math.max(0, this.pending - this.active);
+		if (queued > 0) {
+			this.cancelGeneration += 1;
+			this.cancelReason = reason;
+		}
+		return {
+			active: this.active,
+			queued,
+			cancelled: queued,
+			reason,
+		};
+	}
+
 	enqueue<T>(task: () => Promise<T>): Promise<T> {
 		this.pending += 1;
+		const generation = this.cancelGeneration;
 		const run = this.tail.then(async () => {
 			try {
-				return await task();
+				if (generation !== this.cancelGeneration) throw new RuntimeTurnQueueCancelledError(this.cancelReason);
+				this.active += 1;
+				try {
+					return await task();
+				} finally {
+					this.active -= 1;
+				}
 			} finally {
 				this.pending -= 1;
 			}

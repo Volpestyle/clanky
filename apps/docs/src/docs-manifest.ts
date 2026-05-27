@@ -1,12 +1,49 @@
-export type DocGroup = "Start" | "Setup" | "Operations" | "Reference" | "Advanced" | "Maintainer";
+import type { DocGroup, DocMeta, DocsSiteInfo } from "@volpestyle/agent-docs";
 
-export type DocMeta = {
-	slug: string;
-	title: string;
-	description: string;
-	source: string;
-	group: DocGroup;
+export const site: DocsSiteInfo = {
+	id: "clanky-docs",
+	title: "Clanky Docs",
+	description:
+		"Clanky is a stateful personal AI agent built on the Pi runtime, with Discord text + voice, scoped memory, subagents, and AgentRoom integration.",
+	badge: "localhost",
+	logo: {
+		src: "branding/clanky-icon-32.png",
+		srcSet: "branding/clanky-icon-32.png 1x, branding/clanky-icon-64.png 2x, branding/clanky-icon-128.png 4x",
+		width: 32,
+		height: 32,
+	},
+	llms: {
+		baseUrl: "https://volpestyle.github.io/clanky",
+		title: "Clanky",
+		blurb:
+			"Clanky is a stateful personal AI agent built on the Pi runtime, with Discord text + voice, scoped memory, subagents, and AgentRoom integration.",
+		excludeGroupsFromFull: ["Maintainer"],
+	},
+	siteLinks: [
+		{
+			id: "clanky-docs",
+			label: "Clanky",
+			href: "https://volpestyle.github.io/clanky/",
+			description: "Personal agent docs, setup, operations, and Clanky's AgentRoom integration.",
+		},
+		{
+			id: "agent-room-docs",
+			label: "AgentRoom",
+			href: "https://volpestyle.github.io/agent-room/",
+			description: "Coordination plane docs for rooms, runtimes, gateways, and protocols.",
+		},
+		{
+			id: "clankvox-docs",
+			label: "ClankVox",
+			href: "https://volpestyle.github.io/clankvox/",
+			description: "Rust media-plane docs for the bundled Clanky voice and Go Live transport module.",
+			parentId: "clanky-docs",
+			relationLabel: "voice/media module",
+		},
+	],
 };
+
+export const groups: DocGroup[] = ["Start", "Setup", "Operations", "Reference", "Advanced", "Maintainer"];
 
 export const docsMeta: DocMeta[] = [
 	{

@@ -119,6 +119,21 @@ const DISCORD_VOICE_COMMAND_COMPLETIONS = [
 		aliases: ["set allowed-channels all", "set allowed-channels none"],
 	},
 	{
+		value: "set auto-join on",
+		description: "Join the pinned Discord voice channel automatically at startup.",
+		aliases: ["set autojoin on", "set startup-join on"],
+	},
+	{
+		value: "set auto-join off",
+		description: "Keep the pinned Discord voice channel dormant until an explicit join request.",
+		aliases: ["set autojoin off", "set startup-join off"],
+	},
+	{
+		value: "set auto-join default",
+		description: "Clear the startup auto-join override.",
+		aliases: ["set auto-join clear", "set autojoin default", "set autojoin clear"],
+	},
+	{
 		value: "set model ",
 		label: "set model <openai-realtime-model>",
 		description: "Override the OpenAI Realtime agent model for Discord voice.",
@@ -668,6 +683,7 @@ function discordVoiceUsage(path: string | undefined): string {
 		"  /discord-voice allow-channel <voice-channel-id> [more-channel-ids...]",
 		"  /discord-voice allow <voice-channel-id> [more-channel-ids...]",
 		"  /discord-voice set realtime-provider xai",
+		"  /discord-voice set auto-join on|off",
 		"  /discord-voice set tts-provider elevenlabs",
 		"  /discord-voice set xai-model grok-voice-latest",
 		"  /discord-voice set elevenlabs-voice <voice-id>",
@@ -696,6 +712,7 @@ function formatDiscordVoiceSettings(settings: StoredDiscordVoiceSettings | undef
 	} else {
 		lines.push("Pinned voice target: none.");
 	}
+	lines.push(`Startup auto-join: ${settings.autoJoin === true ? "enabled" : "disabled"}.`);
 	if (settings.allowedGuildIds !== undefined && settings.allowedGuildIds.length > 0) {
 		lines.push(`Allowed servers: ${settings.allowedGuildIds.join(", ")}.`);
 	} else {
@@ -752,6 +769,8 @@ function formatDiscordVoiceEnvOverrides(): string[] {
 	if (guildId !== undefined) lines.push(`Env guild id override: ${guildId}.`);
 	const channelId = cleanArg(process.env.CLANKY_DISCORD_VOICE_CHANNEL_ID);
 	if (channelId !== undefined) lines.push(`Env voice channel id override: ${channelId}.`);
+	const autoJoin = cleanArg(process.env.CLANKY_DISCORD_VOICE_AUTO_JOIN ?? process.env.CLANKY_VOICE_AUTO_JOIN);
+	if (autoJoin !== undefined) lines.push(`Env voice auto-join override: ${autoJoin}.`);
 	const allowedGuildIds = cleanArg(process.env.CLANKY_DISCORD_VOICE_ALLOWED_GUILD_IDS);
 	if (allowedGuildIds !== undefined) lines.push(`Env allowed server override: ${allowedGuildIds}.`);
 	const allowedChannelIds = cleanArg(process.env.CLANKY_DISCORD_VOICE_ALLOWED_CHANNEL_IDS);
@@ -801,6 +820,7 @@ function hasDiscordVoiceEnvConfiguration(): boolean {
 		cleanArg(process.env.CLANKY_DISCORD_VOICE_ENABLED ?? process.env.CLANKY_DISCORD_VOICE) !== undefined ||
 		cleanArg(process.env.CLANKY_DISCORD_VOICE_GUILD_ID) !== undefined ||
 		cleanArg(process.env.CLANKY_DISCORD_VOICE_CHANNEL_ID) !== undefined ||
+		cleanArg(process.env.CLANKY_DISCORD_VOICE_AUTO_JOIN ?? process.env.CLANKY_VOICE_AUTO_JOIN) !== undefined ||
 		cleanArg(process.env.CLANKY_DISCORD_VOICE_ALLOWED_GUILD_IDS) !== undefined ||
 		cleanArg(process.env.CLANKY_DISCORD_VOICE_ALLOWED_CHANNEL_IDS) !== undefined ||
 		cleanArg(
@@ -986,7 +1006,7 @@ async function runDiscordVoiceJoin(
 	if (configureAdvanced) next = await collectDiscordVoiceAdvancedSettings(ctx, next);
 	deps.voiceSettings?.write(next);
 	const lines = [`Discord voice enabled for guild ${guildId}, channel ${channelId}.`];
-	await restartDiscordBridgeAfterVoiceSettingsChange(deps, lines, ctx);
+	await restartDiscordBridgeAfterVoiceSettingsChange(deps, lines, ctx, { joinRequested: true });
 	ctx.ui.notify(lines.join("\n"));
 }
 
@@ -1009,6 +1029,9 @@ async function runDiscordVoiceAdvancedWizard(
 			break;
 		case "speech-provider":
 			next = await collectDiscordVoiceTtsProvider(ctx, next);
+			break;
+		case "auto-join":
+			next = await collectDiscordVoiceAutoJoin(ctx, next);
 			break;
 		case "elevenlabs-api-key":
 			await runElevenLabsLogin(
@@ -1063,6 +1086,7 @@ async function runDiscordVoiceAdvancedWizard(
 			delete next.xAiRealtimeModel;
 			delete next.xAiRealtimeVoice;
 			delete next.ttsProvider;
+			delete next.autoJoin;
 			delete next.elevenLabsVoiceId;
 			delete next.elevenLabsModel;
 			delete next.elevenLabsOutputFormat;
@@ -1080,6 +1104,7 @@ async function runDiscordVoiceAdvancedWizard(
 type DiscordVoiceAdvancedAction =
 	| "realtime-provider"
 	| "speech-provider"
+	| "auto-join"
 	| "openai-model"
 	| "openai-voice"
 	| "openai-reasoning"
@@ -1112,6 +1137,10 @@ function discordVoiceAdvancedMenu(
 		{
 			action: "speech-provider",
 			label: `Speech output: provider (${formatTtsProviderMenuLabel(current.ttsProvider)})`,
+		},
+		{
+			action: "auto-join",
+			label: `Startup: auto-join pinned channel (${current.autoJoin === true ? "on" : "off"})`,
 		},
 		{ action: "openai-model", label: `Realtime agent: OpenAI model (${current.openAiRealtimeModel ?? "default"})` },
 		{ action: "openai-voice", label: `Speech output: OpenAI voice (${current.openAiRealtimeVoice ?? "default"})` },
@@ -1424,6 +1453,16 @@ async function runDiscordVoiceSet(
 				line = `Discord voice channel allowlist set to ${value.join(", ")}.`;
 			}
 		}
+	} else if (field === "auto-join" || field === "autojoin" || field === "startup-join") {
+		const value = parseOnOffArg(rawValue);
+		if (value !== undefined) {
+			if (value) next.autoJoin = true;
+			else delete next.autoJoin;
+			line = `Discord voice startup auto-join ${value ? "enabled" : "disabled"}.`;
+		} else if (rawValue === "clear" || rawValue === "default") {
+			delete next.autoJoin;
+			line = "Discord voice startup auto-join override cleared.";
+		}
 	} else if (field === "model") {
 		const value = await readDiscordVoiceValue(
 			ctx,
@@ -1615,6 +1654,23 @@ async function collectDiscordVoiceTtsProvider(
 	const next = { ...settings };
 	if (value === "Clear override") delete next.ttsProvider;
 	else next.ttsProvider = value === "ElevenLabs" ? "elevenlabs" : "openai";
+	return next;
+}
+
+async function collectDiscordVoiceAutoJoin(
+	ctx: ExtensionCommandContext,
+	settings: StoredDiscordVoiceSettings,
+): Promise<StoredDiscordVoiceSettings> {
+	const value = await ctx.ui.select("Discord voice startup auto-join:", [
+		"Off",
+		"On",
+		"Keep current",
+		"Clear override",
+	]);
+	if (value === undefined || value === "Keep current") return settings;
+	const next = { ...settings };
+	if (value === "On") next.autoJoin = true;
+	else delete next.autoJoin;
 	return next;
 }
 
@@ -1854,6 +1910,7 @@ async function restartDiscordBridgeAfterVoiceSettingsChange(
 	deps: DiscordAuthCommandDeps,
 	lines: string[],
 	ctx: ExtensionCommandContext,
+	options: { joinRequested?: boolean } = {},
 ): Promise<void> {
 	if (deps.gatewayController === undefined) {
 		lines.push("Restart Clanky to apply the voice setting.");
@@ -1862,12 +1919,17 @@ async function restartDiscordBridgeAfterVoiceSettingsChange(
 	const loadingUi = createDiscordVoiceLoadingUi(ctx);
 	try {
 		await deps.gatewayController.restartVoice({
+			...(options.joinRequested === undefined ? {} : { joinRequested: options.joinRequested }),
 			onProgress: (progress) => loadingUi.update(progress),
 		});
 		const status = deps.gatewayController.status();
 		const voiceConfigError = readStatusString(status, "voiceConfigError");
 		if (voiceConfigError === undefined) {
-			lines.push("Discord voice client started with the updated setting.");
+			if (isRecord(status) && status.voiceBridgeActive === true) {
+				lines.push("Discord voice client started with the updated setting.");
+			} else {
+				lines.push("Discord voice setting applied; no voice channel is joined.");
+			}
 		} else {
 			lines.push(`Discord voice setting applied, but voice is inactive: ${voiceConfigError}`);
 		}
@@ -1982,6 +2044,13 @@ function parseBoundedIntegerArg(value: string | undefined, min: number, max: num
 	if (integer < min) return min;
 	if (integer > max) return max;
 	return integer;
+}
+
+function parseOnOffArg(value: string | undefined): boolean | undefined {
+	const normalized = value?.trim().toLowerCase();
+	if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on") return true;
+	if (normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off") return false;
+	return undefined;
 }
 
 function parseHttpUrl(value: string): string | undefined {

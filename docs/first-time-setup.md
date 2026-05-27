@@ -12,7 +12,7 @@ Clanky, start with the [Pi quickstart](https://pi.dev/docs/latest/quickstart).
 
 - Node.js `>=22.19.0`.
 - pnpm `10.33.4` through Corepack or a matching global pnpm install.
-- This repository checked out at `/Users/jamesvolpe/web/clanky-pi`.
+- This repository checked out at `/Users/jamesvolpe/dev/agents/clanky-pi`.
 - An OpenAI API key or another Pi-supported model auth path.
 - Optional: a Discord bot token for agent-owned Discord text.
 - Optional: Rust/Cargo for the bundled Discord voice helper.
@@ -23,7 +23,7 @@ Clanky, start with the [Pi quickstart](https://pi.dev/docs/latest/quickstart).
 ## Install
 
 ```bash
-cd /Users/jamesvolpe/web/clanky-pi
+cd /Users/jamesvolpe/dev/agents/clanky-pi
 corepack enable
 corepack prepare pnpm@10.33.4 --activate
 pnpm install
@@ -163,6 +163,10 @@ Useful shortcuts:
 /discord-voice allow-channel <voice-channel-id>
 /voice-logs
 ```
+
+Pinned voice targets stay inactive on startup unless you explicitly enable
+startup auto-join with `/discord-voice set auto-join on` or
+`CLANKY_DISCORD_VOICE_AUTO_JOIN=1`.
 
 Voice requires a Discord credential and an OpenAI credential for speaker
 transcription. The realtime reasoning/tool agent defaults to OpenAI Realtime,

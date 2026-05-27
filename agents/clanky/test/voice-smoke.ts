@@ -64,6 +64,7 @@ type JsonRecord = Record<string, unknown>;
 
 async function main(): Promise<void> {
 	assertVoiceConfig();
+	await assertVoiceBridgeExplicitJoinGate();
 	assertRealtimeSessionUpdateShape();
 	assertXAiRealtimeSessionUpdateShape();
 	assertRealtimeTranscriptionUrlShape();
@@ -131,6 +132,28 @@ function assertVoiceConfig(): void {
 	}
 	if (config.participationEagerness !== 50) {
 		throw new Error("voice-smoke: default voice participation eagerness mismatch");
+	}
+	if (config.autoJoin === true) {
+		throw new Error("voice-smoke: Discord voice should not auto-join by default");
+	}
+	const autoJoinConfig = resolveAgentDiscordVoiceConfig(
+		{
+			CLANKY_DISCORD_VOICE_ENABLED: "1",
+			CLANKY_DISCORD_TOKEN: "discord-token",
+			CLANKY_DISCORD_VOICE_GUILD_ID: "guild-1",
+			CLANKY_DISCORD_VOICE_CHANNEL_ID: "channel-1",
+			CLANKY_DISCORD_VOICE_AUTO_JOIN: "1",
+			OPENAI_API_KEY: "openai-key",
+		},
+		{
+			providerId: "clanky-discord",
+			token: "discord-token",
+			credentialKind: "bot-token",
+			source: "env",
+		},
+	);
+	if (autoJoinConfig?.autoJoin !== true) {
+		throw new Error("voice-smoke: Discord voice auto-join env override did not parse");
 	}
 	const dynamicConfig = resolveAgentDiscordVoiceConfig(
 		{
@@ -387,6 +410,34 @@ function assertVoiceConfig(): void {
 	);
 	if (envDisabledStored !== undefined) {
 		throw new Error("voice-smoke: explicit env voice disable should override stored enabled setting");
+	}
+}
+
+async function assertVoiceBridgeExplicitJoinGate(): Promise<void> {
+	const handle = await startAgentDiscordVoiceBridge({
+		runtime: {} as never,
+		client: {} as never,
+		discordConfig: {
+			providerId: "clanky-discord",
+			token: "discord-token",
+			credentialKind: "bot-token",
+			source: "env",
+		},
+		config: {
+			enabled: true,
+			guildId: "guild-1",
+			channelId: "voice-1",
+			openAiApiKey: "openai-key",
+			openAiRealtimeModel: DEFAULT_REALTIME_MODEL,
+			openAiRealtimeVoice: "marin",
+		},
+		joinRequested: false,
+	});
+	const status = expectRecord(handle?.status(), "inactive voice status");
+	if (status.active !== false || status.mode !== "dynamic") {
+		throw new Error(
+			`voice-smoke: fixed voice target should stay inactive without join intent ${JSON.stringify(status)}`,
+		);
 	}
 }
 
@@ -1152,6 +1203,7 @@ async function assertFakeVoiceBridgeRealtimeTools(): Promise<void> {
 			openAiRealtimeVoice: "marin",
 			transcriptResponseBatchDelayMs: 0,
 		},
+		joinRequested: true,
 		dependencies: {
 			createRealtime() {
 				return realtime;
@@ -1177,17 +1229,24 @@ async function assertFakeVoiceBridgeRealtimeTools(): Promise<void> {
 		.join(",");
 	if (
 		tools !==
-		"ask_pi,list_screen_shares,media_pause,media_resume,media_status,media_stop,pi_status,pi_subagents,play_music_url,play_video_url,see_screenshare_snapshot,start_music_visualizer,start_screen_watch,stop_screen_watch,voice_stay_silent"
+		"ask_pi,list_screen_shares,media_pause,media_resume,media_status,media_stop,pi_cancel,pi_current_activity,pi_status,pi_subagents,play_music_url,play_video_url,see_screenshare_snapshot,start_music_visualizer,start_screen_watch,stop_screen_watch,voice_stay_silent"
 	) {
 		throw new Error(`voice-smoke: fake voice bridge realtime tools mismatch: ${tools}`);
 	}
 	if (!realtime.connectOptions?.instructions?.includes("Participation eagerness: 50/100")) {
 		throw new Error("voice-smoke: realtime instructions did not include voice participation eagerness");
 	}
-	realtime.emit("audio_delta", "AQIDBA==");
+	const realtimeAudioChunk = Buffer.alloc(960, 1).toString("base64");
+	realtime.emit("audio_delta", realtimeAudioChunk);
+	realtime.emit("audio_delta", realtimeAudioChunk);
 	if (vox.audioSends[0]?.sampleRate !== 24_000) {
 		throw new Error("voice-smoke: realtime audio delta was not sent to Discord audio");
 	}
+	if (vox.audioSends.length !== 1) {
+		throw new Error("voice-smoke: realtime audio deltas should be paced instead of sent in a burst");
+	}
+	await waitUntil(() => vox.audioSends.length === 2, "paced realtime audio send");
+	await sleep(30);
 	handle.requestTextUtterance(" scripted voice prompt ");
 	if (realtime.textUtterances[0] !== "scripted voice prompt") {
 		throw new Error("voice-smoke: voice bridge did not forward scripted text utterance to Realtime");
@@ -1295,6 +1354,7 @@ async function assertFakeVoiceBridgeRealtimeTools(): Promise<void> {
 		"ask_pi output",
 	);
 	if (askOutput.text !== "Pi voice answer.") throw new Error("voice-smoke: ask_pi output did not include Pi answer");
+	if (askOutput.target !== "main-runtime") throw new Error("voice-smoke: ask_pi output did not include target");
 
 	realtime.emit("event", {
 		type: "response.done",
@@ -1323,10 +1383,76 @@ async function assertFakeVoiceBridgeRealtimeTools(): Promise<void> {
 	if (
 		piStatusOutput.ok !== true ||
 		piStatusMain.voiceDelegationTarget !== "main-runtime" ||
+		piStatusMain.lastAssistantText !== "Pi voice answer." ||
 		piStatusVoice.scopeId !== "guild-1:voice-1" ||
 		piStatusSubagents.available !== false
 	) {
 		throw new Error(`voice-smoke: pi_status output mismatch ${JSON.stringify(piStatusOutput)}`);
+	}
+
+	realtime.emit("event", {
+		type: "response.done",
+		response: {
+			output: [
+				{
+					type: "function_call",
+					name: "pi_current_activity",
+					call_id: "call-pi-activity",
+					arguments: '{"limit":2}',
+				},
+			],
+		},
+	});
+	await waitUntil(
+		() => realtime.functionOutputs.some((output) => output.callId === "call-pi-activity"),
+		"pi_current_activity output",
+	);
+	const piActivityOutput = expectRecord(
+		realtime.functionOutputs.find((output) => output.callId === "call-pi-activity")?.output,
+		"pi_current_activity output",
+	);
+	const piActivity = expectRecord(piActivityOutput.activity, "pi_current_activity activity");
+	const recentAssistantMessages = piActivity.recentAssistantMessages;
+	if (
+		piActivityOutput.ok !== true ||
+		!Array.isArray(recentAssistantMessages) ||
+		expectRecord(recentAssistantMessages[0], "recent assistant message").text !== "Pi voice answer."
+	) {
+		throw new Error(`voice-smoke: pi_current_activity output mismatch ${JSON.stringify(piActivityOutput)}`);
+	}
+
+	runtime.session.isStreaming = true;
+	runtime.session.pendingMessageCount = 2;
+	realtime.emit("event", {
+		type: "response.done",
+		response: {
+			output: [
+				{
+					type: "function_call",
+					name: "pi_cancel",
+					call_id: "call-pi-cancel",
+					arguments: '{"reason":"user redirected the main task"}',
+				},
+			],
+		},
+	});
+	await waitUntil(
+		() => realtime.functionOutputs.some((output) => output.callId === "call-pi-cancel"),
+		"pi_cancel output",
+	);
+	const piCancelOutput = expectRecord(
+		realtime.functionOutputs.find((output) => output.callId === "call-pi-cancel")?.output,
+		"pi_cancel output",
+	);
+	if (
+		piCancelOutput.ok !== true ||
+		piCancelOutput.cancelled !== true ||
+		piCancelOutput.aborted !== true ||
+		piCancelOutput.clearedFollowUpMessages !== 2 ||
+		runtime.session.abortCount !== 1 ||
+		runtime.session.clearQueueCount !== 1
+	) {
+		throw new Error(`voice-smoke: pi_cancel output mismatch ${JSON.stringify(piCancelOutput)}`);
 	}
 
 	realtime.emit("event", {
@@ -1520,9 +1646,9 @@ async function assertFakeVoiceBridgeRealtimeTools(): Promise<void> {
 	}
 	const stats = expectRecord(handle.status().stats, "voice bridge stats");
 	if (
-		stats.realtimeAudioDeltaCount !== 1 ||
-		stats.realtimeAudioDeltaBytes !== 4 ||
-		stats.discordOutputAudioSendCount !== 1 ||
+		stats.realtimeAudioDeltaCount !== 2 ||
+		stats.realtimeAudioDeltaBytes !== 1_920 ||
+		stats.discordOutputAudioSendCount !== 2 ||
 		stats.discordOutputAudioDropCount !== 0 ||
 		stats.realtimeSessionCreatedCount !== 1 ||
 		stats.realtimeSessionUpdatedCount !== 1 ||
@@ -1551,11 +1677,13 @@ async function assertFakeVoiceBridgeRealtimeTools(): Promise<void> {
 		throw new Error("voice-smoke: voice bridge did not count speaker-attributed transcripts");
 	}
 	if (
-		stats.realtimeFunctionCallCount !== 9 ||
-		stats.realtimeFunctionCallOutputCount !== 9 ||
+		stats.realtimeFunctionCallCount !== 11 ||
+		stats.realtimeFunctionCallOutputCount !== 11 ||
 		stats.realtimeFunctionCallErrorCount !== 1 ||
 		stats.askPiCallCount !== 2 ||
 		stats.piStatusRequestCount !== 1 ||
+		stats.piCurrentActivityRequestCount !== 1 ||
+		stats.piCancelRequestCount !== 1 ||
 		stats.piSubagentStatusRequestCount !== 1
 	) {
 		throw new Error("voice-smoke: voice bridge did not count realtime tool calls");
@@ -1618,6 +1746,7 @@ async function assertFakeVoiceBridgeXAiRealtimeAgent(): Promise<void> {
 			xAiRealtimeVoice: "ara",
 			transcriptResponseBatchDelayMs: 0,
 		},
+		joinRequested: true,
 		dependencies: {
 			createRealtime() {
 				throw new Error("voice-smoke: xAI realtime agent should not use OpenAI realtime factory");
@@ -1681,6 +1810,7 @@ async function assertFakeVoiceBridgeElevenLabsTts(): Promise<void> {
 			elevenLabsVoiceId: "eleven-voice",
 			elevenLabsModel: "eleven_flash_v2_5",
 		},
+		joinRequested: true,
 		dependencies: {
 			createRealtime() {
 				return realtime;
@@ -1757,6 +1887,7 @@ async function assertFakeVoiceBridgeBargeInPolicy(): Promise<void> {
 			openAiRealtimeVoice: "marin",
 			transcriptResponseBatchDelayMs: 0,
 		},
+		joinRequested: true,
 		dependencies: {
 			createRealtime() {
 				return realtime;
@@ -1944,6 +2075,7 @@ async function assertFakeVoiceBridgeSubagents(): Promise<void> {
 				openAiRealtimeModel: DEFAULT_REALTIME_MODEL,
 				openAiRealtimeVoice: "marin",
 			},
+			joinRequested: true,
 			createSubagentRuntime,
 			createVoiceSubagentRuntime,
 			subagentStore: store,
@@ -2004,7 +2136,7 @@ async function assertFakeVoiceBridgeSubagents(): Promise<void> {
 		});
 		await waitUntil(() => realtime.functionOutputs.some((output) => output.callId === "call-worker"), "worker output");
 		const output = realtime.functionOutputs.find((candidate) => candidate.callId === "call-worker")?.output;
-		if (JSON.stringify(output) !== JSON.stringify({ text: "Worker voice answer." })) {
+		if (JSON.stringify(output) !== JSON.stringify({ text: "Worker voice answer.", target: "voice-worker" })) {
 			throw new Error(`voice-smoke: ask_pi did not return worker answer ${JSON.stringify(output)}`);
 		}
 		if (mainSession.messages.length !== 0) {
@@ -2175,6 +2307,7 @@ async function assertFakeVoiceBridgeRealtimeMediaTools(): Promise<void> {
 			openAiRealtimeModel: DEFAULT_REALTIME_MODEL,
 			openAiRealtimeVoice: "marin",
 		},
+		joinRequested: true,
 		dependencies: {
 			createRealtime() {
 				return realtime;
@@ -2327,6 +2460,7 @@ async function assertFakeVoiceBridgeRealtimeBatchToolResponse(): Promise<void> {
 			openAiRealtimeModel: DEFAULT_REALTIME_MODEL,
 			openAiRealtimeVoice: "marin",
 		},
+		joinRequested: true,
 		dependencies: {
 			createRealtime() {
 				return realtime;
@@ -2404,6 +2538,7 @@ async function assertFakeVoiceBridgeBotTokenScreenWatchGuard(): Promise<void> {
 			openAiRealtimeModel: DEFAULT_REALTIME_MODEL,
 			openAiRealtimeVoice: "marin",
 		},
+		joinRequested: true,
 		dependencies: {
 			createRealtime() {
 				return realtime;
@@ -2524,6 +2659,7 @@ async function assertFakeVoiceBridgeScreenWatchSwitchCleanup(): Promise<void> {
 			openAiRealtimeModel: DEFAULT_REALTIME_MODEL,
 			openAiRealtimeVoice: "marin",
 		},
+		joinRequested: true,
 		dependencies: {
 			createRealtime() {
 				return realtime;
@@ -2620,6 +2756,7 @@ async function assertFakeVoiceBridgeGatewaySessionFallback(): Promise<void> {
 			openAiRealtimeModel: DEFAULT_REALTIME_MODEL,
 			openAiRealtimeVoice: "marin",
 		},
+		joinRequested: true,
 		dependencies: {
 			createRealtime() {
 				return realtime;
@@ -2677,6 +2814,7 @@ async function assertFakeVoiceBridgeRealtimeStreamingToolDedup(): Promise<void> 
 			openAiRealtimeModel: DEFAULT_REALTIME_MODEL,
 			openAiRealtimeVoice: "marin",
 		},
+		joinRequested: true,
 		dependencies: {
 			createRealtime() {
 				return realtime;
@@ -2783,6 +2921,7 @@ async function assertFakeVoiceBridgeRealtimeDuplicateAskPiCoalesces(): Promise<v
 			openAiRealtimeModel: DEFAULT_REALTIME_MODEL,
 			openAiRealtimeVoice: "marin",
 		},
+		joinRequested: true,
 		dependencies: {
 			createRealtime() {
 				return realtime;
@@ -2982,6 +3121,12 @@ interface FakeVoiceMember {
 
 class FakeVoiceRuntimeSession {
 	readonly messages: string[] = [];
+	readonly sessionId = "fake-main-session";
+	readonly sessionFile = undefined;
+	isStreaming = false;
+	pendingMessageCount = 0;
+	clearQueueCount = 0;
+	abortCount = 0;
 	private readonly subscribers = new Set<(event: JsonRecord) => void>();
 
 	subscribe(listener: (event: JsonRecord) => void): () => void {
@@ -2993,15 +3138,40 @@ class FakeVoiceRuntimeSession {
 
 	async sendUserMessage(message: string): Promise<void> {
 		this.messages.push(message);
+		this.isStreaming = true;
 		queueMicrotask(() => {
+			this.isStreaming = false;
 			this.emit({
 				type: "message_end",
 				message: {
 					role: "assistant",
-					stopReason: "endTurn",
+					stopReason: "stop",
 					content: [{ type: "text", text: "Pi voice answer." }],
+					timestamp: Date.now(),
 				},
 			});
+		});
+	}
+
+	clearQueue(): { steering: string[]; followUp: string[] } {
+		this.clearQueueCount += 1;
+		const followUp = Array.from({ length: this.pendingMessageCount }, (_, index) => `pending-${index}`);
+		this.pendingMessageCount = 0;
+		return { steering: [], followUp };
+	}
+
+	async abort(): Promise<void> {
+		this.abortCount += 1;
+		this.isStreaming = false;
+		this.emit({
+			type: "message_end",
+			message: {
+				role: "assistant",
+				stopReason: "aborted",
+				content: [],
+				errorMessage: "aborted by smoke test",
+				timestamp: Date.now(),
+			},
 		});
 	}
 

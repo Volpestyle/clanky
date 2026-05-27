@@ -329,7 +329,7 @@ function formatFreshUserHelp(deps: ClankySetupWizardDeps): string {
 	return [
 		"Fresh-user setup test",
 		"",
-		"From /Users/jamesvolpe/web/clanky-pi, run:",
+		"From /Users/jamesvolpe/dev/clanky-pi, run:",
 		"pnpm dev:setup:fresh",
 		"",
 		"That command creates a temporary Clanky home and launches this TUI with an empty profile.",

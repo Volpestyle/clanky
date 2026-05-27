@@ -791,6 +791,46 @@ async function assertRuntimeTurnQueue(): Promise<void> {
 		throw new Error("smoke: runtime turn queue did not recover after a failed task");
 	}
 
+	const cancelOrder: string[] = [];
+	let releaseCancelFirst: (() => void) | undefined;
+	const cancelFirst = queue.enqueue(async () => {
+		cancelOrder.push("cancel-first-start");
+		await new Promise<void>((resolve) => {
+			releaseCancelFirst = resolve;
+		});
+		cancelOrder.push("cancel-first-end");
+		return "cancel-first";
+	});
+	const cancelSecond = queue.enqueue(async () => {
+		cancelOrder.push("cancel-second-start");
+		return "cancel-second";
+	});
+	const cancelSecondResult = cancelSecond.then(
+		() => undefined,
+		(error: unknown) => error,
+	);
+	await delay(0);
+	const cancelResult = queue.cancelPending("voice cancel");
+	if (cancelResult.active !== 1 || cancelResult.queued !== 1 || cancelResult.cancelled !== 1) {
+		throw new Error(`smoke: runtime turn queue cancel result mismatch ${JSON.stringify(cancelResult)}`);
+	}
+	releaseCancelFirst?.();
+	if ((await cancelFirst) !== "cancel-first") {
+		throw new Error("smoke: runtime turn queue cancelled active work");
+	}
+	const cancelSecondError = await cancelSecondResult;
+	const cancelSecondMessage =
+		cancelSecondError instanceof Error ? cancelSecondError.message : String(cancelSecondError);
+	if (!cancelSecondMessage.includes("voice cancel")) {
+		throw new Error(`smoke: runtime turn queue cancel error mismatch ${cancelSecondMessage}`);
+	}
+	if (cancelOrder.join(",") !== "cancel-first-start,cancel-first-end") {
+		throw new Error(`smoke: runtime turn queue started cancelled queued work ${cancelOrder.join(",")}`);
+	}
+	if (queue.isBusy()) {
+		throw new Error("smoke: runtime turn queue should be idle after cancellation drains");
+	}
+
 	const promptCalls: string[] = [];
 	let promptImageCount = 0;
 	const promptRuntime = {
@@ -921,7 +961,10 @@ async function assertDiscordAuthExtensionCommands(): Promise<void> {
 			async restart() {
 				restarts += 1;
 			},
-			async restartVoice(options?: { onProgress?: (progress: { phase: string; message: string }) => void }) {
+			async restartVoice(options?: {
+				joinRequested?: boolean;
+				onProgress?: (progress: { phase: string; message: string }) => void;
+			}) {
 				restarts += 1;
 				for (const progress of [
 					{ phase: "waiting_for_client_ready", message: "Waiting for Discord voice client to become ready." },
@@ -1482,6 +1525,7 @@ function testControllerPaths() {
 }
 
 async function assertDiscordGatewayControllerStartup(): Promise<void> {
+	await assertControllerVoiceTargetDoesNotAutoJoinOnStartup();
 	await assertControllerSharedChatAndVoiceStartup();
 	await assertControllerWaitsForSharedClientReady();
 	await assertControllerVoiceOnlyStartup();
@@ -1501,6 +1545,7 @@ async function assertControllerSharedChatAndVoiceStartup(): Promise<void> {
 		env: {
 			CLANKY_DISCORD_TOKEN: "discord-token",
 			CLANKY_DISCORD_VOICE_ENABLED: "1",
+			CLANKY_DISCORD_VOICE_AUTO_JOIN: "1",
 			CLANKY_DISCORD_VOICE_GUILD_ID: "guild-1",
 			CLANKY_DISCORD_VOICE_CHANNEL_ID: "voice-1",
 			OPENAI_API_KEY: "openai-key",
@@ -1561,6 +1606,64 @@ async function assertControllerSharedChatAndVoiceStartup(): Promise<void> {
 	}
 }
 
+async function assertControllerVoiceTargetDoesNotAutoJoinOnStartup(): Promise<void> {
+	const authStorage = AuthStorage.inMemory();
+	const calls = createControllerCallRecorder();
+	const controller = new ClankyDiscordGatewayController({
+		authStorage,
+		paths: testControllerPaths(),
+		env: {
+			CLANKY_DISCORD_TOKEN: "discord-token",
+			CLANKY_DISCORD_VOICE_ENABLED: "1",
+			CLANKY_DISCORD_VOICE_GUILD_ID: "guild-1",
+			CLANKY_DISCORD_VOICE_CHANNEL_ID: "voice-1",
+			OPENAI_API_KEY: "openai-key",
+		},
+		dependencies: {
+			createClient(options) {
+				calls.createdClientOptions.push(options ?? {});
+				return calls.sharedClient as never;
+			},
+			async startGateway(input) {
+				calls.startGatewayCalls += 1;
+				if (input.client !== undefined) {
+					throw new Error("smoke: startup without auto-join should let text gateway create its own client");
+				}
+				return {
+					client: calls.sharedClient as never,
+					setSubagentThinkingLevel: () => 0,
+					async stop() {
+						calls.textStops += 1;
+					},
+				};
+			},
+			async startVoice() {
+				calls.startVoiceCalls += 1;
+				throw new Error("smoke: startup should not join pinned Discord voice without auto-join");
+			},
+		},
+	});
+	controller.bindRuntime({} as never);
+	await controller.start();
+	const status = controller.status();
+	if (
+		calls.createdClientOptions.length !== 0 ||
+		calls.startGatewayCalls !== 1 ||
+		calls.startVoiceCalls !== 0 ||
+		calls.loginCalls !== 0
+	) {
+		throw new Error("smoke: startup without auto-join should start text only");
+	}
+	if (
+		status.textBridgeActive !== true ||
+		status.voiceBridgeActive !== false ||
+		status.voiceOnlyClientActive !== false
+	) {
+		throw new Error(`smoke: no-auto-join startup status mismatch: ${JSON.stringify(status)}`);
+	}
+	await controller.stop();
+}
+
 async function assertControllerWaitsForSharedClientReady(): Promise<void> {
 	const authStorage = AuthStorage.inMemory();
 	const calls = createControllerCallRecorder();
@@ -1571,6 +1674,7 @@ async function assertControllerWaitsForSharedClientReady(): Promise<void> {
 		env: {
 			CLANKY_DISCORD_TOKEN: "discord-token",
 			CLANKY_DISCORD_VOICE_ENABLED: "1",
+			CLANKY_DISCORD_VOICE_AUTO_JOIN: "1",
 			CLANKY_DISCORD_VOICE_GUILD_ID: "guild-1",
 			CLANKY_DISCORD_VOICE_CHANNEL_ID: "voice-1",
 			OPENAI_API_KEY: "openai-key",
@@ -1618,6 +1722,7 @@ async function assertControllerVoiceOnlyStartup(): Promise<void> {
 			CLANKY_CHAT_GATEWAY_OWNER: "room",
 			CLANKY_DISCORD_TOKEN: "discord-token",
 			CLANKY_DISCORD_VOICE_ENABLED: "1",
+			CLANKY_DISCORD_VOICE_AUTO_JOIN: "1",
 			CLANKY_DISCORD_VOICE_GUILD_ID: "guild-1",
 			CLANKY_DISCORD_VOICE_CHANNEL_ID: "voice-1",
 			OPENAI_API_KEY: "openai-key",
@@ -1720,7 +1825,7 @@ async function assertControllerVoiceRestartKeepsTextBridge(): Promise<void> {
 	}
 
 	voiceSettings = { enabled: true, guildId: "guild-1", channelId: "voice-1" };
-	await controller.restartVoice();
+	await controller.restartVoice({ joinRequested: true });
 	const created = calls.createdClientOptions[0];
 	const status = controller.status();
 	if (created === undefined || created.voice !== true || created.chat !== false) {
@@ -1795,6 +1900,7 @@ async function assertControllerEnvVoiceConfigErrorStillFailsFast(): Promise<void
 		env: {
 			CLANKY_DISCORD_TOKEN: "discord-token",
 			CLANKY_DISCORD_VOICE_ENABLED: "1",
+			CLANKY_DISCORD_VOICE_AUTO_JOIN: "1",
 			CLANKY_DISCORD_VOICE_GUILD_ID: "guild-1",
 			CLANKY_DISCORD_VOICE_CHANNEL_ID: "voice-1",
 		},
@@ -1812,6 +1918,7 @@ async function assertControllerSharedVoiceFailureCleanup(): Promise<void> {
 		env: {
 			CLANKY_DISCORD_TOKEN: "discord-token",
 			CLANKY_DISCORD_VOICE_ENABLED: "1",
+			CLANKY_DISCORD_VOICE_AUTO_JOIN: "1",
 			CLANKY_DISCORD_VOICE_GUILD_ID: "guild-1",
 			CLANKY_DISCORD_VOICE_CHANNEL_ID: "voice-1",
 			OPENAI_API_KEY: "openai-key",
@@ -1861,6 +1968,7 @@ async function assertControllerVoiceOnlyFailureCleanup(): Promise<void> {
 			CLANKY_CHAT_GATEWAY_OWNER: "room",
 			CLANKY_DISCORD_TOKEN: "discord-token",
 			CLANKY_DISCORD_VOICE_ENABLED: "1",
+			CLANKY_DISCORD_VOICE_AUTO_JOIN: "1",
 			CLANKY_DISCORD_VOICE_GUILD_ID: "guild-1",
 			CLANKY_DISCORD_VOICE_CHANNEL_ID: "voice-1",
 			OPENAI_API_KEY: "openai-key",

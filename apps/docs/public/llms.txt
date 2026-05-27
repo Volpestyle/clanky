@@ -14,17 +14,17 @@
 - [Configuration Model](https://volpestyle.github.io/clanky/?doc=configuration): Profile-local source-of-truth, TUI editor, env override, and AgentRoom boundary rules.
 - [Using Clanky](https://volpestyle.github.io/clanky/?doc=using-clanky): Day-to-day TUI, memory, Discord, voice, web/media, AgentRoom, skills, and MCP workflows.
 
-## Reference
-
-- [Command Reference](https://volpestyle.github.io/clanky/?doc=command-reference): CLI commands, inherited Pi slash commands, Clanky slash commands, and tool families.
-- [Memory And Privacy](https://volpestyle.github.io/clanky/?doc=memory-and-privacy): Profile-local state, credential storage, memory policy, Discord boundaries, and voice logs.
-- [Troubleshooting](https://volpestyle.github.io/clanky/?doc=troubleshooting): Profile, auth, Discord, voice, web, media, MCP, AgentRoom, and docs build fixes.
-
 ## Operations
 
 - [AgentRoom Integration](https://volpestyle.github.io/clanky/?doc=agentroom): Room participation, gateway ownership, launch contract, and runtime environment boundaries.
 - [Live Gates](https://volpestyle.github.io/clanky/?doc=live-gates): Credentialed checks for model auth, Discord text and voice, Linear, xAI media, and AgentRoom launch.
 - [Discord Voice Live Runbook](https://volpestyle.github.io/clanky/?doc=discord-voice-live-runbook): Preflight and copyable live validation commands for Discord voice, media, and Go Live checks.
+
+## Reference
+
+- [Command Reference](https://volpestyle.github.io/clanky/?doc=command-reference): CLI commands, inherited Pi slash commands, Clanky slash commands, and tool families.
+- [Memory And Privacy](https://volpestyle.github.io/clanky/?doc=memory-and-privacy): Profile-local state, credential storage, memory policy, Discord boundaries, and voice logs.
+- [Troubleshooting](https://volpestyle.github.io/clanky/?doc=troubleshooting): Profile, auth, Discord, voice, web, media, MCP, AgentRoom, and docs build fixes.
 
 ## Advanced
 

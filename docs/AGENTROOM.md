@@ -165,6 +165,9 @@ Agent-owned Discord voice env:
 - `CLANKY_DISCORD_VOICE_ENABLED=1`
 - `CLANKY_DISCORD_VOICE_GUILD_ID`
 - `CLANKY_DISCORD_VOICE_CHANNEL_ID`
+- `CLANKY_DISCORD_VOICE_AUTO_JOIN=1` to join the configured target at startup
+  for dev/live-test runs. Without this, a configured target stays dormant until
+  `/discord-voice join` or the `discord_voice_join` tool requests a join.
 - `OPENAI_API_KEY`, `CLANKY_OPENAI_API_KEY`, or stored `/openai-login`
 - `CLANKY_DISCORD_VOICE_TTS_PROVIDER` or `CLANKY_VOICE_TTS_PROVIDER`
   selects only the speech output provider (default `openai`; set to

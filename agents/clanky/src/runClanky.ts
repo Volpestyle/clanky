@@ -138,6 +138,7 @@ async function joinDiscordVoiceFromTool(
 	});
 	voiceSettings.write({ ...current, enabled: true, guildId, channelId });
 	await gatewayController.restartVoice({
+		joinRequested: true,
 		onProgress: (progress) => options.onProgress?.(progress),
 	});
 	return {
@@ -229,6 +230,8 @@ function buildRuntimeFactory(opts: {
 	const handlers = createClankyHandlers(paths, stores, {
 		authStorage,
 		mainSessionContext: async (input) => gatewayController.mainSessionContext(input),
+		mainAgentActivity: async (input) => gatewayController.mainAgentActivity(input),
+		mainAgentCancel: async (input) => gatewayController.cancelMainAgent(input),
 		delegateToMainWorker: async (input) => gatewayController.delegateToMainWorker(input),
 		sendSubagentMessage: async (input) => gatewayController.sendSubagentMessage(input),
 	});

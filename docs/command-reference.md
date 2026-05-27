@@ -121,6 +121,7 @@ Environment variables still override stored credentials where supported.
 | `/discord-voice allow-server <guild-id> [...]` | Configure allowed voice servers. |
 | `/discord-voice allow-channel <voice-channel-id> [...]` | Configure allowed voice channels. |
 | `/discord-voice allow <voice-channel-id> [...]` | Alias for channel allowlist. |
+| `/discord-voice set auto-join on\|off` | Toggle startup auto-join for the pinned voice channel. |
 | `/discord-voice set realtime-provider xai` | Use xAI Grok Voice as the realtime reasoning/tool agent. |
 | `/discord-voice set realtime-provider openai` | Use OpenAI Realtime as the realtime reasoning/tool agent. |
 | `/discord-voice set xai-model <model-id>` | Override the xAI Grok Voice realtime model. |
@@ -148,10 +149,12 @@ Environment variables still override stored credentials where supported.
 | `/forget_this_channel <channel-id>` | Forget memories scoped to a channel. |
 | `/memory view [query]` | View/search memory. |
 | `/memory remember <claim>` | Store an explicit memory claim. |
+| `/memory reflect` | Queue a daily reflection over enough recent transcript and propose durable memories. |
 | `/memory forget <id>` | Forget a memory atom. |
 | `/memory export` | Export profile memory. |
 | `/memory on` | Enable local user memory. |
 | `/memory off` | Disable local user memory. |
+| `/memory_reflect` | Alias for `/memory reflect`. |
 | `/memory_export` | Export profile memory. |
 | `/memory_off` | Disable local user memory. |
 

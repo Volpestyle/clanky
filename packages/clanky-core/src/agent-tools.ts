@@ -105,11 +105,24 @@ const mainSessionContextSchema = Type.Object({
 	include_hidden: Type.Optional(Type.Boolean()),
 });
 
+const mainAgentActivitySchema = Type.Object({
+	limit: Type.Optional(Type.Number()),
+});
+
+const mainAgentCancelSchema = Type.Object({
+	reason: Type.Optional(Type.String()),
+});
+
 const delegateToMainWorkerSchema = Type.Object({
 	title: Type.String(),
 	prompt: Type.String(),
 	reason: Type.Optional(Type.String()),
 	source: Type.Optional(Type.String()),
+});
+
+const subagentMessageSchema = Type.Object({
+	id: Type.String(),
+	text: Type.String(),
 });
 
 const taskCreateSchema = Type.Object({
@@ -389,7 +402,10 @@ export type LinearLinkToolInput = Static<typeof linearLinkSchema>;
 export type ExternalMcpCallToolInput = Static<typeof externalMcpCallSchema>;
 export type ExternalMcpListToolsInput = Static<typeof externalMcpListToolsSchema>;
 export type MainSessionContextToolInput = Static<typeof mainSessionContextSchema>;
+export type MainAgentActivityToolInput = Static<typeof mainAgentActivitySchema>;
+export type MainAgentCancelToolInput = Static<typeof mainAgentCancelSchema>;
 export type DelegateToMainWorkerToolInput = Static<typeof delegateToMainWorkerSchema>;
+export type SubagentMessageToolInput = Static<typeof subagentMessageSchema>;
 export type TaskCreateToolInput = Static<typeof taskCreateSchema>;
 export type MemoryRememberToolInput = Static<typeof memoryRememberSchema>;
 export type MemorySearchToolInput = Static<typeof memorySearchSchema>;
@@ -430,6 +446,8 @@ export interface ClankyAgentToolHandlers {
 	externalMcpCall?: (input: ExternalMcpCallToolInput) => Promise<unknown>;
 	externalMcpListTools?: (input: ExternalMcpListToolsInput) => Promise<unknown>;
 	mainSessionContext?: (input: MainSessionContextToolInput) => Promise<unknown>;
+	mainAgentActivity?: (input: MainAgentActivityToolInput) => Promise<unknown>;
+	mainAgentCancel?: (input: MainAgentCancelToolInput) => Promise<unknown>;
 	delegateToMainWorker?: (input: DelegateToMainWorkerToolInput) => Promise<unknown>;
 	taskCreate?: (input: TaskCreateToolInput) => Promise<unknown>;
 	beforeProviderRequest?: (input: ClankyBeforeProviderRequestInput) => Promise<unknown | undefined>;
@@ -483,6 +501,10 @@ export interface SendSubagentMessageResult {
 }
 
 const CLANKY_MEMORY_PACKET_MESSAGE = "clanky.memory_packet";
+const CLANKY_SOCIAL_MEMORY_OP_MESSAGE = "social_memory_op";
+const MEMORY_REFLECTION_MIN_MESSAGES = 12;
+const MEMORY_REFLECTION_MIN_CHARS = 3000;
+const MEMORY_REFLECTION_MAX_CHARS = 18000;
 const WEB_OPERATOR_SKILL_NAME = "clanky-web-operator";
 const MEDIA_OPERATOR_SKILL_NAME = "clanky-media-operator";
 const AGENTROOM_OPERATOR_SKILL_NAME = "clanky-agentroom-operator";
@@ -516,6 +538,7 @@ const SUBAGENT_COMMAND_COMPLETIONS = [
 const MEMORY_COMMAND_COMPLETIONS = [
 	{ value: "view ", label: "view [query]", description: "Search or list Clanky memory." },
 	{ value: "remember ", label: "remember <claim>", description: "Store a confirmed project memory claim." },
+	{ value: "reflect", description: "Review today's transcript and ask Clanky to propose durable memories." },
 	{ value: "forget ", label: "forget <memory-id>", description: "Forget one memory atom by id." },
 	{ value: "export", description: "Export Clanky memory." },
 	{ value: "on", description: "Enable local user memory." },
@@ -583,6 +606,20 @@ export function createClankyExtensionFactories(handlers: ClankyAgentToolHandlers
 					});
 				});
 			}
+			pi.on("tool_result", (event, ctx) => {
+				const audit = memoryToolAudit(event, ctx.sessionManager.getSessionId());
+				if (audit === undefined) return undefined;
+				pi.sendMessage(
+					{
+						customType: CLANKY_SOCIAL_MEMORY_OP_MESSAGE,
+						content: audit.content,
+						display: false,
+						details: audit.details,
+					},
+					{ triggerTurn: false, deliverAs: "nextTurn" },
+				);
+				return undefined;
+			});
 			if (memoryPacket !== undefined) {
 				pi.on("before_agent_start", async (event, ctx) => {
 					const packet = await memoryPacket({
@@ -2147,6 +2184,61 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
 }
 
+function memoryToolAudit(
+	event: { toolName: string; toolCallId: string; input: Record<string, unknown>; details: unknown; isError: boolean },
+	sessionId: string,
+): { content: string; details: Record<string, unknown> } | undefined {
+	if (event.isError) return undefined;
+	if (event.toolName !== "memory_remember" && event.toolName !== "memory_forget") return undefined;
+	const createdAt = new Date().toISOString();
+	const base = {
+		opId: `${sessionId}:${event.toolCallId}`,
+		sessionId,
+		toolCallId: event.toolCallId,
+		toolName: event.toolName,
+		createdAt,
+	};
+	if (event.toolName === "memory_remember") {
+		if (!isRecord(event.details)) return undefined;
+		const saved = readBoolean(event.details, "saved") === true;
+		const atom = readRecord(event.details, "atom");
+		const candidate = readRecord(event.details, "candidate");
+		const memoryId = atom === undefined ? undefined : readString(atom, "id");
+		const summary = (atom === undefined ? undefined : readString(atom, "claim")) ?? readString(candidate ?? {}, "claim");
+		const action = saved ? "upsert" : "propose";
+		return {
+			content: `social_memory_op: ${action}${memoryId === undefined ? "" : ` ${memoryId}`}`,
+			details: {
+				...base,
+				action,
+				saved,
+				...(memoryId === undefined ? {} : { memoryId }),
+				...(summary === undefined ? {} : { summary }),
+				...(readBoolean(event.details, "needsConfirmation") === true ? { needsConfirmation: true } : {}),
+				...(readString(event.details, "rejectedReason") === undefined
+					? {}
+					: { rejectedReason: readString(event.details, "rejectedReason") }),
+			},
+		};
+	}
+	if (!isRecord(event.details)) return undefined;
+	const forgotten = readNumber(event.details, "forgotten") ?? 0;
+	const memoryId = readString(event.input, "id");
+	const scope = readString(event.input, "scope");
+	const subjectId = readString(event.input, "subjectId") ?? readString(event.input, "subject_id");
+	return {
+		content: `social_memory_op: forget${memoryId === undefined ? "" : ` ${memoryId}`}`,
+		details: {
+			...base,
+			action: "forget",
+			forgotten,
+			...(memoryId === undefined ? {} : { memoryId }),
+			...(scope === undefined ? {} : { scope }),
+			...(subjectId === undefined ? {} : { subjectId }),
+		},
+	};
+}
+
 function registerMemoryCommands(pi: Parameters<ExtensionFactory>[0], handlers: ClankyAgentToolHandlers): void {
 	if (handlers.selfMemory !== undefined) {
 		pi.registerCommand("who_are_you", {
@@ -2205,7 +2297,13 @@ function registerMemoryCommands(pi: Parameters<ExtensionFactory>[0], handlers: C
 		description: "View, remember, forget, export, or configure Clanky memory",
 		getArgumentCompletions: (prefix) => completeClankyCommandArgument(prefix, memoryCommandCompletions(handlers)),
 		handler: async (args, ctx) => {
-			ctx.ui.notify(await runMemoryCommand(args, ctx, handlers));
+			ctx.ui.notify(await runMemoryCommand(args, ctx, handlers, pi));
+		},
+	});
+	pi.registerCommand("memory_reflect", {
+		description: "Review today's transcript and ask Clanky to propose durable memories",
+		handler: async (_args, ctx) => {
+			ctx.ui.notify(await runMemoryReflectionCommand(pi, ctx));
 		},
 	});
 	if (handlers.memoryExport !== undefined) {
@@ -2247,6 +2345,7 @@ async function runMemoryCommand(
 	args: string,
 	ctx: ExtensionCommandContext,
 	handlers: ClankyAgentToolHandlers,
+	pi: Parameters<ExtensionFactory>[0],
 ): Promise<string> {
 	const trimmed = args.trim();
 	if (trimmed === "" || trimmed === "view") {
@@ -2278,6 +2377,9 @@ async function runMemoryCommand(
 			}),
 		);
 	}
+	if (trimmed === "reflect") {
+		return await runMemoryReflectionCommand(pi, ctx);
+	}
 	if (trimmed.startsWith("forget ")) {
 		if (handlers.memoryForget === undefined) return "Memory\nNo memory forget handler is configured.";
 		const id = trimmed.slice("forget ".length).trim();
@@ -2302,7 +2404,90 @@ async function runMemoryCommand(
 			await handlers.memoryConsent({ scope: "user", subjectId: "local", enabled: true, mode: "dm" }),
 		);
 	}
-	return "Memory\nUsage: /memory view [query] | remember <claim> | forget <id> | export | on | off";
+	return "Memory\nUsage: /memory view [query] | remember <claim> | reflect | forget <id> | export | on | off";
+}
+
+async function runMemoryReflectionCommand(
+	pi: Parameters<ExtensionFactory>[0],
+	ctx: ExtensionCommandContext,
+): Promise<string> {
+	const transcript = buildDailyReflectionTranscript(ctx);
+	if (transcript.messageCount < MEMORY_REFLECTION_MIN_MESSAGES || transcript.charCount < MEMORY_REFLECTION_MIN_CHARS) {
+		return [
+			"Memory Reflection",
+			`Not enough transcript to review yet (${transcript.messageCount} messages, ${transcript.charCount} chars).`,
+			`Minimum: ${MEMORY_REFLECTION_MIN_MESSAGES} messages and ${MEMORY_REFLECTION_MIN_CHARS} chars from the last 24 hours.`,
+		].join("\n");
+	}
+	await ctx.waitForIdle();
+	pi.sendUserMessage(memoryReflectionPrompt(transcript), { deliverAs: "followUp" });
+	return [
+		"Memory Reflection",
+		`Queued review of ${transcript.messageCount} messages (${transcript.charCount} chars).`,
+		"Clanky will propose durable memories and only save memories that meet policy and confirmation rules.",
+	].join("\n");
+}
+
+function buildDailyReflectionTranscript(ctx: ExtensionCommandContext): {
+	messageCount: number;
+	charCount: number;
+	text: string;
+} {
+	const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+	const lines: string[] = [];
+	for (const entry of ctx.sessionManager.getEntries()) {
+		if (!isRecord(entry) || entry.type !== "message") continue;
+		const timestamp = typeof entry.timestamp === "string" ? entry.timestamp : undefined;
+		if (timestamp !== undefined) {
+			const parsed = Date.parse(timestamp);
+			if (Number.isFinite(parsed) && parsed < cutoff) continue;
+		}
+		const message = isRecord(entry.message) ? entry.message : undefined;
+		if (message === undefined) continue;
+		const extracted = extractIndexableMessageText(message as SessionMessageEntry["message"]);
+		if (extracted === undefined) continue;
+		const text = extracted.text.trim();
+		if (text.length === 0) continue;
+		lines.push(`[${timestamp ?? "unknown-time"}] ${extracted.role}: ${truncatePlain(text, 2000)}`);
+	}
+	const bounded = boundTranscriptLines(lines, MEMORY_REFLECTION_MAX_CHARS);
+	return {
+		messageCount: lines.length,
+		charCount: lines.reduce((sum, line) => sum + line.length, 0),
+		text: bounded.join("\n\n"),
+	};
+}
+
+function boundTranscriptLines(lines: string[], maxChars: number): string[] {
+	const result: string[] = [];
+	let chars = 0;
+	for (const line of [...lines].reverse()) {
+		const next = chars + line.length + 2;
+		if (next > maxChars && result.length > 0) break;
+		result.push(line);
+		chars = next;
+	}
+	return result.reverse();
+}
+
+function memoryReflectionPrompt(transcript: { text: string; messageCount: number; charCount: number }): string {
+	return [
+		"Run a daily memory reflection over the transcript excerpt below.",
+		"",
+		"Rules:",
+		"- Do not run an automatic extractor. This is a user-requested reflection pass.",
+		"- Use memory_search before claiming that something is new or already remembered.",
+		"- Call memory_remember only for stable, useful, source-grounded facts, preferences, decisions, commitments, lessons, or skill hints.",
+		"- Personal memories still require explicit confirmation in the transcript. If confirmation is missing, list candidate memories and ask before saving.",
+		"- Never save secrets, credentials, sensitive traits, unsupported guesses, relationship inferences, or gossip.",
+		"- Prefer project-scoped memories unless the transcript clearly supports a narrower user/channel scope.",
+		"- If there is nothing durable to remember, say that plainly.",
+		"",
+		`Transcript reviewed: ${transcript.messageCount} messages, ${transcript.charCount} chars before bounding.`,
+		"",
+		"Transcript excerpt:",
+		transcript.text,
+	].join("\n");
 }
 
 function buildMessageIndexInput(
@@ -2464,6 +2649,49 @@ export function createClankyToolDefinitions(handlers: ClankyAgentToolHandlers): 
 			}),
 		);
 	}
+	const mainAgentActivity = handlers.mainAgentActivity;
+	if (mainAgentActivity !== undefined) {
+		tools.push(
+			defineTool({
+				name: "main_agent_activity",
+				label: "Main Agent Activity",
+				description:
+					"Inspect the main Clanky foreground agent's live state, active tools, recent tool activity, and recent assistant messages.",
+				promptSnippet:
+					"main_agent_activity: check what the main Clanky agent is doing now before guessing or interrupting it.",
+				promptGuidelines: [
+					"Use when coordination depends on whether main Clanky is idle, streaming, queued, or using a tool.",
+					"Use this before asking the user what main Clanky is doing if the answer may already be visible.",
+					"Keep summaries bounded; ask for a higher limit only when recent activity is not enough.",
+				],
+				parameters: mainAgentActivitySchema,
+				async execute(_toolCallId, params) {
+					return toolResult(await mainAgentActivity(params));
+				},
+			}),
+		);
+	}
+	const mainAgentCancel = handlers.mainAgentCancel;
+	if (mainAgentCancel !== undefined) {
+		tools.push(
+			defineTool({
+				name: "main_agent_cancel",
+				label: "Cancel Main Agent",
+				description: "Cancel or interrupt the main Clanky foreground agent and clear queued main-agent messages.",
+				promptSnippet:
+					"main_agent_cancel: only stop main Clanky when the user explicitly asks to stop, cancel, or redirect foreground work.",
+				promptGuidelines: [
+					"Use only for explicit user stop/cancel/redirect requests or clear duplicate/conflicting work.",
+					"Prefer main_agent_activity first when you are unsure whether main Clanky is busy.",
+					"After cancelling, report what was aborted or cleared without inventing progress details.",
+				],
+				parameters: mainAgentCancelSchema,
+				async execute(_toolCallId, params) {
+					return toolResult(await mainAgentCancel(params));
+				},
+			}),
+		);
+	}
 	const delegateToMainWorker = handlers.delegateToMainWorker;
 	if (delegateToMainWorker !== undefined) {
 		tools.push(
@@ -2501,6 +2729,27 @@ export function createClankyToolDefinitions(handlers: ClankyAgentToolHandlers): 
 				parameters: Type.Object({}),
 				async execute() {
 					return toolResult(await listSubagents());
+				},
+			}),
+		);
+	}
+	const sendSubagentMessage = handlers.sendSubagentMessage;
+	if (sendSubagentMessage !== undefined) {
+		tools.push(
+			defineTool({
+				name: "subagent_message",
+				label: "Message Subagent",
+				description: "Send a short coordination message to an active Clanky subagent by id.",
+				promptSnippet:
+					"subagent_message: coordinate with an active Clanky subagent after using subagent_status to pick the correct id.",
+				promptGuidelines: [
+					"Use subagent_status first unless the target subagent id is already known from context.",
+					"Send concise coordination messages with enough context for the target subagent to respond or queue work.",
+					"Do not spam subagents; prefer one clear message over repeated polling.",
+				],
+				parameters: subagentMessageSchema,
+				async execute(_toolCallId, params) {
+					return toolResult(await sendSubagentMessage(params));
 				},
 			}),
 		);

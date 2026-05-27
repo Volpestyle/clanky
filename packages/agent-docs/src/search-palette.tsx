@@ -25,32 +25,26 @@ import {
 	useState,
 } from "react";
 
-import { type Doc, type DocGroup, docs, docsBySlug } from "@/content";
-import { cn } from "@/lib/utils";
-import { highlightSegments, type MatchRange, type SearchMatch, search } from "@/search";
+import { cn } from "./lib/utils";
+import { highlightSegments, type DocsSearch, type MatchRange, type SearchMatch } from "./search";
+import type { Doc, DocsSiteConfig } from "./types";
 
-const RECENTS_KEY = "clanky-docs:recent-searches";
 const RECENTS_LIMIT = 6;
 
-const groupIcons = {
-	Start: BookOpenTextIcon,
-	Setup: CheckIcon,
-	Operations: TerminalSquareIcon,
-	Reference: FileTextIcon,
-	Advanced: ShieldCheckIcon,
-	Maintainer: SparklesIcon,
-} satisfies Record<DocGroup, typeof BookOpenTextIcon>;
-
 type SearchPaletteProps = {
+	config: DocsSiteConfig;
+	docsBySlug: Map<string, Doc>;
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	onNavigate: (slug: string, headingId?: string) => void;
+	search: DocsSearch;
 };
 
-export function SearchPalette({ open, onOpenChange, onNavigate }: SearchPaletteProps) {
+export function SearchPalette({ config, docsBySlug, open, onOpenChange, onNavigate, search }: SearchPaletteProps) {
 	const [query, setQuery] = useState("");
 	const [activeIndex, setActiveIndex] = useState(0);
-	const [recents, setRecents] = useState<string[]>(() => loadRecents());
+	const recentsKey = `${config.site.id}:recent-searches`;
+	const [recents, setRecents] = useState<string[]>(() => loadRecents(recentsKey));
 	const inputRef = useRef<HTMLInputElement | null>(null);
 	const listRef = useRef<HTMLDivElement | null>(null);
 	const listboxId = useId();
@@ -60,16 +54,16 @@ export function SearchPalette({ open, onOpenChange, onNavigate }: SearchPaletteP
 		setQuery(value);
 		setActiveIndex(0);
 	}, []);
-	const matches = useMemo(() => (trimmedQuery ? search(trimmedQuery, 40) : []), [trimmedQuery]);
+	const matches = useMemo(() => (trimmedQuery ? search(trimmedQuery, 40) : []), [search, trimmedQuery]);
 
-	const groupedMatches = useMemo(() => groupMatchesByDoc(matches), [matches]);
+	const groupedMatches = useMemo(() => groupMatchesByDoc(matches, docsBySlug), [docsBySlug, matches]);
 
 	const flatItems = useMemo<PaletteItem[]>(() => {
 		if (trimmedQuery) {
 			return flattenGrouped(groupedMatches);
 		}
-		return buildIdleItems(recents);
-	}, [groupedMatches, recents, trimmedQuery]);
+		return buildIdleItems(recents, config.docs);
+	}, [config.docs, groupedMatches, recents, trimmedQuery]);
 
 	useEffect(() => {
 		if (!open) {
@@ -100,15 +94,15 @@ export function SearchPalette({ open, onOpenChange, onNavigate }: SearchPaletteP
 	const commit = useCallback(
 		(item: PaletteItem) => {
 			if (item.kind === "result") {
-				rememberQuery(trimmedQuery);
-				setRecents(loadRecents());
+				rememberQuery(recentsKey, trimmedQuery);
+				setRecents(loadRecents(recentsKey));
 				onNavigate(item.match.section.docSlug, item.match.section.headingId ?? undefined);
 				onOpenChange(false);
 				return;
 			}
 			if (item.kind === "doc") {
-				rememberQuery(item.doc.title);
-				setRecents(loadRecents());
+				rememberQuery(recentsKey, item.doc.title);
+				setRecents(loadRecents(recentsKey));
 				onNavigate(item.doc.slug);
 				onOpenChange(false);
 				return;
@@ -117,7 +111,7 @@ export function SearchPalette({ open, onOpenChange, onNavigate }: SearchPaletteP
 				updateQuery(item.value);
 			}
 		},
-		[onNavigate, onOpenChange, trimmedQuery, updateQuery],
+		[onNavigate, onOpenChange, recentsKey, trimmedQuery, updateQuery],
 	);
 
 	function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
@@ -215,7 +209,7 @@ export function SearchPalette({ open, onOpenChange, onNavigate }: SearchPaletteP
 								onHover={setActiveIndex}
 								onCommit={commit}
 								onClearRecents={() => {
-									clearRecents();
+									clearRecents(recentsKey);
 									setRecents([]);
 								}}
 								hasRecents={recents.length > 0}
@@ -289,7 +283,7 @@ function ResultsView({
 	return (
 		<div className="flex flex-col py-1">
 			{groupedMatches.map((group) => {
-				const Icon = groupIcons[group.doc.group];
+				const Icon = iconForGroup(group.doc.group);
 				return (
 					<section key={group.doc.slug} className="px-2 py-1">
 						<header className="flex items-center justify-between gap-2 px-3 pt-2 pb-1">
@@ -398,7 +392,7 @@ function IdleView({ listboxId, items, activeIndex, onHover, onCommit, onClearRec
 				<div className="flex flex-col gap-0.5">
 					{docItems.map((item) => {
 						if (item.kind !== "doc") return null;
-						const Icon = groupIcons[item.doc.group];
+						const Icon = iconForGroup(item.doc.group);
 						const index = items.indexOf(item);
 						return (
 							<button
@@ -543,7 +537,7 @@ type GroupedMatch = {
 	matches: SearchMatch[];
 };
 
-function groupMatchesByDoc(matches: SearchMatch[]): GroupedMatch[] {
+function groupMatchesByDoc(matches: SearchMatch[], docsBySlug: Map<string, Doc>): GroupedMatch[] {
 	const order: string[] = [];
 	const byDoc = new Map<string, SearchMatch[]>();
 
@@ -580,7 +574,7 @@ function flattenGrouped(grouped: GroupedMatch[]): PaletteItem[] {
 	return items;
 }
 
-function buildIdleItems(recents: string[]): PaletteItem[] {
+function buildIdleItems(recents: string[], docs: readonly Doc[]): PaletteItem[] {
 	const items: PaletteItem[] = [];
 	for (const value of recents) {
 		items.push({ kind: "recent", key: `recent:${value}`, value });
@@ -595,10 +589,10 @@ function offsetRanges(ranges: MatchRange[], offset: number): MatchRange[] {
 	return ranges.map((range) => ({ start: Math.max(0, range.start - offset), end: Math.max(0, range.end - offset) }));
 }
 
-function loadRecents(): string[] {
+function loadRecents(recentsKey: string): string[] {
 	if (typeof window === "undefined") return [];
 	try {
-		const raw = window.localStorage.getItem(RECENTS_KEY);
+		const raw = window.localStorage.getItem(recentsKey);
 		if (!raw) return [];
 		const parsed = JSON.parse(raw);
 		if (!Array.isArray(parsed)) return [];
@@ -608,23 +602,23 @@ function loadRecents(): string[] {
 	}
 }
 
-function rememberQuery(value: string) {
+function rememberQuery(recentsKey: string, value: string) {
 	if (typeof window === "undefined") return;
 	const trimmed = value.trim();
 	if (!trimmed) return;
-	const existing = loadRecents().filter((item) => item.toLowerCase() !== trimmed.toLowerCase());
+	const existing = loadRecents(recentsKey).filter((item) => item.toLowerCase() !== trimmed.toLowerCase());
 	const next = [trimmed, ...existing].slice(0, RECENTS_LIMIT);
 	try {
-		window.localStorage.setItem(RECENTS_KEY, JSON.stringify(next));
+		window.localStorage.setItem(recentsKey, JSON.stringify(next));
 	} catch {
-		// ignore quota errors — recents are best-effort
+		// ignore quota errors; recents are best-effort
 	}
 }
 
-function clearRecents() {
+function clearRecents(recentsKey: string) {
 	if (typeof window === "undefined") return;
 	try {
-		window.localStorage.removeItem(RECENTS_KEY);
+		window.localStorage.removeItem(recentsKey);
 	} catch {
 		// ignore
 	}
@@ -633,4 +627,20 @@ function clearRecents() {
 function isAppleLike() {
 	if (typeof navigator === "undefined") return true;
 	return /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent);
+}
+
+function iconForGroup(group: string) {
+	const normalized = group.toLowerCase();
+	if (normalized.includes("start") || normalized.includes("overview")) return BookOpenTextIcon;
+	if (normalized.includes("setup") || normalized.includes("install")) return CheckIcon;
+	if (normalized.includes("operation") || normalized.includes("runtime") || normalized.includes("runbook")) {
+		return TerminalSquareIcon;
+	}
+	if (normalized.includes("advanced") || normalized.includes("architecture") || normalized.includes("security")) {
+		return ShieldCheckIcon;
+	}
+	if (normalized.includes("maintainer") || normalized.includes("roadmap") || normalized.includes("archive")) {
+		return SparklesIcon;
+	}
+	return FileTextIcon;
 }

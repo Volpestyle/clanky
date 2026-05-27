@@ -2,13 +2,12 @@ import type { Token, Tokens } from "marked";
 import mermaid from "mermaid";
 import { type MouseEvent, type ReactNode, useEffect, useId, useRef, useState } from "react";
 
-import { type Doc, docsBySource } from "@/content";
-import { createSlugger, parseMarkdown } from "@/markdown";
+import { createSlugger, parseMarkdown } from "./markdown";
+import type { Doc } from "./types";
 
 let mermaidRenderSerial = 0;
 
-const MERMAID_FONT_FAMILY =
-	"Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+const MERMAID_FONT_FAMILY = "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
 
 function readMermaidTheme(): "default" | "dark" {
 	if (typeof document === "undefined") return "default";
@@ -17,17 +16,19 @@ function readMermaidTheme(): "default" | "dark" {
 
 type MarkdownViewProps = {
 	currentDoc: Doc;
+	docsBySource: Map<string, Doc>;
 	markdown: string;
 	onNavigate: (slug: string, headingId?: string) => void;
 };
 
 type RenderContext = {
 	currentDoc: Doc;
+	docsBySource: Map<string, Doc>;
 	onNavigate: (slug: string, headingId?: string) => void;
 	slugForHeading: (value: string) => string;
 };
 
-export function MarkdownView({ currentDoc, markdown, onNavigate }: MarkdownViewProps) {
+export function MarkdownView({ currentDoc, docsBySource, markdown, onNavigate }: MarkdownViewProps) {
 	const tokens = parseMarkdown(markdown);
 	const slugForHeading = createSlugger();
 
@@ -36,6 +37,7 @@ export function MarkdownView({ currentDoc, markdown, onNavigate }: MarkdownViewP
 			{tokens.map((token, index) =>
 				renderBlockToken(token, `${token.type}-${index}`, {
 					currentDoc,
+					docsBySource,
 					onNavigate,
 					slugForHeading,
 				}),
@@ -290,7 +292,7 @@ type MarkdownLinkProps = {
 };
 
 function MarkdownLink({ children, context, href, title }: MarkdownLinkProps) {
-	const resolved = resolveLocalDocHref(context.currentDoc, href);
+	const resolved = resolveLocalDocHref(context.currentDoc, context.docsBySource, href);
 	const linkHref = resolved ? `?doc=${resolved.slug}${resolved.headingId ? `#${resolved.headingId}` : ""}` : href;
 
 	function handleClick(event: MouseEvent<HTMLAnchorElement>) {
@@ -356,7 +358,7 @@ function renderHeading(depth: number, id: string, key: string, children: ReactNo
 	}
 }
 
-function resolveLocalDocHref(currentDoc: Doc, href: string) {
+function resolveLocalDocHref(currentDoc: Doc, docsBySource: Map<string, Doc>, href: string) {
 	if (href.startsWith("http:") || href.startsWith("https:") || href.startsWith("mailto:")) {
 		return undefined;
 	}

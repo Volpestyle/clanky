@@ -1,7 +1,7 @@
 import type { Token, Tokens } from "marked";
 
-import { type Doc, docs } from "@/content";
-import { createSlugger, parseMarkdown } from "@/markdown";
+import { createSlugger, parseMarkdown } from "./markdown.js";
+import type { Doc } from "./types.js";
 
 export type SearchSection = {
 	docSlug: string;
@@ -28,9 +28,14 @@ export type SearchMatch = {
 
 const MAX_SNIPPET_LENGTH = 180;
 
-const sections = buildIndex(docs);
+export type DocsSearch = (rawQuery: string, limit?: number) => SearchMatch[];
 
-export function search(rawQuery: string, limit = 30): SearchMatch[] {
+export function createDocsSearch(docs: readonly Doc[]): DocsSearch {
+	const sections = buildIndex(docs);
+	return (rawQuery: string, limit = 30) => searchSections(sections, rawQuery, limit);
+}
+
+function searchSections(sections: SearchSection[], rawQuery: string, limit = 30): SearchMatch[] {
 	const tokens = tokenize(rawQuery);
 	if (tokens.length === 0) {
 		return [];

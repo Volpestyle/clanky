@@ -1,6 +1,6 @@
 # Start Here
 
-![Clanky](/branding/clanky-logo-512.png)
+![Clanky and companion overlooking a mountain forest](/branding/clanky-forest-overlook-1024.png)
 
 Clanky is a personal agent built on [Pi](https://pi.dev). The most useful
 mental model is:
@@ -35,7 +35,7 @@ Use the fresh-user script first. It creates a temporary Clanky home so you can
 test onboarding without touching your real profile.
 
 ```bash
-cd /Users/jamesvolpe/web/clanky-pi
+cd /Users/jamesvolpe/dev/agents/clanky-pi
 pnpm install
 pnpm dev:setup:fresh
 ```

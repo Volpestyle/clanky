@@ -14,14 +14,10 @@ import startHere from "../../../docs/start-here.md?raw";
 import troubleshooting from "../../../docs/troubleshooting.md?raw";
 import usingClanky from "../../../docs/using-clanky.md?raw";
 import readme from "../../../README.md?raw";
-import { type DocMeta, docsMeta } from "./docs-manifest";
+import { defineDocsConfig } from "@volpestyle/agent-docs";
+import { defaultDocSlug, docsMeta, groups, site } from "./docs-manifest";
 
-export type { DocGroup, DocMeta } from "./docs-manifest";
-export { defaultDocSlug } from "./docs-manifest";
-
-export type Doc = DocMeta & { markdown: string };
-
-const markdownBySource: Record<string, string> = {
+const markdownBySource = {
 	"docs/AGENTROOM.md": agentroom,
 	"docs/archive/memory-plan.md": memoryPlan,
 	"docs/archive/plan.md": plan,
@@ -40,14 +36,12 @@ const markdownBySource: Record<string, string> = {
 	"README.md": readme,
 };
 
-export const docs: Doc[] = docsMeta.map((meta) => {
-	const markdown = markdownBySource[meta.source];
-	if (markdown === undefined) {
-		throw new Error(`No markdown registered for doc source "${meta.source}"`);
-	}
-	return { ...meta, markdown };
+export const docsConfig = defineDocsConfig({
+	site,
+	groups,
+	docsMeta,
+	markdownBySource,
+	defaultDocSlug,
 });
 
-export const docsBySlug = new Map(docs.map((doc) => [doc.slug, doc]));
-
-export const docsBySource = new Map(docs.map((doc) => [doc.source.toLowerCase(), doc]));
+export default docsConfig;

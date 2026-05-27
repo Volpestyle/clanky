@@ -19,7 +19,7 @@
 
 - Use pnpm only. Do not add npm lockfiles or npm scripts.
 - Keep the workspace `minimumReleaseAge`, `strictPeerDependencies`, `verifyStoreIntegrity`, and explicit `onlyBuiltDependencies` pnpm guards enabled unless the user explicitly approves changing supply-chain policy.
-- When working on Clanky agent runtime behavior, Pi `InteractiveMode`, sessions, model/tool wiring, or harness integration, first inspect `/Users/jamesvolpe/web/pi` and prefer the published `@earendil-works/pi-*` APIs and local Pi patterns over guesses.
+- When working on Clanky agent runtime behavior, Pi `InteractiveMode`, sessions, model/tool wiring, or harness integration, first inspect `/Users/jamesvolpe/dev/pi` and prefer the published `@earendil-works/pi-*` APIs and local Pi patterns over guesses.
 - Keep package boundaries clean:
   - `agents/clanky` (`@clanky/agent`) owns the runnable Pi `InteractiveMode`, persona wiring, and the `clanky` bin.
   - `packages/clanky-core` (`@clanky/core`) owns Pi integration, memory, profile paths, state storage, Linear stores, skills loading, and model-facing tools.

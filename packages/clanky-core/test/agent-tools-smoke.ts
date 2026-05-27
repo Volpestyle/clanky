@@ -11,6 +11,8 @@ import {
 	type ExternalMcpListToolsInput,
 	type LinearCreateIssueToolInput,
 	type LinearLinkToolInput,
+	type MainAgentActivityToolInput,
+	type MainAgentCancelToolInput,
 	type MainSessionContextToolInput,
 	type MemoryForgetToolInput,
 	type MemoryRememberToolInput,
@@ -21,6 +23,7 @@ import {
 	resolveClankyChatMode,
 	runOpenAiWebSearch,
 	type ScheduleCronToolInput,
+	type SubagentMessageToolInput,
 	saveStoredOpenAiApiKey,
 	shouldStartAgentChatGateway,
 	type TaskCreateToolInput,
@@ -76,6 +79,19 @@ const handlers: ClankyAgentToolHandlers = {
 			entries: [{ id: "entry-smoke", role: "user", text: "main context smoke" }],
 		};
 	},
+	mainAgentActivity: async (input) => {
+		calls.push(`main-activity:${input.limit ?? "default"}`);
+		return {
+			available: true,
+			state: "busy",
+			activeToolName: "Bash",
+			recentAssistantMessages: [{ text: "working on it" }],
+		};
+	},
+	mainAgentCancel: async (input) => {
+		calls.push(`main-cancel:${input.reason ?? "none"}`);
+		return { available: true, ok: true, cancelled: true, reason: input.reason ?? "none" };
+	},
 	delegateToMainWorker: async (input) => {
 		calls.push(`delegate-main:${input.title}`);
 		return { delegated: true, title: input.title, mode: "followUp" };
@@ -96,6 +112,10 @@ const handlers: ClankyAgentToolHandlers = {
 				updatedAt: "2026-01-01T00:01:00.000Z",
 			},
 		];
+	},
+	sendSubagentMessage: async (input) => {
+		calls.push(`subagent-message:${input.id}:${input.text}`);
+		return { accepted: true, mode: "followUp", sessionId: "subagent-session-smoke" };
 	},
 	memoryRemember: async (input) => {
 		calls.push(`memory-remember:${input.claim}:${input.confirmed === true}`);
@@ -171,8 +191,11 @@ const expectedNames = [
 	"linear_link",
 	"task_create",
 	"main_session_context",
+	"main_agent_activity",
+	"main_agent_cancel",
 	"delegate_to_main_worker",
 	"subagent_status",
+	"subagent_message",
 	"memory_remember",
 	"memory_search",
 	"memory_forget",
@@ -227,6 +250,14 @@ await executeTool(tools, "main_session_context", {
 	limit: 4,
 } satisfies MainSessionContextToolInput);
 
+await executeTool(tools, "main_agent_activity", {
+	limit: 3,
+} satisfies MainAgentActivityToolInput);
+
+await executeTool(tools, "main_agent_cancel", {
+	reason: "user asked to redirect foreground work",
+} satisfies MainAgentCancelToolInput);
+
 await executeTool(tools, "delegate_to_main_worker", {
 	title: "Long Discord work",
 	prompt: "Do the durable follow-up from Discord.",
@@ -234,6 +265,11 @@ await executeTool(tools, "delegate_to_main_worker", {
 } satisfies DelegateToMainWorkerToolInput);
 
 await executeTool(tools, "subagent_status", {});
+
+await executeTool(tools, "subagent_message", {
+	id: "discord-guild:guild-tool",
+	text: "Please coordinate with the foreground task.",
+} satisfies SubagentMessageToolInput);
 
 await executeTool(tools, "memory_remember", {
 	claim: "Project uses source-grounded memory atoms.",
@@ -596,6 +632,7 @@ async function assertClankyCommandCompletions(): Promise<void> {
 	for (const factory of createClankyExtensionFactories(completionHandlers)) await factory(pi);
 	await assertCommandCompletionIncludes(commands.get("skill"), "", "add ");
 	await assertCommandCompletionIncludes(commands.get("memory"), "", "remember ");
+	await assertCommandCompletionIncludes(commands.get("memory"), "ref", "reflect");
 	await assertCommandCompletionIncludes(commands.get("memory"), "for", "forget ");
 	await assertCommandCompletionIncludes(commands.get("subagents"), "", "modal");
 	await assertCommandCompletionIncludes(commands.get("subagents"), "off", "off");
