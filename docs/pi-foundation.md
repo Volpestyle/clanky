@@ -65,7 +65,7 @@ out of that thread; they do not replace the native session model.
 
 ```mermaid
 flowchart TB
-  launch["pnpm clanky"] --> paths["resolve Clanky profile paths"]
+  launch["clanky"] --> paths["resolve Clanky profile paths"]
   paths --> stores["create Clanky stores and auth storage"]
   stores --> factory["build Pi runtime factory"]
   factory --> resources["Pi resource loader"]

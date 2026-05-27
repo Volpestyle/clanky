@@ -1,6 +1,6 @@
 # Clanky
 
-> Clanky is a personal Pi agent for local work, memory, Discord text and voice, subagents, media, and AgentRoom participation.
+> Clanky is a personal Pi agent for local work, profile memory, Discord text and voice, media, skills, and AgentRoom participation. Start with the Pi TUI and use the command reference only when you need exact commands.
 
 ## Start
 
@@ -12,13 +12,11 @@
 
 - [First-Time Setup](https://volpestyle.github.io/docs/clanky/?doc=first-time-setup): Install, fresh-user onboarding, persistent profiles, model auth, and optional connector setup.
 - [Configuration Model](https://volpestyle.github.io/docs/clanky/?doc=configuration): Profile-local source-of-truth, TUI editor, env override, and AgentRoom boundary rules.
-- [Using Clanky](https://volpestyle.github.io/docs/clanky/?doc=using-clanky): Day-to-day TUI, memory, Discord, voice, web/media, AgentRoom, skills, and MCP workflows.
 
 ## Operations
 
+- [Using Clanky](https://volpestyle.github.io/docs/clanky/?doc=using-clanky): Day-to-day TUI, memory, Discord, voice, web/media, AgentRoom, skills, and connected tool workflows.
 - [AgentRoom Integration](https://volpestyle.github.io/docs/clanky/?doc=agentroom): Room participation, gateway ownership, launch contract, and runtime environment boundaries.
-- [Live Gates](https://volpestyle.github.io/docs/clanky/?doc=live-gates): Credentialed checks for model auth, Discord text and voice, Linear, xAI media, and AgentRoom launch.
-- [Discord Voice Live Runbook](https://volpestyle.github.io/docs/clanky/?doc=discord-voice-live-runbook): Preflight and copyable live validation commands for Discord voice, media, and Go Live checks.
 
 ## Reference
 
@@ -28,10 +26,6 @@
 
 ## Advanced
 
+- [Live Gates](https://volpestyle.github.io/docs/clanky/?doc=live-gates): Credentialed checks for model auth, Discord text and voice, Linear, xAI media, and AgentRoom launch.
+- [Discord Voice Live Runbook](https://volpestyle.github.io/docs/clanky/?doc=discord-voice-live-runbook): Preflight and copyable live validation commands for Discord voice, media, and Go Live checks.
 - [Discord Voice Architecture](https://volpestyle.github.io/docs/clanky/?doc=discord-voice-architecture): End-to-end control-plane, media-plane, Realtime, and Pi delegation flow for Clanky's Discord voice agent.
-
-## Maintainer
-
-- [Memory Plan (archived)](https://volpestyle.github.io/docs/clanky/?doc=memory-plan): Historical profile-local memory direction and implementation notes.
-- [v1 Plan (archived)](https://volpestyle.github.io/docs/clanky/?doc=plan): Historical v1 daemon architecture, package layout, roadmap, and success criteria.
-- [v1 Audit (archived)](https://volpestyle.github.io/docs/clanky/?doc=v1-audit): Historical prompt-to-artifact checklist, roadmap audit, and live gate preflight evidence.

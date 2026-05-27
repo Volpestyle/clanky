@@ -1,8 +1,5 @@
 import { defineDocsConfig } from "@volpestyle/night-compiler";
 import agentroom from "../../../docs/AGENTROOM.md?raw";
-import memoryPlan from "../../../docs/archive/memory-plan.md?raw";
-import plan from "../../../docs/archive/plan.md?raw";
-import audit from "../../../docs/archive/v1-audit.md?raw";
 import commandReference from "../../../docs/command-reference.md?raw";
 import configuration from "../../../docs/configuration.md?raw";
 import voiceArchitecture from "../../../docs/discord-voice-architecture.md?raw";
@@ -19,9 +16,6 @@ import { defaultDocSlug, docsMeta, groups, site } from "./docs-manifest";
 
 const markdownBySource = {
 	"docs/AGENTROOM.md": agentroom,
-	"docs/archive/memory-plan.md": memoryPlan,
-	"docs/archive/plan.md": plan,
-	"docs/archive/v1-audit.md": audit,
 	"docs/command-reference.md": commandReference,
 	"docs/configuration.md": configuration,
 	"docs/discord-voice-architecture.md": voiceArchitecture,

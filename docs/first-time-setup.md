@@ -12,7 +12,7 @@ Clanky, start with the [Pi quickstart](https://pi.dev/docs/latest/quickstart).
 
 - Node.js `>=22.19.0`.
 - pnpm `10.33.4` through Corepack or a matching global pnpm install.
-- This repository checked out at `/Users/jamesvolpe/dev/agents/clanky-pi`.
+- This repository checked out locally.
 - An OpenAI API key or another Pi-supported model auth path.
 - Optional: a Discord bot token for the current agent-owned chat gateway
   adapter.
@@ -24,11 +24,11 @@ Clanky, start with the [Pi quickstart](https://pi.dev/docs/latest/quickstart).
 ## Install
 
 ```bash
-cd /Users/jamesvolpe/dev/agents/clanky-pi
+cd /path/to/clanky-pi
 corepack enable
 corepack prepare pnpm@10.33.4 --activate
 pnpm install
-pnpm clanky --help
+clanky --help
 ```
 
 The docs site and CI use the same workspace scripts. For hosted docs only:
@@ -70,7 +70,7 @@ repo tools, and can report missing optional connectors without crashing.
 After the fresh path works, launch a normal personal profile:
 
 ```bash
-pnpm clanky --home ~/.clanky --profile personal --cwd .
+clanky --home ~/.clanky --profile personal --cwd .
 ```
 
 Inside Clanky:
@@ -96,7 +96,7 @@ defaults once:
 
 ```bash
 agent-room init --room my-project --runtime herdr --clanky --work-tracker linear --linear-team team_123
-pnpm clanky --cwd /path/to/my-project
+clanky --cwd /path/to/my-project
 ```
 
 With no explicit Clanky home/profile overrides, Clanky adopts the `clanky` and
@@ -145,7 +145,7 @@ uses its own profile credential and owns the gateway.
 Restart Clanky after login so the gateway starts with the new token:
 
 ```bash
-pnpm clanky --home ~/.clanky --profile personal --cwd .
+clanky --home ~/.clanky --profile personal --cwd .
 ```
 
 Then inspect:

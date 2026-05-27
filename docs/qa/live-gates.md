@@ -3,7 +3,7 @@
 These checks touch real services or credentials. Run the non-live checks first:
 
 ```bash
-cd /Users/jamesvolpe/dev/agents/clanky-pi
+cd /path/to/clanky-pi
 pnpm check
 pnpm smoke
 ```
@@ -18,7 +18,7 @@ Required for normal Clanky model use, OpenAI web search/media tools, and Discord
 voice Realtime.
 
 ```bash
-pnpm clanky --home ~/.clanky --profile personal
+clanky --home ~/.clanky --profile personal
 ```
 
 Inside Clanky:
@@ -37,7 +37,7 @@ Pi model.
 Required for Clanky's own Discord identity and Discord subagent path.
 
 ```bash
-pnpm clanky --home ~/.clanky --profile personal
+clanky --home ~/.clanky --profile personal
 ```
 
 Inside Clanky:
@@ -78,7 +78,7 @@ Minimum credential set:
 Required only for live Linear issue creation or link updates from Clanky tools.
 
 ```bash
-LINEAR_API_KEY=... pnpm clanky --home ~/.clanky --profile personal
+LINEAR_API_KEY=... clanky --home ~/.clanky --profile personal
 ```
 
 Expected result: `work_tracker_create_issue` can create Linear issues when
@@ -91,7 +91,7 @@ tracker update explicitly rather than pretending it happened.
 Required only for xAI image/video tools.
 
 ```bash
-XAI_API_KEY=... pnpm clanky --home ~/.clanky --profile personal
+XAI_API_KEY=... clanky --home ~/.clanky --profile personal
 ```
 
 Expected result: `media_backend_status` shows xAI image/video backends as
@@ -107,7 +107,7 @@ From an initialized AgentRoom room:
 ```bash
 agent-room launch clanky \
   --harness pi \
-  --command "pnpm --dir /Users/jamesvolpe/dev/agents/clanky-pi clanky --home ./.clanky-room --profile clanky" \
+  --command "clanky --home ./.clanky-room --profile clanky" \
   --cwd .
 agent-room send clanky "hello"
 agent-room read clanky --lines 40
