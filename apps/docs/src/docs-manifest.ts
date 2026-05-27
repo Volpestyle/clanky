@@ -18,7 +18,7 @@ export const site: DocsSiteInfo = {
 		height: 32,
 	},
 	llms: {
-		baseUrl: "https://volpestyle.github.io/clanky",
+		baseUrl: "https://volpestyle.github.io/docs/clanky",
 		title: "Clanky",
 		blurb:
 			"Clanky is a personal Pi agent for local work, memory, Discord text and voice, subagents, media, and AgentRoom participation.",

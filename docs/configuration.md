@@ -27,9 +27,10 @@ The active profile owns durable personal Clanky configuration and state:
   edited by `/discord-voice`.
 - `<profileDir>/models.json` stores custom model registry entries used by Pi's
   model selector.
-- `<profileDir>/SELF.md`, `memory/`, `sessions/`, `subagents/`,
-  `work-trackers/`, and `cron/` store profile-local memory, session,
-  multitasking, work, and scheduled job state.
+- `<profileDir>/SELF.md`, `memory/`, `sessions/`, `subagents/`, and
+  `work-trackers/` store profile-local memory, session, multitasking, and work
+  state. Scheduler state is optional and only present when that surface is
+  wired.
 
 The TUI setup and status commands edit or report these stores:
 
