@@ -98,7 +98,10 @@ test onboarding without touching your real profile.
 
 ```bash
 cd /path/to/clanky-pi
+corepack enable
+corepack prepare pnpm@10.33.4 --activate
 pnpm install
+export PATH="$PWD/node_modules/.bin:$PATH" # source checkout only
 pnpm dev:setup:fresh
 ```
 
@@ -126,6 +129,9 @@ After the fresh run works, start a persistent profile:
 ```bash
 clanky --home ~/.clanky --profile personal --cwd .
 ```
+
+The released CLI is intended to be used directly as `clanky`. The `PATH` line
+is only for a source checkout before the CLI is installed globally.
 
 Inside Clanky:
 
@@ -273,7 +279,10 @@ real profile:
 
 ```bash
 cd /path/to/clanky-pi
+corepack enable
+corepack prepare pnpm@10.33.4 --activate
 pnpm install
+export PATH="$PWD/node_modules/.bin:$PATH" # source checkout only
 pnpm dev:setup:fresh
 ```
 
@@ -296,6 +305,9 @@ For a persistent profile:
 ```bash
 clanky --home ~/.clanky --profile personal --cwd .
 ```
+
+The released CLI is intended to be used directly as `clanky`. The `PATH` line
+is only for a source checkout before the CLI is installed globally.
 
 ## Communication Gateways And Voice
 
@@ -511,7 +523,7 @@ guide Clanky just like it guides Pi.
 
 | Command | Why it still matters |
 | --- | --- |
-| `/login`, `/logout` | Pi provider auth path for subscription/API-key providers. Clanky also has `/openai-login` for profile-local API keys. |
+| `/login`, `/logout` | Pi provider auth path for subscription/API-key providers. Clanky also has `/openai-login` and `/auth remove <provider>` for profile-local API keys. |
 | `/model` | Switch the current model. Clanky defaults to `openai/gpt-5.5`. |
 | `/settings` | Change thinking, theme, message delivery, and transport settings. |
 | `/resume`, `/new`, `/session` | Manage Pi session files stored in the active Clanky profile. |
@@ -580,8 +592,12 @@ cd /path/to/clanky-pi
 corepack enable
 corepack prepare pnpm@10.33.4 --activate
 pnpm install
+export PATH="$PWD/node_modules/.bin:$PATH" # source checkout only
 clanky --help
 ```
+
+The released CLI is intended to be used directly as `clanky`. The `PATH` line
+is only for a source checkout before the CLI is installed globally.
 
 The docs site and CI use the same workspace scripts. For hosted docs only:
 
@@ -859,6 +875,7 @@ The TUI setup and status commands edit or report these stores:
 /setup
 /setup agentroom
 /openai-login
+/auth
 /discord-login
 /discord-voice
 /xai-login
@@ -867,6 +884,9 @@ The TUI setup and status commands edit or report these stores:
 ```
 
 They should not write hidden state outside the resolved Clanky home/profile.
+Use `/auth remove <provider>` or `/auth remove all` to delete stored provider
+credentials from the active profile without touching launch environment
+variables.
 
 ## Environment Overrides
 
