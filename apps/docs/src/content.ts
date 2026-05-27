@@ -3,6 +3,7 @@ import memoryPlan from "../../../docs/archive/memory-plan.md?raw";
 import plan from "../../../docs/archive/plan.md?raw";
 import audit from "../../../docs/archive/v1-audit.md?raw";
 import commandReference from "../../../docs/command-reference.md?raw";
+import configuration from "../../../docs/configuration.md?raw";
 import voiceArchitecture from "../../../docs/discord-voice-architecture.md?raw";
 import firstTimeSetup from "../../../docs/first-time-setup.md?raw";
 import memoryAndPrivacy from "../../../docs/memory-and-privacy.md?raw";
@@ -26,6 +27,7 @@ const markdownBySource: Record<string, string> = {
 	"docs/archive/plan.md": plan,
 	"docs/archive/v1-audit.md": audit,
 	"docs/command-reference.md": commandReference,
+	"docs/configuration.md": configuration,
 	"docs/discord-voice-architecture.md": voiceArchitecture,
 	"docs/first-time-setup.md": firstTimeSetup,
 	"docs/memory-and-privacy.md": memoryAndPrivacy,
