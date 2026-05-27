@@ -11,6 +11,7 @@ import {
 	type SessionMessageEntry,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import { type ClankyCommandCompletionSpec, completeClankyCommandArgument } from "./command-completions.ts";
 import type {
@@ -2557,6 +2558,41 @@ function messageTimestamp(message: ClankyMessageEndEvent["message"]): string {
 	return new Date().toISOString();
 }
 
+function formatMcpArgsSummary(args: unknown, maxLength: number): string {
+	if (args === undefined || args === null) return "";
+	if (typeof args !== "object") {
+		const text = String(args);
+		return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
+	}
+	if (Array.isArray(args)) {
+		if (args.length === 0) return "[]";
+		return args.length === 1 ? "[1 item]" : `[${args.length} items]`;
+	}
+	const entries = Object.entries(args as Record<string, unknown>);
+	if (entries.length === 0) return "{}";
+	const parts: string[] = [];
+	for (const [key, value] of entries) {
+		let display: string;
+		if (typeof value === "string") {
+			const trimmed = value.replace(/\s+/g, " ").trim();
+			display = trimmed.length > 40 ? `"${trimmed.slice(0, 39)}…"` : `"${trimmed}"`;
+		} else if (typeof value === "number" || typeof value === "boolean" || value === null) {
+			display = String(value);
+		} else if (Array.isArray(value)) {
+			display = value.length === 0 ? "[]" : `[${value.length}]`;
+		} else if (typeof value === "object") {
+			const nested = Object.keys(value as object).length;
+			display = nested === 0 ? "{}" : `{${nested}}`;
+		} else {
+			display = typeof value;
+		}
+		parts.push(`${key}: ${display}`);
+	}
+	const joined = parts.join(", ");
+	if (joined.length <= maxLength) return joined;
+	return `${joined.slice(0, maxLength - 1)}…`;
+}
+
 export function createClankyToolDefinitions(handlers: ClankyAgentToolHandlers): ToolDefinition[] {
 	const tools: ToolDefinition[] = [];
 	const scheduleCron = handlers.scheduleCron;
@@ -2595,6 +2631,14 @@ export function createClankyToolDefinitions(handlers: ClankyAgentToolHandlers): 
 				async execute(_toolCallId, params) {
 					return toolResult(await externalMcpListTools(params));
 				},
+				renderCall(args, theme, context) {
+					const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+					const server = typeof args?.server === "string" && args.server.trim().length > 0 ? args.server : null;
+					const title = theme.fg("toolTitle", theme.bold("mcp_list_tools"));
+					const target = server ? theme.fg("accent", server) : theme.fg("toolOutput", "all servers");
+					text.setText(`${title} ${target}`);
+					return text;
+				},
 			}),
 		);
 	}
@@ -2614,6 +2658,17 @@ export function createClankyToolDefinitions(handlers: ClankyAgentToolHandlers): 
 				parameters: externalMcpCallSchema,
 				async execute(_toolCallId, params) {
 					return toolResult(await externalMcpCall(params));
+				},
+				renderCall(args, theme, context) {
+					const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+					const server = typeof args?.server === "string" && args.server.length > 0 ? args.server : "?";
+					const tool = typeof args?.tool === "string" && args.tool.length > 0 ? args.tool : "?";
+					const title = theme.fg("toolTitle", theme.bold("mcp_call"));
+					const target = theme.fg("accent", `${server}::${tool}`);
+					const summary = formatMcpArgsSummary(args?.arguments, 120);
+					const argsPart = summary ? ` ${theme.fg("toolOutput", `(${summary})`)}` : "";
+					text.setText(`${title} ${target}${argsPart}`);
+					return text;
 				},
 			}),
 		);

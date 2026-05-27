@@ -12,6 +12,7 @@
 	"dependencies": {
 		"@earendil-works/pi-ai": "^0.75.4",
 		"@earendil-works/pi-coding-agent": "^0.75.4",
+		"@earendil-works/pi-tui": "^0.75.4",
 		"@modelcontextprotocol/sdk": "^1.29.0",
 		"chokidar": "^5.0.0",
 		"discord-mcp": "link:../../../discord_mcp",
