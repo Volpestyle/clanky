@@ -943,6 +943,7 @@ async function assertDiscordAuthExtensionCommands(): Promise<void> {
 						allowedGuildIds: voiceSettingsState?.allowedGuildIds ?? [],
 						allowedChannelIds: voiceSettingsState?.allowedChannelIds ?? [],
 						model: DEFAULT_REALTIME_MODEL,
+						participationEagerness: 63,
 						discordCredentialKind: "user-token",
 						nativeScreenWatchSupported: true,
 						discoveredStreams: 1,
@@ -1005,6 +1006,7 @@ async function assertDiscordAuthExtensionCommands(): Promise<void> {
 				message.includes("Voice bridge: active.") &&
 				message.includes("Realtime agent provider: OpenAI Realtime.") &&
 				message.includes("Realtime agent model:") &&
+				message.includes("Voice participation eagerness: 63/100.") &&
 				message.includes("Speech output provider: OpenAI Realtime audio.") &&
 				message.includes("Native screen watch: supported.") &&
 				message.includes("Voice stats: input audio 2, output audio 3, realtime tool calls 4, decoded frames 5.") &&
@@ -1020,6 +1022,7 @@ async function assertDiscordAuthExtensionCommands(): Promise<void> {
 	await assertCommandCompletionIncludes(voiceCommand, "", "set tts-provider elevenlabs");
 	await assertCommandCompletionIncludes(voiceCommand, "eleven", "set elevenlabs-voice ");
 	await assertCommandCompletionIncludes(voiceCommand, "set tts-provider ", "set tts-provider openai");
+	await assertCommandCompletionIncludes(voiceCommand, "set eag", "set eagerness ");
 	await voiceCommand.handler("", ctx);
 	if (getRestarts() !== 1) {
 		throw new Error(`smoke: /discord-voice wizard should hot-restart bridge once, got ${restarts}`);
@@ -1119,10 +1122,15 @@ async function assertDiscordAuthExtensionCommands(): Promise<void> {
 	if (getRestarts() !== 7) {
 		throw new Error(`smoke: /discord-voice set base URL should hot-restart bridge again, got ${restarts}`);
 	}
+	await voiceCommand.handler("set eagerness 72", ctx);
+	if (getRestarts() !== 8) {
+		throw new Error(`smoke: /discord-voice set eagerness should hot-restart bridge again, got ${restarts}`);
+	}
 	const elevenLabsVoiceSettings = getVoiceSettings();
 	if (
 		elevenLabsVoiceSettings?.elevenLabsOutputFormat !== "pcm_16000" ||
-		elevenLabsVoiceSettings.elevenLabsBaseUrl !== "https://api.example.test"
+		elevenLabsVoiceSettings.elevenLabsBaseUrl !== "https://api.example.test" ||
+		elevenLabsVoiceSettings.participationEagerness !== 72
 	) {
 		throw new Error(
 			`smoke: /discord-voice ElevenLabs settings did not persist ${JSON.stringify(elevenLabsVoiceSettings)}`,
@@ -1132,7 +1140,7 @@ async function assertDiscordAuthExtensionCommands(): Promise<void> {
 	const logoutCommand = commands["discord-logout"];
 	if (logoutCommand === undefined) throw new Error("smoke: /discord-logout command was not registered");
 	await logoutCommand.handler([], ctx);
-	if (getRestarts() !== 8) {
+	if (getRestarts() !== 9) {
 		throw new Error(`smoke: /discord-logout should hot-restart bridge after logout, got ${restarts}`);
 	}
 	if (resolveAgentDiscordGatewayConfig({}, authStorage) !== undefined) {

@@ -239,6 +239,17 @@ const DISCORD_VOICE_COMMAND_COMPLETIONS = [
 		description: "Set the screen-share frame auto-attach interval.",
 		aliases: ["set frame_interval "],
 	},
+	{
+		value: "set eagerness ",
+		label: "set eagerness <0-100>",
+		description: "Set how often Clanky should choose to speak in Discord voice.",
+		aliases: ["set participation-eagerness ", "set participation "],
+	},
+	{
+		value: "set eagerness default",
+		description: "Clear the Discord voice participation eagerness override.",
+		aliases: ["set eagerness clear", "set participation-eagerness default", "set participation-eagerness clear"],
+	},
 	{ value: "clear", description: "Clear all stored Discord voice settings." },
 	{ value: "disable", description: "Disable Discord voice access." },
 ] satisfies readonly ClankyCommandCompletionSpec[];
@@ -568,6 +579,9 @@ function formatDiscordBridgeStatus(status: unknown): string {
 		if (typeof voice.reasoningEffort === "string") {
 			lines.push(`Realtime agent reasoning effort: ${voice.reasoningEffort}.`);
 		}
+		if (typeof voice.participationEagerness === "number") {
+			lines.push(`Voice participation eagerness: ${voice.participationEagerness}/100.`);
+		}
 		lines.push(
 			`Speech output provider: ${formatSpeechOutputProviderLabel(speechOutputProvider, realtimeAgentProvider)}.`,
 		);
@@ -658,6 +672,7 @@ function discordVoiceUsage(path: string | undefined): string {
 		"  /discord-voice set xai-model grok-voice-latest",
 		"  /discord-voice set elevenlabs-voice <voice-id>",
 		"  /discord-voice set elevenlabs-output-format pcm_24000",
+		"  /discord-voice set eagerness <0-100>",
 		"  /elevenlabs-login",
 		"  /discord-voice disable",
 	];
@@ -720,6 +735,9 @@ function formatDiscordVoiceSettings(settings: StoredDiscordVoiceSettings | undef
 	if (settings.openAiRealtimeReasoningEffort !== undefined) {
 		lines.push(`Stored realtime agent reasoning effort: ${settings.openAiRealtimeReasoningEffort}.`);
 	}
+	if (settings.participationEagerness !== undefined) {
+		lines.push(`Stored voice participation eagerness: ${settings.participationEagerness}/100.`);
+	}
 	if (settings.videoFrameAutoAttachIntervalMs !== undefined) {
 		lines.push(`Stored video frame auto-attach interval: ${settings.videoFrameAutoAttachIntervalMs} ms.`);
 	}
@@ -758,6 +776,12 @@ function formatDiscordVoiceEnvOverrides(): string[] {
 	if (xAiApiKey !== undefined) lines.push("Env xAI API key override is set.");
 	const xAiBaseUrl = cleanArg(process.env.CLANKY_XAI_BASE_URL ?? process.env.XAI_BASE_URL);
 	if (xAiBaseUrl !== undefined) lines.push(`Env xAI API base URL override: ${xAiBaseUrl}.`);
+	const participationEagerness = cleanArg(
+		process.env.CLANKY_DISCORD_VOICE_PARTICIPATION_EAGERNESS ?? process.env.CLANKY_DISCORD_VOICE_EAGERNESS,
+	);
+	if (participationEagerness !== undefined) {
+		lines.push(`Env voice participation eagerness override: ${participationEagerness}.`);
+	}
 	const elevenLabsVoice = cleanArg(process.env.CLANKY_ELEVENLABS_VOICE_ID);
 	if (elevenLabsVoice !== undefined) lines.push(`Env ElevenLabs voice override: ${elevenLabsVoice}.`);
 	const elevenLabsModel = cleanArg(process.env.CLANKY_ELEVENLABS_MODEL);
@@ -787,6 +811,8 @@ function hasDiscordVoiceEnvConfiguration(): boolean {
 		cleanArg(process.env.CLANKY_XAI_REALTIME_VOICE ?? process.env.CLANKY_XAI_VOICE) !== undefined ||
 		cleanArg(process.env.XAI_API_KEY) !== undefined ||
 		cleanArg(process.env.CLANKY_XAI_BASE_URL ?? process.env.XAI_BASE_URL) !== undefined ||
+		cleanArg(process.env.CLANKY_DISCORD_VOICE_PARTICIPATION_EAGERNESS ?? process.env.CLANKY_DISCORD_VOICE_EAGERNESS) !==
+			undefined ||
 		cleanArg(process.env.CLANKY_ELEVENLABS_VOICE_ID) !== undefined ||
 		cleanArg(process.env.CLANKY_ELEVENLABS_MODEL) !== undefined ||
 		cleanArg(process.env.CLANKY_ELEVENLABS_OUTPUT_FORMAT) !== undefined ||
@@ -1008,6 +1034,9 @@ async function runDiscordVoiceAdvancedWizard(
 		case "openai-frame-interval":
 			next = await collectDiscordVoiceFrameInterval(ctx, next);
 			break;
+		case "participation-eagerness":
+			next = await collectDiscordVoiceParticipationEagerness(ctx, next);
+			break;
 		case "xai-model":
 			next = await collectDiscordVoiceXAiModel(ctx, next);
 			break;
@@ -1039,6 +1068,7 @@ async function runDiscordVoiceAdvancedWizard(
 			delete next.elevenLabsOutputFormat;
 			delete next.elevenLabsBaseUrl;
 			delete next.videoFrameAutoAttachIntervalMs;
+			delete next.participationEagerness;
 			break;
 	}
 	deps.voiceSettings?.write(next);
@@ -1054,6 +1084,7 @@ type DiscordVoiceAdvancedAction =
 	| "openai-voice"
 	| "openai-reasoning"
 	| "openai-frame-interval"
+	| "participation-eagerness"
 	| "xai-model"
 	| "xai-voice"
 	| "elevenlabs-api-key"
@@ -1096,6 +1127,10 @@ function discordVoiceAdvancedMenu(
 		{
 			action: "openai-frame-interval",
 			label: `Realtime agent: video frame interval (${formatFrameIntervalLabel(current.videoFrameAutoAttachIntervalMs)})`,
+		},
+		{
+			action: "participation-eagerness",
+			label: `Participation: eagerness (${current.participationEagerness ?? "default"})`,
 		},
 		{ action: "elevenlabs-api-key", label: `ElevenLabs TTS: API key (${elevenLabsCredentialLabel})` },
 		{ action: "elevenlabs-voice", label: `ElevenLabs TTS: voice id (${current.elevenLabsVoiceId ?? "not set"})` },
@@ -1512,6 +1547,22 @@ async function runDiscordVoiceSet(
 			next.videoFrameAutoAttachIntervalMs = value;
 			line = `Video frame auto-attach interval set to ${value} ms.`;
 		}
+	} else if (
+		field === "eagerness" ||
+		field === "participation" ||
+		field === "participation-eagerness" ||
+		field === "participation_eagerness"
+	) {
+		if (rawValue === "clear" || rawValue === "default") {
+			delete next.participationEagerness;
+			line = "Discord voice participation eagerness override cleared.";
+		} else {
+			const value = parseBoundedIntegerArg(rawValue, 0, 100);
+			if (value !== undefined) {
+				next.participationEagerness = value;
+				line = `Discord voice participation eagerness set to ${value}/100.`;
+			}
+		}
 	}
 	if (line === undefined) {
 		ctx.ui.notify(discordVoiceUsage(deps.voiceSettings?.path), "warning");
@@ -1751,6 +1802,27 @@ async function collectDiscordVoiceFrameInterval(
 	return next;
 }
 
+async function collectDiscordVoiceParticipationEagerness(
+	ctx: ExtensionCommandContext,
+	settings: StoredDiscordVoiceSettings,
+): Promise<StoredDiscordVoiceSettings> {
+	const value = cleanArg(
+		await ctx.ui.input(
+			"Voice participation eagerness from 0 to 100:",
+			settings.participationEagerness?.toString() ?? "blank keeps current/default; type clear to remove override",
+		),
+	);
+	if (value === undefined) return settings;
+	const next = { ...settings };
+	if (value === "clear" || value === "default") {
+		delete next.participationEagerness;
+		return next;
+	}
+	const parsed = parseBoundedIntegerArg(value, 0, 100);
+	if (parsed !== undefined) next.participationEagerness = parsed;
+	return next;
+}
+
 async function runDiscordVoiceClear(deps: DiscordAuthCommandDeps, ctx: ExtensionCommandContext): Promise<void> {
 	const confirmed = await ctx.ui.confirm(
 		"Clear stored Discord voice settings?",
@@ -1900,6 +1972,16 @@ function parseNonNegativeIntegerArg(value: string | undefined): number | undefin
 	if (value === undefined) return undefined;
 	const parsed = Number.parseInt(value, 10);
 	return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function parseBoundedIntegerArg(value: string | undefined, min: number, max: number): number | undefined {
+	if (value === undefined) return undefined;
+	const parsed = Number.parseInt(value, 10);
+	if (!Number.isFinite(parsed)) return undefined;
+	const integer = Math.trunc(parsed);
+	if (integer < min) return min;
+	if (integer > max) return max;
+	return integer;
 }
 
 function parseHttpUrl(value: string): string | undefined {

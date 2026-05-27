@@ -44,7 +44,8 @@ Clanky configures Pi for a personal agent:
 - Clanky memory, profile status, skills, Linear links, and subagent stores.
 - Bundled Clanky skills plus profile-local Clanky skills.
 - Discord text gateway ownership, Discord subagents, and Discord operator tools.
-- Discord voice settings, voice bridge, voice logs, and voice model handoff to Pi.
+- Discord voice settings, voice bridge, voice logs, and realtime voice-agent
+  handoff to Pi.
 - OpenAI web search and OpenAI/xAI media generation tools.
 - External MCP status/list/call tools.
 - Setup, auth, effort, profile, memory, web, media, subagent, Discord, and voice

@@ -44,6 +44,7 @@ import { loadPersona } from "./persona.ts";
 import { createClankySetupExtensionFactory } from "./setupWizard.ts";
 import { createClankyStores } from "./stores.ts";
 import { createClankyVoiceLogsExtensionFactory } from "./voiceLogs.ts";
+import { interpretVoiceStatus } from "./voiceStatus.ts";
 import {
 	createVoiceSupervisorExtensionFactory,
 	type VoiceSupervisorDelegateHandle,
@@ -229,6 +230,7 @@ function buildRuntimeFactory(opts: {
 		authStorage,
 		mainSessionContext: async (input) => gatewayController.mainSessionContext(input),
 		delegateToMainWorker: async (input) => gatewayController.delegateToMainWorker(input),
+		sendSubagentMessage: async (input) => gatewayController.sendSubagentMessage(input),
 	});
 	handlers.discordVoiceStatus = async () => ({
 		settings: discordVoiceSettings.read(),
@@ -491,30 +493,20 @@ function createClankyVoiceStatusExtensionFactory(gatewayController: ClankyDiscor
 }
 
 function formatClankyVoiceFooterStatus(status: unknown): string | undefined {
-	if (!isRecord(status)) return undefined;
-	const voiceConfigError = readStatusString(status, "voiceConfigError");
-	if (voiceConfigError !== undefined) return "voice error";
-	const voice = readStatusRecord(status, "voice");
-	if (readStatusBoolean(status, "voiceBridgeActive") === true) {
-		const channelId = voice === undefined ? undefined : readStatusString(voice, "channelId");
-		if (
-			voice !== undefined &&
-			readStatusBoolean(voice, "active") === false &&
-			readStatusString(voice, "mode") === "dynamic"
-		) {
+	const state = interpretVoiceStatus(status);
+	switch (state.kind) {
+		case "unavailable":
+		case "inactive":
+			return undefined;
+		case "error":
+			return "voice error";
+		case "ready":
 			return "voice ready";
-		}
-		return channelId === undefined ? "voice live" : `voice live channel ${shortDiscordId(channelId)}`;
+		case "live":
+			return state.channelId === undefined ? "voice live" : `voice live channel ${shortDiscordId(state.channelId)}`;
+		case "client-live":
+			return "voice client live";
 	}
-	if (readStatusBoolean(status, "voiceOnlyClientActive") === true) return "voice client live";
-	if (
-		voice !== undefined &&
-		readStatusBoolean(voice, "enabled") === true &&
-		readStatusBoolean(voice, "active") === false
-	) {
-		return "voice ready";
-	}
-	return undefined;
 }
 
 /**
@@ -723,23 +715,4 @@ function formatStartupElapsed(ms: number): string {
 	if (seconds < 60) return `${seconds}s`;
 	const minutes = Math.floor(seconds / 60);
 	return `${minutes}m ${seconds % 60}s`;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function readStatusRecord(record: Record<string, unknown>, key: string): Record<string, unknown> | undefined {
-	const value = record[key];
-	return isRecord(value) ? value : undefined;
-}
-
-function readStatusString(record: Record<string, unknown>, key: string): string | undefined {
-	const value = record[key];
-	return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-function readStatusBoolean(record: Record<string, unknown>, key: string): boolean | undefined {
-	const value = record[key];
-	return typeof value === "boolean" ? value : undefined;
 }

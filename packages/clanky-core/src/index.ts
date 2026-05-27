@@ -26,6 +26,8 @@ export {
 	maybeInjectMediaOperatorSkill,
 	type OpenAiImageGenerateToolInput,
 	type ScheduleCronToolInput,
+	type SendSubagentMessageInput,
+	type SendSubagentMessageResult,
 	shouldUseAgentRoomOperatorSkill,
 	shouldUseMediaOperatorSkill,
 	type TaskCreateToolInput,

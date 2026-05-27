@@ -129,6 +129,9 @@ function assertVoiceConfig(): void {
 	if (config.videoFrameAutoAttachIntervalMs !== 2_000) {
 		throw new Error("voice-smoke: default screen frame auto-attach interval mismatch");
 	}
+	if (config.participationEagerness !== 50) {
+		throw new Error("voice-smoke: default voice participation eagerness mismatch");
+	}
 	const dynamicConfig = resolveAgentDiscordVoiceConfig(
 		{
 			CLANKY_DISCORD_VOICE_ENABLED: "1",
@@ -240,6 +243,7 @@ function assertVoiceConfig(): void {
 			CLANKY_OPENAI_REALTIME_TRANSCRIPTION_LANGUAGE: "en",
 			CLANKY_DISCORD_VOICE_SPEAKER_TRANSCRIPTION_IDLE_CLOSE_MS: "90000",
 			CLANKY_DISCORD_VOICE_TRANSCRIPT_RESPONSE_BATCH_DELAY_MS: "0",
+			CLANKY_DISCORD_VOICE_EAGERNESS: "37",
 		},
 		{
 			providerId: "clanky-discord",
@@ -253,7 +257,8 @@ function assertVoiceConfig(): void {
 		transcriptionOverride.openAiRealtimeTranscriptionDelay !== "medium" ||
 		transcriptionOverride.openAiRealtimeTranscriptionLanguage !== "en" ||
 		transcriptionOverride.speakerTranscriptionIdleCloseMs !== 90_000 ||
-		transcriptionOverride.transcriptResponseBatchDelayMs !== 0
+		transcriptionOverride.transcriptResponseBatchDelayMs !== 0 ||
+		transcriptionOverride.participationEagerness !== 37
 	) {
 		throw new Error("voice-smoke: realtime transcription env overrides did not parse");
 	}
@@ -1127,7 +1132,11 @@ async function assertFakeVoiceBridgeRealtimeTools(): Promise<void> {
 	});
 	const handle = await startAgentDiscordVoiceBridge({
 		runtime: runtime as never,
-		client: new FakeVoiceDiscordClient() as never,
+		client: new FakeVoiceDiscordClient(undefined, [
+			{ id: "speaker-1", displayName: "Speaker One" },
+			{ id: "speaker-2", displayName: "Speaker Two", muted: true, deafened: true },
+			{ id: "clanky-user", displayName: "clanky", bot: true },
+		]) as never,
 		discordConfig: {
 			providerId: "clanky-discord",
 			token: "discord-token",
@@ -1168,9 +1177,12 @@ async function assertFakeVoiceBridgeRealtimeTools(): Promise<void> {
 		.join(",");
 	if (
 		tools !==
-		"ask_pi,list_screen_shares,media_pause,media_resume,media_status,media_stop,pi_status,pi_subagents,play_music_url,play_video_url,see_screenshare_snapshot,start_music_visualizer,start_screen_watch,stop_screen_watch"
+		"ask_pi,list_screen_shares,media_pause,media_resume,media_status,media_stop,pi_status,pi_subagents,play_music_url,play_video_url,see_screenshare_snapshot,start_music_visualizer,start_screen_watch,stop_screen_watch,voice_stay_silent"
 	) {
 		throw new Error(`voice-smoke: fake voice bridge realtime tools mismatch: ${tools}`);
+	}
+	if (!realtime.connectOptions?.instructions?.includes("Participation eagerness: 50/100")) {
+		throw new Error("voice-smoke: realtime instructions did not include voice participation eagerness");
 	}
 	realtime.emit("audio_delta", "AQIDBA==");
 	if (vox.audioSends[0]?.sampleRate !== 24_000) {
@@ -1202,6 +1214,8 @@ async function assertFakeVoiceBridgeRealtimeTools(): Promise<void> {
 			realtime.textUtterances.some(
 				(text) =>
 					text.includes("Discord voice transcript with speaker attribution") &&
+					text.includes("Discord voice channel participants:") &&
+					text.includes("Speaker One, Speaker Two (deafened/muted)") &&
 					text.includes("Speaker One (speaker-1): speaker transcript 1") &&
 					text.includes("Speaker Two (speaker-2): speaker transcript 2"),
 			),
@@ -1230,6 +1244,33 @@ async function assertFakeVoiceBridgeRealtimeTools(): Promise<void> {
 		secondSubscription.silenceDurationMs !== 700
 	) {
 		throw new Error("voice-smoke: per-speaker transcription did not subscribe individual users");
+	}
+
+	const responsesBeforeSilence = realtime.responses;
+	realtime.emit("event", {
+		type: "response.done",
+		response: {
+			output: [
+				{
+					type: "function_call",
+					name: "voice_stay_silent",
+					call_id: "call-silent",
+					arguments: '{"reason":"side_chatter","confidence":0.91,"nextListenMs":4000}',
+				},
+			],
+		},
+	});
+	await waitUntil(() => realtime.functionOutputs.some((output) => output.callId === "call-silent"), "silent output");
+	await sleep(50);
+	if (realtime.responses !== responsesBeforeSilence) {
+		throw new Error("voice-smoke: voice_stay_silent should not trigger a follow-up realtime response");
+	}
+	const silentOutput = expectRecord(
+		realtime.functionOutputs.find((output) => output.callId === "call-silent")?.output,
+		"silent output",
+	);
+	if (silentOutput.speaking !== false || silentOutput.reason !== "side_chatter") {
+		throw new Error("voice-smoke: voice_stay_silent output mismatch");
 	}
 
 	realtime.emit("event", {
@@ -1502,12 +1543,16 @@ async function assertFakeVoiceBridgeRealtimeTools(): Promise<void> {
 	) {
 		throw new Error("voice-smoke: voice bridge did not count Discord input audio");
 	}
-	if (stats.speakerTranscriptFinalCount !== 2 || stats.speakerTranscriptForwardCount !== 2) {
+	if (
+		stats.speakerTranscriptFinalCount !== 2 ||
+		stats.speakerTranscriptForwardCount !== 2 ||
+		stats.voiceStaySilentCount !== 1
+	) {
 		throw new Error("voice-smoke: voice bridge did not count speaker-attributed transcripts");
 	}
 	if (
-		stats.realtimeFunctionCallCount !== 8 ||
-		stats.realtimeFunctionCallOutputCount !== 8 ||
+		stats.realtimeFunctionCallCount !== 9 ||
+		stats.realtimeFunctionCallOutputCount !== 9 ||
 		stats.realtimeFunctionCallErrorCount !== 1 ||
 		stats.askPiCallCount !== 2 ||
 		stats.piStatusRequestCount !== 1 ||
@@ -2774,8 +2819,13 @@ async function assertFakeVoiceBridgeRealtimeDuplicateAskPiCoalesces(): Promise<v
 		throw new Error(`voice-smoke: duplicate ask_pi forwarded ${runtime.session.messages.length} Pi requests`);
 	}
 	const stats = expectRecord(handle.status().stats, "duplicate ask_pi stats");
-	if (stats.askPiCallCount !== 1 || stats.realtimeFunctionCallOutputCount !== 3) {
-		throw new Error("voice-smoke: duplicate ask_pi stats did not show one Pi call and three tool outputs");
+	if (
+		stats.askPiCallCount !== 1 ||
+		stats.realtimeFunctionCallCount !== 1 ||
+		stats.realtimeDuplicateToolCallCount !== 2 ||
+		stats.realtimeFunctionCallOutputCount !== 3
+	) {
+		throw new Error("voice-smoke: duplicate ask_pi stats did not show one Pi call and two coalesced duplicates");
 	}
 	await handle.stop();
 }
@@ -2870,17 +2920,49 @@ class FakeVoiceDiscordClient extends EventEmitter {
 		},
 	};
 
-	constructor(gatewaySessionId?: string) {
+	constructor(gatewaySessionId?: string, voiceMembers: FakeVoiceMember[] = []) {
 		super();
+		const memberRecords = new Map(
+			voiceMembers.map((member) => {
+				const record = {
+					id: member.id,
+					displayName: member.displayName,
+					user: { id: member.id, username: member.displayName, bot: member.bot === true },
+					voice: {
+						channelId: "voice-1",
+						mute: member.muted === true,
+						selfMute: member.muted === true,
+						deaf: member.deafened === true,
+						selfDeaf: member.deafened === true,
+					},
+				};
+				return [member.id, record] as const;
+			}),
+		);
 		this.guild = {
 			voiceAdapterCreator: () => ({ destroy() {} }),
+			channels: {
+				cache: new Map([
+					[
+						"voice-1",
+						{
+							id: "voice-1",
+							members: { cache: memberRecords },
+						},
+					],
+				]),
+			},
 			members:
-				gatewaySessionId === undefined
+				gatewaySessionId === undefined && memberRecords.size === 0
 					? undefined
 					: {
-							me: {
-								voice: { sessionId: gatewaySessionId },
-							},
+							cache: memberRecords,
+							me:
+								gatewaySessionId === undefined
+									? undefined
+									: {
+											voice: { sessionId: gatewaySessionId },
+										},
 						},
 		};
 	}
@@ -2888,6 +2970,14 @@ class FakeVoiceDiscordClient extends EventEmitter {
 	isReady(): boolean {
 		return true;
 	}
+}
+
+interface FakeVoiceMember {
+	id: string;
+	displayName: string;
+	muted?: boolean;
+	deafened?: boolean;
+	bot?: boolean;
 }
 
 class FakeVoiceRuntimeSession {
@@ -2931,6 +3021,7 @@ class FakeBridgeRealtime extends EventEmitter {
 		| {
 				model?: string;
 				voice?: string;
+				instructions?: string;
 				tools?: { name: string }[];
 				responseOutputModality?: string;
 		  }
@@ -2946,6 +3037,7 @@ class FakeBridgeRealtime extends EventEmitter {
 	async connect(options: {
 		model?: string;
 		voice?: string;
+		instructions?: string;
 		tools?: { name: string }[];
 		responseOutputModality?: string;
 	}): Promise<void> {

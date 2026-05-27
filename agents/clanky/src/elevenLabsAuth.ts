@@ -1,8 +1,9 @@
 /**
  * Interactive ElevenLabs API-key auth flow for Clanky Discord voice.
  *
- * The Realtime model still owns reasoning, tool calls, and interruption state.
- * This credential is only for the optional external ElevenLabs speech path.
+ * The realtime voice agent still owns reasoning, tool calls, and interruption
+ * state. This credential is only for the optional external ElevenLabs speech
+ * output path.
  */
 import {
 	DEFAULT_ELEVENLABS_PROVIDER_ID,

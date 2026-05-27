@@ -17,6 +17,8 @@ import {
 	resolveClankyChatGatewayOwner,
 	resolveClankyChatMode,
 	runOpenAiWebSearch,
+	type SendSubagentMessageInput,
+	type SendSubagentMessageResult,
 	shouldStartAgentChatGateway,
 } from "@clanky/core";
 import type { AuthStorage } from "@earendil-works/pi-coding-agent";
@@ -47,6 +49,7 @@ export function createClankyHandlers(
 		authStorage?: AuthStorage;
 		mainSessionContext?: (input: MainSessionContextToolInput) => Promise<unknown>;
 		delegateToMainWorker?: (input: DelegateToMainWorkerToolInput) => Promise<unknown>;
+		sendSubagentMessage?: (input: SendSubagentMessageInput) => Promise<SendSubagentMessageResult>;
 	} = {},
 ): ClankyAgentToolHandlers {
 	return {
@@ -89,6 +92,7 @@ export function createClankyHandlers(
 		linearLink: async (input) => stores.linearLinks.link(input),
 		...(options.mainSessionContext === undefined ? {} : { mainSessionContext: options.mainSessionContext }),
 		...(options.delegateToMainWorker === undefined ? {} : { delegateToMainWorker: options.delegateToMainWorker }),
+		...(options.sendSubagentMessage === undefined ? {} : { sendSubagentMessage: options.sendSubagentMessage }),
 		webSearch: async (input, signal) =>
 			runOpenAiWebSearch(input, {
 				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),

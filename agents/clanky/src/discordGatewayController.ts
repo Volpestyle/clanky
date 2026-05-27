@@ -14,6 +14,8 @@ import {
 	type DelegateToMainWorkerToolInput,
 	DiscordSubagentStore,
 	type MainSessionContextToolInput,
+	type SendSubagentMessageInput,
+	type SendSubagentMessageResult,
 } from "@clanky/core";
 import type {
 	AgentSessionRuntime,
@@ -409,6 +411,22 @@ export class ClankyDiscordGatewayController {
 			runtimeTurnQueue: this.runtimeTurnQueue,
 			log: (line) => this.logBridge(line),
 		});
+	}
+
+	async sendSubagentMessage(input: SendSubagentMessageInput): Promise<SendSubagentMessageResult> {
+		const text = input.text.trim();
+		const id = input.id.trim();
+		if (id.length === 0 || text.length === 0) {
+			return { accepted: false, message: "Subagent id and message are required." };
+		}
+		const textResult = await this.handle?.sendSubagentMessage?.({ id, text });
+		if (textResult !== undefined) return textResult;
+		const voiceResult = await this.voiceHandle?.sendSubagentMessage?.({ id, text });
+		if (voiceResult !== undefined) return voiceResult;
+		return {
+			accepted: false,
+			message: "That subagent is not attached to an active Clanky runtime in this process.",
+		};
 	}
 
 	setSubagentThinkingLevel(level: ClankyThinkingLevel): number {

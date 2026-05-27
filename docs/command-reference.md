@@ -128,6 +128,7 @@ Environment variables still override stored credentials where supported.
 | `/discord-voice set tts-provider elevenlabs` | Use ElevenLabs as the speech output provider instead of the selected realtime agent audio. |
 | `/discord-voice set elevenlabs-voice <voice-id>` | Store ElevenLabs voice id. |
 | `/discord-voice set elevenlabs-output-format pcm_24000` | Store ElevenLabs PCM output format. |
+| `/discord-voice set eagerness <0-100>` | Set how often Clanky chooses to speak in voice. |
 | `/discord-voice clear` | Clear stored voice settings. |
 | `/discord-voice disable` | Disable voice access. |
 | `/voice-logs` or `/voice_logs` | Open live Discord voice logs. |

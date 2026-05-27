@@ -8,6 +8,8 @@ import {
 	type DiscordSubagentStore,
 	loadStoredDiscordCredential,
 	readDiscordMessages,
+	type SendSubagentMessageInput,
+	type SendSubagentMessageResult,
 	shouldStartAgentChatGateway,
 } from "@clanky/core";
 import type {
@@ -190,6 +192,7 @@ export interface ClankyAgentDiscordGatewayHandle {
 	readonly client: DiscordGatewayClient;
 	stop(): Promise<void>;
 	setSubagentThinkingLevel(level: ClankyThinkingLevel): number;
+	sendSubagentMessage?(input: SendSubagentMessageInput): Promise<SendSubagentMessageResult | undefined>;
 }
 
 /**
@@ -491,6 +494,10 @@ class AgentDiscordBridge implements ClankyAgentDiscordGatewayHandle {
 
 	setSubagentThinkingLevel(level: ClankyThinkingLevel): number {
 		return this.subagents?.setThinkingLevel(level) ?? 0;
+	}
+
+	async sendSubagentMessage(input: SendSubagentMessageInput): Promise<SendSubagentMessageResult | undefined> {
+		return await this.subagents?.sendInteractiveMessage(input);
 	}
 
 	private shouldRouteToSubagent(): boolean {

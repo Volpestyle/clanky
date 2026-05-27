@@ -24,6 +24,7 @@ export interface StoredDiscordVoiceSettings {
 	elevenLabsOutputFormat?: ElevenLabsPcmOutputFormat;
 	elevenLabsBaseUrl?: string;
 	videoFrameAutoAttachIntervalMs?: number;
+	participationEagerness?: number;
 }
 
 export interface DiscordVoiceSettingsAccessor {
@@ -103,6 +104,9 @@ export function sanitizeStoredDiscordVoiceSettings(settings: StoredDiscordVoiceS
 	) {
 		sanitized.videoFrameAutoAttachIntervalMs = Math.trunc(settings.videoFrameAutoAttachIntervalMs);
 	}
+	if (typeof settings.participationEagerness === "number" && Number.isFinite(settings.participationEagerness)) {
+		sanitized.participationEagerness = clampInteger(settings.participationEagerness, 0, 100);
+	}
 	return sanitized;
 }
 
@@ -137,7 +141,17 @@ function parseStoredDiscordVoiceSettings(value: unknown): StoredDiscordVoiceSett
 	if (typeof record.videoFrameAutoAttachIntervalMs === "number") {
 		settings.videoFrameAutoAttachIntervalMs = record.videoFrameAutoAttachIntervalMs;
 	}
+	if (typeof record.participationEagerness === "number") {
+		settings.participationEagerness = record.participationEagerness;
+	}
 	return sanitizeStoredDiscordVoiceSettings(settings);
+}
+
+function clampInteger(value: number, min: number, max: number): number {
+	const integer = Math.trunc(value);
+	if (integer < min) return min;
+	if (integer > max) return max;
+	return integer;
 }
 
 function cleanString(value: string | undefined): string | undefined {
