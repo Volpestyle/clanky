@@ -44,6 +44,10 @@ jobs:
 
       - name: Prepare local file dependencies
         run: |
+          git clone --depth 1 https://github.com/Volpestyle/docs.git ../docs
+          mkdir -p ../agent-room/packages/integrations/chat-discord
+          printf '%s\n' '{"name":"@agentroom/chat-discord","version":"0.0.0","type":"module","exports":{".":"./index.js"},"dependencies":{"@modelcontextprotocol/sdk":"^1.29.0","ws":"^8.20.1","zod":"^4.4.3"}}' > ../agent-room/packages/integrations/chat-discord/package.json
+          printf '%s\n' 'export {};' > ../agent-room/packages/integrations/chat-discord/index.js
           mkdir -p ../discord_mcp
           printf '%s\n' '{"name":"discord-mcp","version":"0.0.0","type":"module","bin":{"discord-mcp":"index.js"},"engines":{"node":">=22.19.0"},"dependencies":{"@modelcontextprotocol/sdk":"^1.29.0","tsx":"^4.22.3","zod":"^3.25.76"}}' > ../discord_mcp/package.json
           printf '%s\n' '#!/usr/bin/env node' > ../discord_mcp/index.js

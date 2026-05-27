@@ -2,32 +2,75 @@
 
 ![Clanky and companion overlooking a mountain forest](/branding/clanky-forest-overlook-1024.png)
 
-Clanky is a personal agent built on [Pi](https://pi.dev). The most useful
-mental model is:
+Clanky is a personal agent built on [Pi](https://pi.dev). Learn it through
+three questions:
 
-- Pi is the terminal agent foundation: model runtime, TUI, sessions, built-in
-  tools, context files, extensions, skills, and slash command mechanics.
-- Clanky is the personal layer on top: persona, profile-local state, memory,
-  Discord text and voice, media generation, web lookup, native work-tracker
-  refs, MCP servers, and AgentRoom-aware coordination.
+1. What powerful things can I do as a user?
+2. What should I let Clanky handle?
+3. What mental model explains what is happening?
 
-That means a new user should learn Clanky as a Pi-powered agent, not as a
-separate daemon. When `pnpm clanky` starts, it builds a Pi runtime, injects the
-Clanky persona and extensions, starts any configured Discord bridges, and opens
-Pi's interactive TUI.
+## 1. What You Can Do
 
-## What Clanky Can Do
+Clanky gives you a local agent that can carry personal context across tools:
 
-| Area | What it means |
-| --- | --- |
-| Local TUI | Work in the current repo through Pi's terminal UI, sessions, models, tools, and slash commands. |
-| Memory | Store profile-local, source-grounded memories when policy and user confirmation allow it. |
-| Discord text | Use Clanky's own Discord credential for DMs, mentions, replies, and optional channel binding. |
-| Discord subagents | Give agent-owned Discord chat its own Pi session while the main Clanky session keeps working. |
-| Discord voice | Join a configured voice channel, transcribe speakers, speak through Realtime or ElevenLabs, and delegate durable work to Pi. |
-| Web and media | Use OpenAI hosted web search, Playwright or Chrome CDP routes, OpenAI image generation, and xAI image/video generation. |
-| AgentRoom | Participate in an AgentRoom room as a normal Pi harness while keeping profile state and connector ownership explicit. |
-| Work tracking and MCP | Keep native Clanky task refs, link external tracker issues, use Linear when configured, and call configured external MCP tools. |
+- use Pi's terminal TUI for repo work, session history, model switching, and
+  slash commands
+- keep profile-local auth, memory, sessions, skills, and connector settings
+- ask Clanky to remember source-grounded facts, then inspect or forget them
+- connect an agent-owned Discord identity for DMs, mentions, replies, and
+  optional channel binding
+- let Discord requests run through subagents while the foreground session keeps
+  working
+- join Discord voice, hear speakers, speak back, and delegate durable work to Pi
+- use web, browser, media generation, Linear, Discord, and MCP skills when
+  configured
+- join an AgentRoom room as a normal Pi harness while keeping profile ownership
+  explicit
+
+> GIF slot: `docs/assets/gifs/clanky-tui-discord.gif`  
+> Capture: foreground Clanky working in the local TUI while Discord routes a
+> mention through a subagent and returns a useful handoff.
+
+## 2. What To Let Clanky Handle
+
+Let Clanky handle work that benefits from personal state and live tool access:
+
+- repository orientation and local command/file work
+- memory-backed context that should follow your profile
+- Discord triage: reply, skip, ask for clarification, or delegate
+- voice-room questions that need fast response plus optional Pi follow-up
+- media/web/browser tasks where the right skill can pick the right backend
+- AgentRoom participation as a lead, worker, or reviewer
+
+Use AgentRoom when the problem becomes a room: multiple agents, runtime launch,
+audited terminal IO, task shadows, room-owned connectors, mobile checks, and
+handoffs between workers. Jump to
+[AgentRoom Ecosystem Tour](docs://agent-room-docs/ecosystem) for that layer.
+
+## 3. Mental Model
+
+```mermaid
+flowchart TB
+  pi["Pi foundation<br/>TUI, sessions, tools, slash commands, models"]
+  clanky["Clanky layer<br/>persona, memory, profile, skills, connectors"]
+  profile["Profile stores<br/>auth, sessions, memory, voice, subagents"]
+  discord["Discord text<br/>DMs, mentions, subagents"]
+  voice["Discord voice<br/>Realtime, ask_pi, floor control"]
+  vox["ClankVox<br/>RTP, Opus, DAVE, Go Live"]
+  room["AgentRoom<br/>optional coordination room"]
+
+  pi --> clanky
+  clanky --> profile
+  clanky --> discord
+  clanky --> voice
+  voice --> vox
+  clanky <--> room
+```
+
+Pi is the generic agent harness. Clanky configures that harness with personal
+state, memory, connectors, skills, Discord, voice, and media. ClankVox sits
+under voice as deterministic transport code. AgentRoom sits around Clanky when
+you want multi-agent coordination.
 
 ## First Path To Try
 
@@ -73,15 +116,14 @@ Inside Clanky:
 /openai-whoami
 ```
 
-Use `--home` and `--profile` whenever you want isolation. Profiles are the
-boundary for sessions, memory, skills, auth, voice settings, subagents, and
-work-tracker state. Running two live Clankies on the same profile is
-unsupported.
+Profiles are the boundary for sessions, memory, skills, auth, voice settings,
+subagents, and work-tracker state. Running two live Clankies on the same profile
+is unsupported.
 
 ## Docs Map
 
-- [Pi Foundation](pi-foundation.md): the core concept that explains what Clanky
-  inherits from Pi and what Clanky adds.
+- [Pi Foundation](pi-foundation.md): what Clanky inherits from Pi and what
+  Clanky adds.
 - [First-Time Setup](first-time-setup.md): prerequisites, install, fresh-user
   test, and connector setup.
 - [Using Clanky](using-clanky.md): day-to-day workflows once the profile works.
@@ -89,37 +131,13 @@ unsupported.
   Clanky slash commands, and model-facing tools.
 - [Memory And Privacy](memory-and-privacy.md): profile state, auth storage,
   memory policy, and forget/export commands.
+- [AgentRoom Integration](AGENTROOM.md): room participation, gateway ownership,
+  and launch contract.
+- [Discord Voice Architecture](discord-voice-architecture.md): TypeScript
+  control plane, Realtime, Pi delegation, and ClankVox media plane.
 - [Troubleshooting](troubleshooting.md): common setup failures and where to look
   first.
 
-If you want to feed Clanky's docs into an LLM, the docs site publishes
-[`llms.txt`](https://volpestyle.github.io/clanky/llms.txt) (index) and
-[`llms-full.txt`](https://volpestyle.github.io/clanky/llms-full.txt)
-(all docs concatenated, paste-ready). The same links also appear under
-"For LLMs" in the docs site sidebar.
-
-## The Two Big Boundaries
-
-### Pi Versus Clanky
-
-Pi is the reusable agent harness. Clanky does not reimplement the terminal UI,
-session tree, context-file discovery, extension lifecycle, skill discovery, or
-core file/shell tools. Clanky configures those Pi systems for a personal agent.
-
-The practical result: Pi commands like `/model`, `/settings`, `/resume`,
-`/tree`, `/compact`, `/reload`, and `/hotkeys` still matter in Clanky.
-For the canonical Pi user docs, use [pi.dev/docs/latest](https://pi.dev/docs/latest).
-
-### Clanky Versus AgentRoom
-
-AgentRoom is the room/runtime daemon. Clanky is a standalone Pi agent that may
-participate in a room. Room participation and Discord gateway ownership are
-separate decisions:
-
-- Agent-owned Discord means Clanky uses its own profile credential and owns the
-  Discord bridge.
-- Room-owned Discord means AgentRoom owns the connector token and routes chat
-  through the room.
-
-One Discord conversation should have one owner. Do not point Clanky's agent-owned
-gateway and an AgentRoom room-owned gateway at the same channel.
+For LLM ingestion, the docs site publishes
+[`llms.txt`](https://volpestyle.github.io/clanky/llms.txt) and
+[`llms-full.txt`](https://volpestyle.github.io/clanky/llms-full.txt).

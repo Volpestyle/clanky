@@ -1,6 +1,6 @@
 # Clanky - Full Docs
 
-> Clanky is a stateful personal AI agent built on the Pi runtime, with Discord text + voice, scoped memory, subagents, and AgentRoom integration.
+> Clanky is a personal Pi agent for local work, memory, Discord text and voice, subagents, media, and AgentRoom participation.
 
 Generated from the live docs site. Each section below is one page; see the heading and source path for context.
 
@@ -14,32 +14,75 @@ Source: `docs/start-here.md` - https://volpestyle.github.io/clanky/?doc=start-he
 
 ![Clanky and companion overlooking a mountain forest](/branding/clanky-forest-overlook-1024.png)
 
-Clanky is a personal agent built on [Pi](https://pi.dev). The most useful
-mental model is:
+Clanky is a personal agent built on [Pi](https://pi.dev). Learn it through
+three questions:
 
-- Pi is the terminal agent foundation: model runtime, TUI, sessions, built-in
-  tools, context files, extensions, skills, and slash command mechanics.
-- Clanky is the personal layer on top: persona, profile-local state, memory,
-  Discord text and voice, media generation, web lookup, native work-tracker
-  refs, MCP servers, and AgentRoom-aware coordination.
+1. What powerful things can I do as a user?
+2. What should I let Clanky handle?
+3. What mental model explains what is happening?
 
-That means a new user should learn Clanky as a Pi-powered agent, not as a
-separate daemon. When `pnpm clanky` starts, it builds a Pi runtime, injects the
-Clanky persona and extensions, starts any configured Discord bridges, and opens
-Pi's interactive TUI.
+## 1. What You Can Do
 
-## What Clanky Can Do
+Clanky gives you a local agent that can carry personal context across tools:
 
-| Area | What it means |
-| --- | --- |
-| Local TUI | Work in the current repo through Pi's terminal UI, sessions, models, tools, and slash commands. |
-| Memory | Store profile-local, source-grounded memories when policy and user confirmation allow it. |
-| Discord text | Use Clanky's own Discord credential for DMs, mentions, replies, and optional channel binding. |
-| Discord subagents | Give agent-owned Discord chat its own Pi session while the main Clanky session keeps working. |
-| Discord voice | Join a configured voice channel, transcribe speakers, speak through Realtime or ElevenLabs, and delegate durable work to Pi. |
-| Web and media | Use OpenAI hosted web search, Playwright or Chrome CDP routes, OpenAI image generation, and xAI image/video generation. |
-| AgentRoom | Participate in an AgentRoom room as a normal Pi harness while keeping profile state and connector ownership explicit. |
-| Work tracking and MCP | Keep native Clanky task refs, link external tracker issues, use Linear when configured, and call configured external MCP tools. |
+- use Pi's terminal TUI for repo work, session history, model switching, and
+  slash commands
+- keep profile-local auth, memory, sessions, skills, and connector settings
+- ask Clanky to remember source-grounded facts, then inspect or forget them
+- connect an agent-owned Discord identity for DMs, mentions, replies, and
+  optional channel binding
+- let Discord requests run through subagents while the foreground session keeps
+  working
+- join Discord voice, hear speakers, speak back, and delegate durable work to Pi
+- use web, browser, media generation, Linear, Discord, and MCP skills when
+  configured
+- join an AgentRoom room as a normal Pi harness while keeping profile ownership
+  explicit
+
+> GIF slot: `docs/assets/gifs/clanky-tui-discord.gif`  
+> Capture: foreground Clanky working in the local TUI while Discord routes a
+> mention through a subagent and returns a useful handoff.
+
+## 2. What To Let Clanky Handle
+
+Let Clanky handle work that benefits from personal state and live tool access:
+
+- repository orientation and local command/file work
+- memory-backed context that should follow your profile
+- Discord triage: reply, skip, ask for clarification, or delegate
+- voice-room questions that need fast response plus optional Pi follow-up
+- media/web/browser tasks where the right skill can pick the right backend
+- AgentRoom participation as a lead, worker, or reviewer
+
+Use AgentRoom when the problem becomes a room: multiple agents, runtime launch,
+audited terminal IO, task shadows, room-owned connectors, mobile checks, and
+handoffs between workers. Jump to
+[AgentRoom Ecosystem Tour](docs://agent-room-docs/ecosystem) for that layer.
+
+## 3. Mental Model
+
+```mermaid
+flowchart TB
+  pi["Pi foundation<br/>TUI, sessions, tools, slash commands, models"]
+  clanky["Clanky layer<br/>persona, memory, profile, skills, connectors"]
+  profile["Profile stores<br/>auth, sessions, memory, voice, subagents"]
+  discord["Discord text<br/>DMs, mentions, subagents"]
+  voice["Discord voice<br/>Realtime, ask_pi, floor control"]
+  vox["ClankVox<br/>RTP, Opus, DAVE, Go Live"]
+  room["AgentRoom<br/>optional coordination room"]
+
+  pi --> clanky
+  clanky --> profile
+  clanky --> discord
+  clanky --> voice
+  voice --> vox
+  clanky <--> room
+```
+
+Pi is the generic agent harness. Clanky configures that harness with personal
+state, memory, connectors, skills, Discord, voice, and media. ClankVox sits
+under voice as deterministic transport code. AgentRoom sits around Clanky when
+you want multi-agent coordination.
 
 ## First Path To Try
 
@@ -85,15 +128,14 @@ Inside Clanky:
 /openai-whoami
 ```
 
-Use `--home` and `--profile` whenever you want isolation. Profiles are the
-boundary for sessions, memory, skills, auth, voice settings, subagents, and
-work-tracker state. Running two live Clankies on the same profile is
-unsupported.
+Profiles are the boundary for sessions, memory, skills, auth, voice settings,
+subagents, and work-tracker state. Running two live Clankies on the same profile
+is unsupported.
 
 ## Docs Map
 
-- [Pi Foundation](pi-foundation.md): the core concept that explains what Clanky
-  inherits from Pi and what Clanky adds.
+- [Pi Foundation](pi-foundation.md): what Clanky inherits from Pi and what
+  Clanky adds.
 - [First-Time Setup](first-time-setup.md): prerequisites, install, fresh-user
   test, and connector setup.
 - [Using Clanky](using-clanky.md): day-to-day workflows once the profile works.
@@ -101,40 +143,16 @@ unsupported.
   Clanky slash commands, and model-facing tools.
 - [Memory And Privacy](memory-and-privacy.md): profile state, auth storage,
   memory policy, and forget/export commands.
+- [AgentRoom Integration](AGENTROOM.md): room participation, gateway ownership,
+  and launch contract.
+- [Discord Voice Architecture](discord-voice-architecture.md): TypeScript
+  control plane, Realtime, Pi delegation, and ClankVox media plane.
 - [Troubleshooting](troubleshooting.md): common setup failures and where to look
   first.
 
-If you want to feed Clanky's docs into an LLM, the docs site publishes
-[`llms.txt`](https://volpestyle.github.io/clanky/llms.txt) (index) and
-[`llms-full.txt`](https://volpestyle.github.io/clanky/llms-full.txt)
-(all docs concatenated, paste-ready). The same links also appear under
-"For LLMs" in the docs site sidebar.
-
-## The Two Big Boundaries
-
-### Pi Versus Clanky
-
-Pi is the reusable agent harness. Clanky does not reimplement the terminal UI,
-session tree, context-file discovery, extension lifecycle, skill discovery, or
-core file/shell tools. Clanky configures those Pi systems for a personal agent.
-
-The practical result: Pi commands like `/model`, `/settings`, `/resume`,
-`/tree`, `/compact`, `/reload`, and `/hotkeys` still matter in Clanky.
-For the canonical Pi user docs, use [pi.dev/docs/latest](https://pi.dev/docs/latest).
-
-### Clanky Versus AgentRoom
-
-AgentRoom is the room/runtime daemon. Clanky is a standalone Pi agent that may
-participate in a room. Room participation and Discord gateway ownership are
-separate decisions:
-
-- Agent-owned Discord means Clanky uses its own profile credential and owns the
-  Discord bridge.
-- Room-owned Discord means AgentRoom owns the connector token and routes chat
-  through the room.
-
-One Discord conversation should have one owner. Do not point Clanky's agent-owned
-gateway and an AgentRoom room-owned gateway at the same channel.
+For LLM ingestion, the docs site publishes
+[`llms.txt`](https://volpestyle.github.io/clanky/llms.txt) and
+[`llms-full.txt`](https://volpestyle.github.io/clanky/llms-full.txt).
 
 ---
 
@@ -146,326 +164,151 @@ Source: `README.md` - https://volpestyle.github.io/clanky/?doc=overview
 
 ![Clanky](/branding/clanky-logo-512.png)
 
-Clanky is a standalone personal Pi agent. It owns its persona, profile-local
-state, memory, native work-tracker refs, and bundled skills. It does not run
-its own daemon, scheduler, HTTP server, WebSocket server, or multi-agent room
-system. Linear is the built-in tracker provider today, but the core work
-tracking model is provider-neutral.
+Clanky is a personal Pi agent with profile state, memory, Discord text,
+Discord voice, subagents, media tools, work-tracker refs, bundled skills, and
+AgentRoom participation.
 
-New to Clanky? Start with [docs/start-here.md](docs/start-here.md), then read
-[docs/pi-foundation.md](docs/pi-foundation.md). The upstream Pi harness docs
-live at [pi.dev/docs/latest](https://pi.dev/docs/latest).
+It is not a separate daemon or scheduler. Pi supplies the terminal agent
+runtime. Clanky adds the personal layer. AgentRoom supplies the multi-agent room
+when Clanky needs to coordinate with other agents.
 
-AgentRoom is the room/runtime daemon. Clanky works naturally inside any
-AgentRoom because AgentRoom can launch it as a normal Pi harness command and
-audit the room send/read flow around it.
+## 1. What You Can Do
 
-## Room And Chat Ownership
+Use Clanky as the agent that is always yours:
 
-Two axes are independent. Full contract in `docs/AGENTROOM.md`.
+- work in a repo through the Pi TUI with Clanky's persona, skills, memory, and
+  profile-local credentials
+- keep separate profiles for personal work, room leads, reviewers, voice tests,
+  or temporary experiments
+- store and inspect source-grounded memories with explicit privacy controls
+- connect Clanky's own Discord identity for DMs, mentions, replies, and channel
+  bindings
+- let Discord side requests route to subagents while the main TUI session keeps
+  working
+- join Discord voice, transcribe speakers, speak through Realtime or ElevenLabs,
+  and delegate durable work back to Pi
+- generate or inspect web/media artifacts through the bundled operator skills
+- participate in AgentRoom as a lead, worker, reviewer, or standalone personal
+  agent
 
-- **Room participation.** Clanky can run outside AgentRoom or be launched into
-  a room as a normal Pi harness.
-- **Gateway ownership.** Each Discord conversation is owned either by Clanky
-  directly or by the AgentRoom daemon. Agent-owned Discord keeps Clanky's own
-  bot identity and token, even while Clanky participates in a room. Room-owned
-  Discord uses the room connector bot and routes through AgentRoom.
+> GIF slot: `docs/assets/gifs/clanky-tui-discord.gif`  
+> Capture: local TUI work continuing while a Discord mention routes through a
+> subagent, then delegates a durable task back to the main Clanky session.
 
-For a personal Clanky, the intuitive setup is agent-owned Discord plus optional
-AgentRoom participation for coordinating with other agents. For a shared
-multi-agent public channel, use a room-owned connector with webhook attribution.
+> GIF slot: `docs/assets/gifs/clankvox-voice-live.gif`  
+> Capture: Discord voice live run with speaker transcript, spoken response,
+> `ask_pi` delegation, and screen-watch or media counters.
 
-## Configuration Model
+## 2. What To Let Clanky Handle
 
-Clanky is configured through the active profile, not through AgentRoom's room
-YAML. The TUI setup commands edit profile-local stores such as `auth.json`,
-`discord-voice.json`, and `models.json`; launch env vars remain explicit
-overrides for CI, AgentRoom launches, and one-off sessions.
+Clanky is strongest when the work needs personal context plus tools:
 
-AgentRoom's `.agentroom/config.yaml` owns room topology and room-owned
-connectors. Clanky's profile owns personal credentials, memory, sessions,
-skills, and agent-owned chat settings. See `docs/configuration.md` for the
-source-of-truth and override rules.
+- orienting in a local repository
+- remembering durable preferences, project facts, and recurring context
+- deciding whether a Discord message needs a response or should be skipped
+- splitting Discord side work into subagents so the foreground session stays
+  useful
+- using browser, web search, media, Linear, Discord, or MCP skills when the task
+  calls for them
+- answering live voice questions quickly and handing longer work to Pi
+- joining an AgentRoom room and coordinating through room messages, tasks, and
+  audited runtime flow
 
-## Discord Setup (Agent-Owned)
+Let AgentRoom handle multi-agent room topology, runtime launch, audited
+send/read, task shadows, room-owned chat connectors, and mobile control. Let
+Clanky handle the personal profile, memory, Discord identity, voice settings,
+skills, and foreground Pi work.
 
-The primary path is the interactive login from inside the Clanky TUI:
+## 3. Mental Model
 
-```bash
-pnpm clanky
-# inside Clanky:
-/discord-login     # walks credential kind -> instructions -> masked token entry
-/discord-whoami    # shows which credential the next launch will use
-/discord-status    # shows active Discord text/voice bridge counters
-/discord-logout    # removes the stored credential
+```mermaid
+flowchart TB
+  user["Human"]
+  tui["Pi TUI"]
+  clanky["Clanky runtime"]
+  profile["Profile<br/>auth, memory, sessions, skills"]
+  discord["Agent-owned Discord<br/>text + subagents"]
+  voice["Discord voice bridge"]
+  vox["ClankVox<br/>native media plane"]
+  room["AgentRoom<br/>optional room participation"]
+
+  user --> tui
+  tui --> clanky
+  clanky --> profile
+  clanky --> discord
+  clanky --> voice
+  voice --> vox
+  clanky <--> room
 ```
 
-`/discord-login` validates the token against Discord's REST API (`GET /users/@me`),
-confirms the identity, and persists the credential into the active profile's
-`auth.json` (`0600` perms) under provider id `clanky-discord`. Restart Clanky
-to start the gateway with the new token.
+Read it as:
 
-`CLANKY_DISCORD_TOKEN` still works as an override: when present it always wins
-over the stored credential. Useful for CI, AgentRoom launchers, and one-off
-runs.
+- Pi owns the TUI, sessions, model runtime, slash commands, and local repo tools.
+- Clanky configures Pi with persona, profile state, memory, skills, connectors,
+  and voice/media capabilities.
+- ClankVox is a subprocess below Clanky for Discord media transport.
+- AgentRoom is optional room infrastructure around Clanky; it does not own
+  Clanky's profile.
 
-Agent-owned Discord starts when a token is resolvable (env or stored) and
-`CLANKY_CHAT_GATEWAY_OWNER` is `agent` (the default).
+## First Path
 
-### Discord Subagents
-
-Clanky-owned Discord subagents are a local multitasking aid, not an AgentRoom
-worker system. Accepted Discord chat goes to a dedicated Discord subagent when
-the subagent coordinator is available, giving Discord its own Pi session and
-context window instead of reinjecting Discord history into the main session on
-each turn. That subagent can inspect Discord through the bundled
-`clanky-discord-operator` skill, ask main Clanky for main-session context, and
-delegate longer work back to the main worker.
-
-Subagent sessions are profile-local and resumed from the stored subagent session
-file when Clanky restarts. Pi compaction applies normally to those sessions.
-Use `/clanky direct <message>` from Discord only when you explicitly want to
-bypass the Discord subagent and send a turn straight to main Clanky.
-
-Use AgentRoom for multi-agent development work, room tasks, audited worker
-coordination, and shared room-owned chat connectors. Use Clanky subagents only
-for Clanky's own agent-owned Discord multitasking.
-
-## OpenAI Setup
-
-Clanky can use the normal Pi `/login` OAuth path, or store an OpenAI API key
-interactively:
+Run the fresh-user flow first so you can test onboarding without touching your
+real profile:
 
 ```bash
-pnpm clanky
-# inside Clanky:
-/openai-login     # masked API-key entry + validation
-/openai-whoami    # shows the active OpenAI credential source
-/openai-logout    # removes the stored OpenAI credential
-```
-
-`/openai-login` validates the key against OpenAI's models endpoint and stores it
-in the active profile's `auth.json` (`0600` perms) under provider id `openai`,
-the same slot Pi uses for OpenAI model auth. `CLANKY_OPENAI_API_KEY` and
-`OPENAI_API_KEY` still work as launch-environment overrides; the Clanky-scoped
-env var wins for Clanky tools when both are set.
-
-Clanky's default Pi chat model is `openai/gpt-5.5` with `xhigh` reasoning.
-Clanky-owned Discord subagents use the same default model with `medium`
-reasoning so quick Discord replies do not inherit the main worker's reasoning
-budget. Pi auto-compaction stays enabled by default. In the TUI, use
-`/effort`, `/effort main <level>`, `/effort subagents <level>`, or
-`/effort all <level>` to inspect or change these levels at runtime.
-
-Without a conversation binding, Clanky accepts DMs, Discord @mentions, direct
-replies to his recent messages, natural name mentions (`clanky` / `clank` by
-default), and same-user follow-ups during the engagement window. Name mentions
-and follow-ups are still model-mediated: Clanky can output `[SKIP]` to stay
-silent.
-
-### Discord Voice
-
-Discord voice is opt-in and uses the same Discord credential as the text
-gateway. When text chat is agent-owned, Clanky shares one Discord client for
-chat and voice. When text chat is suppressed by `CLANKY_CHAT_GATEWAY_OWNER`,
-Clanky can still create a voice-only Discord client with voice-state intents,
-join one configured voice channel through `clankvox`, transcribe each active
-Discord speaker through an individual OpenAI Realtime transcription session, and
-send labeled transcript turns into the main realtime voice agent session.
-See `docs/discord-voice-architecture.md` for the end-to-end control-plane,
-media-plane, Realtime, and Pi delegation map.
-
-Required runtime env:
-
-- `CLANKY_DISCORD_VOICE_ENABLED=1`
-- `CLANKY_DISCORD_VOICE_GUILD_ID`
-- `CLANKY_DISCORD_VOICE_CHANNEL_ID`
-
-OpenAI credentials for voice may come from `OPENAI_API_KEY`,
-`CLANKY_OPENAI_API_KEY`, or a stored `/openai-login` API key.
-ElevenLabs credentials for optional external speech may come from
-`CLANKY_ELEVENLABS_API_KEY`, `ELEVENLABS_API_KEY`, or a stored
-`/elevenlabs-login` API key.
-
-Optional env:
-
-- `CLANKY_DISCORD_VOICE_TTS_PROVIDER` or `CLANKY_VOICE_TTS_PROVIDER`
-  selects only the speech output provider (default `openai`; supported values:
-  `openai`, `realtime`, `elevenlabs`, `eleven_labs`, `11labs`)
-- `CLANKY_DISCORD_VOICE_REALTIME_AGENT_PROVIDER` or
-  `CLANKY_VOICE_REALTIME_AGENT_PROVIDER` selects the realtime reasoning/tool
-  agent provider (`openai` or `xai`; default `openai`)
-- `CLANKY_OPENAI_REALTIME_MODEL` controls the OpenAI Realtime reasoning/tool
-  agent model (default `gpt-realtime-2`)
-- `CLANKY_OPENAI_REALTIME_VOICE` (default `marin`; used only by OpenAI
-  Realtime audio output)
-- `CLANKY_OPENAI_REALTIME_REASONING_EFFORT` (default `low` with
-  `gpt-realtime-2`; supported values: `minimal`, `low`, `medium`, `high`,
-  `xhigh`)
-- `XAI_API_KEY`, `CLANKY_XAI_REALTIME_MODEL` (default `grok-voice-latest`),
-  and `CLANKY_XAI_REALTIME_VOICE` (default `eve`) when using
-  `CLANKY_DISCORD_VOICE_REALTIME_AGENT_PROVIDER=xai`
-- `CLANKY_OPENAI_REALTIME_TRANSCRIPTION_MODEL` (default
-  `gpt-realtime-whisper`)
-- `CLANKY_OPENAI_REALTIME_TRANSCRIPTION_DELAY` (default `low`; supported
-  values: `minimal`, `low`, `medium`, `high`, `xhigh`)
-- `CLANKY_OPENAI_REALTIME_TRANSCRIPTION_LANGUAGE` to provide a language hint
-  such as `en`
-- `CLANKY_ELEVENLABS_API_KEY` or `ELEVENLABS_API_KEY` when using
-  `CLANKY_DISCORD_VOICE_TTS_PROVIDER=elevenlabs` without `/elevenlabs-login`
-- `CLANKY_ELEVENLABS_VOICE_ID` when using ElevenLabs speech without the TUI
-  voice setting
-- `CLANKY_ELEVENLABS_MODEL` (default `eleven_flash_v2_5`)
-- `CLANKY_ELEVENLABS_OUTPUT_FORMAT` (default `pcm_24000`; supported values:
-  `pcm_16000`, `pcm_22050`, `pcm_24000`, `pcm_44100`)
-- `CLANKY_ELEVENLABS_BASE_URL` or `ELEVENLABS_BASE_URL`
-- `CLANKY_DISCORD_VOICE_SPEAKER_TRANSCRIPTION_IDLE_CLOSE_MS` (default `120000`)
-  closes inactive per-speaker transcription sessions
-- `CLANKY_DISCORD_VOICE_TRANSCRIPT_RESPONSE_BATCH_DELAY_MS` (default `350`)
-  batches near-simultaneous speaker transcripts before asking the realtime voice
-  agent to respond
-- `CLANKY_OPENAI_BASE_URL`
-- `CLANKY_DISCORD_VOICE_VIDEO_FRAME_INTERVAL_MS` (default `2000`) throttles
-  automatic Realtime attachment of decoded screen-share frames; the snapshot
-  tool always attaches the latest decoded frame on demand.
-- `CLANKY_CLANKVOX_DIR` or `CLANKY_CLANKVOX_BIN` to override the bundled
-  `clankvox` Rust source/binary lookup
-
-The speech output provider is deliberately separate from the realtime
-reasoning/tool agent. With the default `openai` speech output provider, the
-selected realtime agent returns audio directly: OpenAI Realtime uses
-`CLANKY_OPENAI_REALTIME_VOICE`, and xAI Grok Voice uses
-`CLANKY_XAI_REALTIME_VOICE`. With `elevenlabs`, the selected realtime agent is
-still used for live reasoning, tools, and text responses; Clanky streams that
-text through ElevenLabs TTS and sends the returned PCM audio to Discord. The
-`/discord-voice` advanced settings can store the realtime agent provider, xAI
-model/voice, speech output provider, ElevenLabs voice id, model, PCM output
-format, and API base URL in the active profile. `/xai-login` and
-`/elevenlabs-login` store API keys in the profile auth store. Env vars still
-override profile settings.
-
-The bundled native helper can be checked or prebuilt before launching voice:
-
-```bash
-pnpm voice:native:test
-pnpm voice:build
-```
-
-If no release binary exists, the voice bridge falls back to
-`cargo run --release --locked` from the bundled `clankvox` directory.
-If a native build was previously attempted against the wrong system Opus
-library, run `pnpm voice:native:clean` before rebuilding.
-
-The realtime bridge exposes voice-native tools for delegating durable work back
-to the Pi runtime (`ask_pi`) and for native Discord Go Live screen watching
-(`list_screen_shares`, `start_screen_watch`, `stop_screen_watch`,
-`see_screenshare_snapshot`). Native Go Live watching depends on Discord
-user-token/selfbot behavior; bot-token voice can join normal voice channels but
-should not be expected to provide the full screen-share path.
-
-For a headless live check with real credentials, run `pnpm voice:live`. It
-starts the same runtime/gateway stack, joins the configured voice channel, prints
-bridge status, and holds the session open for `CLANKY_DISCORD_VOICE_LIVE_MS`
-(default `60000`, `0` means until signal). It also prints periodic status with
-audio/tool/screen counters; set `CLANKY_DISCORD_VOICE_STATUS_MS=0` to disable
-that interval. Set `CLANKY_DISCORD_VOICE_SCRIPTED_PROMPT` to send an initial
-text prompt into the realtime voice agent session after join; this is useful for
-validating output audio or asking the model to call `ask_pi` without manual
-spoken setup. Set `CLANKY_DISCORD_VOICE_STOP_WHEN_VALID=1` to stop the live run
-as soon as all enabled positive validation counters pass; error-only validation
-still runs for the full configured duration. To make the live run fail unless
-specific activity happened, set
-`CLANKY_DISCORD_VOICE_REQUIRE_INPUT_AUDIO`, `CLANKY_DISCORD_VOICE_REQUIRE_GROUP_AUDIO`,
-`CLANKY_DISCORD_VOICE_REQUIRE_REALTIME_SESSION`,
-`CLANKY_DISCORD_VOICE_REQUIRE_OUTPUT_AUDIO`,
-`CLANKY_DISCORD_VOICE_REQUIRE_TOOL_CALL`, `CLANKY_DISCORD_VOICE_REQUIRE_ASK_PI`,
-`CLANKY_DISCORD_VOICE_REQUIRE_STREAM_WATCH`, or
-`CLANKY_DISCORD_VOICE_REQUIRE_SCREEN_FRAME` to `1`;
-`CLANKY_DISCORD_VOICE_REQUIRE_ALL=1` enables all of them. Set
-`CLANKY_DISCORD_VOICE_FAIL_ON_REALTIME_ERROR=1` to also fail if the Realtime API
-returns errors or the Realtime socket errors or closes during the run. The
-harness prints a checklist for the enabled requirements after joining voice.
-Stream-watch and screen-frame validation require a `user-token` Discord
-credential.
-
-For the exact user-run checklist and copyable bot-token/user-token validation
-commands, including `CLANKY_DISCORD_VOICE_RESULT_PATH` for saving the final
-or startup-failure validation JSON, see
-[docs/qa/discord-voice-live-runbook.md](docs/qa/discord-voice-live-runbook.md).
-
-## Operator Skills
-
-Bundled operator skills use Clanky tools and local project CLIs, not global installs:
-
-- `clanky-web-operator`: broad routing policy for live web lookup and browser
-  work. It can choose OpenAI hosted `web_search`, direct HTTP, Playwright,
-  Chrome CDP, or `agent-browser` depending on the task.
-- `clanky-media-operator`: image/video generation routing across OpenAI Images
-  API, xAI Grok Imagine images, and xAI Grok Imagine videos.
-- `clanky-playwright-browser`: general browsing, extraction, and screenshots through
-  `pnpm browser:playwright ...` or short `pnpm exec tsx` Playwright scripts.
-- `clanky-chrome-cdp`: attach to Chrome DevTools Protocol sessions through
-  `pnpm browser:cdp ...`; launch a temporary-profile debug Chrome with
-  `pnpm browser:chrome-debug ...`.
-
-`web_search` requires an OpenAI credential from `/openai-login`,
-`OPENAI_API_KEY`, or `CLANKY_OPENAI_API_KEY`, and defaults to
-`CLANKY_WEB_SEARCH_MODEL` or `gpt-5.5`. Set
-`CLANKY_WEB_OPERATOR_AUTO_SKILL=0` to disable automatic `clanky-web-operator`
-skill injection for lookup/browser-like prompts.
-
-Media generation tools:
-
-- `openai_image_generate` uses `/openai-login`, `CLANKY_OPENAI_API_KEY`, or
-  `OPENAI_API_KEY`; default model `CLANKY_OPENAI_IMAGE_MODEL` or `gpt-image-2`.
-- `xai_image_generate` uses `XAI_API_KEY`; default model `CLANKY_XAI_IMAGE_MODEL`
-  or `grok-imagine-image-quality`.
-- `xai_video_generate` uses `XAI_API_KEY`; default model `CLANKY_XAI_VIDEO_MODEL`
-  or `grok-imagine-video`.
-- `media_backend_status` shows configured media backends. Set
-  `CLANKY_MEDIA_OPERATOR_AUTO_SKILL=0` to disable automatic
-  `clanky-media-operator` skill injection for media-generation prompts.
-
-Install Playwright's Chromium binary once with `pnpm browser:install` if the
-host does not already have it.
-
-## Layout
-
-- `agents/clanky` is the runnable `@clanky/agent` package and `clanky` bin.
-- `packages/clanky-core` contains Clanky memory, work-tracker stores, profile
-  paths, state storage, skills loading, and model-facing tools.
-- `skills/` contains bundled Clanky skills.
-- `agents/clanky/persona/SELF.md` is the static persona injected into Pi's
-  system prompt.
-
-## Local Development
-
-```bash
+cd /Users/jamesvolpe/dev/agents/clanky-pi
 pnpm install
-pnpm check
-pnpm smoke
-pnpm clanky --help
+pnpm dev:setup:fresh
 ```
 
-Run the local interactive Pi surface:
+Inside the TUI:
+
+```text
+/setup
+/setup status
+/openai-login
+```
+
+Then ask:
+
+```text
+Summarize this repository and tell me how to run the non-live checks.
+```
+
+For a persistent profile:
 
 ```bash
-pnpm clanky
-pnpm clanky --profile personal --home ~/.clanky --cwd .
+pnpm clanky --home ~/.clanky --profile personal --cwd .
 ```
 
-Smoke tests are non-live and isolate profile state in temporary directories:
+## Discord And Voice
 
-```bash
-pnpm smoke:clanky
-pnpm smoke:voice
-pnpm smoke:agent-tools
-pnpm voice:native:test
+Agent-owned Discord is configured from inside the TUI:
+
+```text
+/discord-login
+/discord-whoami
+/discord-status
 ```
+
+Discord voice uses the same profile credential, Clanky's TypeScript control
+plane, OpenAI/xAI Realtime, optional ElevenLabs speech, Pi delegation through
+`ask_pi`, and the bundled ClankVox Rust media process:
+
+```text
+/discord-voice
+/discord-voice setup
+/discord-voice join <guild-id> <voice-channel-id>
+/voice-logs
+```
+
+For the full voice map, use
+[Discord Voice Architecture](docs/discord-voice-architecture.md). For the native
+media subprocess, jump to [ClankVox Docs](docs://clankvox-docs/overview).
 
 ## AgentRoom
 
-From any initialized AgentRoom room, launch Clanky as an external Pi harness:
+Clanky can run inside AgentRoom as a normal Pi harness:
 
 ```bash
 agent-room launch clanky --harness pi --command clanky --cwd .
@@ -473,41 +316,48 @@ agent-room send clanky "hello"
 agent-room read clanky --lines 40
 ```
 
-The `clanky` command must be available in the runtime environment. For local
-development, run AgentRoom from a shell where this checkout's bin is on `PATH`,
-or use a wrapper command that enters this checkout before starting Clanky.
+Room participation and Discord ownership are separate:
 
-AgentRoom supplies room/runtime environment variables such as `AGENTROOM`,
-`AGENTROOM_AGENT_ID`, `AGENTROOM_ROOM_ID`, and `AGENTROOM_ROLE`. These mark
-room participation; they do not decide who owns Clanky's Discord identity.
-Use `CLANKY_CHAT_GATEWAY_OWNER=room` or `CLANKY_CHAT_GATEWAY_OWNER=off` when a
-launcher should suppress Clanky's agent-owned gateway.
+- agent-owned Discord: Clanky uses its own profile credential and owns the
+  conversation
+- room-owned Discord: AgentRoom owns the connector bot and routes the
+  conversation through the room
 
-Agent-owned Discord runtime env:
+One Discord conversation should have one owner. Use
+`CLANKY_CHAT_GATEWAY_OWNER=room` when an AgentRoom connector owns that chat.
 
-- `CLANKY_DISCORD_TOKEN`: Clanky's own Discord bot/user token.
-- `CLANKY_DISCORD_CREDENTIAL_KIND`: `bot-token` (default) or `user-token`.
-- `CLANKY_DISCORD_CONVERSATION_ID`: optional DM/channel/thread allowlist. When
-  omitted, Clanky accepts DMs and messages that mention it.
-- `CLANKY_DISCORD_ENGAGEMENT_WINDOW_MINUTES`: same-user follow-up window in
-  unbound channels. Default `5`; `0` disables.
-- `CLANKY_DISCORD_WAKE_NAMES`: comma-separated natural names that count as
-  mentioning Clanky. Default `clanky,clank`.
+For the room side, jump to [AgentRoom Ecosystem Tour](docs://agent-room-docs/ecosystem).
 
-See `docs/AGENTROOM.md` for the integration contract.
+## Docs Map
 
-## State
+- [Start Here](docs/start-here.md): new-user product path.
+- [Pi Foundation](docs/pi-foundation.md): what Pi owns and what Clanky adds.
+- [First-Time Setup](docs/first-time-setup.md): install, auth, connectors.
+- [Using Clanky](docs/using-clanky.md): daily TUI, memory, Discord, voice,
+  media, AgentRoom, skills, and MCP workflows.
+- [Command Reference](docs/command-reference.md): CLI and slash commands.
+- [Memory And Privacy](docs/memory-and-privacy.md): profile-local state and
+  privacy controls.
+- [AgentRoom Integration](docs/AGENTROOM.md): launch, gateway ownership, and
+  room/profile boundaries.
 
-By default, Clanky stores profile state under `~/.clanky`. Use `--home` and
-`--profile` to isolate runs:
+## Local Development
 
 ```bash
-pnpm clanky --home ./.clanky --profile work
+pnpm check
+pnpm smoke
+pnpm clanky --help
+pnpm docs:dev
 ```
 
-The self-memory tool writes profile-local notes under the resolved profile
-directory. The static persona markdown in `agents/clanky/persona/SELF.md`
-remains the source for startup identity.
+Focused non-live checks:
+
+```bash
+pnpm smoke:clanky
+pnpm smoke:voice
+pnpm smoke:agent-tools
+pnpm voice:native:test
+```
 
 ---
 
@@ -1444,55 +1294,12 @@ Agent-owned Discord env:
 - `CLANKY_DISCORD_ENGAGEMENT_WINDOW_MINUTES` (default `5`; `0` disables)
 - `CLANKY_DISCORD_WAKE_NAMES` (comma-separated, default `clanky,clank`)
 
-Agent-owned Discord voice env:
-
-- `CLANKY_DISCORD_VOICE_ENABLED=1`
-- `CLANKY_DISCORD_VOICE_GUILD_ID`
-- `CLANKY_DISCORD_VOICE_CHANNEL_ID`
-- `CLANKY_DISCORD_VOICE_AUTO_JOIN=1` to join the configured target at startup
-  for dev/live-test runs. Without this, a configured target stays dormant until
-  `/discord-voice join` or the `discord_voice_join` tool requests a join.
-- `OPENAI_API_KEY`, `CLANKY_OPENAI_API_KEY`, or stored `/openai-login`
-- `CLANKY_DISCORD_VOICE_TTS_PROVIDER` or `CLANKY_VOICE_TTS_PROVIDER`
-  selects only the speech output provider (default `openai`; set to
-  `elevenlabs` to use external ElevenLabs speech)
-- `CLANKY_DISCORD_VOICE_REALTIME_AGENT_PROVIDER` or
-  `CLANKY_VOICE_REALTIME_AGENT_PROVIDER` selects the realtime reasoning/tool
-  agent provider (`openai` or `xai`; default `openai`)
-- `CLANKY_OPENAI_REALTIME_MODEL` controls the OpenAI Realtime reasoning/tool
-  agent model (default `gpt-realtime-2`)
-- `CLANKY_OPENAI_REALTIME_VOICE` (default `marin`; used by the default OpenAI
-  speech output path)
-- `CLANKY_OPENAI_REALTIME_REASONING_EFFORT` (default `low` with
-  `gpt-realtime-2`; supported values: `minimal`, `low`, `medium`, `high`,
-  `xhigh`)
-- `XAI_API_KEY`, `CLANKY_XAI_REALTIME_MODEL` (default `grok-voice-latest`),
-  and `CLANKY_XAI_REALTIME_VOICE` (default `eve`) when using
-  `CLANKY_DISCORD_VOICE_REALTIME_AGENT_PROVIDER=xai`
-- `CLANKY_OPENAI_REALTIME_TRANSCRIPTION_MODEL` (default
-  `gpt-realtime-whisper`)
-- `CLANKY_OPENAI_REALTIME_TRANSCRIPTION_DELAY` (default `low`; supported
-  values: `minimal`, `low`, `medium`, `high`, `xhigh`)
-- `CLANKY_OPENAI_REALTIME_TRANSCRIPTION_LANGUAGE` to provide a language hint
-  such as `en`
-- `CLANKY_ELEVENLABS_API_KEY`, `ELEVENLABS_API_KEY`, or stored
-  `/elevenlabs-login` when using `CLANKY_DISCORD_VOICE_TTS_PROVIDER=elevenlabs`
-- `CLANKY_ELEVENLABS_VOICE_ID` when using ElevenLabs speech without the TUI
-  voice setting
-- `CLANKY_ELEVENLABS_MODEL` (default `eleven_flash_v2_5`)
-- `CLANKY_ELEVENLABS_OUTPUT_FORMAT` (default `pcm_24000`; supported values:
-  `pcm_16000`, `pcm_22050`, `pcm_24000`, `pcm_44100`)
-- `CLANKY_ELEVENLABS_BASE_URL` or `ELEVENLABS_BASE_URL`
-- `CLANKY_DISCORD_VOICE_SPEAKER_TRANSCRIPTION_IDLE_CLOSE_MS` (default `120000`)
-  closes inactive per-speaker transcription sessions
-- `CLANKY_DISCORD_VOICE_TRANSCRIPT_RESPONSE_BATCH_DELAY_MS` (default `350`)
-  batches near-simultaneous speaker transcripts before asking the realtime voice
-  agent to respond
-- `CLANKY_DISCORD_VOICE_VIDEO_FRAME_INTERVAL_MS` (default `2000`) throttles
-  automatic Realtime attachment of decoded screen-share frames; snapshot
-  requests still attach the latest decoded frame immediately.
-- `CLANKY_CLANKVOX_DIR` or `CLANKY_CLANKVOX_BIN` to override the bundled
-  `clankvox` Rust source/binary lookup
+Agent-owned Discord voice is configured through `/discord-voice`, profile
+settings, and explicit voice env overrides for live checks. Keep the integration
+contract here focused on ownership: AgentRoom room-owned text connectors do not
+own Clanky's voice bridge. For the full voice model and live-run flags, use
+[Discord Voice Architecture](discord-voice-architecture.md) and
+[Discord Voice Live Runbook](qa/discord-voice-live-runbook.md).
 
 Voice reuses the agent-owned Discord client and token when text chat is
 agent-owned. If room-owned text chat suppresses the text bridge, voice can still
@@ -1521,29 +1328,9 @@ voice bridge falls back to `cargo run --release --locked` from the bundled
 `clankvox` directory. If a native build was previously attempted against the
 wrong system Opus library, run `pnpm voice:native:clean` before rebuilding.
 
-Run `pnpm voice:live` for a headless live check. It starts the same Clanky
-runtime/gateway stack, joins the configured voice channel, prints bridge status,
-and holds the session open for `CLANKY_DISCORD_VOICE_LIVE_MS` (default `60000`,
-`0` means until signal). It also prints periodic status with audio/tool/screen
-counters; set `CLANKY_DISCORD_VOICE_STATUS_MS=0` to disable that interval. Set
-`CLANKY_DISCORD_VOICE_REQUIRE_ALL=1` to fail the live run unless input audio,
-group audio overlap, output audio, tool calls, Pi delegation, stream watch, and
-screen frames all occurred. The individual `CLANKY_DISCORD_VOICE_REQUIRE_*`
-flags can be used for narrower checks. The harness prints a checklist for the
-enabled requirements after joining voice. Set `CLANKY_DISCORD_VOICE_SCRIPTED_PROMPT` to inject an
-initial text prompt into the realtime voice agent session after join; this can trigger
-spoken output or an `ask_pi` tool call without manual voice setup. Set
-`CLANKY_DISCORD_VOICE_STOP_WHEN_VALID=1` to stop the live run as soon as all
-enabled positive validation counters pass; error-only validation still runs for
-the full configured duration. Set `CLANKY_DISCORD_VOICE_FAIL_ON_REALTIME_ERROR=1`
-to also fail on Realtime API errors or Realtime socket errors/closes.
-Stream-watch and screen-frame validation require a `user-token` Discord
-credential.
-
-For the exact user-run checklist and copyable bot-token/user-token validation
-commands, including `CLANKY_DISCORD_VOICE_RESULT_PATH` for saving the final
-or startup-failure validation JSON, see
-[discord-voice-live-runbook.md](discord-voice-live-runbook.md).
+Run `pnpm voice:live` for a headless live check. The detailed credentialed
+checklist, result JSON flags, bot-token/user-token examples, and failure gates
+live in [Discord Voice Live Runbook](qa/discord-voice-live-runbook.md).
 
 ---
 

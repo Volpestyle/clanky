@@ -1,10 +1,10 @@
 # Clanky
 
-> Clanky is a stateful personal AI agent built on the Pi runtime, with Discord text + voice, scoped memory, subagents, and AgentRoom integration.
+> Clanky is a personal Pi agent for local work, memory, Discord text and voice, subagents, media, and AgentRoom participation.
 
 ## Start
 
-- [Start Here](https://volpestyle.github.io/clanky/?doc=start-here): A new-user map of Clanky, the Pi foundation, profiles, connectors, and the docs path.
+- [Start Here](https://volpestyle.github.io/clanky/?doc=start-here): What users can do, what Clanky should handle, and the mental model for Pi, profiles, Discord, voice, and AgentRoom.
 - [Overview](https://volpestyle.github.io/clanky/?doc=overview): Clanky's operating model, setup paths, bundled skills, and local development entry points.
 - [Pi Foundation](https://volpestyle.github.io/clanky/?doc=pi-foundation): What Clanky inherits from Pi, what Clanky adds, and why Pi commands still matter.
 

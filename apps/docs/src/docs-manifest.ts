@@ -4,7 +4,7 @@ export const site: DocsSiteInfo = {
 	id: "clanky-docs",
 	title: "Clanky Docs",
 	description:
-		"Clanky is a stateful personal AI agent built on the Pi runtime, with Discord text + voice, scoped memory, subagents, and AgentRoom integration.",
+		"Clanky is a personal Pi agent for local work, memory, Discord text and voice, subagents, media, and AgentRoom participation.",
 	badge: "localhost",
 	logo: {
 		src: "branding/clanky-icon-32.png",
@@ -16,7 +16,7 @@ export const site: DocsSiteInfo = {
 		baseUrl: "https://volpestyle.github.io/clanky",
 		title: "Clanky",
 		blurb:
-			"Clanky is a stateful personal AI agent built on the Pi runtime, with Discord text + voice, scoped memory, subagents, and AgentRoom integration.",
+			"Clanky is a personal Pi agent for local work, memory, Discord text and voice, subagents, media, and AgentRoom participation.",
 		excludeGroupsFromFull: ["Maintainer"],
 	},
 	siteLinks: [
@@ -50,7 +50,8 @@ export const docsMeta: DocMeta[] = [
 	{
 		slug: "start-here",
 		title: "Start Here",
-		description: "A new-user map of Clanky, the Pi foundation, profiles, connectors, and the docs path.",
+		description:
+			"What users can do, what Clanky should handle, and the mental model for Pi, profiles, Discord, voice, and AgentRoom.",
 		source: "docs/start-here.md",
 		group: "Start",
 	},

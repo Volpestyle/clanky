@@ -170,55 +170,12 @@ Agent-owned Discord env:
 - `CLANKY_DISCORD_ENGAGEMENT_WINDOW_MINUTES` (default `5`; `0` disables)
 - `CLANKY_DISCORD_WAKE_NAMES` (comma-separated, default `clanky,clank`)
 
-Agent-owned Discord voice env:
-
-- `CLANKY_DISCORD_VOICE_ENABLED=1`
-- `CLANKY_DISCORD_VOICE_GUILD_ID`
-- `CLANKY_DISCORD_VOICE_CHANNEL_ID`
-- `CLANKY_DISCORD_VOICE_AUTO_JOIN=1` to join the configured target at startup
-  for dev/live-test runs. Without this, a configured target stays dormant until
-  `/discord-voice join` or the `discord_voice_join` tool requests a join.
-- `OPENAI_API_KEY`, `CLANKY_OPENAI_API_KEY`, or stored `/openai-login`
-- `CLANKY_DISCORD_VOICE_TTS_PROVIDER` or `CLANKY_VOICE_TTS_PROVIDER`
-  selects only the speech output provider (default `openai`; set to
-  `elevenlabs` to use external ElevenLabs speech)
-- `CLANKY_DISCORD_VOICE_REALTIME_AGENT_PROVIDER` or
-  `CLANKY_VOICE_REALTIME_AGENT_PROVIDER` selects the realtime reasoning/tool
-  agent provider (`openai` or `xai`; default `openai`)
-- `CLANKY_OPENAI_REALTIME_MODEL` controls the OpenAI Realtime reasoning/tool
-  agent model (default `gpt-realtime-2`)
-- `CLANKY_OPENAI_REALTIME_VOICE` (default `marin`; used by the default OpenAI
-  speech output path)
-- `CLANKY_OPENAI_REALTIME_REASONING_EFFORT` (default `low` with
-  `gpt-realtime-2`; supported values: `minimal`, `low`, `medium`, `high`,
-  `xhigh`)
-- `XAI_API_KEY`, `CLANKY_XAI_REALTIME_MODEL` (default `grok-voice-latest`),
-  and `CLANKY_XAI_REALTIME_VOICE` (default `eve`) when using
-  `CLANKY_DISCORD_VOICE_REALTIME_AGENT_PROVIDER=xai`
-- `CLANKY_OPENAI_REALTIME_TRANSCRIPTION_MODEL` (default
-  `gpt-realtime-whisper`)
-- `CLANKY_OPENAI_REALTIME_TRANSCRIPTION_DELAY` (default `low`; supported
-  values: `minimal`, `low`, `medium`, `high`, `xhigh`)
-- `CLANKY_OPENAI_REALTIME_TRANSCRIPTION_LANGUAGE` to provide a language hint
-  such as `en`
-- `CLANKY_ELEVENLABS_API_KEY`, `ELEVENLABS_API_KEY`, or stored
-  `/elevenlabs-login` when using `CLANKY_DISCORD_VOICE_TTS_PROVIDER=elevenlabs`
-- `CLANKY_ELEVENLABS_VOICE_ID` when using ElevenLabs speech without the TUI
-  voice setting
-- `CLANKY_ELEVENLABS_MODEL` (default `eleven_flash_v2_5`)
-- `CLANKY_ELEVENLABS_OUTPUT_FORMAT` (default `pcm_24000`; supported values:
-  `pcm_16000`, `pcm_22050`, `pcm_24000`, `pcm_44100`)
-- `CLANKY_ELEVENLABS_BASE_URL` or `ELEVENLABS_BASE_URL`
-- `CLANKY_DISCORD_VOICE_SPEAKER_TRANSCRIPTION_IDLE_CLOSE_MS` (default `120000`)
-  closes inactive per-speaker transcription sessions
-- `CLANKY_DISCORD_VOICE_TRANSCRIPT_RESPONSE_BATCH_DELAY_MS` (default `350`)
-  batches near-simultaneous speaker transcripts before asking the realtime voice
-  agent to respond
-- `CLANKY_DISCORD_VOICE_VIDEO_FRAME_INTERVAL_MS` (default `2000`) throttles
-  automatic Realtime attachment of decoded screen-share frames; snapshot
-  requests still attach the latest decoded frame immediately.
-- `CLANKY_CLANKVOX_DIR` or `CLANKY_CLANKVOX_BIN` to override the bundled
-  `clankvox` Rust source/binary lookup
+Agent-owned Discord voice is configured through `/discord-voice`, profile
+settings, and explicit voice env overrides for live checks. Keep the integration
+contract here focused on ownership: AgentRoom room-owned text connectors do not
+own Clanky's voice bridge. For the full voice model and live-run flags, use
+[Discord Voice Architecture](discord-voice-architecture.md) and
+[Discord Voice Live Runbook](qa/discord-voice-live-runbook.md).
 
 Voice reuses the agent-owned Discord client and token when text chat is
 agent-owned. If room-owned text chat suppresses the text bridge, voice can still
@@ -247,26 +204,6 @@ voice bridge falls back to `cargo run --release --locked` from the bundled
 `clankvox` directory. If a native build was previously attempted against the
 wrong system Opus library, run `pnpm voice:native:clean` before rebuilding.
 
-Run `pnpm voice:live` for a headless live check. It starts the same Clanky
-runtime/gateway stack, joins the configured voice channel, prints bridge status,
-and holds the session open for `CLANKY_DISCORD_VOICE_LIVE_MS` (default `60000`,
-`0` means until signal). It also prints periodic status with audio/tool/screen
-counters; set `CLANKY_DISCORD_VOICE_STATUS_MS=0` to disable that interval. Set
-`CLANKY_DISCORD_VOICE_REQUIRE_ALL=1` to fail the live run unless input audio,
-group audio overlap, output audio, tool calls, Pi delegation, stream watch, and
-screen frames all occurred. The individual `CLANKY_DISCORD_VOICE_REQUIRE_*`
-flags can be used for narrower checks. The harness prints a checklist for the
-enabled requirements after joining voice. Set `CLANKY_DISCORD_VOICE_SCRIPTED_PROMPT` to inject an
-initial text prompt into the realtime voice agent session after join; this can trigger
-spoken output or an `ask_pi` tool call without manual voice setup. Set
-`CLANKY_DISCORD_VOICE_STOP_WHEN_VALID=1` to stop the live run as soon as all
-enabled positive validation counters pass; error-only validation still runs for
-the full configured duration. Set `CLANKY_DISCORD_VOICE_FAIL_ON_REALTIME_ERROR=1`
-to also fail on Realtime API errors or Realtime socket errors/closes.
-Stream-watch and screen-frame validation require a `user-token` Discord
-credential.
-
-For the exact user-run checklist and copyable bot-token/user-token validation
-commands, including `CLANKY_DISCORD_VOICE_RESULT_PATH` for saving the final
-or startup-failure validation JSON, see
-[discord-voice-live-runbook.md](discord-voice-live-runbook.md).
+Run `pnpm voice:live` for a headless live check. The detailed credentialed
+checklist, result JSON flags, bot-token/user-token examples, and failure gates
+live in [Discord Voice Live Runbook](qa/discord-voice-live-runbook.md).
