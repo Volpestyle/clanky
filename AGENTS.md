@@ -24,6 +24,7 @@
   - `agents/clanky` (`@clanky/agent`) owns the runnable Pi `InteractiveMode`, persona wiring, and the `clanky` bin.
   - `packages/clanky-core` (`@clanky/core`) owns Pi integration, memory, profile paths, state storage, Linear stores, skills loading, and model-facing tools.
   - `skills/` holds bundled Clanky skills loaded from disk.
+- Durable Clanky configuration belongs to the active profile (`auth.json`, `discord-voice.json`, `models.json`, profile-local stores). TUI setup commands should edit those stores and report the active source; env vars are explicit launch overrides. Do not add hidden TUI-only persistent state or move AgentRoom room topology into Clanky.
 - Chat gateways (Discord, etc.) are not packages in this repo. Clanky consumes them by importing `@agentroom/chat-discord` for agent-owned conversations, even when also participating in AgentRoom. Room-owned connector channels are owned by the AgentRoom daemon. See `docs/AGENTROOM.md`.
 - Do not patch or vendor Pi. Use published `@earendil-works/pi-*` packages and exported APIs.
 

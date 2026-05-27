@@ -38,6 +38,13 @@ export const docsMeta: DocMeta[] = [
 		group: "Setup",
 	},
 	{
+		slug: "configuration",
+		title: "Configuration Model",
+		description: "Profile-local source-of-truth, TUI editor, env override, and AgentRoom boundary rules.",
+		source: "docs/configuration.md",
+		group: "Setup",
+	},
+	{
 		slug: "using-clanky",
 		title: "Using Clanky",
 		description: "Day-to-day TUI, memory, Discord, voice, web/media, AgentRoom, skills, and MCP workflows.",

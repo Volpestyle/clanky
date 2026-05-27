@@ -11,6 +11,7 @@
 ## Setup
 
 - [First-Time Setup](https://volpestyle.github.io/clanky/?doc=first-time-setup): Install, fresh-user onboarding, persistent profiles, model auth, and optional connector setup.
+- [Configuration Model](https://volpestyle.github.io/clanky/?doc=configuration): Profile-local source-of-truth, TUI editor, env override, and AgentRoom boundary rules.
 - [Using Clanky](https://volpestyle.github.io/clanky/?doc=using-clanky): Day-to-day TUI, memory, Discord, voice, web/media, AgentRoom, skills, and MCP workflows.
 
 ## Reference
