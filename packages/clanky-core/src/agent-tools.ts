@@ -662,7 +662,7 @@ class SubagentPanelController {
 			return;
 		}
 		if (command === "json") {
-			ctx.ui.notify(formatCommandResult("Subagents", await this.listSubagents()));
+			ctx.ui.notify(formatRawCommandResult("Subagents", await this.listSubagents()));
 			return;
 		}
 		if (command === "status" || command === "once") {
@@ -2725,7 +2725,361 @@ function memoryCommandSearch(args: string, cwd: string): MemorySearchOptions {
 }
 
 function formatCommandResult(title: string, details: unknown): string {
-	return `${title}\n${JSON.stringify(details ?? null, null, "\t")}`;
+	if (title === "Profile") return formatProfileCommandResult(details);
+	if (title === "Skills" || title === "Skill") return formatSkillsCommandResult(title, details);
+	if (title === "MCP") return formatMcpCommandResult(details);
+	if (title === "Web Operator") return formatWebCommandResult(details);
+	if (title === "Media Operator") return formatMediaCommandResult(details);
+	if (title === "Memory" || title.startsWith("Memory ") || title.startsWith("Forget ")) {
+		return formatMemoryCommandResult(title, details);
+	}
+	if (title === "Cron") return formatCronCommandResult(details);
+	return formatGenericCommandResult(title, details);
+}
+
+function formatRawCommandResult(title: string, details: unknown): string {
+	return `${title}\n${JSON.stringify(details ?? null, null, 2)}`;
+}
+
+function formatProfileCommandResult(details: unknown): string {
+	if (!isRecord(details)) return formatGenericCommandResult("Profile", details);
+	const lines = ["Profile"];
+	appendField(lines, "Name", readString(details, "profile"));
+	appendField(lines, "Home", readString(details, "homeDir"));
+	appendField(lines, "Profile dir", readString(details, "profileDir"));
+	appendField(lines, "Sessions", readString(details, "sessionsDir"));
+	appendField(lines, "Skills", readString(details, "skillsDir"));
+	appendField(lines, "Profile skills", readString(details, "profileSkillsDir"));
+	const chatMode = readString(details, "chatMode");
+	const chatGatewayOwner = readString(details, "chatGatewayOwner");
+	if (chatMode !== undefined || chatGatewayOwner !== undefined) {
+		lines.push(`Chat: ${chatMode ?? "unknown"}; gateway owner ${chatGatewayOwner ?? "unknown"}.`);
+	}
+	const agentChatGatewayEnabled = readBoolean(details, "agentChatGatewayEnabled");
+	if (agentChatGatewayEnabled !== undefined) {
+		lines.push(`Agent chat gateway: ${agentChatGatewayEnabled ? "enabled" : "disabled"}.`);
+	}
+	return lines.join("\n");
+}
+
+function formatSkillsCommandResult(title: string, details: unknown): string {
+	if (!isRecord(details)) return formatGenericCommandResult(title, details);
+	const created = readRecord(details, "created");
+	if (created !== undefined) {
+		const lines = ["Skill created"];
+		appendField(lines, "Name", readString(created, "name"));
+		appendField(lines, "File", readString(created, "filePath"));
+		appendField(lines, "Invoke", readString(details, "invoke"));
+		return lines.join("\n");
+	}
+
+	const skills = readRecordArray(details, "skills");
+	const diagnostics = readUnknownArray(details, "diagnostics");
+	const lines = [title, `Loaded: ${skills.length}`];
+	if (skills.length === 0) {
+		lines.push("No Clanky skills loaded.");
+	} else {
+		for (const skill of skills) lines.push(formatSkillSummary(skill));
+	}
+	if (diagnostics.length > 0) {
+		lines.push("", `Diagnostics: ${diagnostics.length}`);
+		for (const diagnostic of diagnostics) lines.push(`- ${formatPlainValue(diagnostic)}`);
+	}
+	return lines.join("\n");
+}
+
+function formatSkillSummary(skill: Record<string, unknown>): string {
+	const name = readString(skill, "name") ?? "(unnamed)";
+	const description = readString(skill, "description") ?? readString(skill, "whenToUse");
+	if (description === undefined) return `- ${name}`;
+	return `- ${name}: ${truncateForLine(description, 120)}`;
+}
+
+function formatMcpCommandResult(details: unknown): string {
+	const servers = Array.isArray(details)
+		? details.filter(isRecord)
+		: isRecord(details)
+			? readRecordArray(details, "servers")
+			: [];
+	const lines = ["MCP", `Servers: ${servers.length}`];
+	if (servers.length === 0) {
+		lines.push("No external MCP servers are configured.");
+		return lines.join("\n");
+	}
+	for (const server of servers) {
+		const name = readString(server, "server") ?? "(unnamed)";
+		const disabled = readBoolean(server, "disabled") === true;
+		const error = readString(server, "error");
+		const tools = readRecordArray(server, "tools");
+		const status = disabled ? "disabled" : error !== undefined ? "error" : "ready";
+		lines.push(`- ${name}: ${status}${tools.length > 0 ? ` (${tools.length} tools)` : ""}`);
+		appendIndentedField(lines, "Command", commandLineLabel(server));
+		appendIndentedField(lines, "Allowed tools", readStringArray(server, "allowedTools").join(", ") || undefined);
+		appendIndentedField(lines, "Error", error);
+		if (tools.length > 0) {
+			const names = tools.map((tool) => readString(tool, "name")).filter((name): name is string => name !== undefined);
+			appendIndentedField(lines, "Tools", names.join(", "));
+		}
+	}
+	return lines.join("\n");
+}
+
+function commandLineLabel(record: Record<string, unknown>): string | undefined {
+	const command = readString(record, "command");
+	if (command === undefined) return undefined;
+	const args = readStringArray(record, "args");
+	return [command, ...args].join(" ");
+}
+
+function formatWebCommandResult(details: unknown): string {
+	if (!isRecord(details)) return formatGenericCommandResult("Web Operator", details);
+	const lines = ["Web Operator"];
+	appendField(lines, "Cwd", readString(details, "cwd"));
+	appendField(lines, "Clanky root", readString(details, "clankyRoot"));
+	const openAi = readRecord(details, "openaiWebSearch");
+	if (openAi !== undefined) lines.push(formatBackendCapability("OpenAI web search", openAi));
+	const backends = readRecord(details, "backends");
+	if (backends !== undefined) {
+		lines.push("", "Backends");
+		for (const [name, value] of Object.entries(backends)) {
+			if (!isRecord(value)) continue;
+			lines.push(formatBackendCapability(name, value));
+		}
+	}
+	const tools = readRecord(details, "tools");
+	if (tools !== undefined) {
+		lines.push("", "Tools");
+		for (const [name, value] of Object.entries(tools)) {
+			if (!isRecord(value)) continue;
+			lines.push(formatBackendCapability(name, value));
+		}
+	}
+	return lines.join("\n");
+}
+
+function formatMediaCommandResult(details: unknown): string {
+	if (!isRecord(details)) return formatGenericCommandResult("Media Operator", details);
+	const lines = ["Media Operator"];
+	appendField(lines, "Output dir", readString(details, "outputDir"));
+	const capabilities = [
+		["OpenAI images", readRecord(details, "openaiImages")],
+		["xAI images", readRecord(details, "xaiImagineImages")],
+		["xAI videos", readRecord(details, "xaiImagineVideos")],
+	] as const;
+	for (const [label, capability] of capabilities) {
+		if (capability !== undefined) lines.push(formatBackendCapability(label, capability));
+	}
+	return lines.join("\n");
+}
+
+function formatBackendCapability(label: string, details: Record<string, unknown>): string {
+	const available = readBoolean(details, "available");
+	const state = available === undefined ? "configured" : available ? "available" : "missing";
+	const parts = [`- ${label}: ${state}`];
+	const model = readString(details, "model");
+	const source = readString(details, "apiKeySource");
+	const path = readString(details, "path");
+	const command = readString(details, "command");
+	const access = readString(details, "access");
+	if (model !== undefined) parts.push(`model ${model}`);
+	if (source !== undefined) parts.push(`source ${source}`);
+	if (path !== undefined) parts.push(path);
+	else if (command !== undefined) parts.push(command);
+	if (access !== undefined) parts.push(`access ${access}`);
+	return parts.join("; ");
+}
+
+function formatMemoryCommandResult(title: string, details: unknown): string {
+	if (!isRecord(details)) return formatGenericCommandResult(title, details);
+	if (title === "Memory Export") return formatMemoryExport(details);
+	const atoms = readRecordArray(details, "atoms");
+	if (atoms.length > 0 || details.atoms !== undefined) return formatMemorySearch(details, atoms);
+	const saved = readBoolean(details, "saved");
+	if (saved !== undefined) return formatMemoryWrite(details, saved);
+	const forgotten = readNumber(details, "forgotten");
+	if (forgotten !== undefined) return [title, `Forgotten memories: ${forgotten}`].join("\n");
+	const enabled = readBoolean(details, "enabled");
+	if (enabled !== undefined) {
+		const lines = [title, `Memory: ${enabled ? "enabled" : "disabled"}`];
+		appendField(lines, "Scope", readString(details, "scope"));
+		appendField(lines, "Subject", readString(details, "subjectId"));
+		appendField(lines, "Mode", readString(details, "mode"));
+		return lines.join("\n");
+	}
+	return formatGenericCommandResult(title, details);
+}
+
+function formatMemorySearch(details: Record<string, unknown>, atoms: Record<string, unknown>[]): string {
+	const lines = ["Memory"];
+	appendField(lines, "Query", readString(details, "query"));
+	lines.push(`Matches: ${atoms.length}`);
+	if (atoms.length === 0) {
+		lines.push("No matching memories. Use /memory remember <claim> to save a project memory.");
+		return lines.join("\n");
+	}
+	for (const atom of atoms) lines.push(formatMemoryAtom(atom));
+	return lines.join("\n");
+}
+
+function formatMemoryWrite(details: Record<string, unknown>, saved: boolean): string {
+	if (saved) {
+		const atom = readRecord(details, "atom");
+		const lines = ["Memory", "Saved memory."];
+		if (atom !== undefined) {
+			appendField(lines, "Id", readString(atom, "id"));
+			appendField(lines, "Claim", readString(atom, "claim"));
+		}
+		return lines.join("\n");
+	}
+	const candidate = readRecord(details, "candidate");
+	const lines = ["Memory", "Memory was not saved."];
+	appendField(lines, "Reason", readString(details, "rejectedReason"));
+	if (readBoolean(details, "needsConfirmation") === true) lines.push("Confirmation is required before saving.");
+	if (candidate !== undefined) appendField(lines, "Claim", readString(candidate, "claim"));
+	return lines.join("\n");
+}
+
+function formatMemoryExport(details: Record<string, unknown>): string {
+	const atoms = readRecordArray(details, "atoms");
+	const events = readRecordArray(details, "events");
+	const consent = readRecordArray(details, "consent");
+	const self = readString(details, "self");
+	const lines = [
+		"Memory Export",
+		`Self memory: ${self === undefined ? "missing" : `${self.length} chars`}`,
+		`Atoms: ${atoms.length}`,
+		`Events: ${events.length}`,
+		`Consent rows: ${consent.length}`,
+	];
+	if (atoms.length > 0) {
+		lines.push("", "Atoms");
+		for (const atom of atoms) lines.push(formatMemoryAtom(atom));
+	}
+	return lines.join("\n");
+}
+
+function formatMemoryAtom(atom: Record<string, unknown>): string {
+	const id = readString(atom, "id") ?? "(no id)";
+	const scope = readString(atom, "scope") ?? "unknown";
+	const subjectId = readString(atom, "subjectId") ?? "unknown";
+	const type = readString(atom, "type") ?? "fact";
+	const claim = truncateForLine(readString(atom, "claim") ?? "(empty claim)", 140);
+	return `- ${id} [${scope}/${subjectId}/${type}] ${claim}`;
+}
+
+function formatCronCommandResult(details: unknown): string {
+	if (Array.isArray(details)) return formatRecordListCommandResult("Cron", "Jobs", details.filter(isRecord));
+	if (!isRecord(details)) return formatGenericCommandResult("Cron", details);
+	const jobs = readRecordArray(details, "jobs");
+	if (jobs.length > 0 || details.jobs !== undefined) return formatRecordListCommandResult("Cron", "Jobs", jobs);
+	return formatGenericCommandResult("Cron", details);
+}
+
+function formatRecordListCommandResult(title: string, label: string, records: Record<string, unknown>[]): string {
+	const lines = [title, `${label}: ${records.length}`];
+	for (const record of records) lines.push(`- ${summarizeRecord(record)}`);
+	return lines.join("\n");
+}
+
+function formatGenericCommandResult(title: string, details: unknown): string {
+	if (details === undefined || details === null) return `${title}\nNo data.`;
+	if (Array.isArray(details)) {
+		const lines = [title, `Items: ${details.length}`];
+		for (const item of details) lines.push(`- ${formatPlainValue(item)}`);
+		return lines.join("\n");
+	}
+	if (isRecord(details)) {
+		const lines = [title];
+		for (const [key, value] of Object.entries(details)) lines.push(`${humanizeKey(key)}: ${formatPlainValue(value)}`);
+		return lines.join("\n");
+	}
+	return `${title}\n${String(details)}`;
+}
+
+function summarizeRecord(record: Record<string, unknown>): string {
+	const preferred = ["id", "name", "schedule", "prompt", "status", "state", "description"];
+	const parts: string[] = [];
+	for (const key of preferred) {
+		const value = record[key];
+		if (typeof value === "string" && value.length > 0) parts.push(`${humanizeKey(key)} ${truncateForLine(value, 80)}`);
+	}
+	if (parts.length > 0) return parts.join("; ");
+	return `${Object.keys(record).length} fields`;
+}
+
+function formatPlainValue(value: unknown): string {
+	if (value === undefined) return "not set";
+	if (value === null) return "null";
+	if (typeof value === "string") return truncateForLine(value, 160);
+	if (typeof value === "number" || typeof value === "boolean") return String(value);
+	if (Array.isArray(value)) {
+		const primitives = value.filter(
+			(item): item is string | number | boolean =>
+				typeof item === "string" || typeof item === "number" || typeof item === "boolean",
+		);
+		if (primitives.length === value.length && primitives.length <= 8) return primitives.join(", ");
+		return `${value.length} item${value.length === 1 ? "" : "s"}`;
+	}
+	if (isRecord(value)) return summarizeRecord(value);
+	return String(value);
+}
+
+function appendField(lines: string[], label: string, value: string | undefined): void {
+	if (value !== undefined && value.length > 0) lines.push(`${label}: ${value}`);
+}
+
+function appendIndentedField(lines: string[], label: string, value: string | undefined): void {
+	if (value !== undefined && value.length > 0) lines.push(`  ${label}: ${value}`);
+}
+
+function readString(record: Record<string, unknown>, key: string): string | undefined {
+	const value = record[key];
+	return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function readNumber(record: Record<string, unknown>, key: string): number | undefined {
+	const value = record[key];
+	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readBoolean(record: Record<string, unknown>, key: string): boolean | undefined {
+	const value = record[key];
+	return typeof value === "boolean" ? value : undefined;
+}
+
+function readRecord(record: Record<string, unknown>, key: string): Record<string, unknown> | undefined {
+	const value = record[key];
+	return isRecord(value) ? value : undefined;
+}
+
+function readUnknownArray(record: Record<string, unknown>, key: string): unknown[] {
+	const value = record[key];
+	return Array.isArray(value) ? value : [];
+}
+
+function readRecordArray(record: Record<string, unknown>, key: string): Record<string, unknown>[] {
+	const value = record[key];
+	return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
+function readStringArray(record: Record<string, unknown>, key: string): string[] {
+	const value = record[key];
+	return Array.isArray(value)
+		? value.filter((item): item is string => typeof item === "string" && item.length > 0)
+		: [];
+}
+
+function humanizeKey(key: string): string {
+	return key
+		.replaceAll(/([a-z0-9])([A-Z])/g, "$1 $2")
+		.replaceAll(/[_-]+/g, " ")
+		.replace(/^./, (char) => char.toUpperCase());
+}
+
+function truncateForLine(text: string, maxLength: number): string {
+	if (text.length <= maxLength) return text;
+	if (maxLength <= 3) return text.slice(0, maxLength);
+	return `${text.slice(0, maxLength - 3)}...`;
 }
 
 function latestMemoryExplanation(ctx: ExtensionCommandContext): string {

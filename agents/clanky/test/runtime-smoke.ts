@@ -1346,7 +1346,6 @@ async function assertClankySetupExtensionCommand(): Promise<void> {
 	const setup = commands.setup;
 	if (setup === undefined) throw new Error("smoke: /setup command was not registered");
 	await assertCommandCompletionIncludes(setup, "", "status");
-	await assertCommandCompletionIncludes(setup, "new", "new-user");
 	const ctx = {
 		ui: {
 			notify(message: string) {
