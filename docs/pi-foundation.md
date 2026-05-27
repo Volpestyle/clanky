@@ -102,7 +102,7 @@ uses its own home and profile layout instead:
       work-trackers/
       subagents/
       index.db
-      cron/
+      scheduler/ (optional)
       discord-voice.json
       discord-bridge.log
       discord-voice.log

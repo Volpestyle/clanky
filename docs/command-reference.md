@@ -177,7 +177,7 @@ Environment variables still override stored credentials where supported.
 | `/subagents hide` | Hide the panel. |
 | `/subagents status` | Print subagent status once. |
 | `/subagents json` | Print raw subagent status. |
-| `/cron` | Show Clanky cron jobs when cron handlers are configured. |
+| `/cron` | Show configured Clanky scheduled jobs when scheduler handlers are wired. |
 
 ## Model-Facing Tool Families
 
@@ -200,4 +200,5 @@ are available and credentials/policy allow it:
 - MCP: `mcp_list_tools`, `mcp_call`.
 
 `task_create` and `schedule_cron` exist in the shared tool layer, but are only
-present in a runtime when their handlers are wired.
+present in a runtime when their handlers are wired. They are not part of the
+default Pi foreground-thread path.

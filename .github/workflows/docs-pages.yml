@@ -21,11 +21,10 @@ jobs:
   docs-pages:
     permissions:
       contents: read
-      pages: write
-      id-token: write
     uses: Volpestyle/docs/.github/workflows/docs-pages.yml@main
     with:
-      docs-base-path: /clanky/
+      docs-base-path: /docs/clanky/
+      site-slug: clanky
       node-version: "22"
       pnpm-version: "10.33.4"
       prepare-command: |
@@ -35,3 +34,5 @@ jobs:
         mkdir -p ../discord_mcp
         printf '%s\n' '{"name":"discord-mcp","version":"0.0.0","type":"module","bin":{"discord-mcp":"index.js"},"engines":{"node":">=22.19.0"},"dependencies":{"@modelcontextprotocol/sdk":"^1.29.0","tsx":"^4.22.3","zod":"^3.25.76"}}' > ../discord_mcp/package.json
         printf '%s\n' '#!/usr/bin/env node' > ../discord_mcp/index.js
+    secrets:
+      docs-publish-token: ${{ secrets.DOCS_PUBLISH_TOKEN }}

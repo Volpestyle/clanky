@@ -1445,7 +1445,7 @@ function registerClankyCommands(
 ): void {
 	if (handlers.listCron !== undefined) {
 		pi.registerCommand("cron", {
-			description: "Show Clanky cron jobs",
+			description: "Show configured Clanky scheduled jobs",
 			handler: async (_args, ctx) => {
 				ctx.ui.notify(formatCommandResult("Cron", await handlers.listCron?.()));
 			},
@@ -2631,12 +2631,11 @@ export function createClankyToolDefinitions(
 		tools.push(
 			defineTool({
 				name: "schedule_cron",
-				label: "Schedule Cron",
-				description: "Create a Clanky cron job for a prompt that should run later or on a schedule.",
-				promptSnippet: "schedule_cron: schedule a prompt to run later or repeatedly through the Clanky daemon.",
-				promptGuidelines: [
-					"Set provider/model only when the user asks for a specific model for the scheduled cron prompt.",
-				],
+				label: "Schedule Prompt",
+				description: "Create a Clanky scheduled prompt when a scheduler is configured.",
+				promptSnippet:
+					"schedule_cron: schedule a prompt to run later or repeatedly when a Clanky scheduler is configured.",
+				promptGuidelines: ["Set provider/model only when the user asks for a specific model for the scheduled prompt."],
 				parameters: scheduleCronSchema,
 				async execute(_toolCallId, params) {
 					return toolResult(await scheduleCron(normalizeScheduleCronToolInput(params)));
@@ -2703,7 +2702,7 @@ export function createClankyToolDefinitions(
 			defineTool({
 				name: "mcp_call",
 				label: "MCP Call",
-				description: "Call a tool on an external MCP server configured in the Clanky daemon.",
+				description: "Call a tool on an external MCP server configured for this Clanky profile.",
 				promptSnippet: "mcp_call: call a configured external MCP server tool by server and tool name.",
 				promptGuidelines: [
 					"Use mcp_call only for MCP servers listed in Clanky status or the /mcp command.",
