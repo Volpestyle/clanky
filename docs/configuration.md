@@ -22,7 +22,8 @@ you are editing.
 The active profile owns durable personal Clanky configuration and state:
 
 - `<profileDir>/auth.json` stores profile credentials such as OpenAI,
-  agent-owned gateway adapters, xAI, and ElevenLabs with `0600` permissions.
+  agent-owned communication gateway adapters, xAI, and ElevenLabs with `0600`
+  permissions.
 - `<profileDir>/discord-voice.json` stores non-secret Discord voice settings
   edited by `/discord-voice`.
 - `<profileDir>/models.json` stores custom model registry entries used by Pi's
@@ -71,7 +72,8 @@ the active source in status output.
 Clanky profile config and AgentRoom room config are separate:
 
 - Clanky owns personal credentials, profile memory, persona state, sessions,
-  skills, Clanky's native Pi session thread, and agent-owned gateway settings.
+  skills, Clanky's native Pi session thread, and agent-owned communication
+  gateway settings.
 - AgentRoom owns `.agentroom/config.yaml`, runtime topology, room-owned chat
   gateways, room routes, and audited room coordination.
 
@@ -89,7 +91,6 @@ workTracker:
     linear:
       type: linear
       tokenEnv: LINEAR_API_KEY
-      commandEnv: AGENTROOM_LINEAR_COMMAND
       teamId: team_123
 
 clanky:
@@ -100,8 +101,11 @@ clanky:
 
 Precedence remains explicit: `--home` / `--profile` and `CLANKY_HOME` /
 `CLANKY_PROFILE` win over the portable Clanky defaults. The AgentRoom block can
-set default work tracker selection and Linear team id, but it only names secret
-environment variables; it does not store API keys.
+set the selected work tracker and provider-local defaults such as a team id, but
+it only names secret environment variables; it does not store API keys or make
+Clanky own provider-specific API calls. Tracker creation, comments, and status
+updates still go through the installed MCP server, CLI, or skill for that
+provider.
 
 ## Rule For New Settings
 

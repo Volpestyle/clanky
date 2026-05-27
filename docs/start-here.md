@@ -17,12 +17,13 @@ Clanky gives you a local agent that can carry personal context across tools:
   slash commands
 - keep profile-local auth, memory, sessions, skills, and connector settings
 - ask Clanky to remember source-grounded facts, then inspect or forget them
-- connect external chat gateways, with Discord as the current agent-owned
-  adapter for DMs, mentions, replies, and optional channel binding
+- connect external communication gateways, with Discord as the current
+  agent-owned text adapter for DMs, mentions, replies, and optional channel
+  binding
 - let gateway requests run through subagents while the foreground session keeps
   working
-- join Discord voice through the current media adapter, hear speakers, speak
-  back, and delegate durable work to Pi
+- join live voice through the current Discord/ClankVox media adapter, hear
+  speakers, speak back, and delegate durable work to Pi
 - use web, browser, media generation, Linear, Discord, and other connected tool
   skills when configured
 - join an AgentRoom room as a normal Pi harness while keeping profile ownership
@@ -56,7 +57,7 @@ flowchart TB
   thread["Canonical Clanky thread<br/>Pi session messaging"]
   clanky["Clanky layer<br/>persona, memory, profile, skills, gateway adapters"]
   profile["Profile stores<br/>auth, sessions, memory, voice, subagents"]
-  chat["Chat gateways<br/>Discord today, others later"]
+  chat["Communication gateways<br/>Discord today, others later"]
   voice["Voice/media gateways<br/>ClankVox Discord today"]
   vox["ClankVox<br/>RTP, Opus, DAVE, Go Live"]
   room["AgentRoom<br/>optional coordination room"]
@@ -73,8 +74,9 @@ flowchart TB
 Pi is the generic agent harness. Clanky configures that harness with personal
 state, memory, skills, and gateway adapters. The local Pi session thread is
 Clanky's built-in messaging; Discord text, AgentRoom send/read, and future
-Slack-style integrations are gateways into or out of that thread. ClankVox sits
-under the current Discord voice adapter as deterministic transport code.
+Slack, Telegram, SMS, webhook, or huddle-style integrations are gateways into
+or out of that thread. ClankVox sits under the current Discord voice adapter as
+deterministic transport code.
 AgentRoom sits around Clanky when you want multi-agent coordination.
 
 ## First Path To Try
@@ -103,7 +105,7 @@ Summarize this repository and tell me how to run the non-live checks.
 ```
 
 That proves the Pi TUI, Clanky profile setup, model auth path, context loading,
-and basic tool use before you involve Discord or voice.
+and basic tool use before you involve communication gateways or voice.
 
 ## Normal Personal Profile
 
@@ -132,6 +134,8 @@ is unsupported.
 - [First-Time Setup](first-time-setup.md): prerequisites, install, fresh-user
   test, and connector setup.
 - [Using Clanky](using-clanky.md): day-to-day workflows once the profile works.
+- [Communication Gateways](communication-gateways.md): chat and voice/media
+  gateway abstraction, ownership, and subagent routing.
 - [Command Reference](command-reference.md): CLI commands, Pi slash commands,
   Clanky slash commands, and model-facing tools.
 - [Memory And Privacy](memory-and-privacy.md): profile state, auth storage,

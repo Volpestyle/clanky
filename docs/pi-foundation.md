@@ -58,8 +58,9 @@ is appended to the startup prompt as well. It also uses Pi's `skillsOverride` to
 merge bundled/profile Clanky skills with Pi-discovered skills.
 
 Clanky's built-in messaging is still Pi's session thread. Discord text,
-AgentRoom send/read, and future Slack-style integrations are gateways into or
-out of that thread; they do not replace the native session model.
+AgentRoom send/read, and future Slack, Telegram, SMS, webhook, or huddle-style
+integrations are gateways into or out of that thread; they do not replace the
+native session model.
 
 ## Runtime Flow
 
@@ -144,8 +145,9 @@ personal-agent capabilities:
   `discord_voice_leave` for the current Discord voice adapter.
 - Coordination: `main_session_context`, `delegate_to_main_worker`,
   `subagent_status`.
-- Work trackers and MCP: `work_tracker_create_issue`, `work_tracker_link`,
-  `mcp_list_tools`, `mcp_call`.
+- Work trackers and MCP: `work_tracker_link`, `mcp_list_tools`, `mcp_call`.
+  Tracker-specific creation, comments, and status updates go through installed
+  MCP servers, CLIs, or skills.
 
 The user usually does not call model-facing tools directly. They become
 available to the model when Clanky decides they match the request and the
