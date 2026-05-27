@@ -12,9 +12,9 @@
 		"preview": "vite preview --host 127.0.0.1"
 	},
 	"dependencies": {
+		"@volpestyle/night-compiler": "link:../../../docs/packages/night-compiler",
 		"react": "^19.2.6",
-		"react-dom": "^19.2.6",
-		"@volpestyle/night-compiler": "workspace:*"
+		"react-dom": "^19.2.6"
 	},
 	"devDependencies": {
 		"@tailwindcss/vite": "^4.3.0",
