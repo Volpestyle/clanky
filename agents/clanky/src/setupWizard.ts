@@ -19,6 +19,7 @@ import type { ClankyDiscordGatewayController } from "./discordGatewayController.
 import type { DiscordVoiceSettingsAccessor } from "./discordVoiceSettings.ts";
 import { runElevenLabsLogin } from "./elevenLabsAuth.ts";
 import { runOpenAiLogin } from "./openAiAuth.ts";
+import { interpretVoiceStatus, readStatusBoolean } from "./voiceStatus.ts";
 import { runXAiLogin } from "./xAiAuth.ts";
 
 interface ClankySetupWizardDeps {
@@ -29,7 +30,7 @@ interface ClankySetupWizardDeps {
 	voiceSettings: DiscordVoiceSettingsAccessor;
 }
 
-type SetupChoice = "status" | "openai" | "discord" | "voice" | "elevenlabs" | "xai" | "agentroom" | "fresh" | "done";
+type SetupChoice = "status" | "openai" | "discord" | "voice" | "elevenlabs" | "xai" | "agentroom" | "done";
 
 const SETUP_COMMAND_COMPLETIONS = [
 	{ value: "status", description: "Show connector and profile setup status." },
@@ -135,9 +136,6 @@ async function runClankySetupWizard(deps: ClankySetupWizardDeps, ctx: ExtensionC
 			case "agentroom":
 				ctx.ui.notify(formatAgentRoomParticipation(deps));
 				break;
-			case "fresh":
-				ctx.ui.notify(formatFreshUserHelp(deps));
-				break;
 			case "done":
 				done = true;
 				break;
@@ -185,7 +183,6 @@ function parseSetupChoice(choice: string | undefined): SetupChoice {
 	if (choice.startsWith("Voice / ElevenLabs")) return "elevenlabs";
 	if (choice.startsWith("Media / xAI")) return "xai";
 	if (choice.startsWith("AgentRoom")) return "agentroom";
-	if (choice === "Fresh-user test command") return "fresh";
 	return "done";
 }
 
@@ -286,45 +283,26 @@ function hasDiscordCredential(deps: ClankySetupWizardDeps): boolean {
 }
 
 function formatVoiceDashboardStatus(status: unknown): string {
-	if (!isRecord(status)) return "unavailable";
-	const voiceConfigError = readStatusString(status, "voiceConfigError");
-	if (voiceConfigError !== undefined) return `error (${voiceConfigError})`;
-	const voice = readStatusRecord(status, "voice");
-	if (readStatusBoolean(status, "voiceBridgeActive") === true) {
-		const channelId = voice === undefined ? undefined : readStatusString(voice, "channelId");
-		const mode = voice === undefined ? undefined : readStatusString(voice, "mode");
-		if (voice !== undefined && readStatusBoolean(voice, "active") === false && mode === "dynamic") return "ready";
-		return channelId === undefined ? "active" : `active in channel ${channelId}`;
+	const state = interpretVoiceStatus(status);
+	switch (state.kind) {
+		case "unavailable":
+			return "unavailable";
+		case "error":
+			return `error (${state.message})`;
+		case "ready":
+			return "ready";
+		case "live":
+			return state.channelId === undefined ? "active" : `active in channel ${state.channelId}`;
+		case "client-live":
+			return "client active";
+		case "inactive":
+			return "inactive";
 	}
-	if (readStatusBoolean(status, "voiceOnlyClientActive") === true) return "client active";
-	return "inactive";
 }
 
 function formatStatusActive(active: boolean | undefined): string {
 	if (active === undefined) return "unknown";
 	return active ? "active" : "inactive";
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function readStatusRecord(record: unknown, key: string): Record<string, unknown> | undefined {
-	if (!isRecord(record)) return undefined;
-	const value = record[key];
-	return isRecord(value) ? value : undefined;
-}
-
-function readStatusString(record: unknown, key: string): string | undefined {
-	if (!isRecord(record)) return undefined;
-	const value = record[key];
-	return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-function readStatusBoolean(record: unknown, key: string): boolean | undefined {
-	if (!isRecord(record)) return undefined;
-	const value = record[key];
-	return typeof value === "boolean" ? value : undefined;
 }
 
 function formatAgentRoomParticipation(deps: ClankySetupWizardDeps): string {

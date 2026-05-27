@@ -4,6 +4,8 @@ import type {
 	DiscordInboxAttachment,
 	DiscordInboxMessage,
 	DiscordSubagentStore,
+	SendSubagentMessageInput,
+	SendSubagentMessageResult,
 } from "@clanky/core";
 import {
 	type AgentSessionEvent,
@@ -113,6 +115,51 @@ export class DiscordSubagentCoordinator {
 		return updated;
 	}
 
+	async sendInteractiveMessage(input: SendSubagentMessageInput): Promise<SendSubagentMessageResult | undefined> {
+		const workerId = input.id.trim();
+		const text = input.text.trim();
+		if (workerId.length === 0 || text.length === 0) {
+			return { accepted: false, message: "Subagent id and message are required." };
+		}
+		const summary = await this.store.getSubagent(workerId);
+		if (summary === undefined || !summary.kind.startsWith("discord-")) return undefined;
+		const runtime = await this.ensureRuntimeForSummary(summary);
+		const mode = runtime.session.isStreaming ? "followUp" : "start";
+		if (mode === "start") {
+			await this.store.setSubagentState(workerId, "running", {
+				...(summary.activeConversationId === undefined ? {} : { activeConversationId: summary.activeConversationId }),
+				activeSummary: `chatting from TUI: ${truncateOneLine(text, 80)}`,
+				...sessionFileDetails(runtime),
+				thinkingLevel: runtime.session.thinkingLevel,
+			});
+		}
+		try {
+			await runtime.session.prompt(text, {
+				source: "extension",
+				streamingBehavior: "followUp",
+			});
+			if (mode === "start") {
+				await this.store.setSubagentState(workerId, "idle", {
+					...(summary.activeConversationId === undefined ? {} : { activeConversationId: summary.activeConversationId }),
+					activeSummary: "idle",
+					...sessionFileDetails(runtime),
+					thinkingLevel: runtime.session.thinkingLevel,
+				});
+			}
+			return { accepted: true, mode, sessionId: runtime.session.sessionId };
+		} catch (error) {
+			const message = errorMessage(error);
+			await this.store.setSubagentState(workerId, "failed", {
+				...(summary.activeConversationId === undefined ? {} : { activeConversationId: summary.activeConversationId }),
+				activeSummary: "failed while handling TUI chat",
+				...sessionFileDetails(runtime),
+				thinkingLevel: runtime.session.thinkingLevel,
+				lastError: message,
+			});
+			return { accepted: false, message };
+		}
+	}
+
 	async enqueue(message: DiscordInboundMessage, acceptanceReason: DiscordAcceptanceReason): Promise<void> {
 		const target = resolveDiscordWorkerTarget(message);
 		await this.store.enqueueDiscordMessage({
@@ -220,13 +267,12 @@ export class DiscordSubagentCoordinator {
 	private async ensureRuntime(message: DiscordInboxMessage): Promise<AgentSessionRuntime> {
 		const existing = this.runtimes.get(message.workerId);
 		if (existing !== undefined) return existing.runtime;
-		const sessionManager = await this.createWorkerSessionManager(message.workerId);
-		const runtime = await createAgentSessionRuntime(this.createRuntime, {
-			cwd: this.cwd,
-			agentDir: this.agentDir,
-			sessionManager,
+		const runtime = await this.createRuntimeForSubagent({
+			id: message.workerId,
+			kind: message.kind,
+			scopeId: message.scopeId,
+			...(message.scopeName === undefined ? {} : { scopeName: message.scopeName }),
 		});
-		this.runtimes.set(message.workerId, { runtime, workerId: message.workerId });
 		await this.store.upsertSubagent({
 			id: message.workerId,
 			kind: message.kind,
@@ -238,6 +284,45 @@ export class DiscordSubagentCoordinator {
 			pid: process.pid,
 			activeSummary: "worker runtime ready",
 		});
+		return runtime;
+	}
+
+	private async ensureRuntimeForSummary(summary: {
+		id: string;
+		kind: ClankySubagentKind;
+		scopeId: string;
+		scopeName?: string;
+	}): Promise<AgentSessionRuntime> {
+		const existing = this.runtimes.get(summary.id);
+		if (existing !== undefined) return existing.runtime;
+		const runtime = await this.createRuntimeForSubagent(summary);
+		await this.store.upsertSubagent({
+			id: summary.id,
+			kind: summary.kind,
+			scopeId: summary.scopeId,
+			...(summary.scopeName === undefined ? {} : { scopeName: summary.scopeName }),
+			state: "idle",
+			...(runtime.session.sessionFile === undefined ? {} : { sessionFile: runtime.session.sessionFile }),
+			thinkingLevel: runtime.session.thinkingLevel,
+			pid: process.pid,
+			activeSummary: "worker runtime ready",
+		});
+		return runtime;
+	}
+
+	private async createRuntimeForSubagent(summary: {
+		id: string;
+		kind: ClankySubagentKind;
+		scopeId: string;
+		scopeName?: string;
+	}): Promise<AgentSessionRuntime> {
+		const sessionManager = await this.createWorkerSessionManager(summary.id);
+		const runtime = await createAgentSessionRuntime(this.createRuntime, {
+			cwd: this.cwd,
+			agentDir: this.agentDir,
+			sessionManager,
+		});
+		this.runtimes.set(summary.id, { runtime, workerId: summary.id });
 		return runtime;
 	}
 
@@ -422,6 +507,13 @@ function isDiscordSkipReplyText(text: string): boolean {
 function sessionFileDetails(runtime: AgentSessionRuntime | undefined): { sessionFile?: string } {
 	const sessionFile = runtime?.session.sessionFile;
 	return sessionFile === undefined ? {} : { sessionFile };
+}
+
+function truncateOneLine(text: string, maxLength: number): string {
+	const normalized = text.replace(/\s+/g, " ").trim();
+	if (normalized.length <= maxLength) return normalized;
+	if (maxLength <= 3) return normalized.slice(0, maxLength);
+	return `${normalized.slice(0, maxLength - 3)}...`;
 }
 
 async function isReadableFile(path: string): Promise<boolean> {

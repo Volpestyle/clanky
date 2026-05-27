@@ -7,6 +7,8 @@ import {
 	resolveElevenLabsApiKeySync,
 	resolveOpenAiApiKeySync,
 	resolveXAiApiKeySync,
+	type SendSubagentMessageInput,
+	type SendSubagentMessageResult,
 } from "@clanky/core";
 import type {
 	AgentSessionEvent,
@@ -98,6 +100,7 @@ export interface ClankyAgentDiscordVoiceConfig {
 	openAiRealtimeTranscriptionLanguage?: string;
 	speakerTranscriptionIdleCloseMs?: number;
 	transcriptResponseBatchDelayMs?: number;
+	participationEagerness?: number;
 	clankvoxBin?: string;
 	clankvoxDir?: string;
 	videoFrameAutoAttachIntervalMs?: number;
@@ -131,6 +134,7 @@ export interface ClankyAgentDiscordVoiceHandle {
 	status(): JsonRecord;
 	requestTextUtterance(text: string): void;
 	setSubagentThinkingLevel?(level: ClankyThinkingLevel): number;
+	sendSubagentMessage?(input: SendSubagentMessageInput): Promise<SendSubagentMessageResult | undefined>;
 }
 
 interface DiscordVoiceClient extends DiscordGatewayClient {
@@ -150,6 +154,8 @@ interface RecentRealtimeToolResult {
 	result: unknown;
 	expiresAtMs: number;
 }
+
+type RealtimeToolContinuation = "continue" | "stop";
 
 interface VoiceBridgeStats {
 	speakingStartCount: number;
@@ -174,6 +180,7 @@ interface VoiceBridgeStats {
 	realtimeSocketErrorCount: number;
 	realtimeTranscriptCount: number;
 	realtimeFunctionCallCount: number;
+	realtimeDuplicateToolCallCount: number;
 	realtimeFunctionCallOutputCount: number;
 	realtimeFunctionCallErrorCount: number;
 	speakerTranscriptDeltaCount: number;
@@ -181,6 +188,7 @@ interface VoiceBridgeStats {
 	speakerTranscriptForwardCount: number;
 	speakerTranscriptionErrorCount: number;
 	speakerTranscriptionSocketCloseCount: number;
+	voiceStaySilentCount: number;
 	askPiCallCount: number;
 	piStatusRequestCount: number;
 	piSubagentStatusRequestCount: number;
@@ -337,6 +345,22 @@ interface SpeakerTranscriptLine {
 	interruptedAssistant?: boolean;
 }
 
+interface DiscordVoiceParticipant {
+	userId: string;
+	displayName: string;
+	muted: boolean;
+	deafened: boolean;
+	isBot: boolean;
+}
+
+interface DiscordVoiceParticipantCandidate {
+	userId?: string | undefined;
+	displayName?: string | undefined;
+	muted?: boolean | undefined;
+	deafened?: boolean | undefined;
+	isBot?: boolean | undefined;
+}
+
 interface ResolvedVoiceDependencies {
 	createRealtime(options: OpenAiRealtimeClientOptions): VoiceRealtimeClientLike;
 	createXAiRealtime(options: OpenAiRealtimeClientOptions): VoiceRealtimeClientLike;
@@ -364,6 +388,7 @@ const DEFAULT_REALTIME_TRANSCRIPTION_DELAY: OpenAiRealtimeTranscriptionDelay = "
 const DEFAULT_VIDEO_FRAME_AUTO_ATTACH_INTERVAL_MS = 2_000;
 const DEFAULT_SPEAKER_TRANSCRIPTION_IDLE_CLOSE_MS = 120_000;
 const DEFAULT_TRANSCRIPT_RESPONSE_BATCH_DELAY_MS = 350;
+const DEFAULT_PARTICIPATION_EAGERNESS = 50;
 const REALTIME_TOOL_RESPONSE_DEBOUNCE_MS = 25;
 const REALTIME_DUPLICATE_TOOL_RESULT_CACHE_MS = 5_000;
 const PI_TOOL_TIMEOUT_MS = 120_000;
@@ -396,6 +421,7 @@ function createVoiceBridgeStats(): VoiceBridgeStats {
 		realtimeSocketErrorCount: 0,
 		realtimeTranscriptCount: 0,
 		realtimeFunctionCallCount: 0,
+		realtimeDuplicateToolCallCount: 0,
 		realtimeFunctionCallOutputCount: 0,
 		realtimeFunctionCallErrorCount: 0,
 		speakerTranscriptDeltaCount: 0,
@@ -403,6 +429,7 @@ function createVoiceBridgeStats(): VoiceBridgeStats {
 		speakerTranscriptForwardCount: 0,
 		speakerTranscriptionErrorCount: 0,
 		speakerTranscriptionSocketCloseCount: 0,
+		voiceStaySilentCount: 0,
 		askPiCallCount: 0,
 		piStatusRequestCount: 0,
 		piSubagentStatusRequestCount: 0,
@@ -544,6 +571,14 @@ export function resolveAgentDiscordVoiceConfig(
 		openAiRealtimeTranscriptionDelay:
 			parseRealtimeTranscriptionDelay(env.CLANKY_OPENAI_REALTIME_TRANSCRIPTION_DELAY) ??
 			DEFAULT_REALTIME_TRANSCRIPTION_DELAY,
+		participationEagerness:
+			parseOptionalBoundedInteger(
+				env.CLANKY_DISCORD_VOICE_PARTICIPATION_EAGERNESS ?? env.CLANKY_DISCORD_VOICE_EAGERNESS,
+				0,
+				100,
+			) ??
+			storedSettings?.participationEagerness ??
+			DEFAULT_PARTICIPATION_EAGERNESS,
 		videoFrameAutoAttachIntervalMs:
 			parseOptionalNonNegativeInteger(env.CLANKY_DISCORD_VOICE_VIDEO_FRAME_INTERVAL_MS) ??
 			storedSettings?.videoFrameAutoAttachIntervalMs ??
@@ -736,6 +771,7 @@ class AgentDiscordVoiceDynamicHandle implements ClankyAgentDiscordVoiceHandle {
 			elevenLabsOutputFormat: this.config.elevenLabsOutputFormat,
 			elevenLabsBaseUrl: this.config.elevenLabsBaseUrl,
 			reasoningEffort: this.config.openAiRealtimeReasoningEffort,
+			participationEagerness: this.config.participationEagerness ?? DEFAULT_PARTICIPATION_EAGERNESS,
 			interruptionPolicy: "while-speaking-requires-clanky",
 			transcriptionModel: this.config.openAiRealtimeTranscriptionModel ?? DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
 			transcriptionDelay: this.config.openAiRealtimeTranscriptionDelay,
@@ -879,6 +915,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 				model: this.realtimeAgentModel(),
 				voice: this.realtimeAgentVoice(),
 				instructions: buildRealtimeInstructions(this.discordConfig, this.config.ttsProvider ?? "openai", {
+					participationEagerness: this.config.participationEagerness ?? DEFAULT_PARTICIPATION_EAGERNESS,
 					supportsScreenShareSnapshots: (this.config.realtimeAgentProvider ?? "openai") === "openai",
 				}),
 				tools: buildVoiceTools({
@@ -955,6 +992,10 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		return this.subagents?.setThinkingLevel(level) ?? 0;
 	}
 
+	async sendSubagentMessage(input: SendSubagentMessageInput): Promise<SendSubagentMessageResult | undefined> {
+		return await this.subagents?.sendInteractiveMessage(input);
+	}
+
 	private realtimeAgentClientOptions(openAiRealtimeOptions: OpenAiRealtimeClientOptions): OpenAiRealtimeClientOptions {
 		if ((this.config.realtimeAgentProvider ?? "openai") !== "xai") return openAiRealtimeOptions;
 		const apiKey = this.config.xAiApiKey;
@@ -1011,6 +1052,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			elevenLabsOutputFormat: this.config.elevenLabsOutputFormat,
 			elevenLabsBaseUrl: this.config.elevenLabsBaseUrl,
 			reasoningEffort: this.config.openAiRealtimeReasoningEffort,
+			participationEagerness: this.config.participationEagerness ?? DEFAULT_PARTICIPATION_EAGERNESS,
 			interruptionPolicy: "while-speaking-requires-clanky",
 			transcriptionModel: this.config.openAiRealtimeTranscriptionModel ?? DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
 			transcriptionDelay: this.config.openAiRealtimeTranscriptionDelay,
@@ -1110,6 +1152,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			realtimeAgentProvider: this.config.realtimeAgentProvider ?? "openai",
 			model: this.realtimeAgentModel(),
 			voice: this.realtimeAgentVoice(),
+			participationEagerness: this.config.participationEagerness ?? DEFAULT_PARTICIPATION_EAGERNESS,
 			realtimeConnected: this.realtime !== undefined,
 			voxAlive: this.vox?.isAlive === true,
 			supervisor: this.subagents?.status(),
@@ -1253,6 +1296,9 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		const transcriptLines = lines.map((line) => {
 			return `${line.displayName} (${line.userId}): ${line.text}`;
 		});
+		const participantList = formatDiscordVoiceChannelParticipants(this.guild, this.client, this.config.channelId);
+		const participantLines =
+			participantList === undefined ? [] : ["Discord voice channel participants:", participantList, ""];
 		const interruptionLines = lines.some((line) => line.interruptedAssistant === true)
 			? [
 					"",
@@ -1261,12 +1307,15 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			: [];
 		realtime.requestTextUtterance(
 			[
+				...participantLines,
 				"Discord voice transcript with speaker attribution:",
 				"",
 				...transcriptLines,
 				...interruptionLines,
 				"",
-				"Respond in the Discord voice channel. Use the speaker names above when attribution matters.",
+				`Voice participation eagerness: ${this.config.participationEagerness ?? DEFAULT_PARTICIPATION_EAGERNESS}/100.`,
+				"Decide whether Clanky should speak now. If speaking would feel natural, respond briefly in the Discord voice channel. If not, call voice_stay_silent and do not say that you are staying silent.",
+				"Use the speaker names above when attribution matters.",
 			].join("\n"),
 		);
 		this.stats.speakerTranscriptForwardCount += lines.length;
@@ -1535,11 +1584,11 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 	private async handleRealtimeEvent(event: JsonRecord): Promise<void> {
 		const envelopes = extractRealtimeFunctionCallEnvelopes(event);
 		if (envelopes.length === 0) return;
-		let completedToolCalls = 0;
+		let shouldContinueAfterTool = false;
 		for (const envelope of envelopes) {
-			if (await this.handleRealtimeFunctionCallEnvelope(envelope)) completedToolCalls += 1;
+			if ((await this.handleRealtimeFunctionCallEnvelope(envelope)) === "continue") shouldContinueAfterTool = true;
 		}
-		if (completedToolCalls > 0) this.scheduleRealtimeToolResponse();
+		if (shouldContinueAfterTool) this.scheduleRealtimeToolResponse();
 	}
 
 	private scheduleRealtimeToolResponse(): void {
@@ -1558,8 +1607,10 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		this.realtime?.createAudioResponse();
 	}
 
-	private async handleRealtimeFunctionCallEnvelope(envelope: RealtimeFunctionCallEnvelope): Promise<boolean> {
-		if (this.completedToolCallIdSet.has(envelope.callId)) return false;
+	private async handleRealtimeFunctionCallEnvelope(
+		envelope: RealtimeFunctionCallEnvelope,
+	): Promise<RealtimeToolContinuation | undefined> {
+		if (this.completedToolCallIdSet.has(envelope.callId)) return undefined;
 		const existing = this.pendingToolCalls.get(envelope.callId);
 		const pending: PendingRealtimeToolCall = {
 			callId: envelope.callId,
@@ -1568,25 +1619,31 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		};
 		if (envelope.argumentsJson !== undefined) pending.argumentsJson = envelope.argumentsJson;
 		this.pendingToolCalls.set(pending.callId, pending);
-		if (!envelope.done) return false;
+		if (!envelope.done) return undefined;
 		this.pendingToolCalls.delete(pending.callId);
-		this.stats.realtimeFunctionCallCount += 1;
-		this.subagents?.recordToolCall(pending.name, pending.argumentsJson);
+		const continuation: RealtimeToolContinuation = pending.name === "voice_stay_silent" ? "stop" : "continue";
+		const coalescedDuplicate = this.isCoalescedDuplicateRealtimeToolCall(pending);
+		if (coalescedDuplicate) {
+			this.stats.realtimeDuplicateToolCallCount += 1;
+		} else {
+			this.stats.realtimeFunctionCallCount += 1;
+			this.subagents?.recordToolCall(pending.name, pending.argumentsJson);
+		}
 		let result: unknown;
 		try {
 			result = await this.executeRealtimeToolCall(pending);
 		} catch (error) {
-			this.stats.realtimeFunctionCallErrorCount += 1;
+			if (!coalescedDuplicate) this.stats.realtimeFunctionCallErrorCount += 1;
 			result = {
 				ok: false,
 				error: error instanceof Error ? error.message : String(error),
 			};
 		}
 		this.realtime?.sendFunctionCallOutput({ callId: pending.callId, output: result });
-		this.subagents?.recordToolResult(pending.name, result);
+		if (!coalescedDuplicate) this.subagents?.recordToolResult(pending.name, result);
 		this.rememberCompletedToolCallId(pending.callId);
 		this.stats.realtimeFunctionCallOutputCount += 1;
-		return true;
+		return continuation;
 	}
 
 	private rememberCompletedToolCallId(callId: string): void {
@@ -1613,6 +1670,9 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		}
 		if (call.name === "pi_subagents") {
 			return await this.piSubagentsStatus(args);
+		}
+		if (call.name === "voice_stay_silent") {
+			return this.voiceStaySilent(args);
 		}
 		if (call.name === "list_screen_shares") {
 			return this.listScreenShares();
@@ -1648,6 +1708,26 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			return this.mediaStatus();
 		}
 		return { error: `Unknown Discord voice tool: ${call.name}` };
+	}
+
+	private isCoalescedDuplicateRealtimeToolCall(call: PendingRealtimeToolCall): boolean {
+		const signature = this.realtimeDuplicateToolCallSignature(call);
+		if (signature === undefined) return false;
+		this.pruneRecentRealtimeToolResults();
+		return this.inFlightToolResults.has(signature) || this.recentToolResults.has(signature);
+	}
+
+	private realtimeDuplicateToolCallSignature(call: PendingRealtimeToolCall): string | undefined {
+		if (call.name !== "ask_pi") return undefined;
+		let args: JsonRecord;
+		try {
+			args = parseToolArguments(call.argumentsJson);
+		} catch {
+			return undefined;
+		}
+		const prompt = stringValue(args.prompt).trim();
+		if (prompt.length === 0) return undefined;
+		return realtimeToolCallSignature(call.name, { prompt });
 	}
 
 	private async executeDedupedRealtimeToolCall(
@@ -1736,6 +1816,26 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 
 	private voiceScopeId(): string {
 		return `${this.config.guildId}:${this.config.channelId}`;
+	}
+
+	private voiceStaySilent(args: JsonRecord): JsonRecord {
+		const reason = stringValue(args.reason) || "not_natural_to_speak";
+		const confidence = boundedNumberValue(args.confidence, 0, 0, 1);
+		const nextListenMs = boundedIntegerValue(args.nextListenMs ?? args.next_listen_ms, 0, 0, 60_000);
+		this.stats.voiceStaySilentCount += 1;
+		this.logVoice("info", "voice_stay_silent", {
+			reason,
+			confidence,
+			nextListenMs,
+			participationEagerness: this.config.participationEagerness ?? DEFAULT_PARTICIPATION_EAGERNESS,
+		});
+		return {
+			ok: true,
+			speaking: false,
+			reason,
+			confidence,
+			nextListenMs,
+		};
 	}
 
 	private playMusicUrl(args: JsonRecord): JsonRecord {
@@ -2225,11 +2325,16 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 function buildRealtimeInstructions(
 	config: ClankyAgentDiscordGatewayConfig,
 	ttsProvider: DiscordVoiceTtsProvider = "openai",
-	options: { supportsScreenShareSnapshots?: boolean } = {},
+	options: { participationEagerness?: number; supportsScreenShareSnapshots?: boolean } = {},
 ): string {
+	const participationEagerness = options.participationEagerness ?? DEFAULT_PARTICIPATION_EAGERNESS;
 	const lines = [
 		"You are Clanky in a Discord group voice channel.",
 		"You receive labeled text transcripts from individual Discord speakers; use those speaker names when attribution matters.",
+		"When a Discord voice channel participant list is provided, use it as live room context. Muted participants can listen but may not be able to talk; deafened participants may not hear you.",
+		`Participation eagerness: ${participationEagerness}/100. Lower values mean behave like a quieter participant; higher values mean join more often and help steer the room.`,
+		"When a transcript batch is side chatter, backchanneling, or not a natural moment for Clanky to speak, call voice_stay_silent instead of producing speech. Do not say that you are staying silent.",
+		"Always speak for direct Clanky address, explicit tool/media requests, urgent corrections, or clear follow-ups to Clanky's last turn.",
 		"Keep replies short enough for spoken conversation, and avoid reading long tool output verbatim.",
 		"Use ask_pi for durable work, memory-backed answers, coding tasks, Linear, MCP, or anything that should go through the Pi agent runtime.",
 		"Use pi_status when users ask what Clanky, Pi, the voice bridge, or the main runtime is doing.",
@@ -2262,6 +2367,31 @@ function buildRealtimeInstructions(
 
 function buildVoiceTools(options: { supportsScreenShareSnapshots?: boolean } = {}): OpenAiRealtimeTool[] {
 	const tools: OpenAiRealtimeTool[] = [
+		{
+			type: "function",
+			name: "voice_stay_silent",
+			description:
+				"Choose not to speak for the current Discord voice transcript batch when replying would feel unnatural, too eager, or like interrupting side chatter.",
+			parameters: {
+				type: "object",
+				properties: {
+					reason: {
+						type: "string",
+						description: "Brief reason, such as side_chatter, backchannel, low_relevance, or letting_humans_talk.",
+					},
+					confidence: {
+						type: "number",
+						description: "Confidence from 0 to 1 that staying silent is the right participant behavior.",
+					},
+					nextListenMs: {
+						type: "number",
+						description: "Optional suggested listening cooldown in milliseconds before Clanky should be eager again.",
+					},
+				},
+				required: ["reason"],
+				additionalProperties: false,
+			},
+		},
 		{
 			type: "function",
 			name: "ask_pi",
@@ -2617,6 +2747,17 @@ function parseOptionalPositiveInteger(value: string | undefined): number | undef
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
+function parseOptionalBoundedInteger(value: string | undefined, min: number, max: number): number | undefined {
+	const normalized = value?.trim();
+	if (normalized === undefined || normalized.length === 0) return undefined;
+	const parsed = Number.parseInt(normalized, 10);
+	if (!Number.isFinite(parsed)) return undefined;
+	const integer = Math.trunc(parsed);
+	if (integer < min) return min;
+	if (integer > max) return max;
+	return integer;
+}
+
 function parseRealtimeReasoningEffort(value: string | undefined): OpenAiRealtimeReasoningEffort | undefined {
 	const normalized = value?.trim().toLowerCase();
 	if (
@@ -2703,6 +2844,15 @@ function boundedIntegerValue(value: unknown, fallback: number, min: number, max:
 	if (integer < min) return min;
 	if (integer > max) return max;
 	return integer;
+}
+
+function boundedNumberValue(value: unknown, fallback: number, min: number, max: number): number {
+	const parsed =
+		typeof value === "number" ? value : typeof value === "string" && value.trim().length > 0 ? Number(value) : NaN;
+	if (!Number.isFinite(parsed)) return fallback;
+	if (parsed < min) return min;
+	if (parsed > max) return max;
+	return parsed;
 }
 
 function parseSubagentStateFilter(value: unknown): ClankySubagentState | undefined {
@@ -2811,16 +2961,192 @@ function readDiscordDisplayName(guild: unknown, client: unknown, userId: string)
 
 function readCachedById(container: unknown, id: string): unknown {
 	if (!isRecord(container)) return undefined;
+	const directGet = container.get;
+	if (typeof directGet === "function") return directGet.call(container, id);
 	const cache = isRecord(container.cache) ? container.cache : undefined;
 	const get = cache?.get;
 	return typeof get === "function" ? get.call(cache, id) : undefined;
+}
+
+function formatDiscordVoiceChannelParticipants(guild: unknown, client: unknown, channelId: string): string | undefined {
+	const participants = readDiscordVoiceChannelParticipants(guild, client, channelId)
+		.filter((participant) => !participant.isBot)
+		.sort((left, right) => left.displayName.localeCompare(right.displayName, undefined, { sensitivity: "base" }));
+	if (participants.length === 0) return undefined;
+	const maxParticipants = 16;
+	const visibleParticipants = participants.slice(0, maxParticipants).map(formatDiscordVoiceParticipant);
+	const hiddenCount = participants.length - visibleParticipants.length;
+	if (hiddenCount > 0) visibleParticipants.push(`${hiddenCount} more`);
+	return visibleParticipants.join(", ");
+}
+
+function readDiscordVoiceChannelParticipants(
+	guild: unknown,
+	client: unknown,
+	channelId: string,
+): DiscordVoiceParticipant[] {
+	const normalizedChannelId = channelId.trim();
+	if (normalizedChannelId.length === 0) return [];
+	const selfUserId = readClientUserId(client);
+	const participantsById = new Map<string, DiscordVoiceParticipant>();
+	const mergeParticipant = (candidate: DiscordVoiceParticipantCandidate) => {
+		const userId = candidate.userId?.trim();
+		if (userId === undefined || userId.length === 0 || userId === selfUserId) return;
+		const existing = participantsById.get(userId);
+		participantsById.set(userId, {
+			userId,
+			displayName:
+				candidate.displayName !== undefined && candidate.displayName.trim().length > 0
+					? normalizePromptLine(candidate.displayName)
+					: (existing?.displayName ?? readDiscordDisplayName(guild, client, userId) ?? `User ${userId}`),
+			muted: existing?.muted === true || candidate.muted === true,
+			deafened: existing?.deafened === true || candidate.deafened === true,
+			isBot: existing?.isBot === true || candidate.isBot === true,
+		});
+	};
+
+	for (const member of readDiscordVoiceChannelMembers(guild, normalizedChannelId)) {
+		const voice = readDiscordMemberVoice(member);
+		mergeParticipant({
+			userId: readDiscordMemberUserId(member),
+			displayName: readDiscordMemberDisplayName(member),
+			muted: readDiscordVoiceMuted(voice),
+			deafened: readDiscordVoiceDeafened(voice),
+			isBot: readDiscordMemberIsBot(member),
+		});
+	}
+
+	for (const state of readDiscordVoiceStates(guild, normalizedChannelId)) {
+		const member = isRecord(state) ? state.member : undefined;
+		const user = isRecord(state) ? state.user : undefined;
+		const userId = readDiscordVoiceStateUserId(state) ?? readDiscordMemberUserId(member);
+		mergeParticipant({
+			userId,
+			displayName: readDiscordMemberDisplayName(member) ?? discordDisplayNameFromRecord(user),
+			muted: readDiscordVoiceMuted(state),
+			deafened: readDiscordVoiceDeafened(state),
+			isBot: readDiscordMemberIsBot(member) || readDiscordUserIsBot(user),
+		});
+	}
+
+	return Array.from(participantsById.values());
+}
+
+function readDiscordVoiceChannelMembers(guild: unknown, channelId: string): unknown[] {
+	const channel = readDiscordVoiceChannel(guild, channelId);
+	const channelMembers = readCachedValues(isRecord(channel) ? channel.members : undefined);
+	if (channelMembers.length > 0) return channelMembers;
+	return readCachedValues(isRecord(guild) ? guild.members : undefined).filter((member) =>
+		discordVoiceBelongsToChannel(readDiscordMemberVoice(member), channelId),
+	);
+}
+
+function readDiscordVoiceChannel(guild: unknown, channelId: string): unknown {
+	if (!isRecord(guild)) return undefined;
+	return readCachedById(guild.channels, channelId);
+}
+
+function readDiscordVoiceStates(guild: unknown, channelId: string): unknown[] {
+	if (!isRecord(guild)) return [];
+	const states = readCachedValues(isRecord(guild.voiceStates) ? guild.voiceStates : undefined);
+	return states.filter((state) => discordVoiceBelongsToChannel(state, channelId));
+}
+
+function readCachedValues(container: unknown): unknown[] {
+	if (Array.isArray(container)) return container;
+	if (!isRecord(container)) return [];
+	const directValues = callValuesFunction(container);
+	if (directValues.length > 0) return directValues;
+	return callValuesFunction(container.cache);
+}
+
+function callValuesFunction(container: unknown): unknown[] {
+	if (!isRecord(container)) return [];
+	const values = container.values;
+	if (typeof values !== "function") return [];
+	const result = values.call(container);
+	return isIterable(result) ? Array.from(result) : [];
+}
+
+function readClientUserId(client: unknown): string | undefined {
+	const user = isRecord(client) ? client.user : undefined;
+	const userId = stringValue(isRecord(user) ? user.id : undefined);
+	return userId.length > 0 ? userId : undefined;
+}
+
+function readDiscordMemberVoice(member: unknown): unknown {
+	return isRecord(member) ? member.voice : undefined;
+}
+
+function readDiscordMemberUserId(member: unknown): string | undefined {
+	if (!isRecord(member)) return undefined;
+	const user = isRecord(member.user) ? member.user : undefined;
+	const userId =
+		stringValue(member.id) || stringValue(member.userId) || stringValue(member.user_id) || stringValue(user?.id);
+	return userId.length > 0 ? userId : undefined;
+}
+
+function readDiscordVoiceStateUserId(state: unknown): string | undefined {
+	if (!isRecord(state)) return undefined;
+	const user = isRecord(state.user) ? state.user : undefined;
+	const userId =
+		stringValue(state.userId) || stringValue(state.user_id) || stringValue(state.id) || stringValue(user?.id);
+	return userId.length > 0 ? userId : undefined;
+}
+
+function readDiscordMemberDisplayName(member: unknown): string | undefined {
+	const memberName = discordDisplayNameFromRecord(member);
+	if (memberName !== undefined) return memberName;
+	return isRecord(member) ? discordDisplayNameFromRecord(member.user) : undefined;
+}
+
+function readDiscordMemberIsBot(member: unknown): boolean {
+	if (!isRecord(member)) return false;
+	return booleanValue(member.bot, false) || readDiscordUserIsBot(member.user);
+}
+
+function readDiscordUserIsBot(user: unknown): boolean {
+	return isRecord(user) ? booleanValue(user.bot, false) : false;
+}
+
+function readDiscordVoiceMuted(voice: unknown): boolean {
+	if (!isRecord(voice)) return false;
+	return (
+		booleanValue(voice.mute, false) || booleanValue(voice.selfMute, false) || booleanValue(voice.serverMute, false)
+	);
+}
+
+function readDiscordVoiceDeafened(voice: unknown): boolean {
+	if (!isRecord(voice)) return false;
+	return (
+		booleanValue(voice.deaf, false) || booleanValue(voice.selfDeaf, false) || booleanValue(voice.serverDeaf, false)
+	);
+}
+
+function discordVoiceBelongsToChannel(voice: unknown, channelId: string): boolean {
+	if (!isRecord(voice)) return false;
+	const directChannelId = stringValue(voice.channelId) || stringValue(voice.channel_id);
+	if (directChannelId === channelId) return true;
+	const channel = isRecord(voice.channel) ? voice.channel : undefined;
+	return stringValue(channel?.id) === channelId;
+}
+
+function formatDiscordVoiceParticipant(participant: DiscordVoiceParticipant): string {
+	const flags = [participant.deafened ? "deafened" : undefined, participant.muted ? "muted" : undefined].filter(
+		(flag): flag is string => flag !== undefined,
+	);
+	return flags.length === 0 ? participant.displayName : `${participant.displayName} (${flags.join("/")})`;
+}
+
+function normalizePromptLine(value: string): string {
+	return value.trim().replace(/\s+/g, " ");
 }
 
 function discordDisplayNameFromRecord(value: unknown): string | undefined {
 	if (!isRecord(value)) return undefined;
 	for (const field of ["displayName", "nickname", "globalName", "username", "tag"]) {
 		const text = stringValue(value[field]);
-		if (text.length > 0) return text;
+		if (text.length > 0) return normalizePromptLine(text);
 	}
 	return undefined;
 }
@@ -3070,6 +3396,14 @@ function hasCredentials(stream: DiscoveredDiscordStream): stream is DiscoveredDi
 
 function isRecord(value: unknown): value is JsonRecord {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isIterable(value: unknown): value is Iterable<unknown> {
+	return (
+		value !== null &&
+		typeof value === "object" &&
+		typeof (value as { [Symbol.iterator]?: unknown })[Symbol.iterator] === "function"
+	);
 }
 
 function stringValue(value: unknown): string {

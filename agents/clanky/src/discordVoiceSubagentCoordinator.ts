@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { access, appendFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { DiscordSubagentStore } from "@clanky/core";
+import type { DiscordSubagentStore, SendSubagentMessageInput, SendSubagentMessageResult } from "@clanky/core";
 import {
 	type AgentSessionEvent,
 	type AgentSessionRuntime,
@@ -215,6 +215,88 @@ export class DiscordVoiceSubagentCoordinator {
 			updated += 1;
 		}
 		return updated;
+	}
+
+	async sendInteractiveMessage(input: SendSubagentMessageInput): Promise<SendSubagentMessageResult | undefined> {
+		const subagentId = input.id.trim();
+		const text = input.text.trim();
+		if (subagentId.length === 0 || text.length === 0) {
+			return { accepted: false, message: "Subagent id and message are required." };
+		}
+		if (subagentId === this.voiceId) {
+			return {
+				accepted: false,
+				message: "The live voice transcript is read-only. Open the voice worker subagent to chat with Pi.",
+			};
+		}
+		if (subagentId === this.workerId) {
+			const runtime = await this.ensureWorkerRuntime();
+			return await this.workerQueue.enqueue(async () => this.promptRuntimeFromTui(subagentId, runtime, text, "idle"));
+		}
+		const entry = this.generalRuntimes.get(subagentId);
+		if (entry !== undefined) {
+			return await entry.queue.enqueue(async () =>
+				this.promptRuntimeFromTui(subagentId, entry.runtime, text, `completed TUI chat with ${entry.workerKey}`),
+			);
+		}
+		if (subagentId.startsWith(`voice-general:${this.scopeId}:`)) {
+			return {
+				accepted: false,
+				message: "That voice general subagent is not active in this Clanky process.",
+			};
+		}
+		if (
+			subagentId.startsWith(`discord-voice:${this.scopeId}`) ||
+			subagentId.startsWith(`voice-worker:${this.scopeId}`)
+		) {
+			return {
+				accepted: false,
+				message: "That voice subagent runtime is not active in this Clanky process.",
+			};
+		}
+		return undefined;
+	}
+
+	private async promptRuntimeFromTui(
+		subagentId: string,
+		runtime: AgentSessionRuntime,
+		text: string,
+		idleSummary: string,
+	): Promise<SendSubagentMessageResult> {
+		const mode = runtime.session.isStreaming ? "followUp" : "start";
+		if (mode === "start") {
+			await this.store.setSubagentState(subagentId, "running", {
+				activeConversationId: this.channelId,
+				activeSummary: `chatting from TUI: ${truncateOneLine(text, 80)}`,
+				...(runtime.session.sessionFile === undefined ? {} : { sessionFile: runtime.session.sessionFile }),
+				thinkingLevel: runtime.session.thinkingLevel,
+			});
+		}
+		try {
+			await runtime.session.prompt(text, {
+				source: "extension",
+				streamingBehavior: "followUp",
+			});
+			if (mode === "start") {
+				await this.store.setSubagentState(subagentId, "idle", {
+					activeConversationId: this.channelId,
+					activeSummary: idleSummary,
+					...(runtime.session.sessionFile === undefined ? {} : { sessionFile: runtime.session.sessionFile }),
+					thinkingLevel: runtime.session.thinkingLevel,
+				});
+			}
+			return { accepted: true, mode, sessionId: runtime.session.sessionId };
+		} catch (error) {
+			const message = errorMessage(error);
+			await this.store.setSubagentState(subagentId, "failed", {
+				activeConversationId: this.channelId,
+				activeSummary: "failed while handling TUI chat",
+				...(runtime.session.sessionFile === undefined ? {} : { sessionFile: runtime.session.sessionFile }),
+				thinkingLevel: runtime.session.thinkingLevel,
+				lastError: message,
+			});
+			return { accepted: false, message };
+		}
 	}
 
 	async markFailed(error: unknown): Promise<void> {
@@ -620,7 +702,7 @@ function buildGeneralSubagentPrompt(
 	return [
 		"You are a general-purpose Clanky subagent spawned by the privileged Discord voice supervisor.",
 		"You are a capable Clanky worker with the normal Clanky tools, skills, memory, and project context.",
-		"You are not the main Clanky foreground agent, and you are not the live Discord voice Realtime model.",
+		"You are not the main Clanky foreground agent, and you are not the live Discord realtime voice agent.",
 		"The main Clanky agent remains the user's primary window, AgentRoom/tmux authority, and final coordinator for foreground work.",
 		"You cannot spawn child subagents. If work needs foreground ownership, use delegate_to_main_worker. If you need awareness of other workers, use subagent_status. If you need main-agent context, use main_session_context.",
 		"Work independently, return a clear result to the voice supervisor, and keep the response concise enough to summarize in voice.",
