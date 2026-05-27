@@ -5,7 +5,9 @@ important distinction is that Discord voice is not one Pi chat turn. It is a
 TypeScript control plane, a Rust Discord media plane, and Pi delegation behind a
 live realtime voice agent session. The realtime agent provider can be OpenAI
 Realtime or xAI Grok Voice. The speech output provider is only the audio
-renderer; it is not the same setting as the realtime reasoning/tool agent.
+renderer; it is not the same setting as the realtime reasoning/tool agent. There
+is no ElevenLabs-only Discord voice mode: ElevenLabs can replace the final voice
+rendering step, but a realtime agent still owns the conversation loop.
 
 ```mermaid
 flowchart TB
@@ -15,10 +17,10 @@ flowchart TB
     rtp --> vox["clankvox media plane"]
     vox --> bridge["TypeScript voice bridge"]
     bridge --> stt["OpenAI per-speaker STT"]
-    stt --> realtime["main Realtime session"]
+    stt --> realtime["required main Realtime agent<br/>OpenAI Realtime or xAI Grok Voice"]
   end
 
-  realtime --> toolChoice{"tool call needed"}
+  realtime --> toolChoice{"agent decision<br/>speak, stay silent, or call tools"}
 
   subgraph delegation["Delegation and media"]
     direction LR
@@ -36,19 +38,52 @@ flowchart TB
   toolChoice -->|ask_pi| pi
   toolChoice -->|status| statusTools
   toolChoice -->|media or stream| mediaTools
-  toolChoice -->|no tool| speechChoice
-  toolReturn --> speechChoice{"speech output provider"}
+  toolChoice -->|speak without tool| speechChoice
+  toolChoice -->|voice_stay_silent| silent["no Discord audio"]
+  toolReturn --> speechChoice{"speech renderer<br/>selected by tts-provider"}
 
   subgraph outbound["Outbound speech"]
     direction LR
-    realtimeAudio["realtime agent audio deltas"] --> playback["PCM to clankvox"]
-    elevenText["text to ElevenLabs TTS"] --> playback
+    realtimeAudio["selected realtime agent audio deltas"] --> playback["PCM to clankvox"]
+    elevenText["realtime text response to ElevenLabs TTS"] --> playback
     playback --> outboundRtp["Opus RTP to Discord"]
   end
 
-  speechChoice -->|Realtime agent audio| realtimeAudio
-  speechChoice -->|ElevenLabs| elevenText
+  speechChoice -->|tts-provider openai<br/>internal realtime audio| realtimeAudio
+  speechChoice -->|tts-provider elevenlabs<br/>external TTS only| elevenText
 ```
+
+## Provider Split
+
+Discord voice has separate provider choices for reasoning and speech. Treating
+ElevenLabs as "the voice agent" is the oversimplification this architecture
+avoids.
+
+| Concern | Setting | Provider | What it owns |
+| --- | --- | --- | --- |
+| Main realtime voice agent | `realtime-provider`, plus OpenAI/xAI model settings | OpenAI Realtime or xAI Grok Voice | Required for every joined voice session. Owns instructions, participation policy, whether to speak, realtime tool calls, Pi delegation, interruption state, and response continuation after tools. |
+| Speaker transcription | OpenAI realtime transcription settings | OpenAI Realtime transcription | One STT session per active Discord speaker. Produces labeled final transcripts for the main realtime agent. |
+| Speech renderer | `tts-provider` | Internal realtime audio or ElevenLabs TTS | Converts the main realtime agent's response into PCM for `clankvox`. It does not own room state, tool calls, or Pi delegation. |
+| Discord media transport | native `clankvox` process | Discord voice/Go Live protocol code | Moves PCM/RTP/video/media frames between Discord and TypeScript. It does not decide what Clanky says. |
+
+`tts-provider=openai` is the internal realtime-audio path. Despite the stored
+name, it means "use audio emitted by the selected realtime agent"; if
+`realtime-provider=xai`, the outbound audio comes from Grok Voice. In
+`tts-provider=elevenlabs` mode, the main realtime agent is still connected, but
+its `responseOutputModality` is text. TypeScript accumulates that text and sends
+it to ElevenLabs for external TTS.
+
+The practical combinations are:
+
+- OpenAI Realtime agent with internal OpenAI realtime audio.
+- OpenAI Realtime agent with ElevenLabs TTS.
+- xAI Grok Voice realtime agent with internal xAI audio.
+- xAI Grok Voice realtime agent with ElevenLabs TTS.
+
+The unsupported combination is "ElevenLabs by itself." ElevenLabs never receives
+Discord room audio, never sees the tool schema, never calls `ask_pi`, never
+chooses `voice_stay_silent`, and never continues after a tool result. It only
+renders speakable text that the realtime agent already decided to say.
 
 ## Runtime Roles
 
@@ -99,6 +134,18 @@ tool handlers, optional ElevenLabs client, and voice worker recording. When a
 subagent runtime factory is available, it also prewarms the voice worker so the
 first `ask_pi` turn does not pay the worker creation cost.
 
+The main realtime client is selected before speech rendering:
+
+1. Build provider options from the selected realtime provider credential and base
+   URL.
+2. Instantiate `OpenAiRealtimeClient` or `XAiRealtimeClient`.
+3. Connect it with model, voice, instructions, voice tools, `toolChoice: "auto"`,
+   and `responseOutputModality`.
+4. If `tts-provider=elevenlabs`, set `responseOutputModality` to `text` and
+   create the ElevenLabs synthesizer beside the realtime session. If not, keep
+   `responseOutputModality` as `audio` and play the realtime agent audio deltas
+   directly.
+
 ## Inbound Audio
 
 Discord audio does not go directly into the main Realtime response session.
@@ -126,6 +173,12 @@ sends Discord voice RTP.
 In ElevenLabs mode, Realtime output modality is text. TypeScript accumulates
 the response text, streams it through ElevenLabs TTS, and sends the returned
 PCM to `clankvox` for the same Discord playback path.
+
+This means the interruption and tool lifecycle is identical in both speech
+paths: wake-name barge-in cancels the active realtime response, Realtime emits
+function-call events, TypeScript executes local tool handlers, sends function
+outputs back to Realtime, and then asks Realtime to continue. ElevenLabs only
+participates after that continuation has produced text to speak.
 
 ## Tools And Pi Delegation
 
@@ -230,7 +283,9 @@ pnpm voice:build
 - Discord ownership: `agents/clanky/src/discordGatewayController.ts`
 - Voice settings: `agents/clanky/src/discordVoiceSettings.ts`
 - Realtime adapter: `agents/clanky/src/voice/openAiRealtimeClient.ts`
+- xAI realtime adapter: `agents/clanky/src/voice/xAiRealtimeClient.ts`
 - Per-speaker STT: `agents/clanky/src/voice/discordVoiceSpeakerTranscription.ts`
+- ElevenLabs TTS adapter: `agents/clanky/src/voice/elevenLabsTtsClient.ts`
 - Rust IPC client: `agents/clanky/src/voice/clankvoxIpcClient.ts`
 - Rust media process: `agents/clanky/src/voice/clankvox/src/main.rs`
 - Rust voice/audio pipeline:
