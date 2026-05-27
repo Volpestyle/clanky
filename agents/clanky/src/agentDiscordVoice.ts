@@ -1,3 +1,4 @@
+import { appendFile } from "node:fs/promises";
 import type { DiscordGatewayClient } from "@agentroom/chat-discord";
 import { type DiscordSubagentStore, resolveElevenLabsApiKeySync, resolveOpenAiApiKeySync } from "@clanky/core";
 import type {
@@ -99,6 +100,7 @@ export interface StartAgentDiscordVoiceBridgeInput {
 	subagentSessionDir?: string;
 	subagentCwd?: string;
 	bridgeLogPath?: string;
+	voiceLogPath?: string;
 	dependencies?: ClankyAgentDiscordVoiceDependencies;
 }
 
@@ -119,6 +121,11 @@ interface PendingRealtimeToolCall {
 	callId: string;
 	name: string;
 	argumentsJson: string;
+}
+
+interface RecentRealtimeToolResult {
+	result: unknown;
+	expiresAtMs: number;
 }
 
 interface VoiceBridgeStats {
@@ -327,6 +334,8 @@ const DEFAULT_REALTIME_TRANSCRIPTION_DELAY: OpenAiRealtimeTranscriptionDelay = "
 const DEFAULT_VIDEO_FRAME_AUTO_ATTACH_INTERVAL_MS = 2_000;
 const DEFAULT_SPEAKER_TRANSCRIPTION_IDLE_CLOSE_MS = 120_000;
 const DEFAULT_TRANSCRIPT_RESPONSE_BATCH_DELAY_MS = 350;
+const REALTIME_TOOL_RESPONSE_DEBOUNCE_MS = 25;
+const REALTIME_DUPLICATE_TOOL_RESULT_CACHE_MS = 5_000;
 const PI_TOOL_TIMEOUT_MS = 120_000;
 const DEFAULT_VOICE_BARGE_IN_WAKE_WORDS = DEFAULT_DISCORD_WAKE_NAMES;
 const PRIMARY_WAKE_TOKEN_MIN_LEN = 4;
@@ -424,7 +433,6 @@ function createDefaultSpeechSynthesizer(
 		voiceId: config.elevenLabsVoiceId,
 		modelId: config.elevenLabsModel ?? DEFAULT_ELEVENLABS_TTS_MODEL,
 		outputFormat: config.elevenLabsOutputFormat ?? DEFAULT_ELEVENLABS_OUTPUT_FORMAT,
-		logger: (level, event, details) => console[level](`[discord-voice] ${event}`, details ?? {}),
 	};
 	if (config.elevenLabsBaseUrl !== undefined) options.baseUrl = config.elevenLabsBaseUrl;
 	return new ElevenLabsTtsClient(options);
@@ -592,6 +600,7 @@ export async function startAgentDiscordVoiceBridge(
 		input.runtimeTurnQueue ?? new SerialRuntimeTurnQueue(),
 		resolveVoiceDependencies(input.dependencies),
 		subagents,
+		input.voiceLogPath,
 	);
 	await bridge.start();
 	return bridge;
@@ -672,6 +681,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 	private readonly runtimeTurnQueue: RuntimeTurnQueue;
 	private readonly dependencies: ResolvedVoiceDependencies;
 	private readonly subagents: DiscordVoiceSubagentCoordinator | undefined;
+	private readonly voiceLogPath: string | undefined;
 	private realtime: VoiceRealtimeClientLike | undefined;
 	private vox: VoiceVoxClientLike | undefined;
 	private speechSynthesizer: VoiceSpeechSynthesizerLike | undefined;
@@ -693,18 +703,23 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 	private readonly activeSpeakingUserIds = new Set<string>();
 	private readonly seenInputSpeakerIds = new Set<string>();
 	private readonly pendingToolCalls = new Map<string, PendingRealtimeToolCall>();
+	private readonly inFlightToolResults = new Map<string, Promise<unknown>>();
+	private readonly recentToolResults = new Map<string, RecentRealtimeToolResult>();
 	private readonly pendingRealtimeOutputText = new Map<string, string>();
 	private readonly completedToolCallIds: string[] = [];
 	private readonly completedToolCallIdSet = new Set<string>();
 	private readonly pendingSpeakerTranscriptLines: SpeakerTranscriptLine[] = [];
 	private readonly stats: VoiceBridgeStats = createVoiceBridgeStats();
 	private transcriptResponseTimer: TimerHandle | undefined;
+	private realtimeToolResponseTimer: TimerHandle | undefined;
 	private speechSynthesisQueue: Promise<void> = Promise.resolve();
 	private speechSynthesisGeneration = 0;
 	private speechSynthesisAbortController: AbortController | undefined;
 	private externalSpeechActiveCount = 0;
 	private assistantSpeechActiveUntilMs = 0;
 	private realtimeResponseActive = false;
+	private realtimeToolResponsePending = false;
+	private voiceLogFailureReported = false;
 
 	constructor(
 		runtime: AgentSessionRuntime,
@@ -714,6 +729,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		runtimeTurnQueue: RuntimeTurnQueue,
 		dependencies: ResolvedVoiceDependencies,
 		subagents: DiscordVoiceSubagentCoordinator | undefined,
+		voiceLogPath: string | undefined,
 	) {
 		this.runtime = runtime;
 		this.client = client;
@@ -722,6 +738,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		this.runtimeTurnQueue = runtimeTurnQueue;
 		this.dependencies = dependencies;
 		this.subagents = subagents;
+		this.voiceLogPath = voiceLogPath;
 	}
 
 	async start(): Promise<void> {
@@ -751,7 +768,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			this.guild = guild;
 			const realtimeOptions: ConstructorParameters<typeof OpenAiRealtimeClient>[0] = {
 				apiKey: this.config.openAiApiKey,
-				logger: (level, event, details) => console[level](`[discord-voice] ${event}`, details ?? {}),
+				logger: (level, event, details) => this.logVoice(level, event, details),
 			};
 			if (this.config.openAiBaseUrl !== undefined) realtimeOptions.baseUrl = this.config.openAiBaseUrl;
 			realtime = this.dependencies.createRealtime(realtimeOptions);
@@ -761,6 +778,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			};
 			if (this.config.clankvoxBin !== undefined) voxOptions.bin = this.config.clankvoxBin;
 			if (this.config.clankvoxDir !== undefined) voxOptions.cwd = this.config.clankvoxDir;
+			voxOptions.log = (line) => this.logVoiceLine(`[clankvox] ${line}`);
 			vox = await this.dependencies.spawnVox(this.config.guildId, this.config.channelId, guild, voxOptions);
 			speechSynthesizer = this.dependencies.createSpeechSynthesizer(this.config);
 			this.realtime = realtime;
@@ -801,6 +819,8 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 
 	async stop(): Promise<void> {
 		this.clearTranscriptResponseTimer();
+		this.clearRealtimeToolResponseTimer();
+		this.realtimeToolResponsePending = false;
 		this.cancelExternalSpeechSynthesis();
 		this.assistantSpeechActiveUntilMs = 0;
 		this.clearStreamPublish("voice_bridge_stop", true);
@@ -814,6 +834,9 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		this.activeSpeakingUserIds.clear();
 		this.seenInputSpeakerIds.clear();
 		this.pendingSpeakerTranscriptLines.length = 0;
+		this.pendingToolCalls.clear();
+		this.inFlightToolResults.clear();
+		this.recentToolResults.clear();
 		this.pendingRealtimeOutputText.clear();
 		await this.speechSynthesizer?.dispose?.();
 		this.speechSynthesizer = undefined;
@@ -830,6 +853,20 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		if (prompt.length === 0) return;
 		if (this.realtime === undefined) throw new Error("Discord voice realtime client is not connected.");
 		this.realtime.requestTextUtterance(prompt);
+	}
+
+	private logVoice(level: "info" | "warn" | "error", event: string, details?: JsonRecord): void {
+		this.logVoiceLine(`[${level}] ${event}${formatVoiceLogDetails(details)}`);
+	}
+
+	private logVoiceLine(line: string): void {
+		const path = this.voiceLogPath;
+		if (path === undefined) return;
+		appendFile(path, `${new Date().toISOString()} ${line}\n`).catch((error: unknown) => {
+			if (this.voiceLogFailureReported) return;
+			this.voiceLogFailureReported = true;
+			console.error(`discord-voice log failed: ${error instanceof Error ? error.message : String(error)}`);
+		});
 	}
 
 	status(): JsonRecord {
@@ -914,15 +951,14 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			},
 			onError: (userId, error) => {
 				this.stats.speakerTranscriptionErrorCount += 1;
-				console.warn(
-					"[discord-voice] speaker transcription error",
+				this.logVoice("warn", "speaker_transcription_error", {
 					userId,
-					error instanceof Error ? error.message : String(error),
-				);
+					error: error instanceof Error ? error.message : String(error),
+				});
 			},
 			onSocketClosed: (userId, event) => {
 				this.stats.speakerTranscriptionSocketCloseCount += 1;
-				console.warn("[discord-voice] speaker transcription socket closed", { userId, ...event });
+				this.logVoice("warn", "speaker_transcription_socket_closed", { userId, ...event });
 			},
 			idleCloseMs: this.config.speakerTranscriptionIdleCloseMs ?? DEFAULT_SPEAKER_TRANSCRIPTION_IDLE_CLOSE_MS,
 		});
@@ -1005,6 +1041,13 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		clearTimeout(timer);
 	}
 
+	private clearRealtimeToolResponseTimer(): void {
+		const timer = this.realtimeToolResponseTimer;
+		if (timer === undefined) return;
+		this.realtimeToolResponseTimer = undefined;
+		clearTimeout(timer);
+	}
+
 	private bindVox(vox: VoiceVoxClientLike): void {
 		vox.on("speakingStart", (userId) => {
 			this.stats.speakingStartCount += 1;
@@ -1053,7 +1096,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			this.maybeAppendDecodedVideoFrame(frame);
 		});
 		vox.on("ipcError", (event) => {
-			console.warn("[discord-voice] clankvox ipc error", event);
+			this.logVoice("warn", "clankvox_ipc_error", event);
 		});
 	}
 
@@ -1115,22 +1158,25 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			if (eventType === "session.created") this.stats.realtimeSessionCreatedCount += 1;
 			else if (eventType === "session.updated") this.stats.realtimeSessionUpdatedCount += 1;
 			else if (eventType === "response.created") this.realtimeResponseActive = true;
-			else if (eventType === "response.done" || eventType === "response.cancelled") this.realtimeResponseActive = false;
+			else if (eventType === "response.done" || eventType === "response.cancelled") {
+				this.realtimeResponseActive = false;
+				this.flushRealtimeToolResponse();
+			}
 			void this.handleRealtimeEvent(event).catch((error: unknown) => {
-				console.error(error instanceof Error ? error.message : String(error));
+				this.logVoice("error", "realtime_event_handler_error", { error: errorMessage(error) });
 			});
 		});
 		realtime.on("error_event", (event: JsonRecord) => {
 			this.stats.realtimeErrorEventCount += 1;
-			console.warn("[discord-voice] openai realtime error", event);
+			this.logVoice("warn", "openai_realtime_error", event);
 		});
 		realtime.on("socket_closed", (event: JsonRecord) => {
 			this.stats.realtimeSocketCloseCount += 1;
-			console.warn("[discord-voice] openai realtime socket closed", event);
+			this.logVoice("warn", "openai_realtime_socket_closed", event);
 		});
 		realtime.on("socket_error", (error: Error) => {
 			this.stats.realtimeSocketErrorCount += 1;
-			console.warn("[discord-voice] openai realtime socket error", error.message);
+			this.logVoice("warn", "openai_realtime_socket_error", { error: error.message });
 		});
 		realtime.on("transcript", (transcript: OpenAiRealtimeTranscript) => {
 			this.handleRealtimeTranscript(transcript);
@@ -1195,7 +1241,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		} catch (error) {
 			if (abortController.signal.aborted || isAbortError(error)) return;
 			this.stats.externalTtsErrorCount += 1;
-			console.warn("[discord-voice] external tts error", error instanceof Error ? error.message : String(error));
+			this.logVoice("warn", "external_tts_error", { error: errorMessage(error) });
 			throw error;
 		} finally {
 			this.externalSpeechActiveCount = Math.max(0, this.externalSpeechActiveCount - 1);
@@ -1212,6 +1258,8 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 	private interruptAssistantSpeech(): void {
 		this.cancelExternalSpeechSynthesis();
 		this.pendingRealtimeOutputText.clear();
+		this.clearRealtimeToolResponseTimer();
+		this.realtimeToolResponsePending = false;
 		this.assistantSpeechActiveUntilMs = 0;
 		this.vox?.stopTtsPlayback();
 		if (this.realtimeResponseActive) {
@@ -1249,7 +1297,23 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		for (const envelope of envelopes) {
 			if (await this.handleRealtimeFunctionCallEnvelope(envelope)) completedToolCalls += 1;
 		}
-		if (completedToolCalls > 0) this.realtime?.createAudioResponse();
+		if (completedToolCalls > 0) this.scheduleRealtimeToolResponse();
+	}
+
+	private scheduleRealtimeToolResponse(): void {
+		this.realtimeToolResponsePending = true;
+		this.clearRealtimeToolResponseTimer();
+		this.realtimeToolResponseTimer = setTimeout(() => {
+			this.realtimeToolResponseTimer = undefined;
+			this.flushRealtimeToolResponse();
+		}, REALTIME_TOOL_RESPONSE_DEBOUNCE_MS);
+	}
+
+	private flushRealtimeToolResponse(): void {
+		if (!this.realtimeToolResponsePending || this.realtimeResponseActive) return;
+		this.clearRealtimeToolResponseTimer();
+		this.realtimeToolResponsePending = false;
+		this.realtime?.createAudioResponse();
 	}
 
 	private async handleRealtimeFunctionCallEnvelope(envelope: RealtimeFunctionCallEnvelope): Promise<boolean> {
@@ -1295,8 +1359,12 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 	private async executeRealtimeToolCall(call: PendingRealtimeToolCall): Promise<unknown> {
 		const args = parseToolArguments(call.argumentsJson);
 		if (call.name === "ask_pi") {
-			this.stats.askPiCallCount += 1;
-			return { text: await this.askPi(stringValue(args.prompt)) };
+			const prompt = stringValue(args.prompt);
+			const signature = realtimeToolCallSignature(call.name, { prompt: prompt.trim() });
+			return await this.executeDedupedRealtimeToolCall(signature, call.name, async () => {
+				this.stats.askPiCallCount += 1;
+				return { text: await this.askPi(prompt) };
+			});
 		}
 		if (call.name === "list_screen_shares") {
 			return this.listScreenShares();
@@ -1332,6 +1400,43 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			return this.mediaStatus();
 		}
 		return { error: `Unknown Discord voice tool: ${call.name}` };
+	}
+
+	private async executeDedupedRealtimeToolCall(
+		signature: string,
+		name: string,
+		execute: () => Promise<unknown>,
+	): Promise<unknown> {
+		this.pruneRecentRealtimeToolResults();
+		const recent = this.recentToolResults.get(signature);
+		if (recent !== undefined) {
+			this.logVoice("warn", "realtime_duplicate_tool_result_reused", { name });
+			return recent.result;
+		}
+		const inFlight = this.inFlightToolResults.get(signature);
+		if (inFlight !== undefined) {
+			this.logVoice("warn", "realtime_duplicate_tool_call_joined", { name });
+			return await inFlight;
+		}
+		const run = execute();
+		this.inFlightToolResults.set(signature, run);
+		try {
+			const result = await run;
+			this.recentToolResults.set(signature, {
+				result,
+				expiresAtMs: Date.now() + REALTIME_DUPLICATE_TOOL_RESULT_CACHE_MS,
+			});
+			return result;
+		} finally {
+			this.inFlightToolResults.delete(signature);
+		}
+	}
+
+	private pruneRecentRealtimeToolResults(): void {
+		const now = Date.now();
+		for (const [signature, recent] of this.recentToolResults) {
+			if (recent.expiresAtMs <= now) this.recentToolResults.delete(signature);
+		}
 	}
 
 	private async askPi(prompt: string): Promise<string> {
@@ -1656,7 +1761,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		if (vox === undefined || clientUserId === undefined || sessionId === undefined) return;
 		const daveChannelId = deriveDiscordStreamWatchDaveChannelId(stream.rtcServerId);
 		if (daveChannelId === undefined) {
-			console.warn("[discord-voice] could not derive stream watch DAVE channel id", {
+			this.logVoice("warn", "stream_watch_dave_channel_id_missing", {
 				streamKey: stream.streamKey,
 				rtcServerId: stream.rtcServerId,
 			});
@@ -2181,6 +2286,21 @@ function parseToolArguments(raw: string): JsonRecord {
 	}
 }
 
+function realtimeToolCallSignature(name: string, args: JsonRecord): string {
+	return `${name}:${stableJson(args)}`;
+}
+
+function stableJson(value: unknown): string {
+	if (Array.isArray(value)) return `[${value.map((item) => stableJson(item)).join(",")}]`;
+	if (isRecord(value)) {
+		return `{${Object.keys(value)
+			.sort()
+			.map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`)
+			.join(",")}}`;
+	}
+	return JSON.stringify(value) ?? "undefined";
+}
+
 function parseMediaUrl(value: unknown, fieldName: string): string {
 	const raw = stringValue(value);
 	if (raw.length === 0) throw new Error(`${fieldName} is required.`);
@@ -2474,6 +2594,19 @@ function escapeRegExp(value: string): string {
 function isAbortError(error: unknown): boolean {
 	if (!isRecord(error)) return false;
 	return stringValue(error.name) === "AbortError";
+}
+
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+function formatVoiceLogDetails(details: JsonRecord | undefined): string {
+	if (details === undefined) return "";
+	try {
+		return ` ${JSON.stringify(details)}`;
+	} catch (error) {
+		return ` ${JSON.stringify({ detail: "failed to serialize log details", error: errorMessage(error) })}`;
+	}
 }
 
 function isFinalInputTranscriptEvent(eventType: string): boolean {

@@ -29,6 +29,7 @@ import {
 	type DiscoveredDiscordStream,
 	deriveDiscordStreamWatchDaveChannelId,
 } from "../src/voice/discordStreamDiscovery.ts";
+import { DiscordVoiceSpeakerTranscriptionManager } from "../src/voice/discordVoiceSpeakerTranscription.ts";
 import { DiscordVoiceTurnBuffer, mixPcm16MonoFrames } from "../src/voice/discordVoiceTurnBuffer.ts";
 import {
 	describeVoiceLiveValidationRequirements,
@@ -45,6 +46,7 @@ import {
 	buildInputAudioAppendEvent,
 	buildRealtimeSessionUpdateEvent,
 	buildRealtimeTranscriptionSessionUpdateEvent,
+	buildRealtimeTranscriptionUrl,
 	type OpenAiRealtimeTranscriptionConnectOptions,
 	splitRealtimeInputAudioChunk,
 	stringifyRealtimeFunctionOutput,
@@ -55,6 +57,7 @@ type JsonRecord = Record<string, unknown>;
 async function main(): Promise<void> {
 	assertVoiceConfig();
 	assertRealtimeSessionUpdateShape();
+	assertRealtimeTranscriptionUrlShape();
 	assertRealtimeTranscriptionSessionUpdateShape();
 	assertRealtimeAudioAppendShape();
 	assertRealtimeFunctionOutputSerialization();
@@ -66,6 +69,7 @@ async function main(): Promise<void> {
 	assertDiscordStreamDiscovery();
 	assertVoiceLiveValidation();
 	assertVoiceLiveValidationResult();
+	await assertSpeakerTranscriptionCommitGuard();
 	await assertFakeVoiceBridgeRealtimeTools();
 	await assertFakeVoiceBridgeElevenLabsTts();
 	await assertFakeVoiceBridgeBargeInPolicy();
@@ -76,6 +80,7 @@ async function main(): Promise<void> {
 	await assertFakeVoiceBridgeScreenWatchSwitchCleanup();
 	await assertFakeVoiceBridgeGatewaySessionFallback();
 	await assertFakeVoiceBridgeRealtimeStreamingToolDedup();
+	await assertFakeVoiceBridgeRealtimeDuplicateAskPiCoalesces();
 	console.log("voice-smoke: PASS");
 }
 
@@ -337,9 +342,15 @@ function assertRealtimeSessionUpdateShape(): void {
 	const audio = expectRecord(session.audio, "session.audio");
 	const audioInput = expectRecord(audio.input, "session.audio.input");
 	const audioOutput = expectRecord(audio.output, "session.audio.output");
-	if (audioInput.format !== "pcm16") throw new Error("voice-smoke: realtime input audio format missing");
+	const inputFormat = expectRecord(audioInput.format, "session.audio.input.format");
+	if (inputFormat.type !== "audio/pcm" || inputFormat.rate !== 24_000) {
+		throw new Error("voice-smoke: realtime input audio format missing");
+	}
 	if (audioInput.turn_detection !== null) throw new Error("voice-smoke: realtime turn detection should be manual");
-	if (audioOutput.format !== "pcm16") throw new Error("voice-smoke: realtime output audio format missing");
+	const outputFormat = expectRecord(audioOutput.format, "session.audio.output.format");
+	if (outputFormat.type !== "audio/pcm" || outputFormat.rate !== 24_000) {
+		throw new Error("voice-smoke: realtime output audio format missing");
+	}
 	if (audioOutput.voice !== "marin") throw new Error("voice-smoke: realtime voice missing");
 	if ("input_audio_format" in session) throw new Error("voice-smoke: session should use GA nested audio input config");
 	const reasoning = expectRecord(session.reasoning, "session.reasoning");
@@ -359,6 +370,13 @@ function assertRealtimeSessionUpdateShape(): void {
 	const textAudio = expectRecord(textSession.audio, "text session audio");
 	if ("output" in textAudio)
 		throw new Error("voice-smoke: realtime text session should not configure audio output voice");
+}
+
+function assertRealtimeTranscriptionUrlShape(): void {
+	const url = buildRealtimeTranscriptionUrl("https://api.openai.com/v1");
+	if (url !== "wss://api.openai.com/v1/realtime?intent=transcription") {
+		throw new Error(`voice-smoke: realtime transcription URL should use intent=transcription, got ${url}`);
+	}
 }
 
 function assertRealtimeTranscriptionSessionUpdateShape(): void {
@@ -936,6 +954,41 @@ function assertVoiceLiveValidationResult(): void {
 	}
 }
 
+async function assertSpeakerTranscriptionCommitGuard(): Promise<void> {
+	const realtime = new FakeSpeakerTranscriptionRealtime("speaker transcript");
+	const transcripts: string[] = [];
+	const manager = new DiscordVoiceSpeakerTranscriptionManager({
+		realtimeOptions: { apiKey: "openai-key" },
+		connectOptions: {
+			model: "gpt-realtime-whisper",
+			sampleRate: 24_000,
+		},
+		createRealtime() {
+			return realtime;
+		},
+		subscribeUser() {},
+		onTranscript(transcript) {
+			transcripts.push(transcript.text);
+		},
+	});
+
+	manager.userAudio("speaker-1", Buffer.alloc(4_799));
+	manager.userAudioEnd("speaker-1");
+	await waitUntil(() => realtime.audioAppends.length === 1, "short speaker transcription append");
+	await sleep(0);
+	if (realtime.commits !== 0 || transcripts.length !== 0) {
+		throw new Error("voice-smoke: speaker transcription should not commit less than 100ms of audio");
+	}
+
+	manager.userAudio("speaker-1", Buffer.alloc(4_800));
+	manager.userAudioEnd("speaker-1");
+	await waitUntil(() => realtime.commits === 1, "speaker transcription commit after 100ms");
+	if (transcripts.join(",") !== "speaker transcript") {
+		throw new Error("voice-smoke: speaker transcription did not emit transcript after commit");
+	}
+	await manager.dispose();
+}
+
 async function assertFakeVoiceBridgeRealtimeTools(): Promise<void> {
 	const realtime = new FakeBridgeRealtime();
 	const speakerTranscriptions: FakeSpeakerTranscriptionRealtime[] = [];
@@ -1018,9 +1071,9 @@ async function assertFakeVoiceBridgeRealtimeTools(): Promise<void> {
 		restoreWarn();
 	}
 	vox.emit("speakingStart", "speaker-1");
-	vox.emit("userAudio", "speaker-1", Buffer.from([1, 2, 3, 4, 5, 6]));
+	vox.emit("userAudio", "speaker-1", Buffer.alloc(4_800, 1));
 	vox.emit("speakingStart", "speaker-2");
-	vox.emit("userAudio", "speaker-2", Buffer.from([7, 8, 9, 10]));
+	vox.emit("userAudio", "speaker-2", Buffer.alloc(4_800, 2));
 	vox.emit("userAudioEnd", "speaker-1");
 	vox.emit("userAudioEnd", "speaker-2");
 	await waitUntil(
@@ -1041,6 +1094,9 @@ async function assertFakeVoiceBridgeRealtimeTools(): Promise<void> {
 		speakerTranscriptions.some((client) => client.audioAppends.length !== 1 || client.commits !== 1)
 	) {
 		throw new Error("voice-smoke: per-speaker transcription sessions did not receive isolated audio");
+	}
+	if (speakerTranscriptions.some((client) => client.connectOptions?.model !== "gpt-realtime-whisper")) {
+		throw new Error("voice-smoke: per-speaker transcription should connect with the transcription model");
 	}
 	const firstSubscription = vox.userSubscriptions[0];
 	const secondSubscription = vox.userSubscriptions[1];
@@ -1263,7 +1319,7 @@ async function assertFakeVoiceBridgeRealtimeTools(): Promise<void> {
 		stats.discordInputMaxConcurrentSpeakers !== 2 ||
 		stats.discordInputGroupOverlapCount !== 1 ||
 		stats.discordInputAudioEventCount !== 2 ||
-		stats.discordInputAudioBytes !== 10
+		stats.discordInputAudioBytes !== 9_600
 	) {
 		throw new Error("voice-smoke: voice bridge did not count Discord input audio");
 	}
@@ -1438,7 +1494,7 @@ async function assertFakeVoiceBridgeBargeInPolicy(): Promise<void> {
 	if (handle === undefined) throw new Error("voice-smoke: barge-in voice bridge did not start");
 	vox.emit("bufferDepth", 24_000, 0);
 	vox.emit("speakingStart", "speaker-1");
-	vox.emit("userAudio", "speaker-1", Buffer.from([1, 2, 3, 4]));
+	vox.emit("userAudio", "speaker-1", Buffer.alloc(4_800, 1));
 	vox.emit("userAudioEnd", "speaker-1");
 	await sleep(10);
 	if (realtime.textUtterances.length !== 0) {
@@ -1447,7 +1503,7 @@ async function assertFakeVoiceBridgeBargeInPolicy(): Promise<void> {
 	realtime.emit("event", { type: "response.created" });
 	vox.emit("bufferDepth", 24_000, 0);
 	vox.emit("speakingStart", "speaker-2");
-	vox.emit("userAudio", "speaker-2", Buffer.from([5, 6, 7, 8]));
+	vox.emit("userAudio", "speaker-2", Buffer.alloc(4_800, 2));
 	vox.emit("userAudioEnd", "speaker-2");
 	await waitUntil(
 		() => realtime.textUtterances.some((text) => text.includes("hey Clanky, hold on a second")),
@@ -1459,7 +1515,7 @@ async function assertFakeVoiceBridgeBargeInPolicy(): Promise<void> {
 	realtime.emit("event", { type: "response.created" });
 	vox.emit("bufferDepth", 24_000, 0);
 	vox.emit("speakingStart", "speaker-3");
-	vox.emit("userAudio", "speaker-3", Buffer.from([9, 10, 11, 12]));
+	vox.emit("userAudio", "speaker-3", Buffer.alloc(4_800, 3));
 	vox.emit("userAudioEnd", "speaker-3");
 	await waitUntil(
 		() => realtime.textUtterances.some((text) => text.includes("yo planky, one more thing")),
@@ -1878,6 +1934,7 @@ async function assertFakeVoiceBridgeRealtimeBatchToolResponse(): Promise<void> {
 		},
 	});
 	await waitUntil(() => realtime.functionOutputs.length === 2, "batch realtime tool outputs");
+	await waitUntil(() => realtime.responses === 1, "batch realtime audio response");
 	if (realtime.responses !== 1) {
 		throw new Error(`voice-smoke: batch realtime tool calls created ${realtime.responses} audio responses`);
 	}
@@ -2275,6 +2332,69 @@ async function assertFakeVoiceBridgeRealtimeStreamingToolDedup(): Promise<void> 
 	}
 	if (runtime.session.messages.length !== 1 || !runtime.session.messages[0]?.includes("streamed prompt")) {
 		throw new Error("voice-smoke: streamed realtime tool call did not execute ask_pi exactly once");
+	}
+	await handle.stop();
+}
+
+async function assertFakeVoiceBridgeRealtimeDuplicateAskPiCoalesces(): Promise<void> {
+	const realtime = new FakeBridgeRealtime();
+	const vox = new FakeBridgeClankvox();
+	const runtime = new FakeVoiceRuntime();
+	const handle = await startAgentDiscordVoiceBridge({
+		runtime: runtime as never,
+		client: new FakeVoiceDiscordClient() as never,
+		discordConfig: {
+			providerId: "clanky-discord",
+			token: "discord-token",
+			credentialKind: "bot-token",
+			source: "env",
+		},
+		config: {
+			enabled: true,
+			guildId: "guild-1",
+			channelId: "voice-1",
+			openAiApiKey: "openai-key",
+			openAiRealtimeModel: DEFAULT_REALTIME_MODEL,
+			openAiRealtimeVoice: "marin",
+		},
+		dependencies: {
+			createRealtime() {
+				return realtime;
+			},
+			async spawnVox() {
+				return vox;
+			},
+			createStreamDiscovery() {
+				return new FakeVoiceStreamDiscovery({
+					streamKey: "guild:guild-1:voice-1:streamer-1",
+					guildId: "guild-1",
+					channelId: "voice-1",
+					userId: "streamer-1",
+					endpoint: null,
+					token: null,
+					rtcServerId: null,
+					updatedAt: Date.now(),
+				});
+			},
+		},
+	});
+	if (handle === undefined) throw new Error("voice-smoke: duplicate ask_pi voice bridge did not start");
+	for (const callId of ["call-dup-1", "call-dup-2", "call-dup-3"]) {
+		realtime.emit("event", {
+			type: "response.function_call_arguments.done",
+			name: "ask_pi",
+			call_id: callId,
+			arguments: '{"prompt":"open chrome as a test"}',
+		});
+	}
+	await waitUntil(() => realtime.functionOutputs.length === 3, "duplicate ask_pi outputs");
+	await waitUntil(() => realtime.responses === 1, "duplicate ask_pi audio response");
+	if (runtime.session.messages.length !== 1) {
+		throw new Error(`voice-smoke: duplicate ask_pi forwarded ${runtime.session.messages.length} Pi requests`);
+	}
+	const stats = expectRecord(handle.status().stats, "duplicate ask_pi stats");
+	if (stats.askPiCallCount !== 1 || stats.realtimeFunctionCallOutputCount !== 3) {
+		throw new Error("voice-smoke: duplicate ask_pi stats did not show one Pi call and three tool outputs");
 	}
 	await handle.stop();
 }

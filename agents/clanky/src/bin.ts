@@ -10,12 +10,18 @@ import {
 	sendDiscordMessage,
 } from "@clanky/core";
 import { AuthStorage } from "@earendil-works/pi-coding-agent";
+import { runClankyLogDiveCli } from "./logDive.ts";
 import { type RunClankyOptions, runClanky } from "./runClanky.ts";
 
 const args = process.argv.slice(2);
 
 if (args[0] === "discord") {
 	runDiscordCli(args.slice(1)).catch((error: unknown) => {
+		console.error(error instanceof Error ? (error.stack ?? error.message) : String(error));
+		process.exit(1);
+	});
+} else if (args[0] === "logs") {
+	runClankyLogDiveCli(args.slice(1)).catch((error: unknown) => {
 		console.error(error instanceof Error ? (error.stack ?? error.message) : String(error));
 		process.exit(1);
 	});
@@ -40,6 +46,7 @@ if (args[0] === "discord") {
 		} else if (a === "--help" || a === "-h") {
 			console.log("Usage: clanky [--profile <name>] [--home <dir>] [--cwd <dir>] [--message <text>]");
 			console.log("       clanky discord <guilds|channels|messages|recent|digest|send|emojis|react> [...]");
+			console.log("       clanky logs [--profile <name>] [--home <dir>] [--session <latest|id|path>] [--json]");
 			process.exit(0);
 		} else {
 			console.error(`Unknown argument: ${a}`);
