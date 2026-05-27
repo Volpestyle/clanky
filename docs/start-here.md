@@ -86,7 +86,10 @@ test onboarding without touching your real profile.
 
 ```bash
 cd /path/to/clanky-pi
+corepack enable
+corepack prepare pnpm@10.33.4 --activate
 pnpm install
+export PATH="$PWD/node_modules/.bin:$PATH" # source checkout only
 pnpm dev:setup:fresh
 ```
 
@@ -114,6 +117,9 @@ After the fresh run works, start a persistent profile:
 ```bash
 clanky --home ~/.clanky --profile personal --cwd .
 ```
+
+The released CLI is intended to be used directly as `clanky`. The `PATH` line
+is only for a source checkout before the CLI is installed globally.
 
 Inside Clanky:
 
