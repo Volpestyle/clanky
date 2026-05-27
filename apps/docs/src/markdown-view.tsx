@@ -7,8 +7,7 @@ import { createSlugger, parseMarkdown } from "@/markdown";
 
 let mermaidRenderSerial = 0;
 
-const MERMAID_FONT_FAMILY =
-	"Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+const MERMAID_FONT_FAMILY = "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
 
 function readMermaidTheme(): "default" | "dark" {
 	if (typeof document === "undefined") return "default";

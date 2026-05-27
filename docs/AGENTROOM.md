@@ -16,6 +16,53 @@ others later):
 These are separate axes. `AGENTROOM=1` means "Clanky is in a room"; it does
 not mean "Clanky must surrender his Discord identity."
 
+## System Diagram
+
+Clanky can participate in AgentRoom without moving profile state or agent-owned
+connectors into the room daemon.
+
+```mermaid
+flowchart TB
+  Human["Human / lead agent"] --> Daemon["agentroomd / agent-room CLI"]
+  Config[".agentroom/config.yaml<br/>room topology"] --> Daemon
+  Daemon <--> EventLog["EventStore<br/>messages, tasks, audit"]
+  Daemon --> Runtime["RuntimeProvider<br/>Herdr, tmux, etc."]
+  Runtime --> Clanky["Clanky process"]
+  Daemon -->|"audited send/read"| Clanky
+
+  subgraph ClankyState["Clanky owns"]
+    Pi["Pi InteractiveMode<br/>model, TUI, tools, sessions"]
+    Profile["Profile stores<br/>auth.json, memory,<br/>sessions, voice settings"]
+  end
+
+  Clanky --> Pi
+  Pi --> Profile
+  Pi -->|"AgentRoom CLI / MCP when enrolled"| Daemon
+```
+
+Discord can be owned by Clanky or by the room. Pick one owner per external
+conversation.
+
+```mermaid
+flowchart TB
+  Discord["Discord conversation"]
+
+  subgraph RoomOwned["Room-owned path"]
+    RoomGateway["AgentRoom ChatGateway<br/>room connector token"]
+    Route["ChatGatewayRouter<br/>route table"]
+    Lead["Clanky lead via agent-stdin"]
+  end
+
+  subgraph AgentOwned["Agent-owned path"]
+    AgentGateway["Clanky Discord gateway<br/>Clanky profile token"]
+    DiscordSubagent["Discord subagent<br/>or main session"]
+    AgentPi["Clanky Pi session"]
+  end
+
+  Discord --> RoomGateway --> Route --> Lead
+  Discord --> AgentGateway --> DiscordSubagent --> AgentPi
+```
+
 ### Agent-owned Discord
 
 Clanky imports `@agentroom/chat-discord` as a library and runs the gateway

@@ -45,6 +45,7 @@ export interface OpenAiRealtimeTranscript {
 	text: string;
 	eventType: string;
 	itemId?: string;
+	responseId?: string;
 }
 
 const DEFAULT_BASE_URL = "https://api.openai.com/v1";
@@ -240,15 +241,18 @@ export class OpenAiRealtimeClient extends EventEmitter {
 			if (audio.length > 0) this.emit("audio_delta", audio);
 			return;
 		}
-		if (TRANSCRIPT_EVENTS.has(stringValue(event.type))) {
+		const eventType = stringValue(event.type);
+		if (TRANSCRIPT_EVENTS.has(eventType)) {
 			const text = stringValue(event.transcript) || stringValue(event.text) || stringValue(event.delta);
-			if (text.length > 0) {
+			if (text.length > 0 || isFinalRealtimeTranscriptEventType(eventType)) {
 				const itemId = stringValue(event.item_id) || stringValue(event.itemId);
+				const responseId = stringValue(event.response_id) || stringValue(event.responseId);
 				const transcript: OpenAiRealtimeTranscript = {
 					text,
-					eventType: stringValue(event.type),
+					eventType,
 				};
 				if (itemId.length > 0) transcript.itemId = itemId;
+				if (responseId.length > 0) transcript.responseId = responseId;
 				this.emit("transcript", transcript);
 			}
 			return;
@@ -369,15 +373,18 @@ export class OpenAiRealtimeTranscriptionClient extends EventEmitter {
 		const event = parseJsonRecord(data);
 		if (event === undefined) return;
 		this.emit("event", event);
-		if (TRANSCRIPT_EVENTS.has(stringValue(event.type))) {
+		const eventType = stringValue(event.type);
+		if (TRANSCRIPT_EVENTS.has(eventType)) {
 			const text = stringValue(event.transcript) || stringValue(event.text) || stringValue(event.delta);
-			if (text.length > 0) {
+			if (text.length > 0 || isFinalRealtimeTranscriptEventType(eventType)) {
 				const itemId = stringValue(event.item_id) || stringValue(event.itemId);
+				const responseId = stringValue(event.response_id) || stringValue(event.responseId);
 				const transcript: OpenAiRealtimeTranscript = {
 					text,
-					eventType: stringValue(event.type),
+					eventType,
 				};
 				if (itemId.length > 0) transcript.itemId = itemId;
+				if (responseId.length > 0) transcript.responseId = responseId;
 				this.emit("transcript", transcript);
 			}
 			return;
@@ -417,6 +424,10 @@ function parseJsonRecord(data: WebSocket.RawData): JsonRecord | undefined {
 
 function stringValue(value: unknown): string {
 	return typeof value === "string" ? value : "";
+}
+
+function isFinalRealtimeTranscriptEventType(eventType: string): boolean {
+	return eventType.endsWith(".done") || eventType.endsWith(".completed");
 }
 
 export function buildRealtimeSessionUpdateEvent(session: OpenAiRealtimeConnectOptions): JsonRecord {

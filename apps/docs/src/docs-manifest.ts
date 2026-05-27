@@ -75,7 +75,7 @@ export const docsMeta: DocMeta[] = [
 	{
 		slug: "agentroom",
 		title: "AgentRoom Integration",
-		description: "Room participation, gateway ownership, launch contract, and runtime environment boundaries.",
+		description: "Room participation, gateway ownership diagrams, launch contract, and runtime environment boundaries.",
 		source: "docs/AGENTROOM.md",
 		group: "Operations",
 	},

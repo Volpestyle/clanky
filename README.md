@@ -12,6 +12,8 @@ live at [pi.dev/docs/latest](https://pi.dev/docs/latest).
 AgentRoom is the room/runtime daemon. Clanky works naturally inside any
 AgentRoom because AgentRoom can launch it as a normal Pi harness command and
 audit the room send/read flow around it.
+See [docs/AGENTROOM.md](docs/AGENTROOM.md) for the ownership map and integration
+contract.
 
 ## Room And Chat Ownership
 

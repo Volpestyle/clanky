@@ -82,6 +82,7 @@ async function main(): Promise<void> {
 	await assertFakeVoiceBridgeRealtimeTools();
 	await assertFakeVoiceBridgeXAiRealtimeAgent();
 	await assertFakeVoiceBridgeElevenLabsTts();
+	await assertFakeVoiceBridgeElevenLabsTtsCoalescesFinalTranscripts();
 	await assertFakeVoiceBridgeBargeInPolicy();
 	await assertFakeVoiceBridgeSubagents();
 	await assertFakeVoiceBridgeRealtimeMediaTools();
@@ -1731,6 +1732,88 @@ async function assertFakeVoiceBridgeElevenLabsTts(): Promise<void> {
 	}
 	if (vox.audioSends[0]?.sampleRate !== 24_000) {
 		throw new Error("voice-smoke: ElevenLabs PCM sample rate was not preserved");
+	}
+	await handle.stop();
+}
+
+async function assertFakeVoiceBridgeElevenLabsTtsCoalescesFinalTranscripts(): Promise<void> {
+	const realtime = new FakeBridgeRealtime();
+	const vox = new FakeBridgeClankvox();
+	const speech = new FakeSpeechSynthesizer();
+	const handle = await startAgentDiscordVoiceBridge({
+		runtime: new FakeVoiceRuntime() as never,
+		client: new FakeVoiceDiscordClient() as never,
+		discordConfig: {
+			providerId: "clanky-discord",
+			token: "discord-token",
+			credentialKind: "bot-token",
+			source: "env",
+		},
+		config: {
+			enabled: true,
+			guildId: "guild-1",
+			channelId: "voice-1",
+			ttsProvider: "elevenlabs",
+			openAiApiKey: "openai-key",
+			openAiRealtimeModel: DEFAULT_REALTIME_MODEL,
+			openAiRealtimeVoice: "marin",
+			elevenLabsApiKey: "elevenlabs-key",
+			elevenLabsVoiceId: "eleven-voice",
+			elevenLabsModel: "eleven_flash_v2_5",
+		},
+		dependencies: {
+			createRealtime() {
+				return realtime;
+			},
+			async spawnVox() {
+				return vox;
+			},
+			createStreamDiscovery() {
+				return new FakeVoiceStreamDiscovery({
+					streamKey: "guild:guild-1:voice-1:streamer-1",
+					guildId: "guild-1",
+					channelId: "voice-1",
+					userId: "streamer-1",
+					endpoint: "voice.example",
+					token: "stream-token",
+					rtcServerId: "9002",
+					updatedAt: Date.now(),
+				});
+			},
+			createSpeechSynthesizer() {
+				return speech;
+			},
+		},
+	});
+	if (handle === undefined) throw new Error("voice-smoke: ElevenLabs coalesce bridge did not start");
+	realtime.emit("event", { type: "response.created", response: { id: "resp-browser" } });
+	realtime.emit("transcript", {
+		eventType: "response.output_text.done",
+		responseId: "resp-browser",
+		itemId: "item-short",
+		text: "I can't directly open your browser from here, but I can help you get to what you want quickly.",
+	});
+	realtime.emit("transcript", {
+		eventType: "response.output_text.done",
+		responseId: "resp-browser",
+		itemId: "item-long",
+		text: "I can't directly open your browser from here, but I can help you get to what you want quickly. Tell me what site or page you want, and I'll guide you.",
+	});
+	await waitUntil(() => speech.texts.length === 1, "coalesced ElevenLabs transcript synthesis");
+	await sleep(150);
+	if (speech.texts.length !== 1 || vox.audioSends.length !== 1) {
+		throw new Error(
+			`voice-smoke: ElevenLabs duplicate finals should synthesize once ${JSON.stringify({
+				texts: speech.texts,
+				audioSends: vox.audioSends.length,
+			})}`,
+		);
+	}
+	if (
+		speech.texts[0] !==
+		"I can't directly open your browser from here, but I can help you get to what you want quickly. Tell me what site or page you want, and I'll guide you."
+	) {
+		throw new Error(`voice-smoke: ElevenLabs coalesced wrong text ${JSON.stringify(speech.texts)}`);
 	}
 	await handle.stop();
 }

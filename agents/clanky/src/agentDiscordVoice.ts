@@ -155,6 +155,14 @@ interface RecentRealtimeToolResult {
 	expiresAtMs: number;
 }
 
+interface PendingRealtimeAssistantTranscript {
+	eventType: string;
+	texts: string[];
+	timer: TimerHandle | undefined;
+	itemId: string | undefined;
+	responseId: string | undefined;
+}
+
 type RealtimeToolContinuation = "continue" | "stop";
 
 interface VoiceBridgeStats {
@@ -390,6 +398,7 @@ const DEFAULT_SPEAKER_TRANSCRIPTION_IDLE_CLOSE_MS = 120_000;
 const DEFAULT_TRANSCRIPT_RESPONSE_BATCH_DELAY_MS = 350;
 const DEFAULT_PARTICIPATION_EAGERNESS = 50;
 const REALTIME_TOOL_RESPONSE_DEBOUNCE_MS = 25;
+const REALTIME_ASSISTANT_TRANSCRIPT_FINAL_DEBOUNCE_MS = 75;
 const REALTIME_DUPLICATE_TOOL_RESULT_CACHE_MS = 5_000;
 const PI_TOOL_TIMEOUT_MS = 120_000;
 const DEFAULT_VOICE_BARGE_IN_WAKE_WORDS = DEFAULT_DISCORD_WAKE_NAMES;
@@ -818,6 +827,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 	private readonly inFlightToolResults = new Map<string, Promise<unknown>>();
 	private readonly recentToolResults = new Map<string, RecentRealtimeToolResult>();
 	private readonly pendingRealtimeOutputText = new Map<string, string>();
+	private readonly pendingRealtimeAssistantTranscripts = new Map<string, PendingRealtimeAssistantTranscript>();
 	private readonly completedToolCallIds: string[] = [];
 	private readonly completedToolCallIdSet = new Set<string>();
 	private readonly pendingSpeakerTranscriptLines: SpeakerTranscriptLine[] = [];
@@ -830,6 +840,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 	private externalSpeechActiveCount = 0;
 	private assistantSpeechActiveUntilMs = 0;
 	private realtimeResponseActive = false;
+	private activeRealtimeResponseId: string | undefined;
 	private realtimeToolResponsePending = false;
 	private voiceLogFailureReported = false;
 	private piRequestActiveCount = 0;
@@ -971,6 +982,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		this.inFlightToolResults.clear();
 		this.recentToolResults.clear();
 		this.pendingRealtimeOutputText.clear();
+		this.clearPendingRealtimeAssistantTranscripts();
 		await this.speechSynthesizer?.dispose?.();
 		this.speechSynthesizer = undefined;
 		await this.realtime?.close();
@@ -1448,9 +1460,14 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			const eventType = stringValue(event.type);
 			if (eventType === "session.created") this.stats.realtimeSessionCreatedCount += 1;
 			else if (eventType === "session.updated") this.stats.realtimeSessionUpdatedCount += 1;
-			else if (eventType === "response.created") this.realtimeResponseActive = true;
-			else if (eventType === "response.done" || eventType === "response.cancelled") {
+			else if (eventType === "response.created") {
+				this.realtimeResponseActive = true;
+				const responseId = realtimeEventResponseId(event);
+				if (responseId !== undefined) this.activeRealtimeResponseId = responseId;
+			} else if (eventType === "response.done" || eventType === "response.cancelled") {
 				this.realtimeResponseActive = false;
+				const responseId = realtimeEventResponseId(event);
+				if (responseId !== undefined) this.activeRealtimeResponseId = responseId;
 				this.flushRealtimeToolResponse();
 			}
 			void this.handleRealtimeEvent(event).catch((error: unknown) => {
@@ -1476,20 +1493,70 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 
 	private handleRealtimeTranscript(transcript: OpenAiRealtimeTranscript): void {
 		this.stats.realtimeTranscriptCount += 1;
-		this.subagents?.recordRealtimeTranscript(transcript);
-		if ((this.config.ttsProvider ?? "openai") !== "elevenlabs") return;
 		const eventType = transcript.eventType;
 		if (eventType === "response.output_text.delta" || eventType === "response.output_audio_transcript.delta") {
-			const key = transcript.itemId ?? "default";
+			const key = realtimeOutputTextKey(transcript);
 			this.pendingRealtimeOutputText.set(key, `${this.pendingRealtimeOutputText.get(key) ?? ""}${transcript.text}`);
 			return;
 		}
-		if (eventType !== "response.output_text.done" && eventType !== "response.output_audio_transcript.done") return;
-		const key = transcript.itemId ?? "default";
-		const fallback = this.pendingRealtimeOutputText.get(key) ?? "";
-		this.pendingRealtimeOutputText.delete(key);
-		const text = transcript.text.trim().length > 0 ? transcript.text : fallback;
-		this.enqueueExternalSpeech(text);
+		if (isFinalAssistantRealtimeTranscriptEvent(eventType)) {
+			const key = realtimeOutputTextKey(transcript);
+			const fallback = this.pendingRealtimeOutputText.get(key) ?? "";
+			this.pendingRealtimeOutputText.delete(key);
+			const text = transcript.text.trim().length > 0 ? transcript.text : fallback;
+			this.queueFinalAssistantRealtimeTranscript(transcript, text);
+			return;
+		}
+		this.subagents?.recordRealtimeTranscript(transcript);
+	}
+
+	private queueFinalAssistantRealtimeTranscript(transcript: OpenAiRealtimeTranscript, text: string): void {
+		const normalizedText = normalizeRealtimeAssistantText(text);
+		if (normalizedText.length === 0) return;
+		const key = realtimeAssistantTranscriptGroupKey(transcript, this.activeRealtimeResponseId);
+		let group = this.pendingRealtimeAssistantTranscripts.get(key);
+		if (group === undefined) {
+			group = {
+				eventType: transcript.eventType,
+				texts: [],
+				timer: undefined,
+				itemId: transcript.itemId,
+				responseId: transcript.responseId ?? this.activeRealtimeResponseId,
+			};
+			this.pendingRealtimeAssistantTranscripts.set(key, group);
+		}
+		group.eventType = transcript.eventType;
+		if (transcript.itemId !== undefined) group.itemId = transcript.itemId;
+		if (transcript.responseId !== undefined) group.responseId = transcript.responseId;
+		addCoalescedRealtimeAssistantText(group.texts, normalizedText);
+		if (group.timer !== undefined) clearTimeout(group.timer);
+		group.timer = setTimeout(() => {
+			this.flushFinalAssistantRealtimeTranscript(key);
+		}, REALTIME_ASSISTANT_TRANSCRIPT_FINAL_DEBOUNCE_MS);
+	}
+
+	private flushFinalAssistantRealtimeTranscript(key: string): void {
+		const group = this.pendingRealtimeAssistantTranscripts.get(key);
+		if (group === undefined) return;
+		if (group.timer !== undefined) clearTimeout(group.timer);
+		this.pendingRealtimeAssistantTranscripts.delete(key);
+		const text = group.texts.join(" ").trim();
+		if (text.length === 0) return;
+		const transcript: OpenAiRealtimeTranscript = {
+			text,
+			eventType: group.eventType,
+		};
+		if (group.itemId !== undefined) transcript.itemId = group.itemId;
+		if (group.responseId !== undefined) transcript.responseId = group.responseId;
+		this.subagents?.recordRealtimeTranscript(transcript);
+		if ((this.config.ttsProvider ?? "openai") === "elevenlabs") this.enqueueExternalSpeech(text);
+	}
+
+	private clearPendingRealtimeAssistantTranscripts(): void {
+		for (const group of this.pendingRealtimeAssistantTranscripts.values()) {
+			if (group.timer !== undefined) clearTimeout(group.timer);
+		}
+		this.pendingRealtimeAssistantTranscripts.clear();
 	}
 
 	private enqueueExternalSpeech(text: string): void {
@@ -1549,6 +1616,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 	private interruptAssistantSpeech(): void {
 		this.cancelExternalSpeechSynthesis();
 		this.pendingRealtimeOutputText.clear();
+		this.clearPendingRealtimeAssistantTranscripts();
 		this.clearRealtimeToolResponseTimer();
 		this.realtimeToolResponsePending = false;
 		this.assistantSpeechActiveUntilMs = 0;
@@ -3384,6 +3452,52 @@ function formatVoiceLogDetails(details: JsonRecord | undefined): string {
 
 function isFinalInputTranscriptEvent(eventType: string): boolean {
 	return eventType === "conversation.item.input_audio_transcription.completed";
+}
+
+function isFinalAssistantRealtimeTranscriptEvent(eventType: string): boolean {
+	return eventType === "response.output_text.done" || eventType === "response.output_audio_transcript.done";
+}
+
+function realtimeOutputTextKey(transcript: OpenAiRealtimeTranscript): string {
+	if (transcript.itemId !== undefined && transcript.itemId.length > 0) return `item:${transcript.itemId}`;
+	if (transcript.responseId !== undefined && transcript.responseId.length > 0)
+		return `response:${transcript.responseId}`;
+	return "default";
+}
+
+function realtimeAssistantTranscriptGroupKey(
+	transcript: OpenAiRealtimeTranscript,
+	activeResponseId: string | undefined,
+): string {
+	if (transcript.responseId !== undefined && transcript.responseId.length > 0)
+		return `response:${transcript.responseId}`;
+	if (activeResponseId !== undefined && activeResponseId.length > 0) return `response:${activeResponseId}`;
+	if (transcript.itemId !== undefined && transcript.itemId.length > 0) return `item:${transcript.itemId}`;
+	return "default";
+}
+
+function addCoalescedRealtimeAssistantText(texts: string[], text: string): void {
+	for (let index = 0; index < texts.length; index += 1) {
+		const existing = texts[index] ?? "";
+		if (existing === text || existing.startsWith(text)) return;
+		if (text.startsWith(existing)) {
+			texts[index] = text;
+			return;
+		}
+	}
+	texts.push(text);
+}
+
+function normalizeRealtimeAssistantText(text: string): string {
+	return text.trim().replace(/\s+/g, " ");
+}
+
+function realtimeEventResponseId(event: JsonRecord): string | undefined {
+	const direct = stringValue(event.response_id) || stringValue(event.responseId);
+	if (direct.length > 0) return direct;
+	if (!isRecord(event.response)) return undefined;
+	const nested = stringValue(event.response.id);
+	return nested.length > 0 ? nested : undefined;
 }
 
 function hasCredentials(stream: DiscoveredDiscordStream): stream is DiscoveredDiscordStream & {

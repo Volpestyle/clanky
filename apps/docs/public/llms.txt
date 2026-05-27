@@ -22,7 +22,7 @@
 
 ## Operations
 
-- [AgentRoom Integration](https://volpestyle.github.io/clanky/?doc=agentroom): Room participation, gateway ownership, launch contract, and runtime environment boundaries.
+- [AgentRoom Integration](https://volpestyle.github.io/clanky/?doc=agentroom): Room participation, gateway ownership diagrams, launch contract, and runtime environment boundaries.
 - [Live Gates](https://volpestyle.github.io/clanky/?doc=live-gates): Credentialed checks for model auth, Discord text and voice, Linear, xAI media, and AgentRoom launch.
 - [Discord Voice Live Runbook](https://volpestyle.github.io/clanky/?doc=discord-voice-live-runbook): Preflight and copyable live validation commands for Discord voice, media, and Go Live checks.
 

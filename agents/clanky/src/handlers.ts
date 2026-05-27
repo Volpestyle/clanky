@@ -2,6 +2,7 @@ import {
 	type ClankyAgentToolHandlers,
 	type ClankyPaths,
 	callExternalMcpTool,
+	createProfileSkill,
 	type DelegateToMainWorkerToolInput,
 	generateOpenAiImage,
 	generateXAiImage,
@@ -26,21 +27,6 @@ import type { ClankyStores } from "./stores.ts";
 
 /**
  * Build the agent-tool handlers wired against standalone clanky stores.
- *
- * Phase 1: only the gateway-uncoupled handlers are wired up:
- *
- * - memory.* (packet, remember, search, forget, export, consent, self)
- * - profileStatus
- * - listSkills + createSkill
- * - linearCreateIssue + linearLink (gated on LINEAR_API_KEY / LINEAR_ACCESS_TOKEN)
- * - beforeProviderRequest (passthrough so the logging extension hook fires)
- *
- * Intentionally omitted (defer to a later phase):
- *
- * - scheduleCron / listCron (needs CronJobStore + scheduler)
- * - externalMcpCall / externalMcpStatus (gateway-owned external MCP launcher)
- * - taskCreate / listTasks (coupled to SessionRegistry event log)
- * - indexMessage (depends on SessionIndexStore)
  */
 export function createClankyHandlers(
 	paths: ClankyPaths,
@@ -64,10 +50,7 @@ export function createClankyHandlers(
 		selfMemory: () => stores.memory.readSelfMemory(),
 
 		listSkills: async () => loadClankySkills({ paths }),
-		createSkill: async (input) => {
-			const { createProfileSkill } = await import("@clanky/core");
-			return await createProfileSkill(paths, input);
-		},
+		createSkill: async (input) => await createProfileSkill(paths, input),
 
 		profileStatus: async () => ({
 			profile: paths.profile,

@@ -192,11 +192,13 @@ export class XAiRealtimeClient extends EventEmitter {
 			const text = stringValue(event.transcript) || stringValue(event.text) || stringValue(event.delta);
 			if (text.length > 0 || stringValue(event.type).endsWith(".done")) {
 				const itemId = stringValue(event.item_id) || stringValue(event.itemId);
+				const responseId = stringValue(event.response_id) || stringValue(event.responseId);
 				const transcript: OpenAiRealtimeTranscript = {
 					text,
 					eventType: normalizeXAiTranscriptEventType(stringValue(event.type)),
 				};
 				if (itemId.length > 0) transcript.itemId = itemId;
+				if (responseId.length > 0) transcript.responseId = responseId;
 				this.emit("transcript", transcript);
 			}
 			return;
