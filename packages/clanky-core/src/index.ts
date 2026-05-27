@@ -234,14 +234,14 @@ export {
 	type UpdateClankyTaskInput,
 } from "./state/index-db.ts";
 export {
+	type ChatInboxAttachment,
+	type ChatInboxMessage,
+	type ChatInboxStatus,
 	type ClankySubagentKind,
 	type ClankySubagentState,
+	ClankySubagentStore,
 	type ClankySubagentSummary,
-	type DiscordInboxAttachment,
-	type DiscordInboxMessage,
-	type DiscordInboxStatus,
-	DiscordSubagentStore,
-	type EnqueueDiscordInboxMessageInput,
+	type EnqueueChatInboxMessageInput,
 	type UpsertSubagentInput,
 } from "./subagents/store.ts";
 export {

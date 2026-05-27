@@ -1,9 +1,9 @@
 import { access, appendFile } from "node:fs/promises";
 import type {
+	ChatInboxAttachment,
+	ChatInboxMessage,
 	ClankySubagentKind,
-	DiscordInboxAttachment,
-	DiscordInboxMessage,
-	DiscordSubagentStore,
+	ClankySubagentStore,
 	SendSubagentMessageInput,
 	SendSubagentMessageResult,
 } from "@clanky/core";
@@ -19,8 +19,8 @@ import type {
 	DiscordInboundConversation,
 	DiscordInboundMessage,
 } from "./agentDiscordGateway.ts";
+import { withChatTypingIndicator } from "./chatTyping.ts";
 import type { ClankyThinkingLevel } from "./clankyDefaults.ts";
-import { withDiscordTypingIndicator } from "./discordTyping.ts";
 
 interface DiscordMessageSender {
 	sendMessage(input: {
@@ -44,7 +44,7 @@ interface DiscordSubagentRuntimeEntry {
 }
 
 export interface DiscordSubagentResponseSentEvent {
-	message: DiscordInboxMessage;
+	message: ChatInboxMessage;
 	sentExternalMessageId: string;
 	text: string;
 }
@@ -55,7 +55,7 @@ const DISCORD_OPERATOR_SKILL_NAME = "clanky-discord-operator";
 
 export interface DiscordSubagentCoordinatorOptions {
 	provider: DiscordMessageSender;
-	store: DiscordSubagentStore;
+	store: ClankySubagentStore;
 	mainRuntime: AgentSessionRuntime;
 	createRuntime: CreateAgentSessionRuntimeFactory;
 	agentDir: string;
@@ -66,7 +66,7 @@ export interface DiscordSubagentCoordinatorOptions {
 
 export class DiscordSubagentCoordinator {
 	private readonly provider: DiscordMessageSender;
-	private readonly store: DiscordSubagentStore;
+	private readonly store: ClankySubagentStore;
 	private readonly mainRuntime: AgentSessionRuntime;
 	private readonly createRuntime: CreateAgentSessionRuntimeFactory;
 	private readonly agentDir: string;
@@ -96,7 +96,7 @@ export class DiscordSubagentCoordinator {
 
 	async start(): Promise<void> {
 		this.stopped = false;
-		const queuedWorkerIds = await this.store.listDiscordWorkersWithQueuedMessages();
+		const queuedWorkerIds = await this.store.listChatWorkersWithQueuedMessages();
 		for (const workerId of queuedWorkerIds) this.schedulePump(workerId);
 	}
 
@@ -164,12 +164,13 @@ export class DiscordSubagentCoordinator {
 
 	async enqueue(message: DiscordInboundMessage, acceptanceReason: DiscordAcceptanceReason): Promise<void> {
 		const target = resolveDiscordWorkerTarget(message);
-		await this.store.enqueueDiscordMessage({
+		await this.store.enqueueChatMessage({
 			workerId: target.workerId,
 			kind: target.kind,
 			scopeId: target.scopeId,
 			...(target.scopeName === undefined ? {} : { scopeName: target.scopeName }),
-			...(message.conversation.guildId === undefined ? {} : { guildId: message.conversation.guildId }),
+			platform: "discord",
+			...(message.conversation.serverId === undefined ? {} : { serverId: message.conversation.serverId }),
 			conversationId: message.conversation.id,
 			...(message.conversation.displayName === undefined ? {} : { conversationName: message.conversation.displayName }),
 			conversationKind: message.conversation.kind,
@@ -210,9 +211,9 @@ export class DiscordSubagentCoordinator {
 
 	private async pump(workerId: string): Promise<void> {
 		while (!this.stopped) {
-			const message = await this.store.claimNextDiscordMessage(workerId);
+			const message = await this.store.claimNextChatMessage(workerId);
 			if (message === undefined) {
-				const depth = await this.store.discordQueueDepth(workerId);
+				const depth = await this.store.chatQueueDepth(workerId);
 				if (depth === 0) {
 					const runtime = this.runtimes.get(workerId)?.runtime;
 					await this.store.setSubagentState(workerId, "idle", {
@@ -228,7 +229,7 @@ export class DiscordSubagentCoordinator {
 		}
 	}
 
-	private async processMessage(message: DiscordInboxMessage): Promise<void> {
+	private async processMessage(message: ChatInboxMessage): Promise<void> {
 		const runtime = await this.ensureRuntime(message);
 		const activeSummary = `replying to ${message.senderName ?? message.senderId} in ${message.conversationName ?? message.conversationId}`;
 		await this.store.setSubagentState(message.workerId, "running", {
@@ -238,7 +239,7 @@ export class DiscordSubagentCoordinator {
 		});
 		const conversation = inboxConversation(message);
 		try {
-			const replyText = await withDiscordTypingIndicator(
+			const replyText = await withChatTypingIndicator(
 				this.provider,
 				conversation,
 				async () => runSubagentTurn(runtime, buildDiscordSubagentPrompt(message, this.mainStatusText())),
@@ -255,7 +256,7 @@ export class DiscordSubagentCoordinator {
 				...sessionFileDetails(runtime),
 			});
 			if (replyText === undefined || isDiscordSkipReplyText(replyText)) {
-				await this.store.completeDiscordMessage(message.id, undefined);
+				await this.store.completeChatMessage(message.id, undefined);
 				return;
 			}
 			const sent = await this.provider.sendMessage({
@@ -264,10 +265,10 @@ export class DiscordSubagentCoordinator {
 				text: replyText,
 			});
 			this.responseObserver?.({ message, sentExternalMessageId: sent.externalMessageId, text: replyText });
-			await this.store.completeDiscordMessage(message.id, sent.externalMessageId);
+			await this.store.completeChatMessage(message.id, sent.externalMessageId);
 		} catch (error) {
 			const messageText = errorMessage(error);
-			await this.store.failDiscordMessage(message.id, messageText);
+			await this.store.failChatMessage(message.id, messageText);
 			await this.store.setSubagentState(message.workerId, "failed", {
 				activeConversationId: message.conversationId,
 				activeSummary: "failed while replying to Discord",
@@ -277,7 +278,7 @@ export class DiscordSubagentCoordinator {
 		}
 	}
 
-	private async ensureRuntime(message: DiscordInboxMessage): Promise<AgentSessionRuntime> {
+	private async ensureRuntime(message: ChatInboxMessage): Promise<AgentSessionRuntime> {
 		const existing = this.runtimes.get(message.workerId);
 		if (existing !== undefined) return existing.runtime;
 		const runtime = await this.createRuntimeForSubagent({
@@ -393,13 +394,13 @@ function activateDiscordOperatorSkill(prompt: string): string {
 }
 
 function resolveDiscordWorkerTarget(message: DiscordInboundMessage): DiscordWorkerTarget {
-	const guildId = message.conversation.guildId?.trim();
-	if (guildId !== undefined && guildId.length > 0) {
+	const serverId = message.conversation.serverId?.trim();
+	if (serverId !== undefined && serverId.length > 0) {
 		return {
-			workerId: `discord-guild:${guildId}`,
+			workerId: `discord-guild:${serverId}`,
 			kind: "discord-guild",
-			scopeId: guildId,
-			scopeName: guildId,
+			scopeId: serverId,
+			scopeName: serverId,
 		};
 	}
 	return {
@@ -416,7 +417,7 @@ function priorityForAcceptanceReason(reason: DiscordAcceptanceReason): number {
 	return 0;
 }
 
-function buildDiscordSubagentPrompt(message: DiscordInboxMessage, mainStatus: string): string {
+function buildDiscordSubagentPrompt(message: ChatInboxMessage, mainStatus: string): string {
 	const sender = message.senderName ?? message.senderId;
 	const channel = message.conversationName ?? message.conversationId;
 	const attachments = renderAttachments(message.attachments);
@@ -451,12 +452,12 @@ function buildDiscordSubagentPrompt(message: DiscordInboxMessage, mainStatus: st
 		.join("\n");
 }
 
-function inboxConversation(message: DiscordInboxMessage): DiscordInboundConversation {
+function inboxConversation(message: ChatInboxMessage): DiscordInboundConversation {
 	const conversation: DiscordInboundConversation = {
 		id: message.conversationId,
 		kind: readConversationKind(message.conversationKind),
 	};
-	if (message.guildId !== undefined) conversation.guildId = message.guildId;
+	if (message.serverId !== undefined) conversation.serverId = message.serverId;
 	if (message.conversationName !== undefined) conversation.displayName = message.conversationName;
 	if (message.conversationThreadId !== undefined) conversation.threadId = message.conversationThreadId;
 	if (message.conversationParentId !== undefined) conversation.parentId = message.conversationParentId;
@@ -469,7 +470,7 @@ function readConversationKind(value: string): DiscordInboundConversation["kind"]
 	return "custom";
 }
 
-function renderAttachments(attachments: readonly DiscordInboxAttachment[]): string {
+function renderAttachments(attachments: readonly ChatInboxAttachment[]): string {
 	if (attachments.length === 0) return "";
 	return [
 		"Attachments:",

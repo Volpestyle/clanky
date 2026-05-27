@@ -609,15 +609,27 @@ function normalizeDuplicateText(text: string): string {
 async function readSubagents(paths: ClankyPaths): Promise<SubagentRow[]> {
 	if (!(await isReadable(paths.subagentsDbFile))) return [];
 	return withReadonlyDatabase(paths.subagentsDbFile, (db) => {
+		if (!hasTable(db, "chat_inbox")) {
+			const rows = db
+				.prepare(`
+					SELECT
+						subagents.*,
+						0 AS queue_depth
+					FROM subagents
+					ORDER BY subagents.updated_at DESC
+				`)
+				.all();
+			return rows.flatMap(readSubagentRow);
+		}
 		const rows = db
 			.prepare(`
 				SELECT
 					subagents.*,
-					COUNT(discord_inbox.id) AS queue_depth
+					COUNT(chat_inbox.id) AS queue_depth
 				FROM subagents
-				LEFT JOIN discord_inbox
-					ON discord_inbox.worker_id = subagents.id
-					AND discord_inbox.status IN ('queued', 'claimed')
+				LEFT JOIN chat_inbox
+					ON chat_inbox.worker_id = subagents.id
+					AND chat_inbox.status IN ('queued', 'claimed')
 				GROUP BY subagents.id
 				ORDER BY subagents.updated_at DESC
 			`)
@@ -629,16 +641,22 @@ async function readSubagents(paths: ClankyPaths): Promise<SubagentRow[]> {
 async function readInbox(paths: ClankyPaths, limit: number): Promise<InboxRow[]> {
 	if (!(await isReadable(paths.subagentsDbFile))) return [];
 	return withReadonlyDatabase(paths.subagentsDbFile, (db) => {
+		if (!hasTable(db, "chat_inbox")) return [];
 		const rows = db
 			.prepare(`
 				SELECT *
-				FROM discord_inbox
+				FROM chat_inbox
 				ORDER BY received_at DESC
 				LIMIT ?
 			`)
 			.all(limit);
 		return rows.flatMap(readInboxRow);
 	});
+}
+
+function hasTable(db: DatabaseSync, name: string): boolean {
+	const row = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1").get(name);
+	return row !== undefined;
 }
 
 function withReadonlyDatabase<T>(path: string, fn: (db: DatabaseSync) => T): T {

@@ -3,12 +3,7 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import {
-	DiscordSubagentStore,
-	resolveClankyPaths,
-	saveStoredElevenLabsApiKey,
-	saveStoredXAiApiKey,
-} from "@clanky/core";
+import { ClankySubagentStore, resolveClankyPaths, saveStoredElevenLabsApiKey, saveStoredXAiApiKey } from "@clanky/core";
 import {
 	type AgentSessionEvent,
 	AuthStorage,
@@ -420,7 +415,7 @@ async function assertVoiceBridgeExplicitJoinGate(): Promise<void> {
 	const handle = await startAgentDiscordVoiceBridge({
 		runtime: {} as never,
 		client: {} as never,
-		discordConfig: {
+		discordCredential: {
 			providerId: "clanky-discord",
 			token: "discord-token",
 			credentialKind: "bot-token",
@@ -1191,7 +1186,7 @@ async function assertFakeVoiceBridgeRealtimeTools(): Promise<void> {
 			{ id: "speaker-2", displayName: "Speaker Two", muted: true, deafened: true },
 			{ id: "clanky-user", displayName: "clanky", bot: true },
 		]) as never,
-		discordConfig: {
+		discordCredential: {
 			providerId: "clanky-discord",
 			token: "discord-token",
 			credentialKind: "user-token",
@@ -1730,7 +1725,7 @@ async function assertFakeVoiceBridgeXAiRealtimeAgent(): Promise<void> {
 	const handle = await startAgentDiscordVoiceBridge({
 		runtime: new FakeVoiceRuntime() as never,
 		client: new FakeVoiceDiscordClient() as never,
-		discordConfig: {
+		discordCredential: {
 			providerId: "clanky-discord",
 			token: "discord-token",
 			credentialKind: "bot-token",
@@ -1795,7 +1790,7 @@ async function assertFakeVoiceBridgeElevenLabsTts(): Promise<void> {
 	const handle = await startAgentDiscordVoiceBridge({
 		runtime: new FakeVoiceRuntime() as never,
 		client: new FakeVoiceDiscordClient() as never,
-		discordConfig: {
+		discordCredential: {
 			providerId: "clanky-discord",
 			token: "discord-token",
 			credentialKind: "bot-token",
@@ -1875,7 +1870,7 @@ async function assertFakeVoiceBridgeBargeInPolicy(): Promise<void> {
 	const handle = await startAgentDiscordVoiceBridge({
 		runtime: new FakeVoiceRuntime() as never,
 		client: new FakeVoiceDiscordClient() as never,
-		discordConfig: {
+		discordCredential: {
 			providerId: "clanky-discord",
 			token: "discord-token",
 			credentialKind: "bot-token",
@@ -1966,7 +1961,7 @@ async function assertFakeVoiceBridgeMusicReservedListening(): Promise<void> {
 	const handle = await startAgentDiscordVoiceBridge({
 		runtime: new FakeVoiceRuntime() as never,
 		client: new FakeVoiceDiscordClient() as never,
-		discordConfig: {
+		discordCredential: {
 			providerId: "clanky-discord",
 			token: "discord-token",
 			credentialKind: "bot-token",
@@ -2042,7 +2037,7 @@ async function assertFakeVoiceBridgeMusicSpeechDucking(): Promise<void> {
 	const handle = await startAgentDiscordVoiceBridge({
 		runtime: new FakeVoiceRuntime() as never,
 		client: new FakeVoiceDiscordClient() as never,
-		discordConfig: {
+		discordCredential: {
 			providerId: "clanky-discord",
 			token: "discord-token",
 			credentialKind: "bot-token",
@@ -2097,7 +2092,7 @@ async function assertFakeVoiceBridgeRealtimeAudioBackpressure(): Promise<void> {
 	const handle = await startAgentDiscordVoiceBridge({
 		runtime: new FakeVoiceRuntime() as never,
 		client: new FakeVoiceDiscordClient() as never,
-		discordConfig: {
+		discordCredential: {
 			providerId: "clanky-discord",
 			token: "discord-token",
 			credentialKind: "bot-token",
@@ -2158,7 +2153,7 @@ async function assertFakeVoiceBridgeRealtimeAudioBackpressure(): Promise<void> {
 async function assertFakeVoiceBridgeSubagents(): Promise<void> {
 	const tmpRoot = await mkdtemp(join(tmpdir(), "clanky-voice-subagents-"));
 	const paths = resolveClankyPaths({ homeDir: join(tmpRoot, "home") });
-	const store = new DiscordSubagentStore(paths);
+	const store = new ClankySubagentStore(paths);
 	try {
 		const realtime = new FakeBridgeRealtime();
 		const vox = new FakeBridgeClankvox();
@@ -2264,7 +2259,7 @@ async function assertFakeVoiceBridgeSubagents(): Promise<void> {
 		const handle = await startAgentDiscordVoiceBridge({
 			runtime: mainRuntime as never,
 			client: new FakeVoiceDiscordClient() as never,
-			discordConfig: {
+			discordCredential: {
 				providerId: "clanky-discord",
 				token: "discord-token",
 				credentialKind: "bot-token",
@@ -2496,7 +2491,7 @@ async function assertFakeVoiceBridgeRealtimeMediaTools(): Promise<void> {
 	const handle = await startAgentDiscordVoiceBridge({
 		runtime: new FakeVoiceRuntime() as never,
 		client: new FakeVoiceDiscordClient() as never,
-		discordConfig: {
+		discordCredential: {
 			providerId: "clanky-discord",
 			token: "discord-token",
 			credentialKind: "user-token",
@@ -2649,7 +2644,7 @@ async function assertFakeVoiceBridgeRealtimeBatchToolResponse(): Promise<void> {
 	const handle = await startAgentDiscordVoiceBridge({
 		runtime: runtime as never,
 		client: new FakeVoiceDiscordClient() as never,
-		discordConfig: {
+		discordCredential: {
 			providerId: "clanky-discord",
 			token: "discord-token",
 			credentialKind: "user-token",
@@ -2727,7 +2722,7 @@ async function assertFakeVoiceBridgeBotTokenScreenWatchGuard(): Promise<void> {
 	const handle = await startAgentDiscordVoiceBridge({
 		runtime: new FakeVoiceRuntime() as never,
 		client: new FakeVoiceDiscordClient() as never,
-		discordConfig: {
+		discordCredential: {
 			providerId: "clanky-discord",
 			token: "discord-token",
 			credentialKind: "bot-token",
@@ -2848,7 +2843,7 @@ async function assertFakeVoiceBridgeScreenWatchSwitchCleanup(): Promise<void> {
 	const handle = await startAgentDiscordVoiceBridge({
 		runtime: new FakeVoiceRuntime() as never,
 		client: new FakeVoiceDiscordClient() as never,
-		discordConfig: {
+		discordCredential: {
 			providerId: "clanky-discord",
 			token: "discord-token",
 			credentialKind: "user-token",
@@ -2945,7 +2940,7 @@ async function assertFakeVoiceBridgeGatewaySessionFallback(): Promise<void> {
 	const handle = await startAgentDiscordVoiceBridge({
 		runtime: new FakeVoiceRuntime() as never,
 		client: new FakeVoiceDiscordClient("gateway-session-1") as never,
-		discordConfig: {
+		discordCredential: {
 			providerId: "clanky-discord",
 			token: "discord-token",
 			credentialKind: "user-token",
@@ -3003,7 +2998,7 @@ async function assertFakeVoiceBridgeRealtimeStreamingToolDedup(): Promise<void> 
 	const handle = await startAgentDiscordVoiceBridge({
 		runtime: runtime as never,
 		client: new FakeVoiceDiscordClient() as never,
-		discordConfig: {
+		discordCredential: {
 			providerId: "clanky-discord",
 			token: "discord-token",
 			credentialKind: "bot-token",
@@ -3110,7 +3105,7 @@ async function assertFakeVoiceBridgeRealtimeDuplicateAskPiCoalesces(): Promise<v
 	const handle = await startAgentDiscordVoiceBridge({
 		runtime: runtime as never,
 		client: new FakeVoiceDiscordClient() as never,
-		discordConfig: {
+		discordCredential: {
 			providerId: "clanky-discord",
 			token: "discord-token",
 			credentialKind: "bot-token",

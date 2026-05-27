@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { DiscordSubagentStore, resolveClankyPaths } from "@clanky/core";
+import { ClankySubagentStore, resolveClankyPaths } from "@clanky/core";
 import type {
 	AgentSessionEvent,
 	AgentSessionRuntime,
@@ -22,7 +22,7 @@ interface SentDiscordMessage {
 
 const tmpRoot = await mkdtemp(join(tmpdir(), "clanky-discord-subagent-coordinator-"));
 const paths = resolveClankyPaths({ homeDir: join(tmpRoot, "home") });
-const store = new DiscordSubagentStore(paths);
+const store = new ClankySubagentStore(paths);
 let coordinator: DiscordSubagentCoordinator | undefined;
 
 try {
@@ -143,7 +143,7 @@ try {
 
 	let injectedWakeup = false;
 	const originalSetSubagentState = store.setSubagentState.bind(store);
-	store.setSubagentState = async (...args: Parameters<DiscordSubagentStore["setSubagentState"]>): Promise<void> => {
+	store.setSubagentState = async (...args: Parameters<ClankySubagentStore["setSubagentState"]>): Promise<void> => {
 		if (args[1] === "idle" && !injectedWakeup) {
 			injectedWakeup = true;
 			await coordinator?.enqueue(makeMessage("message-2", "second message"), "platform_mention");
@@ -211,7 +211,7 @@ function makeMessage(externalMessageId: string, text: string): DiscordInboundMes
 			kind: "thread",
 			threadId: "thread-1",
 			parentId: "channel-1",
-			guildId: "guild-1",
+			serverId: "guild-1",
 			displayName: "thread-one",
 		},
 		sender: { id: "user-1", username: "user-one" },

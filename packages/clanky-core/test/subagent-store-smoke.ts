@@ -1,21 +1,22 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DiscordSubagentStore, resolveClankyPaths } from "@clanky/core";
+import { ClankySubagentStore, resolveClankyPaths } from "@clanky/core";
 
 const tmpRoot = await mkdtemp(join(tmpdir(), "clanky-subagent-store-"));
 
 try {
 	const paths = resolveClankyPaths({ homeDir: join(tmpRoot, "home") });
-	const store = new DiscordSubagentStore(paths);
+	const store = new ClankySubagentStore(paths);
 	const workerId = "discord-guild:guild-smoke";
 
-	await store.enqueueDiscordMessage({
+	await store.enqueueChatMessage({
 		workerId,
 		kind: "discord-guild",
 		scopeId: "guild-smoke",
 		scopeName: "Smoke Guild",
-		guildId: "guild-smoke",
+		platform: "discord",
+		serverId: "guild-smoke",
 		conversationId: "channel-low",
 		conversationName: "low",
 		conversationKind: "channel",
@@ -27,12 +28,13 @@ try {
 		priority: 0,
 		receivedAt: "2026-01-01T00:00:00.000Z",
 	});
-	await store.enqueueDiscordMessage({
+	await store.enqueueChatMessage({
 		workerId,
 		kind: "discord-guild",
 		scopeId: "guild-smoke",
 		scopeName: "Smoke Guild",
-		guildId: "guild-smoke",
+		platform: "discord",
+		serverId: "guild-smoke",
 		conversationId: "channel-high-parent",
 		conversationName: "high",
 		conversationKind: "thread",
@@ -54,7 +56,7 @@ try {
 		throw new Error(`subagent smoke: unexpected initial summary ${JSON.stringify(initial)}`);
 	}
 
-	const first = await store.claimNextDiscordMessage(workerId, new Date("2026-01-01T00:02:00.000Z"));
+	const first = await store.claimNextChatMessage(workerId, new Date("2026-01-01T00:02:00.000Z"));
 	if (
 		first === undefined ||
 		first.externalMessageId !== "message-high" ||
@@ -68,12 +70,13 @@ try {
 		activeSummary: "processing high priority",
 		thinkingLevel: "medium",
 	});
-	const duplicate = await store.enqueueDiscordMessage({
+	const duplicate = await store.enqueueChatMessage({
 		workerId,
 		kind: "discord-guild",
 		scopeId: "guild-smoke",
 		scopeName: "Smoke Guild",
-		guildId: "guild-smoke",
+		platform: "discord",
+		serverId: "guild-smoke",
 		conversationId: "channel-high-parent",
 		conversationName: "high",
 		conversationKind: "thread",
@@ -95,12 +98,13 @@ try {
 	if (duplicateSubagent?.queueDepth !== 2 || duplicateSubagent.state !== "running") {
 		throw new Error(`subagent smoke: duplicate enqueue rewrote worker state ${JSON.stringify(duplicateSummary)}`);
 	}
-	await store.enqueueDiscordMessage({
+	await store.enqueueChatMessage({
 		workerId,
 		kind: "discord-guild",
 		scopeId: "guild-smoke",
 		scopeName: "Smoke Guild",
-		guildId: "guild-smoke",
+		platform: "discord",
+		serverId: "guild-smoke",
 		conversationId: "channel-mid",
 		conversationName: "mid",
 		conversationKind: "channel",
@@ -123,18 +127,18 @@ try {
 			`subagent smoke: enqueue behind running worker rewrote active state ${JSON.stringify(runningSummary)}`,
 		);
 	}
-	await store.completeDiscordMessage(first.id, "reply-high", new Date("2026-01-01T00:03:00.000Z"));
+	await store.completeChatMessage(first.id, "reply-high", new Date("2026-01-01T00:03:00.000Z"));
 
-	const second = await store.claimNextDiscordMessage(workerId, new Date("2026-01-01T00:04:00.000Z"));
+	const second = await store.claimNextChatMessage(workerId, new Date("2026-01-01T00:04:00.000Z"));
 	if (second === undefined || second.externalMessageId !== "message-mid") {
 		throw new Error(`subagent smoke: second claim failed ${JSON.stringify(second)}`);
 	}
-	await store.failDiscordMessage(second.id, "simulated failure", new Date("2026-01-01T00:05:00.000Z"));
-	const third = await store.claimNextDiscordMessage(workerId, new Date("2026-01-01T00:06:00.000Z"));
+	await store.failChatMessage(second.id, "simulated failure", new Date("2026-01-01T00:05:00.000Z"));
+	const third = await store.claimNextChatMessage(workerId, new Date("2026-01-01T00:06:00.000Z"));
 	if (third === undefined || third.externalMessageId !== "message-low") {
 		throw new Error(`subagent smoke: third claim failed ${JSON.stringify(third)}`);
 	}
-	await store.failDiscordMessage(third.id, "simulated failure", new Date("2026-01-01T00:07:00.000Z"));
+	await store.failChatMessage(third.id, "simulated failure", new Date("2026-01-01T00:07:00.000Z"));
 	await store.setSubagentState(workerId, "failed", { lastError: "simulated failure" });
 
 	const final = await store.listSubagents();

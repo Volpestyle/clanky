@@ -2,8 +2,8 @@ import { appendFile } from "node:fs/promises";
 import type { DiscordGatewayClient } from "@agentroom/chat-discord";
 import {
 	type ClankySubagentState,
+	type ClankySubagentStore,
 	type ClankySubagentSummary,
-	type DiscordSubagentStore,
 	type MainAgentActivityToolInput,
 	type MainAgentCancelToolInput,
 	resolveElevenLabsApiKeySync,
@@ -18,7 +18,8 @@ import type {
 	AuthStorage,
 	CreateAgentSessionRuntimeFactory,
 } from "@earendil-works/pi-coding-agent";
-import { type ClankyAgentDiscordGatewayConfig, resolveAgentDiscordCredentialConfig } from "./agentDiscordGateway.ts";
+import { type ClankyAgentDiscordCredentialConfig, resolveAgentDiscordCredentialConfig } from "./agentDiscordGateway.ts";
+import type { AgentRealtimeVoiceConfig, AgentVoiceFeature, AgentVoiceGatewayHandle } from "./agentVoiceGateway.ts";
 import type { ClankyThinkingLevel } from "./clankyDefaults.ts";
 import type {
 	DiscordVoiceRealtimeAgentProvider,
@@ -101,7 +102,7 @@ const VOICE_MUSIC_DUCK_FADE_MS = 180;
 const VOICE_MUSIC_UNDUCK_FADE_MS = 650;
 const VOICE_MUSIC_UNDUCK_DELAY_MS = 250;
 
-export interface ClankyAgentDiscordVoiceConfig {
+export interface ClankyAgentDiscordVoiceConfig extends AgentRealtimeVoiceConfig {
 	enabled: boolean;
 	autoJoin?: boolean;
 	guildId?: string;
@@ -144,13 +145,13 @@ type FixedClankyAgentDiscordVoiceConfig = ClankyAgentDiscordVoiceConfig & {
 export interface StartAgentDiscordVoiceBridgeInput {
 	runtime: AgentSessionRuntime;
 	client: DiscordGatewayClient;
-	discordConfig: ClankyAgentDiscordGatewayConfig;
+	discordCredential: ClankyAgentDiscordCredentialConfig;
 	authStorage?: AuthStorage;
 	config?: ClankyAgentDiscordVoiceConfig;
 	runtimeTurnQueue?: RuntimeTurnQueue;
 	createSubagentRuntime?: CreateAgentSessionRuntimeFactory;
 	createVoiceSubagentRuntime?: CreateAgentSessionRuntimeFactory;
-	subagentStore?: DiscordSubagentStore;
+	subagentStore?: ClankySubagentStore;
 	subagentSessionDir?: string;
 	subagentCwd?: string;
 	voiceSupervisorDelegate?: VoiceSupervisorDelegateHandle;
@@ -160,13 +161,7 @@ export interface StartAgentDiscordVoiceBridgeInput {
 	dependencies?: ClankyAgentDiscordVoiceDependencies;
 }
 
-export interface ClankyAgentDiscordVoiceHandle {
-	stop(): Promise<void>;
-	status(): JsonRecord;
-	requestTextUtterance(text: string): void;
-	setSubagentThinkingLevel?(level: ClankyThinkingLevel): number;
-	sendSubagentMessage?(input: SendSubagentMessageInput): Promise<SendSubagentMessageResult | undefined>;
-}
+export interface ClankyAgentDiscordVoiceHandle extends AgentVoiceGatewayHandle {}
 
 interface DiscordVoiceClient extends DiscordGatewayClient {
 	guilds: {
@@ -544,13 +539,13 @@ function createDefaultSpeechSynthesizer(
 
 export function resolveAgentDiscordVoiceConfig(
 	env: NodeJS.ProcessEnv = process.env,
-	discordConfig?: ClankyAgentDiscordGatewayConfig,
+	discordCredential?: ClankyAgentDiscordCredentialConfig,
 	authStorage?: AuthStorage,
 	storedSettings?: StoredDiscordVoiceSettings,
 ): ClankyAgentDiscordVoiceConfig | undefined {
 	const enabledOverride = parseOptionalEnabled(env.CLANKY_DISCORD_VOICE_ENABLED ?? env.CLANKY_DISCORD_VOICE);
 	if (!(enabledOverride ?? storedSettings?.enabled === true)) return undefined;
-	const config = discordConfig ?? resolveAgentDiscordCredentialConfig(env);
+	const config = discordCredential ?? resolveAgentDiscordCredentialConfig(env);
 	if (config === undefined) {
 		throw new Error(
 			"CLANKY_DISCORD_TOKEN or a stored /discord-login credential is required when Discord voice is enabled.",
@@ -710,13 +705,14 @@ export function resolveAgentDiscordVoiceConfig(
 export async function startAgentDiscordVoiceBridge(
 	input: StartAgentDiscordVoiceBridgeInput,
 ): Promise<ClankyAgentDiscordVoiceHandle | undefined> {
-	const config = input.config ?? resolveAgentDiscordVoiceConfig(process.env, input.discordConfig, input.authStorage);
+	const config =
+		input.config ?? resolveAgentDiscordVoiceConfig(process.env, input.discordCredential, input.authStorage);
 	if (config === undefined || !config.enabled) return undefined;
 	if (!hasFixedVoiceTarget(config)) {
-		return new AgentDiscordVoiceDynamicHandle(config, input.discordConfig);
+		return new AgentDiscordVoiceDynamicHandle(config, input.discordCredential);
 	}
 	if (input.joinRequested !== true && config.autoJoin !== true) {
-		return new AgentDiscordVoiceDynamicHandle(config, input.discordConfig);
+		return new AgentDiscordVoiceDynamicHandle(config, input.discordCredential);
 	}
 	assertVoiceTargetAllowed(config);
 	const subagents =
@@ -746,7 +742,7 @@ export async function startAgentDiscordVoiceBridge(
 	const bridge = new AgentDiscordVoiceBridge(
 		input.runtime,
 		input.client as DiscordVoiceClient,
-		input.discordConfig,
+		input.discordCredential,
 		config,
 		input.runtimeTurnQueue ?? new SerialRuntimeTurnQueue(),
 		resolveVoiceDependencies(input.dependencies),
@@ -780,13 +776,32 @@ function assertVoiceTargetAllowed(config: FixedClankyAgentDiscordVoiceConfig): v
 	throw new Error(`Discord voice channel ${config.channelId} is not in the allowed voice channel list.`);
 }
 
+function discordVoiceTargetStatus(config: ClankyAgentDiscordVoiceConfig): {
+	serverId?: string;
+	channelId?: string;
+	conversationId?: string;
+} {
+	return {
+		...(config.guildId === undefined ? {} : { serverId: config.guildId }),
+		...(config.channelId === undefined ? {} : { channelId: config.channelId, conversationId: config.channelId }),
+	};
+}
+
+function discordVoiceFeatures(credential: ClankyAgentDiscordCredentialConfig): AgentVoiceFeature[] {
+	const features: AgentVoiceFeature[] = ["audio-input", "audio-output", "music-playback"];
+	if (credential.credentialKind === "user-token") {
+		features.push("screen-watch", "screen-publish", "video-output");
+	}
+	return features;
+}
+
 class AgentDiscordVoiceDynamicHandle implements ClankyAgentDiscordVoiceHandle {
 	private readonly config: ClankyAgentDiscordVoiceConfig;
-	private readonly discordConfig: ClankyAgentDiscordGatewayConfig;
+	private readonly discordCredential: ClankyAgentDiscordCredentialConfig;
 
-	constructor(config: ClankyAgentDiscordVoiceConfig, discordConfig: ClankyAgentDiscordGatewayConfig) {
+	constructor(config: ClankyAgentDiscordVoiceConfig, discordCredential: ClankyAgentDiscordCredentialConfig) {
 		this.config = config;
-		this.discordConfig = discordConfig;
+		this.discordCredential = discordCredential;
 	}
 
 	async stop(): Promise<void> {}
@@ -803,7 +818,10 @@ class AgentDiscordVoiceDynamicHandle implements ClankyAgentDiscordVoiceHandle {
 		return {
 			active: false,
 			enabled: this.config.enabled,
+			platform: "discord",
 			mode: "dynamic",
+			target: discordVoiceTargetStatus(this.config),
+			features: discordVoiceFeatures(this.discordCredential),
 			autoJoin: this.config.autoJoin === true,
 			guildId: this.config.guildId,
 			channelId: this.config.channelId,
@@ -827,9 +845,9 @@ class AgentDiscordVoiceDynamicHandle implements ClankyAgentDiscordVoiceHandle {
 			transcriptionModel: this.config.openAiRealtimeTranscriptionModel ?? DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
 			transcriptionDelay: this.config.openAiRealtimeTranscriptionDelay,
 			transcriptionLanguage: this.config.openAiRealtimeTranscriptionLanguage,
-			discordCredentialKind: this.discordConfig.credentialKind,
-			nativeScreenWatchSupported: this.discordConfig.credentialKind === "user-token",
-			nativeStreamPublishSupported: this.discordConfig.credentialKind === "user-token",
+			discordCredentialKind: this.discordCredential.credentialKind,
+			nativeScreenWatchSupported: this.discordCredential.credentialKind === "user-token",
+			nativeStreamPublishSupported: this.discordCredential.credentialKind === "user-token",
 			hasVox: false,
 		};
 	}
@@ -838,12 +856,12 @@ class AgentDiscordVoiceDynamicHandle implements ClankyAgentDiscordVoiceHandle {
 class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 	private readonly runtime: AgentSessionRuntime;
 	private readonly client: DiscordVoiceClient;
-	private readonly discordConfig: ClankyAgentDiscordGatewayConfig;
+	private readonly discordCredential: ClankyAgentDiscordCredentialConfig;
 	private readonly config: FixedClankyAgentDiscordVoiceConfig;
 	private readonly runtimeTurnQueue: RuntimeTurnQueue;
 	private readonly dependencies: ResolvedVoiceDependencies;
 	private readonly subagents: DiscordVoiceSubagentCoordinator | undefined;
-	private readonly subagentStore: DiscordSubagentStore | undefined;
+	private readonly subagentStore: ClankySubagentStore | undefined;
 	private readonly voiceLogPath: string | undefined;
 	private realtime: VoiceRealtimeClientLike | undefined;
 	private vox: VoiceVoxClientLike | undefined;
@@ -898,17 +916,17 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 	constructor(
 		runtime: AgentSessionRuntime,
 		client: DiscordVoiceClient,
-		discordConfig: ClankyAgentDiscordGatewayConfig,
+		discordCredential: ClankyAgentDiscordCredentialConfig,
 		config: FixedClankyAgentDiscordVoiceConfig,
 		runtimeTurnQueue: RuntimeTurnQueue,
 		dependencies: ResolvedVoiceDependencies,
 		subagents: DiscordVoiceSubagentCoordinator | undefined,
-		subagentStore: DiscordSubagentStore | undefined,
+		subagentStore: ClankySubagentStore | undefined,
 		voiceLogPath: string | undefined,
 	) {
 		this.runtime = runtime;
 		this.client = client;
-		this.discordConfig = discordConfig;
+		this.discordCredential = discordCredential;
 		this.config = config;
 		this.runtimeTurnQueue = runtimeTurnQueue;
 		this.dependencies = dependencies;
@@ -971,7 +989,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			const connectOptions: OpenAiRealtimeConnectOptions = {
 				model: this.realtimeAgentModel(),
 				voice: this.realtimeAgentVoice(),
-				instructions: buildRealtimeInstructions(this.discordConfig, this.config.ttsProvider ?? "openai", {
+				instructions: buildRealtimeInstructions(this.discordCredential, this.config.ttsProvider ?? "openai", {
 					participationEagerness: this.config.participationEagerness ?? DEFAULT_PARTICIPATION_EAGERNESS,
 					supportsScreenShareSnapshots: (this.config.realtimeAgentProvider ?? "openai") === "openai",
 				}),
@@ -1097,7 +1115,10 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		return {
 			active: true,
 			enabled: this.config.enabled,
+			platform: "discord",
 			mode: "fixed",
+			target: discordVoiceTargetStatus(this.config),
+			features: discordVoiceFeatures(this.discordCredential),
 			autoJoin: this.config.autoJoin === true,
 			guildId: this.config.guildId,
 			channelId: this.config.channelId,
@@ -1121,9 +1142,9 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			transcriptionModel: this.config.openAiRealtimeTranscriptionModel ?? DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
 			transcriptionDelay: this.config.openAiRealtimeTranscriptionDelay,
 			transcriptionLanguage: this.config.openAiRealtimeTranscriptionLanguage,
-			discordCredentialKind: this.discordConfig.credentialKind,
-			nativeScreenWatchSupported: this.discordConfig.credentialKind === "user-token",
-			nativeStreamPublishSupported: this.discordConfig.credentialKind === "user-token",
+			discordCredentialKind: this.discordCredential.credentialKind,
+			nativeScreenWatchSupported: this.discordCredential.credentialKind === "user-token",
+			nativeStreamPublishSupported: this.discordCredential.credentialKind === "user-token",
 			hasVox: this.vox?.isAlive === true,
 			discoveredStreams: this.streamDiscovery?.listStreams().length ?? 0,
 			hasLatestFrame: this.latestFrame !== undefined,
@@ -2293,7 +2314,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			},
 			streamPublish: { ...this.streamPublish },
 			bufferDepth: { ...this.mediaBufferDepth },
-			nativeStreamPublishSupported: this.discordConfig.credentialKind === "user-token",
+			nativeStreamPublishSupported: this.discordCredential.credentialKind === "user-token",
 		};
 	}
 
@@ -2304,12 +2325,12 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		visualizerMode?: string;
 	}): JsonRecord {
 		this.stats.streamPublishRequestCount += 1;
-		if (this.discordConfig.credentialKind !== "user-token") {
+		if (this.discordCredential.credentialKind !== "user-token") {
 			this.stats.streamPublishUnsupportedCount += 1;
 			return {
 				ok: false,
 				error: "Discord Go Live publish requires a user-token Discord credential.",
-				credentialKind: this.discordConfig.credentialKind,
+				credentialKind: this.discordCredential.credentialKind,
 			};
 		}
 		const vox = this.requireVox();
@@ -2361,7 +2382,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 
 	private listScreenShares(): JsonRecord {
 		this.stats.screenShareListCount += 1;
-		const nativeWatchSupported = this.discordConfig.credentialKind === "user-token";
+		const nativeWatchSupported = this.discordCredential.credentialKind === "user-token";
 		const discovery = this.streamDiscovery;
 		const streams =
 			discovery
@@ -2386,12 +2407,12 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 
 	private startScreenWatch(target: string): JsonRecord {
 		this.stats.screenWatchRequestCount += 1;
-		if (this.discordConfig.credentialKind !== "user-token") {
+		if (this.discordCredential.credentialKind !== "user-token") {
 			this.stats.screenWatchUnsupportedCount += 1;
 			return {
 				ok: false,
 				error: "Native Discord Go Live watching requires a user-token Discord credential.",
-				credentialKind: this.discordConfig.credentialKind,
+				credentialKind: this.discordCredential.credentialKind,
 			};
 		}
 		const discovery = this.streamDiscovery;
@@ -2643,7 +2664,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 }
 
 function buildRealtimeInstructions(
-	config: ClankyAgentDiscordGatewayConfig,
+	config: ClankyAgentDiscordCredentialConfig,
 	ttsProvider: DiscordVoiceTtsProvider = "openai",
 	options: { participationEagerness?: number; supportsScreenShareSnapshots?: boolean } = {},
 ): string {

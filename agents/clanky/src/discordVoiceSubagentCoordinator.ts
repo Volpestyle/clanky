@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { access, appendFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { DiscordSubagentStore, SendSubagentMessageInput, SendSubagentMessageResult } from "@clanky/core";
+import type { ClankySubagentStore, SendSubagentMessageInput, SendSubagentMessageResult } from "@clanky/core";
 import {
 	type AgentSessionEvent,
 	type AgentSessionRuntime,
@@ -21,7 +21,7 @@ import type {
 type JsonRecord = Record<string, unknown>;
 
 export interface DiscordVoiceSubagentCoordinatorOptions {
-	store: DiscordSubagentStore;
+	store: ClankySubagentStore;
 	createRuntime: CreateAgentSessionRuntimeFactory;
 	createGeneralRuntime: CreateAgentSessionRuntimeFactory;
 	agentDir: string;
@@ -64,7 +64,7 @@ interface VoiceGeneralSubagentRuntimeEntry {
 }
 
 export class DiscordVoiceSubagentCoordinator {
-	private readonly store: DiscordSubagentStore;
+	private readonly store: ClankySubagentStore;
 	private readonly createRuntime: CreateAgentSessionRuntimeFactory;
 	private readonly createGeneralRuntime: CreateAgentSessionRuntimeFactory;
 	private readonly agentDir: string;

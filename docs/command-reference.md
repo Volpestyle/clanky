@@ -98,7 +98,7 @@ These are inherited from Pi and work inside Clanky:
 | `/openai-logout` | Remove the stored OpenAI credential. |
 | `/discord-login` | Configure Clanky's agent-owned Discord credential. |
 | `/discord-whoami` | Show which Discord credential the next launch will use. |
-| `/discord-status` | Show active Discord text and voice bridge counters. |
+| `/discord-status` | Show active Discord adapter chat and voice bridge counters. |
 | `/discord-logout` | Remove the stored Discord credential. |
 | `/xai-login` | Store an xAI API key in the active profile. |
 | `/xai-whoami` | Show active xAI credential source. |

@@ -1,13 +1,15 @@
 # Discord Voice Architecture
 
-This is the end-to-end map for Clanky's agent-owned Discord voice path. The
-important distinction is that Discord voice is not one Pi chat turn. It is a
-TypeScript control plane, a Rust Discord media plane, and Pi delegation behind a
-live realtime voice agent session. The realtime agent provider can be OpenAI
-Realtime or xAI Grok Voice. The speech output provider is only the audio
-renderer; it is not the same setting as the realtime reasoning/tool agent. There
-is no ElevenLabs-only Discord voice mode: ElevenLabs can replace the final voice
-rendering step, but a realtime agent still owns the conversation loop.
+This is the end-to-end map for Clanky's current agent-owned Discord voice
+adapter. Clanky's native messaging is the Pi session thread; Discord voice is a
+separate media gateway that can feed that thread through `ask_pi`, not a
+replacement for it. The voice adapter is a TypeScript control plane, a Rust
+Discord media plane, and Pi delegation behind a live realtime voice agent
+session. The realtime agent provider can be OpenAI Realtime or xAI Grok Voice.
+The speech output provider is only the audio renderer; it is not the same
+setting as the realtime reasoning/tool agent. There is no ElevenLabs-only
+Discord voice mode: ElevenLabs can replace the final voice rendering step, but
+a realtime agent still owns the conversation loop.
 
 ```mermaid
 flowchart TB
@@ -87,10 +89,10 @@ renders speakable text that the realtime agent already decided to say.
 
 ## Runtime Roles
 
-`agents/clanky/src/discordGatewayController.ts` decides whether Clanky owns the
-Discord text client, a voice-only client, or no Discord client. Room-owned
-AgentRoom text connectors do not own this voice bridge; voice uses Clanky's
-agent-owned Discord credential.
+`agents/clanky/src/discordGatewayController.ts` decides whether the current
+Discord adapter runs as an agent-owned chat client, a voice-only client, or no
+Discord client. Room-owned AgentRoom text connectors do not own this media
+gateway; voice uses Clanky's agent-owned Discord credential.
 
 `agents/clanky/src/agentDiscordVoice.ts` is the TypeScript voice orchestrator.
 It resolves settings, starts the selected realtime agent client, starts the
@@ -216,8 +218,8 @@ low-latency Realtime session. Instead, voice has a small control surface:
 - `pi_subagents` lists tracked subagents and workers, with filters for kind,
   state, stale entries, and result limit.
 
-Those status tools read the same runtime queue and `DiscordSubagentStore` that
-the text gateway and subagent coordinator already use. They are meant for
+Those status tools read the same runtime queue and `ClankySubagentStore` that
+the chat gateway and subagent coordinator already use. They are meant for
 questions like "what is the main agent doing?", "is the voice worker busy?",
 or "did a subagent fail?" without creating a new Pi turn just to inspect local
 state.

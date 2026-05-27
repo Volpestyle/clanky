@@ -104,16 +104,17 @@ Export:
 /memory_export
 ```
 
-## Discord Privacy Boundary
+## Gateway Privacy Boundary
 
-Agent-owned Discord uses Clanky's own profile credential. Room-owned Discord
-uses AgentRoom's connector credential. Those credentials should not cross:
+Agent-owned gateways use Clanky's own profile credential. Room-owned gateways
+use AgentRoom's connector credential. For the current Discord adapter, those
+credentials should not cross:
 
 - Clanky must not read AgentRoom room connector tokens.
 - AgentRoom must not read Clanky's profile token.
 - One Discord conversation should not be owned by both at once.
 
-Discord subagents are profile-local Clanky sessions. They are not AgentRoom
+Gateway subagents are profile-local Clanky sessions. They are not AgentRoom
 workers and do not create a separate credential boundary.
 
 ## Voice Privacy Boundary

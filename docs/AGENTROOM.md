@@ -3,33 +3,44 @@
 Clanky is standalone. AgentRoom should treat it as an external Pi harness
 command, not as source code vendored into the AgentRoom repository.
 
+## Gateway Boundary
+
+Clanky's native messaging is its Pi session thread. Discord, AgentRoom
+send/read, and future Slack-style integrations are gateways that can feed that
+thread, receive replies from it, or route work to profile-local subagents. A
+gateway can be absent entirely and Clanky still works as a local Pi agent.
+
+Voice and video are separate media gateways. The current production adapter is
+Discord voice through ClankVox; a future Slack huddle adapter should plug in at
+the same ownership boundary rather than making Slack or Discord part of
+Clanky's core session model.
+
 ## Two Independent Axes
 
-There are two independent choices for Clanky + chat gateways (Discord today,
-others later):
+There are two independent choices for Clanky + external gateways:
 
 1. **Room participation:** Clanky may run outside AgentRoom, or AgentRoom may
    launch it as a runtime-backed Pi harness.
-2. **Gateway ownership:** each external chat conversation is owned either by
-   Clanky directly or by the AgentRoom daemon.
+2. **Gateway ownership:** each external chat or media conversation is owned
+   either by Clanky directly or by the AgentRoom daemon.
 
 These are separate axes. `AGENTROOM=1` means "Clanky is in a room"; it does
-not mean "Clanky must surrender his Discord identity."
+not mean "Clanky must surrender an agent-owned gateway identity."
 
-### Agent-owned Discord
+### Agent-owned Chat Gateway
 
-Clanky imports `@agentroom/chat-discord` as a library and runs the gateway
-in-process under his own bot token. Traffic flows directly Discord <->
-Clanky. This works both outside a room and while Clanky is participating in
-AgentRoom.
+For the current Discord adapter, Clanky imports `@agentroom/chat-discord` as a
+library and runs the gateway in-process under his own bot token. Traffic flows
+directly Discord <-> Clanky. This works both outside a room and while Clanky is
+participating in AgentRoom.
 
 Use case: personal Clanky keeps his own Discord identity and DMs with the
 human, while also using AgentRoom DMs/tasks/channels to coordinate with other
 agents.
 
-Clanky's Discord subagents belong to this agent-owned path. They are only for
+Clanky's chat subagents belong to this agent-owned path. They are only for
 local multitasking while main Clanky is busy: if the main session is idle,
-normal accepted Discord chat is routed to main Clanky, not to a subagent.
+normal accepted gateway chat is routed to main Clanky, not to a subagent.
 AgentRoom remains the path for real multi-agent development work, room tasks,
 audited worker coordination, and room-owned connector channels.
 
@@ -51,16 +62,17 @@ Set `CLANKY_DISCORD_CONVERSATION_ID` to bind one specific DM, channel, or
 thread. The conversation id may also be saved alongside the stored token at
 login time.
 
-### Room-owned Discord
+### Room-owned Chat Gateway
 
-AgentRoom daemon owns the gateway and token for a particular Discord
-conversation. The Discord identity is the room's connector bot, not any
-individual Clanky. Inbound messages route to a configured target, often
-`agent-stdin:clanky-lead`. Worker Clankies receive tasks and DMs from the
-lead through AgentRoom's native messaging.
+AgentRoom daemon owns the gateway and token for a particular external
+conversation. With Discord, the Discord identity is the room's connector bot,
+not any individual Clanky. Inbound messages route to a configured target,
+often `agent-stdin:clanky-lead`. Worker Clankies receive tasks and DMs from
+the lead through AgentRoom's native messaging.
 
-The gateway library is the same in both cases (`@agentroom/chat-discord`,
-which implements `ChatGatewayProvider`). Only the lifecycle owner differs.
+The gateway library is the same in both Discord cases (`@agentroom/chat-discord`,
+which implements the chat gateway provider contract). Only the lifecycle owner
+differs.
 
 One Discord conversation should have exactly one owner. Do not point both an
 agent-owned gateway and a room-owned gateway at the same channel or DM.
@@ -71,18 +83,18 @@ agent-owned gateway and a room-owned gateway at the same channel or DM.
   `InteractiveMode` wiring.
 - AgentRoom owns rooms, runtime providers, task/event audit, send/read
   coordination, and room-owned chat gateway lifecycle.
-- Clanky owns agent-owned chat gateway lifecycle for its own profile, whether
-  or not it is also in a room.
+- Clanky owns agent-owned chat and media gateway lifecycle for its own profile,
+  whether or not it is also in a room.
 
 ## Token Ownership
 
 The rule: **whoever runs the gateway owns the token.**
 
-- Agent-owned: Clanky's profile holds Clanky's Discord bot token, persisted
-  in `<profileDir>/auth.json` (the same file Pi uses for model API keys, with
-  `0600` perms and the same file locking). `CLANKY_DISCORD_TOKEN` env still
-  overrides the stored value.
-- Room-owned: AgentRoom holds the connector bot token.
+- Agent-owned: Clanky's profile holds the gateway credential, persisted in
+  `<profileDir>/auth.json` (the same file Pi uses for model API keys, with
+  `0600` perms and the same file locking). For Discord,
+  `CLANKY_DISCORD_TOKEN` env still overrides the stored value.
+- Room-owned: AgentRoom holds the connector credential.
 
 Clanky must never read the room connector token. AgentRoom must never read
 Clanky's profile token.
@@ -173,7 +185,7 @@ Agent-owned Discord env:
 Agent-owned Discord voice is configured through `/discord-voice`, profile
 settings, and explicit voice env overrides for live checks. Keep the integration
 contract here focused on ownership: AgentRoom room-owned text connectors do not
-own Clanky's voice bridge. For the full voice model and live-run flags, use
+own Clanky's media gateway. For the full voice model and live-run flags, use
 [Discord Voice Architecture](discord-voice-architecture.md) and
 [Discord Voice Live Runbook](qa/discord-voice-live-runbook.md).
 

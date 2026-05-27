@@ -17,11 +17,12 @@ Clanky gives you a local agent that can carry personal context across tools:
   slash commands
 - keep profile-local auth, memory, sessions, skills, and connector settings
 - ask Clanky to remember source-grounded facts, then inspect or forget them
-- connect an agent-owned Discord identity for DMs, mentions, replies, and
-  optional channel binding
-- let Discord requests run through subagents while the foreground session keeps
+- connect external chat gateways, with Discord as the current agent-owned
+  adapter for DMs, mentions, replies, and optional channel binding
+- let gateway requests run through subagents while the foreground session keeps
   working
-- join Discord voice, hear speakers, speak back, and delegate durable work to Pi
+- join Discord voice through the current media adapter, hear speakers, speak
+  back, and delegate durable work to Pi
 - use web, browser, media generation, Linear, Discord, and MCP skills when
   configured
 - join an AgentRoom room as a normal Pi harness while keeping profile ownership
@@ -37,7 +38,7 @@ Let Clanky handle work that benefits from personal state and live tool access:
 
 - repository orientation and local command/file work
 - memory-backed context that should follow your profile
-- Discord triage: reply, skip, ask for clarification, or delegate
+- external chat triage: reply, skip, ask for clarification, or delegate
 - voice-room questions that need fast response plus optional Pi follow-up
 - media/web/browser tasks where the right skill can pick the right backend
 - AgentRoom participation as a lead, worker, or reviewer
@@ -52,25 +53,29 @@ handoffs between workers. Jump to
 ```mermaid
 flowchart TB
   pi["Pi foundation<br/>TUI, sessions, tools, slash commands, models"]
-  clanky["Clanky layer<br/>persona, memory, profile, skills, connectors"]
+  thread["Canonical Clanky thread<br/>Pi session messaging"]
+  clanky["Clanky layer<br/>persona, memory, profile, skills, gateway adapters"]
   profile["Profile stores<br/>auth, sessions, memory, voice, subagents"]
-  discord["Discord text<br/>DMs, mentions, subagents"]
-  voice["Discord voice<br/>Realtime, ask_pi, floor control"]
+  chat["Chat gateways<br/>Discord today, others later"]
+  voice["Voice/media gateways<br/>ClankVox Discord today"]
   vox["ClankVox<br/>RTP, Opus, DAVE, Go Live"]
   room["AgentRoom<br/>optional coordination room"]
 
-  pi --> clanky
+  pi --> thread
+  thread --> clanky
   clanky --> profile
-  clanky --> discord
+  chat <--> thread
   clanky --> voice
   voice --> vox
   clanky <--> room
 ```
 
 Pi is the generic agent harness. Clanky configures that harness with personal
-state, memory, connectors, skills, Discord, voice, and media. ClankVox sits
-under voice as deterministic transport code. AgentRoom sits around Clanky when
-you want multi-agent coordination.
+state, memory, skills, and gateway adapters. The local Pi session thread is
+Clanky's built-in messaging; Discord text, AgentRoom send/read, and future
+Slack-style integrations are gateways into or out of that thread. ClankVox sits
+under the current Discord voice adapter as deterministic transport code.
+AgentRoom sits around Clanky when you want multi-agent coordination.
 
 ## First Path To Try
 

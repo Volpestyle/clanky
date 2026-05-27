@@ -1,6 +1,6 @@
 import {
 	type ClankyPaths,
-	DiscordSubagentStore,
+	ClankySubagentStore,
 	MemoryStore,
 	WorkTrackerOutboxStore,
 	WorkTrackerRefStore,
@@ -10,7 +10,7 @@ export interface ClankyStores {
 	memory: MemoryStore;
 	workTrackerRefs: WorkTrackerRefStore;
 	workTrackerOutbox: WorkTrackerOutboxStore;
-	subagents: DiscordSubagentStore;
+	subagents: ClankySubagentStore;
 }
 
 /**
@@ -26,6 +26,6 @@ export function createClankyStores(paths: ClankyPaths): ClankyStores {
 		memory: new MemoryStore(paths),
 		workTrackerRefs: new WorkTrackerRefStore(paths),
 		workTrackerOutbox: new WorkTrackerOutboxStore(paths),
-		subagents: new DiscordSubagentStore(paths),
+		subagents: new ClankySubagentStore(paths),
 	};
 }

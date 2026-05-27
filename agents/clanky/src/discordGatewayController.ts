@@ -11,8 +11,8 @@
 import { appendFile } from "node:fs/promises";
 import {
 	type ClankyPaths,
+	ClankySubagentStore,
 	type DelegateToMainWorkerToolInput,
-	DiscordSubagentStore,
 	type MainAgentActivityToolInput,
 	type MainAgentCancelToolInput,
 	type MainSessionContextToolInput,
@@ -93,17 +93,17 @@ export class ClankyDiscordGatewayController {
 	private readonly readVoiceSettings: (() => StoredDiscordVoiceSettings | undefined) | undefined;
 	private readonly dependencies: ResolvedClankyDiscordGatewayControllerDependencies;
 	private readonly runtimeTurnQueue: RuntimeTurnQueue;
-	private readonly subagentStore: DiscordSubagentStore;
+	private readonly subagentStore: ClankySubagentStore;
 	private readonly mainAgentActivityMonitor = new MainAgentActivityMonitor();
 	private readonly voiceSupervisorDelegate: VoiceSupervisorDelegateHandle | undefined;
 	private runtime: AgentSessionRuntime | undefined;
 	private createRuntime: CreateAgentSessionRuntimeFactory | undefined;
 	private createVoiceRuntime: CreateAgentSessionRuntimeFactory | undefined;
 	private cwd: string | undefined;
-	private handle: ClankyAgentDiscordGatewayHandle | undefined;
+	private chatHandle: ClankyAgentDiscordGatewayHandle | undefined;
 	private voiceHandle: ClankyAgentDiscordVoiceHandle | undefined;
 	private voiceOnlyClient: ClankyAgentDiscordGatewayHandle["client"] | undefined;
-	private handleClientSupportsVoice = false;
+	private chatClientSupportsVoice = false;
 	private voiceConfigError: string | undefined;
 
 	constructor(input: {
@@ -124,7 +124,7 @@ export class ClankyDiscordGatewayController {
 		this.env = input.env ?? process.env;
 		this.readVoiceSettings = input.readVoiceSettings;
 		this.runtimeTurnQueue = input.runtimeTurnQueue ?? new SerialRuntimeTurnQueue();
-		this.subagentStore = new DiscordSubagentStore(input.paths);
+		this.subagentStore = new ClankySubagentStore(input.paths);
 		this.voiceSupervisorDelegate = input.voiceSupervisorDelegate;
 		this.dependencies = {
 			createClient: input.dependencies?.createClient ?? createAgentDiscordClient,
@@ -150,7 +150,7 @@ export class ClankyDiscordGatewayController {
 	}
 
 	async start(options: DiscordVoiceStartOptions = {}): Promise<void> {
-		if (this.handle !== undefined || this.voiceHandle !== undefined) return;
+		if (this.chatHandle !== undefined || this.voiceHandle !== undefined) return;
 		if (this.runtime === undefined) {
 			throw new Error("ClankyDiscordGatewayController.start: runtime not bound");
 		}
@@ -199,10 +199,10 @@ export class ClankyDiscordGatewayController {
 		if (client !== undefined) startInput.client = client;
 		if (this.bridgeLogPath !== undefined) startInput.bridgeLogPath = this.bridgeLogPath;
 		try {
-			this.handle = discordConfig === undefined ? undefined : await this.dependencies.startGateway(startInput);
-			this.handleClientSupportsVoice = this.handle !== undefined && client !== undefined && shouldStartVoiceNow;
+			this.chatHandle = discordConfig === undefined ? undefined : await this.dependencies.startGateway(startInput);
+			this.chatClientSupportsVoice = this.chatHandle !== undefined && client !== undefined && shouldStartVoiceNow;
 			if (
-				this.handle === undefined &&
+				this.chatHandle === undefined &&
 				client !== undefined &&
 				discordCredentials !== undefined &&
 				voiceConfig !== undefined &&
@@ -220,7 +220,7 @@ export class ClankyDiscordGatewayController {
 			client?.destroy();
 			throw error;
 		}
-		const voiceClient = this.handle?.client ?? this.voiceOnlyClient;
+		const voiceClient = this.chatHandle?.client ?? this.voiceOnlyClient;
 		if (voiceConfig !== undefined && !shouldStartVoiceNow) {
 			this.reportVoiceProgress(options, {
 				phase: "skipped",
@@ -252,7 +252,7 @@ export class ClankyDiscordGatewayController {
 				this.voiceHandle = await this.dependencies.startVoice({
 					runtime: this.runtime,
 					client: voiceClient,
-					discordConfig: discordCredentials,
+					discordCredential: discordCredentials,
 					authStorage: this.authStorage,
 					config: voiceConfig,
 					runtimeTurnQueue: this.runtimeTurnQueue,
@@ -349,8 +349,8 @@ export class ClankyDiscordGatewayController {
 		}
 
 		let voiceClient = this.voiceOnlyClient;
-		if (voiceClient === undefined && this.handle !== undefined && this.handleClientSupportsVoice) {
-			voiceClient = this.handle.client;
+		if (voiceClient === undefined && this.chatHandle !== undefined && this.chatClientSupportsVoice) {
+			voiceClient = this.chatHandle.client;
 		}
 		if (voiceClient === undefined) {
 			this.reportVoiceProgress(options, {
@@ -389,7 +389,7 @@ export class ClankyDiscordGatewayController {
 			this.voiceHandle = await this.dependencies.startVoice({
 				runtime: this.runtime,
 				client: voiceClient,
-				discordConfig: discordCredentials,
+				discordCredential: discordCredentials,
 				authStorage: this.authStorage,
 				config: voiceConfig,
 				runtimeTurnQueue: this.runtimeTurnQueue,
@@ -430,14 +430,14 @@ export class ClankyDiscordGatewayController {
 			this.voiceOnlyClient.destroy();
 			this.voiceOnlyClient = undefined;
 		}
-		if (this.handle === undefined) return;
-		await this.handle.stop();
-		this.handle = undefined;
-		this.handleClientSupportsVoice = false;
+		if (this.chatHandle === undefined) return;
+		await this.chatHandle.stop();
+		this.chatHandle = undefined;
+		this.chatClientSupportsVoice = false;
 	}
 
 	hasActiveBridge(): boolean {
-		return this.handle !== undefined || this.voiceHandle !== undefined;
+		return this.chatHandle !== undefined || this.voiceHandle !== undefined;
 	}
 
 	mainSessionContext(input: MainSessionContextToolInput): unknown {
@@ -466,7 +466,7 @@ export class ClankyDiscordGatewayController {
 		if (id.length === 0 || text.length === 0) {
 			return { accepted: false, message: "Subagent id and message are required." };
 		}
-		const textResult = await this.handle?.sendSubagentMessage?.({ id, text });
+		const textResult = await this.chatHandle?.sendSubagentMessage?.({ id, text });
 		if (textResult !== undefined) return textResult;
 		const voiceResult = await this.voiceHandle?.sendSubagentMessage?.({ id, text });
 		if (voiceResult !== undefined) return voiceResult;
@@ -478,7 +478,8 @@ export class ClankyDiscordGatewayController {
 
 	setSubagentThinkingLevel(level: ClankyThinkingLevel): number {
 		return (
-			(this.handle?.setSubagentThinkingLevel?.(level) ?? 0) + (this.voiceHandle?.setSubagentThinkingLevel?.(level) ?? 0)
+			(this.chatHandle?.setSubagentThinkingLevel?.(level) ?? 0) +
+			(this.voiceHandle?.setSubagentThinkingLevel?.(level) ?? 0)
 		);
 	}
 
@@ -494,7 +495,7 @@ export class ClankyDiscordGatewayController {
 	status(): JsonRecord {
 		const voice = this.voiceHandle?.status();
 		const status: JsonRecord = {
-			textBridgeActive: this.handle !== undefined,
+			textBridgeActive: this.chatHandle !== undefined,
 			voiceBridgeActive: this.voiceHandle !== undefined && (!isRecord(voice) || voice.active !== false),
 			voiceOnlyClientActive: this.voiceOnlyClient !== undefined,
 			voice,

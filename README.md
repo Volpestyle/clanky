@@ -2,9 +2,9 @@
 
 ![Clanky](/branding/clanky-logo-512.png)
 
-Clanky is a personal Pi agent with profile state, memory, Discord text,
-Discord voice, subagents, media tools, work-tracker refs, bundled skills, and
-AgentRoom participation.
+Clanky is a personal Pi agent with profile state, memory, a canonical Pi
+session thread, chat and voice gateway adapters, subagents, media tools,
+work-tracker refs, bundled skills, and AgentRoom participation.
 
 It is not a separate daemon or scheduler. Pi supplies the terminal agent
 runtime. Clanky adds the personal layer. AgentRoom supplies the multi-agent room
@@ -19,12 +19,13 @@ Use Clanky as the agent that is always yours:
 - keep separate profiles for personal work, room leads, reviewers, voice tests,
   or temporary experiments
 - store and inspect source-grounded memories with explicit privacy controls
-- connect Clanky's own Discord identity for DMs, mentions, replies, and channel
-  bindings
-- let Discord side requests route to subagents while the main TUI session keeps
+- connect external chat gateways, with Discord as the current agent-owned
+  adapter for DMs, mentions, replies, and channel bindings
+- let gateway side requests route to subagents while the main TUI session keeps
   working
-- join Discord voice, transcribe speakers, speak through Realtime or ElevenLabs,
-  and delegate durable work back to Pi
+- join Discord voice through the current ClankVox media adapter, transcribe
+  speakers, speak through Realtime or ElevenLabs, and delegate durable work
+  back to Pi
 - generate or inspect web/media artifacts through the bundled operator skills
 - participate in AgentRoom as a lead, worker, reviewer, or standalone personal
   agent
@@ -43,8 +44,8 @@ Clanky is strongest when the work needs personal context plus tools:
 
 - orienting in a local repository
 - remembering durable preferences, project facts, and recurring context
-- deciding whether a Discord message needs a response or should be skipped
-- splitting Discord side work into subagents so the foreground session stays
+- deciding whether an external gateway message needs a response or should be skipped
+- splitting gateway side work into subagents so the foreground session stays
   useful
 - using browser, web search, media, Linear, Discord, or MCP skills when the task
   calls for them
@@ -54,8 +55,8 @@ Clanky is strongest when the work needs personal context plus tools:
 
 Let AgentRoom handle multi-agent room topology, runtime launch, audited
 send/read, task shadows, room-owned chat connectors, and mobile control. Let
-Clanky handle the personal profile, memory, Discord identity, voice settings,
-skills, and foreground Pi work.
+Clanky handle the personal profile, memory, agent-owned gateway credentials,
+voice settings, skills, and foreground Pi work.
 
 ## 3. Mental Model
 
@@ -63,17 +64,19 @@ skills, and foreground Pi work.
 flowchart TB
   user["Human"]
   tui["Pi TUI"]
+  thread["Clanky Pi session thread<br/>canonical messaging"]
   clanky["Clanky runtime"]
   profile["Profile<br/>auth, memory, sessions, skills"]
-  discord["Agent-owned Discord<br/>text + subagents"]
-  voice["Discord voice bridge"]
+  chat["Chat gateway adapters<br/>Discord today, others later"]
+  voice["Voice/media gateway adapters<br/>ClankVox Discord today"]
   vox["ClankVox<br/>native media plane"]
   room["AgentRoom<br/>optional room participation"]
 
   user --> tui
-  tui --> clanky
+  tui --> thread
+  thread --> clanky
   clanky --> profile
-  clanky --> discord
+  chat <--> thread
   clanky --> voice
   voice --> vox
   clanky <--> room
@@ -84,7 +87,9 @@ Read it as:
 - Pi owns the TUI, sessions, model runtime, slash commands, and local repo tools.
 - Clanky configures Pi with persona, profile state, memory, skills, connectors,
   and voice/media capabilities.
-- ClankVox is a subprocess below Clanky for Discord media transport.
+- Clanky's built-in messaging is the Pi session thread. Discord, AgentRoom, and
+  future Slack-style integrations are gateways into or out of that thread.
+- ClankVox is a subprocess below Clanky for the current Discord media transport.
 - AgentRoom is optional room infrastructure around Clanky; it does not own
   Clanky's profile.
 
@@ -119,9 +124,10 @@ For a persistent profile:
 pnpm clanky --home ~/.clanky --profile personal --cwd .
 ```
 
-## Discord And Voice
+## Chat Gateways And Voice
 
-Agent-owned Discord is configured from inside the TUI:
+Agent-owned chat gateways are configured from inside the TUI. Discord is the
+current built-in chat adapter:
 
 ```text
 /discord-login
@@ -129,9 +135,10 @@ Agent-owned Discord is configured from inside the TUI:
 /discord-status
 ```
 
-Discord voice uses the same profile credential, Clanky's TypeScript control
-plane, OpenAI/xAI Realtime, optional ElevenLabs speech, Pi delegation through
-`ask_pi`, and the bundled ClankVox Rust media process:
+Voice/media gateways are separate from Clanky's native Pi thread. The current
+Discord voice adapter uses the same profile credential, Clanky's TypeScript
+control plane, OpenAI/xAI Realtime, optional ElevenLabs speech, Pi delegation
+through `ask_pi`, and the bundled ClankVox Rust media process:
 
 ```text
 /discord-voice
@@ -154,11 +161,11 @@ agent-room send clanky "hello"
 agent-room read clanky --lines 40
 ```
 
-Room participation and Discord ownership are separate:
+Room participation and gateway ownership are separate:
 
-- agent-owned Discord: Clanky uses its own profile credential and owns the
-  conversation
-- room-owned Discord: AgentRoom owns the connector bot and routes the
+- agent-owned chat: Clanky uses its own profile credential and owns the
+  conversation, currently through the Discord adapter
+- room-owned chat: AgentRoom owns the connector bot and routes the
   conversation through the room
 
 One Discord conversation should have one owner. Use

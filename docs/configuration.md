@@ -21,8 +21,8 @@ you are editing.
 
 The active profile owns durable personal Clanky configuration and state:
 
-- `<profileDir>/auth.json` stores profile credentials such as OpenAI, Discord,
-  xAI, and ElevenLabs with `0600` permissions.
+- `<profileDir>/auth.json` stores profile credentials such as OpenAI,
+  agent-owned gateway adapters, xAI, and ElevenLabs with `0600` permissions.
 - `<profileDir>/discord-voice.json` stores non-secret Discord voice settings
   edited by `/discord-voice`.
 - `<profileDir>/models.json` stores custom model registry entries used by Pi's
@@ -70,7 +70,7 @@ the active source in status output.
 Clanky profile config and AgentRoom room config are separate:
 
 - Clanky owns personal credentials, profile memory, persona state, sessions,
-  skills, and agent-owned chat gateway settings.
+  skills, Clanky's native Pi session thread, and agent-owned gateway settings.
 - AgentRoom owns `.agentroom/config.yaml`, runtime topology, room-owned chat
   gateways, room routes, and audited room coordination.
 

@@ -7,22 +7,23 @@ import { loadDatabaseSync } from "../sqlite.ts";
 
 export type ClankySubagentKind = string;
 export type ClankySubagentState = "idle" | "queued" | "running" | "failed" | "stale";
-export type DiscordInboxStatus = "queued" | "claimed" | "answered" | "failed";
+export type ChatInboxStatus = "queued" | "claimed" | "answered" | "failed";
 
-export interface DiscordInboxAttachment {
+export interface ChatInboxAttachment {
 	url?: string;
 	filename?: string;
 	mime?: string;
 	contentType?: string;
 }
 
-export interface EnqueueDiscordInboxMessageInput {
+export interface EnqueueChatInboxMessageInput {
 	workerId: string;
 	kind: ClankySubagentKind;
 	scopeId: string;
 	scopeName?: string;
-	guildId?: string;
-	guildName?: string;
+	platform: string;
+	serverId?: string;
+	serverName?: string;
 	conversationId: string;
 	conversationName?: string;
 	conversationKind: string;
@@ -34,19 +35,20 @@ export interface EnqueueDiscordInboxMessageInput {
 	replyToExternalMessageId?: string;
 	acceptanceReason: string;
 	text: string;
-	attachments?: DiscordInboxAttachment[];
+	attachments?: ChatInboxAttachment[];
 	priority?: number;
 	receivedAt?: string;
 }
 
-export interface DiscordInboxMessage {
+export interface ChatInboxMessage {
 	id: string;
 	workerId: string;
 	kind: ClankySubagentKind;
 	scopeId: string;
 	scopeName?: string;
-	guildId?: string;
-	guildName?: string;
+	platform: string;
+	serverId?: string;
+	serverName?: string;
 	conversationId: string;
 	conversationName?: string;
 	conversationKind: string;
@@ -58,8 +60,8 @@ export interface DiscordInboxMessage {
 	replyToExternalMessageId?: string;
 	acceptanceReason: string;
 	text: string;
-	attachments: DiscordInboxAttachment[];
-	status: DiscordInboxStatus;
+	attachments: ChatInboxAttachment[];
+	status: ChatInboxStatus;
 	priority: number;
 	receivedAt: string;
 	claimedAt?: string;
@@ -105,7 +107,7 @@ interface SqliteRunResult {
 	changes: number;
 }
 
-export class DiscordSubagentStore {
+export class ClankySubagentStore {
 	private readonly paths: ClankyPaths;
 	private db: DatabaseSync | undefined;
 
@@ -113,20 +115,21 @@ export class DiscordSubagentStore {
 		this.paths = paths;
 	}
 
-	async enqueueDiscordMessage(input: EnqueueDiscordInboxMessageInput): Promise<DiscordInboxMessage> {
+	async enqueueChatMessage(input: EnqueueChatInboxMessageInput): Promise<ChatInboxMessage> {
 		await this.ensure();
-		const message = normalizeDiscordInboxInput(input);
+		const message = normalizeChatInboxInput(input);
 		const db = this.database();
 		const insertResult = db
 			.prepare(`
-				INSERT OR IGNORE INTO discord_inbox (
+				INSERT OR IGNORE INTO chat_inbox (
 					id,
 					worker_id,
 					kind,
 					scope_id,
 					scope_name,
-					guild_id,
-					guild_name,
+					platform,
+					server_id,
+					server_name,
 					conversation_id,
 					conversation_name,
 					conversation_kind,
@@ -143,7 +146,7 @@ export class DiscordSubagentStore {
 					priority,
 					received_at
 				)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			`)
 			.run(
 				message.id,
@@ -151,8 +154,9 @@ export class DiscordSubagentStore {
 				message.kind,
 				message.scopeId,
 				message.scopeName ?? null,
-				message.guildId ?? null,
-				message.guildName ?? null,
+				message.platform,
+				message.serverId ?? null,
+				message.serverName ?? null,
 				message.conversationId,
 				message.conversationName ?? null,
 				message.conversationKind,
@@ -173,13 +177,13 @@ export class DiscordSubagentStore {
 			const existing = db
 				.prepare(`
 					SELECT *
-					FROM discord_inbox
-					WHERE external_message_id = ?
+					FROM chat_inbox
+					WHERE platform = ? AND external_message_id = ?
 				`)
-				.get(message.externalMessageId);
+				.get(message.platform, message.externalMessageId);
 			const existingMessage =
 				typeof existing === "object" && existing !== null
-					? readDiscordInboxRow(existing as Record<string, unknown>)
+					? readChatInboxRow(existing as Record<string, unknown>)
 					: undefined;
 			return existingMessage ?? message;
 		}
@@ -190,12 +194,12 @@ export class DiscordSubagentStore {
 			...(message.scopeName === undefined ? {} : { scopeName: message.scopeName }),
 			state: "queued",
 			activeConversationId: message.conversationId,
-			activeSummary: `queued Discord message from ${message.senderName ?? message.senderId}`,
+			activeSummary: `queued ${message.platform} message from ${message.senderName ?? message.senderId}`,
 		});
 		return message;
 	}
 
-	async claimNextDiscordMessage(workerId: string, now = new Date()): Promise<DiscordInboxMessage | undefined> {
+	async claimNextChatMessage(workerId: string, now = new Date()): Promise<ChatInboxMessage | undefined> {
 		await this.ensure();
 		const db = this.database();
 		db.exec("BEGIN IMMEDIATE");
@@ -203,7 +207,7 @@ export class DiscordSubagentStore {
 			const row = db
 				.prepare(`
 					SELECT *
-					FROM discord_inbox
+					FROM chat_inbox
 					WHERE worker_id = ? AND status = 'queued'
 					ORDER BY priority DESC, received_at ASC
 					LIMIT 1
@@ -213,14 +217,14 @@ export class DiscordSubagentStore {
 				db.exec("COMMIT");
 				return undefined;
 			}
-			const message = readDiscordInboxRow(row);
+			const message = readChatInboxRow(row);
 			if (message === undefined) {
 				db.exec("COMMIT");
 				return undefined;
 			}
 			const claimedAt = now.toISOString();
 			db.prepare(`
-				UPDATE discord_inbox
+				UPDATE chat_inbox
 				SET status = 'claimed', claimed_at = ?
 				WHERE id = ? AND status = 'queued'
 			`).run(claimedAt, message.id);
@@ -232,7 +236,7 @@ export class DiscordSubagentStore {
 		}
 	}
 
-	async completeDiscordMessage(
+	async completeChatMessage(
 		id: string,
 		responseExternalMessageId: string | undefined,
 		now = new Date(),
@@ -240,7 +244,7 @@ export class DiscordSubagentStore {
 		await this.ensure();
 		this.database()
 			.prepare(`
-				UPDATE discord_inbox
+				UPDATE chat_inbox
 				SET status = 'answered',
 					finished_at = ?,
 					response_external_message_id = ?,
@@ -250,11 +254,11 @@ export class DiscordSubagentStore {
 			.run(now.toISOString(), responseExternalMessageId ?? null, id);
 	}
 
-	async failDiscordMessage(id: string, error: string, now = new Date()): Promise<void> {
+	async failChatMessage(id: string, error: string, now = new Date()): Promise<void> {
 		await this.ensure();
 		this.database()
 			.prepare(`
-				UPDATE discord_inbox
+				UPDATE chat_inbox
 				SET status = 'failed',
 					finished_at = ?,
 					error = ?
@@ -383,11 +387,11 @@ export class DiscordSubagentStore {
 			.prepare(`
 				SELECT
 					subagents.*,
-					COUNT(discord_inbox.id) AS queue_depth
+					COUNT(chat_inbox.id) AS queue_depth
 				FROM subagents
-				LEFT JOIN discord_inbox
-					ON discord_inbox.worker_id = subagents.id
-					AND discord_inbox.status IN ('queued', 'claimed')
+				LEFT JOIN chat_inbox
+					ON chat_inbox.worker_id = subagents.id
+					AND chat_inbox.status IN ('queued', 'claimed')
 				WHERE subagents.id = ?
 				GROUP BY subagents.id
 			`)
@@ -401,11 +405,11 @@ export class DiscordSubagentStore {
 			.prepare(`
 				SELECT
 					subagents.*,
-					COUNT(discord_inbox.id) AS queue_depth
+					COUNT(chat_inbox.id) AS queue_depth
 				FROM subagents
-				LEFT JOIN discord_inbox
-					ON discord_inbox.worker_id = subagents.id
-					AND discord_inbox.status IN ('queued', 'claimed')
+				LEFT JOIN chat_inbox
+					ON chat_inbox.worker_id = subagents.id
+					AND chat_inbox.status IN ('queued', 'claimed')
 				GROUP BY subagents.id
 				ORDER BY subagents.updated_at DESC
 			`)
@@ -413,12 +417,12 @@ export class DiscordSubagentStore {
 		return rows.map(readSubagentRow).filter((row): row is ClankySubagentSummary => row !== undefined);
 	}
 
-	async listDiscordWorkersWithQueuedMessages(): Promise<string[]> {
+	async listChatWorkersWithQueuedMessages(): Promise<string[]> {
 		await this.ensure();
 		const rows = this.database()
 			.prepare(`
 				SELECT DISTINCT worker_id
-				FROM discord_inbox
+				FROM chat_inbox
 				WHERE status = 'queued'
 				ORDER BY worker_id
 			`)
@@ -429,12 +433,12 @@ export class DiscordSubagentStore {
 		});
 	}
 
-	async discordQueueDepth(workerId: string): Promise<number> {
+	async chatQueueDepth(workerId: string): Promise<number> {
 		await this.ensure();
 		const row = this.database()
 			.prepare(`
 				SELECT COUNT(*) AS count
-				FROM discord_inbox
+				FROM chat_inbox
 				WHERE worker_id = ? AND status IN ('queued', 'claimed')
 			`)
 			.get(workerId);
@@ -466,14 +470,15 @@ export class DiscordSubagentStore {
 			);
 			CREATE INDEX IF NOT EXISTS idx_subagents_kind_scope
 				ON subagents (kind, scope_id);
-			CREATE TABLE IF NOT EXISTS discord_inbox (
+			CREATE TABLE IF NOT EXISTS chat_inbox (
 				id TEXT PRIMARY KEY,
 				worker_id TEXT NOT NULL,
 				kind TEXT NOT NULL,
 				scope_id TEXT NOT NULL,
 				scope_name TEXT,
-				guild_id TEXT,
-				guild_name TEXT,
+				platform TEXT NOT NULL,
+				server_id TEXT,
+				server_name TEXT,
 				conversation_id TEXT NOT NULL,
 				conversation_name TEXT,
 				conversation_kind TEXT NOT NULL,
@@ -481,7 +486,7 @@ export class DiscordSubagentStore {
 				conversation_parent_id TEXT,
 				sender_id TEXT NOT NULL,
 				sender_name TEXT,
-				external_message_id TEXT NOT NULL UNIQUE,
+				external_message_id TEXT NOT NULL,
 				reply_to_external_message_id TEXT,
 				acceptance_reason TEXT NOT NULL,
 				text TEXT NOT NULL,
@@ -492,15 +497,19 @@ export class DiscordSubagentStore {
 				claimed_at TEXT,
 				finished_at TEXT,
 				error TEXT,
-				response_external_message_id TEXT
+				response_external_message_id TEXT,
+				UNIQUE(platform, external_message_id)
 			);
-			CREATE INDEX IF NOT EXISTS idx_discord_inbox_worker_status
-				ON discord_inbox (worker_id, status, priority, received_at);
-			CREATE INDEX IF NOT EXISTS idx_discord_inbox_conversation
-				ON discord_inbox (conversation_id, received_at);
+			CREATE INDEX IF NOT EXISTS idx_chat_inbox_worker_status
+				ON chat_inbox (worker_id, status, priority, received_at);
+			CREATE INDEX IF NOT EXISTS idx_chat_inbox_conversation
+				ON chat_inbox (conversation_id, received_at);
 		`);
-		ensureColumn(db, "discord_inbox", "conversation_thread_id", "TEXT");
-		ensureColumn(db, "discord_inbox", "conversation_parent_id", "TEXT");
+		ensureColumn(db, "chat_inbox", "platform", "TEXT NOT NULL DEFAULT 'discord'");
+		ensureColumn(db, "chat_inbox", "server_id", "TEXT");
+		ensureColumn(db, "chat_inbox", "server_name", "TEXT");
+		ensureColumn(db, "chat_inbox", "conversation_thread_id", "TEXT");
+		ensureColumn(db, "chat_inbox", "conversation_parent_id", "TEXT");
 		ensureColumn(db, "subagents", "thinking_level", "TEXT");
 	}
 
@@ -518,22 +527,23 @@ export class DiscordSubagentStore {
 	}
 }
 
-function normalizeDiscordInboxInput(input: EnqueueDiscordInboxMessageInput): DiscordInboxMessage {
+function normalizeChatInboxInput(input: EnqueueChatInboxMessageInput): ChatInboxMessage {
 	const now = input.receivedAt ?? new Date().toISOString();
 	const workerId = requiredString(input.workerId, "workerId");
 	const scopeName = optionalString(input.scopeName);
-	const guildId = optionalString(input.guildId);
-	const guildName = optionalString(input.guildName);
+	const serverId = optionalString(input.serverId);
+	const serverName = optionalString(input.serverName);
 	const conversationName = optionalString(input.conversationName);
 	const conversationThreadId = optionalString(input.conversationThreadId);
 	const conversationParentId = optionalString(input.conversationParentId);
 	const senderName = optionalString(input.senderName);
 	const replyToExternalMessageId = optionalString(input.replyToExternalMessageId);
-	const message: DiscordInboxMessage = {
+	const message: ChatInboxMessage = {
 		id: randomUUID(),
 		workerId,
 		kind: normalizeKind(input.kind),
 		scopeId: requiredString(input.scopeId, "scopeId"),
+		platform: requiredString(input.platform, "platform"),
 		conversationId: requiredString(input.conversationId, "conversationId"),
 		conversationKind: requiredString(input.conversationKind, "conversationKind"),
 		senderId: requiredString(input.senderId, "senderId"),
@@ -546,8 +556,8 @@ function normalizeDiscordInboxInput(input: EnqueueDiscordInboxMessageInput): Dis
 		receivedAt: normalizedTimestamp(now, "receivedAt"),
 	};
 	if (scopeName !== undefined) message.scopeName = scopeName;
-	if (guildId !== undefined) message.guildId = guildId;
-	if (guildName !== undefined) message.guildName = guildName;
+	if (serverId !== undefined) message.serverId = serverId;
+	if (serverName !== undefined) message.serverName = serverName;
 	if (conversationName !== undefined) message.conversationName = conversationName;
 	if (conversationThreadId !== undefined) message.conversationThreadId = conversationThreadId;
 	if (conversationParentId !== undefined) message.conversationParentId = conversationParentId;
@@ -556,18 +566,19 @@ function normalizeDiscordInboxInput(input: EnqueueDiscordInboxMessageInput): Dis
 	return message;
 }
 
-function readDiscordInboxRow(row: Record<string, unknown>): DiscordInboxMessage | undefined {
+function readChatInboxRow(row: Record<string, unknown>): ChatInboxMessage | undefined {
 	const id = readString(row, "id");
 	const workerId = readString(row, "worker_id");
 	const kind = readKind(row.kind);
 	const scopeId = readString(row, "scope_id");
+	const platform = readString(row, "platform");
 	const conversationId = readString(row, "conversation_id");
 	const conversationKind = readString(row, "conversation_kind");
 	const senderId = readString(row, "sender_id");
 	const externalMessageId = readString(row, "external_message_id");
 	const acceptanceReason = readString(row, "acceptance_reason");
 	const text = readString(row, "text");
-	const status = readDiscordInboxStatus(row.status);
+	const status = readChatInboxStatus(row.status);
 	const priority = readNumber(row, "priority");
 	const receivedAt = readString(row, "received_at");
 	if (
@@ -575,6 +586,7 @@ function readDiscordInboxRow(row: Record<string, unknown>): DiscordInboxMessage 
 		workerId === undefined ||
 		kind === undefined ||
 		scopeId === undefined ||
+		platform === undefined ||
 		conversationId === undefined ||
 		conversationKind === undefined ||
 		senderId === undefined ||
@@ -587,11 +599,12 @@ function readDiscordInboxRow(row: Record<string, unknown>): DiscordInboxMessage 
 	) {
 		return undefined;
 	}
-	const message: DiscordInboxMessage = {
+	const message: ChatInboxMessage = {
 		id,
 		workerId,
 		kind,
 		scopeId,
+		platform,
 		conversationId,
 		conversationKind,
 		senderId,
@@ -605,10 +618,10 @@ function readDiscordInboxRow(row: Record<string, unknown>): DiscordInboxMessage 
 	};
 	const scopeName = readString(row, "scope_name");
 	if (scopeName !== undefined) message.scopeName = scopeName;
-	const guildId = readString(row, "guild_id");
-	if (guildId !== undefined) message.guildId = guildId;
-	const guildName = readString(row, "guild_name");
-	if (guildName !== undefined) message.guildName = guildName;
+	const serverId = readString(row, "server_id");
+	if (serverId !== undefined) message.serverId = serverId;
+	const serverName = readString(row, "server_name");
+	if (serverName !== undefined) message.serverName = serverName;
 	const conversationName = readString(row, "conversation_name");
 	if (conversationName !== undefined) message.conversationName = conversationName;
 	const conversationThreadId = readString(row, "conversation_thread_id");
@@ -678,7 +691,7 @@ function ensureColumn(db: DatabaseSync, table: string, column: string, type: str
 	if (!hasColumn) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
 }
 
-function readAttachments(value: unknown): DiscordInboxAttachment[] {
+function readAttachments(value: unknown): ChatInboxAttachment[] {
 	if (typeof value !== "string") return [];
 	try {
 		const parsed = JSON.parse(value) as unknown;
@@ -686,7 +699,7 @@ function readAttachments(value: unknown): DiscordInboxAttachment[] {
 		return parsed.flatMap((item) => {
 			if (typeof item !== "object" || item === null || Array.isArray(item)) return [];
 			const record = item as Record<string, unknown>;
-			const attachment: DiscordInboxAttachment = {};
+			const attachment: ChatInboxAttachment = {};
 			if (typeof record.url === "string") attachment.url = record.url;
 			if (typeof record.filename === "string") attachment.filename = record.filename;
 			if (typeof record.mime === "string") attachment.mime = record.mime;
@@ -745,7 +758,7 @@ function readSubagentState(value: unknown): ClankySubagentState | undefined {
 	return undefined;
 }
 
-function readDiscordInboxStatus(value: unknown): DiscordInboxStatus | undefined {
+function readChatInboxStatus(value: unknown): ChatInboxStatus | undefined {
 	if (value === "queued" || value === "claimed" || value === "answered" || value === "failed") return value;
 	return undefined;
 }

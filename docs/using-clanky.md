@@ -41,9 +41,9 @@ Useful Pi editor patterns still apply:
 /setup fresh
 ```
 
-Use `/setup status` when you want a compact view of profile paths, OpenAI,
-Discord text, Discord owner, Discord voice, ElevenLabs, xAI, and AgentRoom
-participation.
+Use `/setup status` when you want a compact view of profile paths, OpenAI, chat
+gateway ownership, Discord adapter status, Discord voice, ElevenLabs, xAI, and
+AgentRoom participation.
 
 ## Memory Workflow
 
@@ -73,19 +73,22 @@ Use `/memory reflect` near the end of a busy day or long session. It only runs
 when there is enough recent transcript to review, and it should propose
 memories before saving anything that lacks explicit confirmation.
 
-## Discord Text Workflow
+## Chat Gateway Workflow
 
-Agent-owned Discord is for Clanky's personal identity:
+Clanky's built-in messaging is the local Pi session thread. External chat
+platforms are gateways that can deliver messages to that thread or to a
+profile-local subagent. The current built-in adapter is agent-owned Discord:
 
 ```text
 /discord-whoami
 /discord-status
 ```
 
-Accepted Discord chat may route to a dedicated Discord subagent. That gives
-Discord its own Pi session and context window while the main TUI session remains
-available. The Discord subagent can inspect Discord, ask main Clanky for recent
-main-session context, and delegate durable work back to the main worker.
+Accepted gateway chat may route to a dedicated subagent. That gives the
+external conversation its own Pi session and context window while the main TUI
+session remains available. The Discord adapter can inspect Discord, ask main
+Clanky for recent main-session context, and delegate durable work back to the
+main worker.
 
 Use the live subagent panel in the TUI:
 
@@ -102,11 +105,12 @@ In Discord, `/clanky direct <message>` bypasses the Discord subagent and sends
 the turn straight to main Clanky. Use that only when you explicitly want the
 foreground worker.
 
-## Discord Voice Workflow
+## Voice Gateway Workflow
 
-Voice is a separate live path. It is not just a normal Pi text turn.
+Voice is a separate live media path. It is not just a normal Pi text turn, and
+it is not coupled to which chat gateway owns a text conversation.
 
-The voice bridge uses:
+The current Discord voice adapter uses:
 
 - TypeScript for control, settings, Realtime, tools, and Pi delegation.
 - Rust `clankvox` for Discord voice transport, RTP, Opus, screen watch, and

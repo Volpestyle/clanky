@@ -1,11 +1,11 @@
 import { appendFile } from "node:fs/promises";
 import { DiscordChatGatewayProvider, type DiscordGatewayClient } from "@agentroom/chat-discord";
 import {
+	type ChatInboxMessage,
 	type ClankyDiscordCredentialKind,
+	type ClankySubagentStore,
 	DEFAULT_CLANKY_DISCORD_PROVIDER_ID,
-	type DiscordInboxMessage,
 	type DiscordMessageSummary,
-	type DiscordSubagentStore,
 	loadStoredDiscordCredential,
 	readDiscordMessages,
 	type SendSubagentMessageInput,
@@ -19,56 +19,39 @@ import type {
 	CreateAgentSessionRuntimeFactory,
 	PromptOptions,
 } from "@earendil-works/pi-coding-agent";
+import type {
+	AgentChatAttachment,
+	AgentChatConversation,
+	AgentChatGatewayHandle,
+	AgentChatGatewayProvider,
+	AgentChatInboundMessage,
+	AgentChatSender,
+} from "./agentChatGateway.ts";
 import { createAgentDiscordClient } from "./agentDiscordClient.ts";
+import { startChatTypingIndicator, withChatTypingIndicator } from "./chatTyping.ts";
 import type { ClankyThinkingLevel } from "./clankyDefaults.ts";
 import { DiscordSubagentCoordinator } from "./discordSubagentCoordinator.ts";
-import { startDiscordTypingIndicator, withDiscordTypingIndicator } from "./discordTyping.ts";
 import { DEFAULT_DISCORD_WAKE_NAMES, dedupeWakeNames, parseDiscordWakeNamesFromEnv } from "./discordWakeNames.ts";
 import { type RuntimeTurnQueue, SerialRuntimeTurnQueue } from "./runtimeTurnQueue.ts";
 
 type DiscordCredentialKind = ClankyDiscordCredentialKind;
 
-export interface DiscordInboundConversation {
-	id: string;
-	kind: "dm" | "channel" | "group" | "thread" | "custom";
-	threadId?: string;
-	parentId?: string;
-	guildId?: string;
-	displayName?: string;
-}
-
-export interface DiscordInboundSender {
-	id: string;
-	username?: string;
-	displayName?: string;
-	isBot?: boolean;
-}
-
-export interface DiscordInboundAttachment {
-	url?: string;
-	filename?: string;
-	mime?: string;
-	contentType?: string;
-}
-
-export interface DiscordInboundMessage {
-	externalMessageId: string;
-	conversation: DiscordInboundConversation;
-	sender: DiscordInboundSender;
-	text: string;
-	attachments: DiscordInboundAttachment[];
-	mentionsSelf: boolean;
-	replyToExternalMessageId?: string;
-}
+export type DiscordInboundConversation = AgentChatConversation;
+export type DiscordInboundSender = AgentChatSender;
+export type DiscordInboundAttachment = AgentChatAttachment;
+export type DiscordInboundMessage = AgentChatInboundMessage;
 
 export type ClankyAgentDiscordGatewayConfigSource = "env" | "stored";
 
-export interface ClankyAgentDiscordGatewayConfig {
+export interface ClankyAgentDiscordCredentialConfig {
 	providerId: string;
 	token: string;
 	credentialKind: DiscordCredentialKind;
-	conversationId?: string;
 	source: ClankyAgentDiscordGatewayConfigSource;
+}
+
+export interface ClankyAgentDiscordGatewayConfig extends ClankyAgentDiscordCredentialConfig {
+	conversationId?: string;
 }
 
 interface PendingDiscordReply {
@@ -98,7 +81,7 @@ export interface DiscordConversationPromptMetadata {
 	conversationId: string;
 	conversationKind: DiscordInboundConversation["kind"];
 	messageId: string;
-	guildId?: string;
+	serverId?: string;
 	threadId?: string;
 	parentId?: string;
 	displayName?: string;
@@ -189,11 +172,8 @@ function resolveDiscordWakeNames(env: NodeJS.ProcessEnv): string[] {
 	return parseDiscordWakeNamesFromEnv(env);
 }
 
-export interface ClankyAgentDiscordGatewayHandle {
+export interface ClankyAgentDiscordGatewayHandle extends AgentChatGatewayHandle {
 	readonly client: DiscordGatewayClient;
-	stop(): Promise<void>;
-	setSubagentThinkingLevel(level: ClankyThinkingLevel): number;
-	sendSubagentMessage?(input: SendSubagentMessageInput): Promise<SendSubagentMessageResult | undefined>;
 }
 
 /**
@@ -218,7 +198,13 @@ export function resolveAgentDiscordGatewayConfig(
 	authStorage?: AuthStorage,
 ): ClankyAgentDiscordGatewayConfig | undefined {
 	if (!shouldStartAgentChatGateway(env)) return undefined;
-	return resolveAgentDiscordCredentialConfig(env, authStorage);
+	const credential = resolveAgentDiscordCredentialConfig(env, authStorage);
+	if (credential === undefined) return undefined;
+	const conversationId = resolveAgentDiscordConversationId(env, authStorage, credential);
+	return {
+		...credential,
+		...(conversationId === undefined ? {} : { conversationId }),
+	};
 }
 
 /**
@@ -232,22 +218,19 @@ export function resolveAgentDiscordGatewayConfig(
 export function resolveAgentDiscordCredentialConfig(
 	env: NodeJS.ProcessEnv = process.env,
 	authStorage?: AuthStorage,
-): ClankyAgentDiscordGatewayConfig | undefined {
+): ClankyAgentDiscordCredentialConfig | undefined {
 	const providerId = env.CLANKY_DISCORD_PROVIDER_ID?.trim() || DEFAULT_CLANKY_DISCORD_PROVIDER_ID;
-	const envConversationId = env.CLANKY_DISCORD_CONVERSATION_ID?.trim() || undefined;
 	const envCredentialKindRaw = env.CLANKY_DISCORD_CREDENTIAL_KIND?.trim();
 
 	const envToken = env.CLANKY_DISCORD_TOKEN?.trim();
 	if (envToken !== undefined && envToken.length > 0) {
 		const credentialKind = parseDiscordCredentialKind(envCredentialKindRaw);
-		const config: ClankyAgentDiscordGatewayConfig = {
+		return {
 			providerId,
 			token: envToken,
 			credentialKind,
 			source: "env",
 		};
-		if (envConversationId !== undefined) config.conversationId = envConversationId;
-		return config;
 	}
 
 	if (authStorage === undefined) return undefined;
@@ -258,15 +241,23 @@ export function resolveAgentDiscordCredentialConfig(
 		envCredentialKindRaw !== undefined && envCredentialKindRaw.length > 0
 			? parseDiscordCredentialKind(envCredentialKindRaw)
 			: stored.payload.credentialKind;
-	const conversationId = envConversationId ?? stored.payload.conversationId;
-	const config: ClankyAgentDiscordGatewayConfig = {
+	return {
 		providerId: stored.providerId,
 		token: stored.payload.token,
 		credentialKind,
 		source: "stored",
 	};
-	if (conversationId !== undefined) config.conversationId = conversationId;
-	return config;
+}
+
+function resolveAgentDiscordConversationId(
+	env: NodeJS.ProcessEnv,
+	authStorage: AuthStorage | undefined,
+	credential: ClankyAgentDiscordCredentialConfig,
+): string | undefined {
+	const envConversationId = env.CLANKY_DISCORD_CONVERSATION_ID?.trim() || undefined;
+	if (envConversationId !== undefined) return envConversationId;
+	if (credential.source !== "stored" || authStorage === undefined) return undefined;
+	return loadStoredDiscordCredential(authStorage, credential.providerId)?.payload.conversationId;
 }
 
 export interface StartAgentDiscordGatewayInput {
@@ -278,7 +269,7 @@ export interface StartAgentDiscordGatewayInput {
 	createSubagentRuntime?: CreateAgentSessionRuntimeFactory;
 	/** Append-only log of inbound/outbound timing — pass `<profileDir>/discord-bridge.log` from runClanky. */
 	bridgeLogPath?: string;
-	subagentStore?: DiscordSubagentStore;
+	subagentStore?: ClankySubagentStore;
 	subagentSessionDir?: string;
 	subagentCwd?: string;
 	/** Override default 5-minute engagement window. 0 disables. */
@@ -364,7 +355,7 @@ export type DiscordAcceptanceDecision =
 class AgentDiscordBridge implements ClankyAgentDiscordGatewayHandle {
 	readonly client: DiscordGatewayClient;
 	private readonly runtime: AgentSessionRuntime;
-	private readonly provider: DiscordChatGatewayProvider;
+	private readonly provider: AgentChatGatewayProvider;
 	private readonly config: ClankyAgentDiscordGatewayConfig;
 	private readonly options: AgentDiscordBridgeOptions;
 	private readonly runtimeTurnQueue: RuntimeTurnQueue;
@@ -382,7 +373,7 @@ class AgentDiscordBridge implements ClankyAgentDiscordGatewayHandle {
 
 	constructor(
 		runtime: AgentSessionRuntime,
-		provider: DiscordChatGatewayProvider,
+		provider: AgentChatGatewayProvider,
 		config: ClankyAgentDiscordGatewayConfig,
 		client: DiscordGatewayClient,
 		options: AgentDiscordBridgeOptions,
@@ -401,7 +392,7 @@ class AgentDiscordBridge implements ClankyAgentDiscordGatewayHandle {
 	async start(): Promise<void> {
 		this.subscribeToCurrentSession();
 		await this.provider.start(async (rawMessage: unknown) => {
-			const message = rawMessage as DiscordInboundMessage;
+			const message = normalizeDiscordInboundMessage(rawMessage);
 			const t1 = Date.now();
 			const channelId = message.conversation.id;
 			const senderId = message.sender.id;
@@ -452,7 +443,7 @@ class AgentDiscordBridge implements ClankyAgentDiscordGatewayHandle {
 		acceptanceReason: DiscordAcceptanceReason,
 		receivedAt: number,
 	): Promise<void> {
-		const stopTyping = startDiscordTypingIndicator(this.provider, message.conversation, {
+		const stopTyping = startChatTypingIndicator(this.provider, message.conversation, {
 			onError: (error) => this.logBridge(`typing-failed ext=${message.externalMessageId} error=${errorMessage(error)}`),
 		});
 		try {
@@ -662,7 +653,7 @@ class AgentDiscordBridge implements ClankyAgentDiscordGatewayHandle {
 		task: () => Promise<string>,
 	): Promise<void> {
 		try {
-			const reply = await withDiscordTypingIndicator(this.provider, message.conversation, task, {
+			const reply = await withChatTypingIndicator(this.provider, message.conversation, task, {
 				onError: (error) =>
 					this.logBridge(`typing-failed ext=${message.externalMessageId} type=${label} error=${errorMessage(error)}`),
 			});
@@ -688,7 +679,7 @@ class AgentDiscordBridge implements ClankyAgentDiscordGatewayHandle {
 	}
 
 	private handleSubagentResponseSent(event: {
-		message: DiscordInboxMessage;
+		message: ChatInboxMessage;
 		sentExternalMessageId: string;
 		text: string;
 	}): void {
@@ -784,6 +775,20 @@ function engagementKey(channelId: string, userId: string): string {
 	return `${channelId}:${userId}`;
 }
 
+function normalizeDiscordInboundMessage(rawMessage: unknown): DiscordInboundMessage {
+	const message = rawMessage as DiscordInboundMessage & {
+		conversation: DiscordInboundConversation & { guildId?: string };
+	};
+	const serverId = message.conversation.serverId ?? message.conversation.guildId;
+	return {
+		...message,
+		conversation: {
+			...message.conversation,
+			...(serverId === undefined ? {} : { serverId }),
+		},
+	};
+}
+
 export function shouldRouteDiscordMessageToSubagent(state: DiscordSubagentRoutingState): boolean {
 	return state.subagentsAvailable;
 }
@@ -797,7 +802,7 @@ function conversationPromptMetadata(message: DiscordInboundMessage): DiscordConv
 		conversationId: message.conversation.id,
 		conversationKind: message.conversation.kind,
 		messageId: message.externalMessageId,
-		...(message.conversation.guildId === undefined ? {} : { guildId: message.conversation.guildId }),
+		...(message.conversation.serverId === undefined ? {} : { serverId: message.conversation.serverId }),
 		...(message.conversation.threadId === undefined ? {} : { threadId: message.conversation.threadId }),
 		...(message.conversation.parentId === undefined ? {} : { parentId: message.conversation.parentId }),
 		...(message.conversation.displayName === undefined ? {} : { displayName: message.conversation.displayName }),
@@ -1123,7 +1128,7 @@ export function formatDiscordUserMessage(
 		`- kind: ${metadata.conversationKind}`,
 		`- conversationId: ${metadata.conversationId}`,
 		`- channelOrThreadId: ${metadata.threadId ?? metadata.conversationId}`,
-		...(metadata.guildId === undefined ? [] : [`- guildId: ${metadata.guildId}`]),
+		...(metadata.serverId === undefined ? [] : [`- serverId: ${metadata.serverId}`]),
 		...(metadata.threadId === undefined ? [] : [`- threadId: ${metadata.threadId}`]),
 		...(metadata.parentId === undefined ? [] : [`- parentId: ${metadata.parentId}`]),
 		...(metadata.displayName === undefined ? [] : [`- displayName: ${metadata.displayName}`]),

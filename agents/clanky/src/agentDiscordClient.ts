@@ -11,7 +11,7 @@ import {
 	DiscordGatewayIntentBits,
 	DiscordPartials,
 } from "@agentroom/chat-discord";
-import type { ClankyAgentDiscordGatewayConfig } from "./agentDiscordGateway.ts";
+import type { ClankyAgentDiscordCredentialConfig } from "./agentDiscordGateway.ts";
 
 export interface CreateAgentDiscordClientOptions {
 	voice?: boolean;
@@ -42,7 +42,7 @@ export function createAgentDiscordClient(options: CreateAgentDiscordClientOption
 
 export async function loginAgentDiscordClient(
 	client: DiscordGatewayClient,
-	config: Pick<ClankyAgentDiscordGatewayConfig, "token" | "credentialKind">,
+	config: Pick<ClankyAgentDiscordCredentialConfig, "token" | "credentialKind">,
 ): Promise<void> {
 	if (config.credentialKind === "user-token") {
 		applyDiscordUserTokenPatches(client);

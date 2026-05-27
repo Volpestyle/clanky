@@ -40,21 +40,26 @@ Clanky configures Pi for a personal agent:
 
 - Persona markdown from `agents/clanky/persona/SELF.md`.
 - Profile paths under `~/.clanky` by default.
-- Profile auth storage for OpenAI, Discord, xAI, and ElevenLabs credentials.
+- Profile auth storage for OpenAI, gateway, xAI, and ElevenLabs credentials.
 - Clanky memory, profile status, skills, work-tracker refs, and subagent stores.
 - Bundled Clanky skills plus profile-local Clanky skills.
-- Discord text gateway ownership, Discord subagents, and Discord operator tools.
-- Discord voice settings, voice bridge, voice logs, and realtime voice-agent
-  handoff to Pi.
+- Chat gateway ownership, profile-local gateway subagents, and Discord operator
+  tools for the current Discord adapter.
+- Voice/media gateway settings, voice logs, and realtime voice-agent handoff to
+  Pi, with Discord voice implemented by the current ClankVox adapter.
 - OpenAI web search and OpenAI/xAI media generation tools.
 - External MCP status/list/call tools.
 - Setup, auth, effort, profile, memory, web, media, subagent, Discord, and voice
   slash commands.
 
 The Clanky runtime uses Pi's `systemPromptOverride` to append the Clanky persona.
-If a Discord identity is stored in the active profile, that identity is appended
-to the startup prompt as well. It also uses Pi's `skillsOverride` to merge
-bundled/profile Clanky skills with Pi-discovered skills.
+If an external gateway identity is stored in the active profile, that identity
+is appended to the startup prompt as well. It also uses Pi's `skillsOverride` to
+merge bundled/profile Clanky skills with Pi-discovered skills.
+
+Clanky's built-in messaging is still Pi's session thread. Discord text,
+AgentRoom send/read, and future Slack-style integrations are gateways into or
+out of that thread; they do not replace the native session model.
 
 ## Runtime Flow
 
@@ -68,7 +73,7 @@ flowchart TB
   resources --> extensions["Pi extensions + Clanky extension factories"]
   resources --> skills["Pi skills + Clanky bundled/profile skills"]
   factory --> runtime["AgentSessionRuntime"]
-  runtime --> gateway["start configured Discord bridges"]
+  runtime --> gateway["start configured gateway adapters"]
   gateway --> tui["InteractiveMode TUI"]
 ```
 
@@ -134,9 +139,9 @@ personal-agent capabilities:
 - Web and media: `web_search`, `web_backend_status`,
   `openai_image_generate`, `xai_image_generate`, `xai_video_generate`,
   `media_backend_status`.
-- Discord: guild/channel/message/media/send/reaction tools.
-- Discord voice: `discord_voice_status`, `discord_voice_join`,
-  `discord_voice_leave`.
+- Discord adapter: guild/channel/message/media/send/reaction tools.
+- Voice gateway tools: `discord_voice_status`, `discord_voice_join`,
+  `discord_voice_leave` for the current Discord voice adapter.
 - Coordination: `main_session_context`, `delegate_to_main_worker`,
   `subagent_status`.
 - Work trackers and MCP: `work_tracker_create_issue`, `work_tracker_link`,
