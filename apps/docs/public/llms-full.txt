@@ -20,8 +20,8 @@ mental model is:
 - Pi is the terminal agent foundation: model runtime, TUI, sessions, built-in
   tools, context files, extensions, skills, and slash command mechanics.
 - Clanky is the personal layer on top: persona, profile-local state, memory,
-  Discord text and voice, media generation, web lookup, Linear links, MCP
-  servers, and AgentRoom-aware coordination.
+  Discord text and voice, media generation, web lookup, native work-tracker
+  refs, MCP servers, and AgentRoom-aware coordination.
 
 That means a new user should learn Clanky as a Pi-powered agent, not as a
 separate daemon. When `pnpm clanky` starts, it builds a Pi runtime, injects the
@@ -39,7 +39,7 @@ Pi's interactive TUI.
 | Discord voice | Join a configured voice channel, transcribe speakers, speak through Realtime or ElevenLabs, and delegate durable work to Pi. |
 | Web and media | Use OpenAI hosted web search, Playwright or Chrome CDP routes, OpenAI image generation, and xAI image/video generation. |
 | AgentRoom | Participate in an AgentRoom room as a normal Pi harness while keeping profile state and connector ownership explicit. |
-| Linear and MCP | Create/link Linear issues when credentials exist and call configured external MCP tools. |
+| Work tracking and MCP | Keep native Clanky task refs, link external tracker issues, use Linear when configured, and call configured external MCP tools. |
 
 ## First Path To Try
 
@@ -87,7 +87,8 @@ Inside Clanky:
 
 Use `--home` and `--profile` whenever you want isolation. Profiles are the
 boundary for sessions, memory, skills, auth, voice settings, subagents, and
-Linear state. Running two live Clankies on the same profile is unsupported.
+work-tracker state. Running two live Clankies on the same profile is
+unsupported.
 
 ## Docs Map
 
@@ -146,9 +147,10 @@ Source: `README.md` - https://volpestyle.github.io/clanky/?doc=overview
 ![Clanky](/branding/clanky-logo-512.png)
 
 Clanky is a standalone personal Pi agent. It owns its persona, profile-local
-state, memory, Linear stores, and bundled skills. It does not run its own
-daemon, scheduler, HTTP server, WebSocket server, or multi-agent room
-system.
+state, memory, native work-tracker refs, and bundled skills. It does not run
+its own daemon, scheduler, HTTP server, WebSocket server, or multi-agent room
+system. Linear is the built-in tracker provider today, but the core work
+tracking model is provider-neutral.
 
 New to Clanky? Start with [docs/start-here.md](docs/start-here.md), then read
 [docs/pi-foundation.md](docs/pi-foundation.md). The upstream Pi harness docs
@@ -430,8 +432,8 @@ host does not already have it.
 ## Layout
 
 - `agents/clanky` is the runnable `@clanky/agent` package and `clanky` bin.
-- `packages/clanky-core` contains Clanky memory, Linear stores, profile paths,
-  state storage, skills loading, and model-facing tools.
+- `packages/clanky-core` contains Clanky memory, work-tracker stores, profile
+  paths, state storage, skills loading, and model-facing tools.
 - `skills/` contains bundled Clanky skills.
 - `agents/clanky/persona/SELF.md` is the static persona injected into Pi's
   system prompt.
@@ -556,7 +558,7 @@ Clanky configures Pi for a personal agent:
 - Persona markdown from `agents/clanky/persona/SELF.md`.
 - Profile paths under `~/.clanky` by default.
 - Profile auth storage for OpenAI, Discord, xAI, and ElevenLabs credentials.
-- Clanky memory, profile status, skills, Linear links, and subagent stores.
+- Clanky memory, profile status, skills, work-tracker refs, and subagent stores.
 - Bundled Clanky skills plus profile-local Clanky skills.
 - Discord text gateway ownership, Discord subagents, and Discord operator tools.
 - Discord voice settings, voice bridge, voice logs, and realtime voice-agent
@@ -609,7 +611,7 @@ uses its own home and profile layout instead:
       skills/
       memory/
       SELF.md
-      linear/
+      work-trackers/
       subagents/
       index.db
       cron/
@@ -654,8 +656,8 @@ personal-agent capabilities:
   `discord_voice_leave`.
 - Coordination: `main_session_context`, `delegate_to_main_worker`,
   `subagent_status`.
-- Linear and MCP: `linear_create_issue`, `linear_link`, `mcp_list_tools`,
-  `mcp_call`.
+- Work trackers and MCP: `work_tracker_create_issue`, `work_tracker_link`,
+  `mcp_list_tools`, `mcp_call`.
 
 The user usually does not call model-facing tools directly. They become
 available to the model when Clanky decides they match the request and the
@@ -758,6 +760,17 @@ Clanky uses profile-local durable stores rather than a single room YAML file.
 The TUI setup commands write the active profile, while env vars remain
 launch-time overrides. See [Configuration Model](configuration.md) for the
 source-of-truth rules and the AgentRoom boundary.
+
+If you are starting from AgentRoom, you can configure the shared non-secret
+defaults once:
+
+```bash
+agent-room init --room my-project --runtime herdr --clanky --work-tracker linear --linear-team team_123
+pnpm clanky --cwd /path/to/my-project
+```
+
+With no explicit Clanky home/profile overrides, Clanky adopts the `clanky` and
+`workTracker` blocks from `.agentroom/config.yaml`.
 
 ## Model Auth
 
@@ -944,9 +957,9 @@ The active profile owns durable personal Clanky configuration and state:
   edited by `/discord-voice`.
 - `<profileDir>/models.json` stores custom model registry entries used by Pi's
   model selector.
-- `<profileDir>/SELF.md`, `memory/`, `sessions/`, `subagents/`, `linear/`, and
-  `cron/` store profile-local memory, session, multitasking, work, and scheduled
-  job state.
+- `<profileDir>/SELF.md`, `memory/`, `sessions/`, `subagents/`,
+  `work-trackers/`, and `cron/` store profile-local memory, session,
+  multitasking, work, and scheduled job state.
 
 The TUI setup and status commands edit or report these stores:
 
@@ -994,6 +1007,30 @@ Clanky profile config and AgentRoom room config are separate:
 When Clanky is launched in AgentRoom, `AGENTROOM=1` means room participation
 only. It does not move Clanky's profile credentials into AgentRoom and it does
 not make Clanky read a room-owned connector token.
+
+There is one portable non-secret overlap: when Clanky starts inside a project
+with `.agentroom/config.yaml`, it reads these optional blocks as defaults:
+
+```yaml
+workTracker:
+  default: linear
+  providers:
+    linear:
+      type: linear
+      tokenEnv: LINEAR_API_KEY
+      commandEnv: AGENTROOM_LINEAR_COMMAND
+      teamId: team_123
+
+clanky:
+  home: .clanky-room
+  profile: lead
+  chatGatewayOwner: room
+```
+
+Precedence remains explicit: `--home` / `--profile` and `CLANKY_HOME` /
+`CLANKY_PROFILE` win over the portable Clanky defaults. The AgentRoom block can
+set default work tracker selection and Linear team id, but it only names secret
+environment variables; it does not store API keys.
 
 ## Rule For New Settings
 
@@ -1304,7 +1341,7 @@ agent-owned gateway and a room-owned gateway at the same channel or DM.
 
 ## Ownership
 
-- Clanky owns persona, memory, profile state, Linear stores, skills, and Pi
+- Clanky owns persona, memory, profile state, work-tracker stores, skills, and Pi
   `InteractiveMode` wiring.
 - AgentRoom owns rooms, runtime providers, task/event audit, send/read
   coordination, and room-owned chat gateway lifecycle.
@@ -1341,9 +1378,20 @@ change.
 
 Multiple Clanky instances in the same workspace **must** use separate
 `--profile <name>` flags, and typically `--home ./.clanky-room` for
-room-scoped state, so memory, sessions, and Linear links do not collide.
+room-scoped state, so memory, sessions, and work-tracker refs do not collide.
 Profiles are the only isolation boundary; sharing a profile across two live
 Clankies is unsupported.
+
+AgentRoom can write the shared non-secret defaults directly into
+`.agentroom/config.yaml`:
+
+```bash
+agent-room init --room my-project --runtime herdr --clanky --work-tracker linear --linear-team team_123
+```
+
+Clanky treats that as a launch default only. Explicit `--home`, `--profile`,
+`CLANKY_HOME`, and `CLANKY_PROFILE` still win, and API keys remain in env vars
+or Clanky's profile auth store.
 
 ## Launch Contract
 
@@ -1391,8 +1439,7 @@ Agent-owned Discord env:
 
 - `CLANKY_DISCORD_TOKEN`
 - `CLANKY_DISCORD_CREDENTIAL_KIND=bot-token|user-token` (default `bot-token`)
-- `CLANKY_DISCORD_CONVERSATION_ID` or legacy alias
-  `CLANKY_DISCORD_CHANNEL_ID`
+- `CLANKY_DISCORD_CONVERSATION_ID`
 - `CLANKY_DISCORD_PROVIDER_ID` (default `clanky-discord`)
 - `CLANKY_DISCORD_ENGAGEMENT_WINDOW_MINUTES` (default `5`; `0` disables)
 - `CLANKY_DISCORD_WAKE_NAMES` (comma-separated, default `clanky,clank`)
@@ -1587,9 +1634,10 @@ Required only for live Linear issue creation or link updates from Clanky tools.
 LINEAR_API_KEY=... pnpm clanky --home ~/.clanky --profile personal
 ```
 
-Expected result: Linear-backed tool calls can create or link issues. If Linear
-credentials are unavailable, Clanky should report the skipped tracker update
-explicitly rather than pretending it happened.
+Expected result: `work_tracker_create_issue` can create Linear issues when
+Linear is the selected provider, and `work_tracker_link` can persist tracker
+refs. If tracker credentials are unavailable, Clanky should report the skipped
+tracker update explicitly rather than pretending it happened.
 
 ## xAI Media
 
@@ -2151,7 +2199,7 @@ are available and credentials/policy allow it:
   `discord_voice_leave`.
 - Coordination: `main_session_context`, `delegate_to_main_worker`,
   `subagent_status`.
-- Linear: `linear_create_issue`, `linear_link`.
+- Work tracking: `work_tracker_create_issue`, `work_tracker_link`.
 - MCP: `mcp_list_tools`, `mcp_call`.
 
 `task_create` and `schedule_cron` exist in the shared tool layer, but are only
@@ -2187,7 +2235,7 @@ Important profile files:
 | `profiles/<profile>/SELF.md` | Profile-local self memory. |
 | `profiles/<profile>/skills/` | Profile-local Clanky skills. |
 | `profiles/<profile>/subagents/` | Discord and voice subagent state and sessions. |
-| `profiles/<profile>/linear/` | Linear links and outbox state. |
+| `profiles/<profile>/work-trackers/` | Provider-neutral tracker refs and outbox state. |
 | `profiles/<profile>/discord-voice.json` | Stored voice settings. |
 | `profiles/<profile>/discord-bridge.log` | Discord bridge log. |
 | `profiles/<profile>/discord-voice.log` | Discord voice log. |
