@@ -159,10 +159,15 @@ Useful shortcuts:
 /voice-logs
 ```
 
-Voice requires a Discord credential and an OpenAI credential. ElevenLabs is
-optional:
+Voice requires a Discord credential and an OpenAI credential for speaker
+transcription. The realtime reasoning/tool agent defaults to OpenAI Realtime,
+but can be switched to xAI Grok Voice when an xAI credential is available.
+ElevenLabs is optional speech output:
 
 ```text
+/xai-login
+/discord-voice set realtime-provider xai
+/discord-voice set xai-model grok-voice-latest
 /elevenlabs-login
 /discord-voice set tts-provider elevenlabs
 /discord-voice set elevenlabs-voice <voice-id>
@@ -176,7 +181,7 @@ pnpm voice:build
 ```
 
 For live credentialed checks, use
-[Discord Voice Live Runbook](discord-voice-live-runbook.md).
+[Discord Voice Live Runbook](qa/discord-voice-live-runbook.md).
 
 ## Web, Browser, And Media
 

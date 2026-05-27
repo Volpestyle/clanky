@@ -3,7 +3,9 @@
 This is the end-to-end map for Clanky's agent-owned Discord voice path. The
 important distinction is that Discord voice is not one Pi chat turn. It is a
 TypeScript control plane, a Rust Discord media plane, and Pi delegation behind a
-live OpenAI Realtime session.
+live realtime voice agent session. The realtime agent provider can be OpenAI
+Realtime or xAI Grok Voice. The speech output provider is only the audio
+renderer; it is not the same setting as the realtime reasoning/tool agent.
 
 ```mermaid
 flowchart TB
@@ -12,7 +14,7 @@ flowchart TB
     speaker["Discord speaker"] --> rtp["Discord RTP"]
     rtp --> vox["clankvox media plane"]
     vox --> bridge["TypeScript voice bridge"]
-    bridge --> stt["per-speaker STT"]
+    bridge --> stt["OpenAI per-speaker STT"]
     stt --> realtime["main Realtime session"]
   end
 
@@ -35,16 +37,16 @@ flowchart TB
   toolChoice -->|status| statusTools
   toolChoice -->|media or stream| mediaTools
   toolChoice -->|no tool| speechChoice
-  toolReturn --> speechChoice{"speech provider"}
+  toolReturn --> speechChoice{"speech output provider"}
 
   subgraph outbound["Outbound speech"]
     direction LR
-    openaiAudio["OpenAI audio deltas"] --> playback["PCM to clankvox"]
+    realtimeAudio["realtime agent audio deltas"] --> playback["PCM to clankvox"]
     elevenText["text to ElevenLabs TTS"] --> playback
     playback --> outboundRtp["Opus RTP to Discord"]
   end
 
-  speechChoice -->|OpenAI| openaiAudio
+  speechChoice -->|Realtime agent audio| realtimeAudio
   speechChoice -->|ElevenLabs| elevenText
 ```
 
@@ -56,18 +58,22 @@ AgentRoom text connectors do not own this voice bridge; voice uses Clanky's
 agent-owned Discord credential.
 
 `agents/clanky/src/agentDiscordVoice.ts` is the TypeScript voice orchestrator.
-It resolves settings, starts the OpenAI Realtime clients, starts `clankvox`,
-dispatches tools, handles interruption policy, and records voice subagent
-context.
+It resolves settings, starts the selected realtime agent client, starts the
+OpenAI speaker transcription client, starts `clankvox`, dispatches tools,
+handles interruption policy, and records voice subagent context.
 
 `agents/clanky/src/voice/clankvox/` is the Rust media process. It owns Discord
 voice transport details: voice gateway connection, RTP/RTCP, DAVE encryption,
 Opus encode/decode, screen stream watch/publish, music/video playback, and PCM
 IPC to Node.
 
-Pi is downstream of Realtime. The voice model can call `ask_pi`, which either
-uses the voice worker subagent coordinator or serializes a prompt through the
-main Pi runtime.
+Pi is downstream of the realtime agent. The voice agent can call `ask_pi`,
+which either uses the voice worker subagent coordinator or serializes a prompt
+through the main Pi runtime.
+
+xAI Grok Voice supports the live audio/tool agent path but does not currently
+receive Discord screen-share image frames in this bridge. OpenAI Realtime
+remains the provider for screen-watch snapshot inspection.
 
 ## Startup
 
@@ -137,7 +143,7 @@ The voice supervisor is a real Clanky subagent: it uses the same runtime
 factory shape as the main agent, with the subagent effort default. Its context
 explicitly says that it is below the main foreground Clanky agent, that the
 main agent owns the user's primary window, AgentRoom/tmux authority, and final
-foreground coordination, and that the Realtime voice model owns live speech and
+foreground coordination, and that the realtime voice agent owns live speech and
 media.
 
 Only the voice supervisor gets the privileged `voice_delegate_to_subagent`
@@ -146,7 +152,7 @@ general workers get normal Clanky tools, skills, memory, `main_session_context`,
 `subagent_status`, and `delegate_to_main_worker`, but they do not receive the
 child-spawn tool. Ordinary Discord text subagents also do not receive it.
 
-The voice model does not mirror every tool that the main Pi agent can use.
+The realtime voice agent does not mirror every tool that the main Pi agent can use.
 That would duplicate authorization, tool schemas, and runtime policy in the
 low-latency Realtime session. Instead, voice has a small control surface:
 
@@ -204,7 +210,7 @@ counters prove separate parts of the bridge:
 
 - Discord join and input audio prove the gateway and `clankvox` capture path.
 - Realtime session acceptance proves model connectivity and configuration.
-- Output audio proves the selected speech provider and Discord playback path.
+- Output audio proves the selected speech output provider and Discord playback path.
 - Tool-call and `ask_pi` counters prove Realtime-to-Pi delegation.
 - Stream and media counters prove native Go Live or media playback behavior.
 

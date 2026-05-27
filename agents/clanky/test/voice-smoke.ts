@@ -3,7 +3,12 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { DiscordSubagentStore, resolveClankyPaths, saveStoredElevenLabsApiKey } from "@clanky/core";
+import {
+	DiscordSubagentStore,
+	resolveClankyPaths,
+	saveStoredElevenLabsApiKey,
+	saveStoredXAiApiKey,
+} from "@clanky/core";
 import {
 	type AgentSessionEvent,
 	AuthStorage,
@@ -12,6 +17,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
 	DEFAULT_REALTIME_MODEL,
+	DEFAULT_XAI_REALTIME_MODEL,
 	extractRealtimeFunctionCallEnvelopes,
 	resolveAgentDiscordVoiceConfig,
 	startAgentDiscordVoiceBridge,
@@ -51,6 +57,7 @@ import {
 	splitRealtimeInputAudioChunk,
 	stringifyRealtimeFunctionOutput,
 } from "../src/voice/openAiRealtimeClient.ts";
+import { __xaiRealtimeTestHooks, buildXAiRealtimeSessionUpdateEvent } from "../src/voice/xAiRealtimeClient.ts";
 import type { VoiceSupervisorDelegateHandle } from "../src/voiceSupervisorExtension.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -58,6 +65,7 @@ type JsonRecord = Record<string, unknown>;
 async function main(): Promise<void> {
 	assertVoiceConfig();
 	assertRealtimeSessionUpdateShape();
+	assertXAiRealtimeSessionUpdateShape();
 	assertRealtimeTranscriptionUrlShape();
 	assertRealtimeTranscriptionSessionUpdateShape();
 	assertRealtimeAudioAppendShape();
@@ -72,6 +80,7 @@ async function main(): Promise<void> {
 	assertVoiceLiveValidationResult();
 	await assertSpeakerTranscriptionCommitGuard();
 	await assertFakeVoiceBridgeRealtimeTools();
+	await assertFakeVoiceBridgeXAiRealtimeAgent();
 	await assertFakeVoiceBridgeElevenLabsTts();
 	await assertFakeVoiceBridgeBargeInPolicy();
 	await assertFakeVoiceBridgeSubagents();
@@ -107,6 +116,9 @@ function assertVoiceConfig(): void {
 	}
 	if (config.openAiRealtimeReasoningEffort !== "low") {
 		throw new Error("voice-smoke: default realtime reasoning effort should be low for gpt-realtime-2");
+	}
+	if (config.realtimeAgentProvider !== "openai") {
+		throw new Error("voice-smoke: default realtime agent provider should be OpenAI");
 	}
 	if (config.openAiRealtimeTranscriptionModel !== "gpt-realtime-whisper") {
 		throw new Error("voice-smoke: default realtime transcription model mismatch");
@@ -157,6 +169,64 @@ function assertVoiceConfig(): void {
 		elevenLabsConfig.elevenLabsModel !== "eleven_flash_v2_5"
 	) {
 		throw new Error(`voice-smoke: ElevenLabs voice config did not resolve ${JSON.stringify(elevenLabsConfig)}`);
+	}
+	const xAiConfig = resolveAgentDiscordVoiceConfig(
+		{
+			CLANKY_DISCORD_VOICE_ENABLED: "1",
+			CLANKY_DISCORD_TOKEN: "discord-token",
+			CLANKY_DISCORD_VOICE_GUILD_ID: "guild-1",
+			CLANKY_DISCORD_VOICE_CHANNEL_ID: "channel-1",
+			OPENAI_API_KEY: "openai-key",
+			XAI_API_KEY: "xai-key",
+			CLANKY_DISCORD_VOICE_REALTIME_AGENT_PROVIDER: "xai",
+			CLANKY_XAI_REALTIME_MODEL: "grok-voice-think-fast-1.0",
+			CLANKY_XAI_REALTIME_VOICE: "ara",
+		},
+		{
+			providerId: "clanky-discord",
+			token: "discord-token",
+			credentialKind: "bot-token",
+			source: "env",
+		},
+	);
+	if (
+		xAiConfig?.realtimeAgentProvider !== "xai" ||
+		xAiConfig.xAiApiKey !== "xai-key" ||
+		xAiConfig.xAiRealtimeModel !== "grok-voice-think-fast-1.0" ||
+		xAiConfig.xAiRealtimeVoice !== "ara" ||
+		xAiConfig.openAiRealtimeReasoningEffort !== undefined
+	) {
+		throw new Error(`voice-smoke: xAI realtime agent config did not resolve ${JSON.stringify(xAiConfig)}`);
+	}
+	const xAiAuthStorage = AuthStorage.inMemory();
+	saveStoredXAiApiKey(xAiAuthStorage, "stored-xai-key");
+	const storedXAiConfig = resolveAgentDiscordVoiceConfig(
+		{
+			CLANKY_DISCORD_VOICE_ENABLED: "1",
+			CLANKY_DISCORD_TOKEN: "discord-token",
+			OPENAI_API_KEY: "openai-key",
+		},
+		{
+			providerId: "clanky-discord",
+			token: "discord-token",
+			credentialKind: "bot-token",
+			source: "env",
+		},
+		xAiAuthStorage,
+		{
+			enabled: true,
+			realtimeAgentProvider: "xai",
+			xAiRealtimeModel: "stored-grok-voice",
+			xAiRealtimeVoice: "rex",
+		},
+	);
+	if (
+		storedXAiConfig?.realtimeAgentProvider !== "xai" ||
+		storedXAiConfig.xAiApiKey !== "stored-xai-key" ||
+		storedXAiConfig.xAiRealtimeModel !== "stored-grok-voice" ||
+		storedXAiConfig.xAiRealtimeVoice !== "rex"
+	) {
+		throw new Error(`voice-smoke: stored xAI realtime agent config did not resolve ${JSON.stringify(storedXAiConfig)}`);
 	}
 	const transcriptionOverride = resolveAgentDiscordVoiceConfig(
 		{
@@ -371,6 +441,56 @@ function assertRealtimeSessionUpdateShape(): void {
 	const textAudio = expectRecord(textSession.audio, "text session audio");
 	if ("output" in textAudio)
 		throw new Error("voice-smoke: realtime text session should not configure audio output voice");
+}
+
+function assertXAiRealtimeSessionUpdateShape(): void {
+	const tool = {
+		type: "function" as const,
+		name: "ask_pi",
+		description: "Delegate to Pi.",
+		parameters: { type: "object", properties: {}, additionalProperties: false },
+	};
+	const event = buildXAiRealtimeSessionUpdateEvent({
+		model: DEFAULT_XAI_REALTIME_MODEL,
+		voice: "eve",
+		instructions: "Talk briefly.",
+		tools: [tool],
+		toolChoice: "auto",
+		reasoningEffort: "low",
+	});
+	const session = expectRecord(event.session, "xAI session");
+	if (event.type !== "session.update") throw new Error("voice-smoke: expected xAI session.update");
+	if ("model" in session) throw new Error("voice-smoke: xAI realtime model should live in the WebSocket URL");
+	if (session.voice !== "eve") throw new Error("voice-smoke: xAI realtime voice missing");
+	if (session.turn_detection !== null) throw new Error("voice-smoke: xAI realtime turn detection should be manual");
+	if ("reasoning" in session) throw new Error("voice-smoke: xAI session should not include OpenAI reasoning settings");
+	const audio = expectRecord(session.audio, "xAI session audio");
+	const audioInput = expectRecord(audio.input, "xAI session audio input");
+	const audioOutput = expectRecord(audio.output, "xAI session audio output");
+	const inputFormat = expectRecord(audioInput.format, "xAI input format");
+	const outputFormat = expectRecord(audioOutput.format, "xAI output format");
+	if (inputFormat.type !== "audio/pcm" || inputFormat.rate !== 24_000) {
+		throw new Error("voice-smoke: xAI realtime input audio format missing");
+	}
+	if (outputFormat.type !== "audio/pcm" || outputFormat.rate !== 24_000) {
+		throw new Error("voice-smoke: xAI realtime output audio format missing");
+	}
+	const url = __xaiRealtimeTestHooks.buildXAiRealtimeUrl("https://api.x.ai/v1", DEFAULT_XAI_REALTIME_MODEL);
+	if (url !== `wss://api.x.ai/v1/realtime?model=${DEFAULT_XAI_REALTIME_MODEL}`) {
+		throw new Error(`voice-smoke: xAI realtime URL mismatch: ${url}`);
+	}
+	if (__xaiRealtimeTestHooks.normalizeXAiTranscriptEventType("response.text.delta") !== "response.output_text.delta") {
+		throw new Error("voice-smoke: xAI text delta event should normalize to OpenAI GA text delta");
+	}
+	const textEvent = buildXAiRealtimeSessionUpdateEvent({
+		model: DEFAULT_XAI_REALTIME_MODEL,
+		voice: "eve",
+		instructions: "Talk briefly.",
+		responseOutputModality: "text",
+	});
+	const textSession = expectRecord(textEvent.session, "xAI text session");
+	const textAudio = expectRecord(textSession.audio, "xAI text session audio");
+	if ("output" in textAudio) throw new Error("voice-smoke: xAI text session should not configure audio output");
 }
 
 function assertRealtimeTranscriptionUrlShape(): void {
@@ -1425,6 +1545,70 @@ async function assertFakeVoiceBridgeRealtimeTools(): Promise<void> {
 	if (vox.streamWatchDisconnects[0] !== "tool_stop_screen_watch" || vox.streamWatchDisconnects.length !== 1) {
 		throw new Error("voice-smoke: stop_screen_watch did not disconnect stream_watch exactly once");
 	}
+}
+
+async function assertFakeVoiceBridgeXAiRealtimeAgent(): Promise<void> {
+	const realtime = new FakeBridgeRealtime();
+	const speakerTranscription = new FakeSpeakerTranscriptionRealtime("speaker transcript");
+	const vox = new FakeBridgeClankvox();
+	const handle = await startAgentDiscordVoiceBridge({
+		runtime: new FakeVoiceRuntime() as never,
+		client: new FakeVoiceDiscordClient() as never,
+		discordConfig: {
+			providerId: "clanky-discord",
+			token: "discord-token",
+			credentialKind: "bot-token",
+			source: "env",
+		},
+		config: {
+			enabled: true,
+			guildId: "guild-1",
+			channelId: "voice-1",
+			realtimeAgentProvider: "xai",
+			openAiApiKey: "openai-key",
+			openAiRealtimeModel: DEFAULT_REALTIME_MODEL,
+			openAiRealtimeVoice: "marin",
+			xAiApiKey: "xai-key",
+			xAiRealtimeModel: "grok-voice-think-fast-1.0",
+			xAiRealtimeVoice: "ara",
+			transcriptResponseBatchDelayMs: 0,
+		},
+		dependencies: {
+			createRealtime() {
+				throw new Error("voice-smoke: xAI realtime agent should not use OpenAI realtime factory");
+			},
+			createXAiRealtime() {
+				return realtime;
+			},
+			createTranscriptionRealtime() {
+				return speakerTranscription;
+			},
+			async spawnVox() {
+				return vox;
+			},
+		},
+	});
+	if (handle === undefined) throw new Error("voice-smoke: fake xAI voice bridge did not start");
+	if (realtime.connectOptions?.model !== "grok-voice-think-fast-1.0" || realtime.connectOptions.voice !== "ara") {
+		throw new Error(`voice-smoke: xAI realtime connect options mismatch ${JSON.stringify(realtime.connectOptions)}`);
+	}
+	const toolNames = new Set(realtime.connectOptions.tools?.map((tool) => tool.name) ?? []);
+	if (!toolNames.has("ask_pi") || !toolNames.has("list_screen_shares")) {
+		throw new Error("voice-smoke: xAI realtime agent should retain core voice tools");
+	}
+	if (toolNames.has("see_screenshare_snapshot") || toolNames.has("start_screen_watch")) {
+		throw new Error("voice-smoke: xAI realtime agent should not expose screen-share image tools");
+	}
+	const voiceStatus = expectRecord(handle.status(), "xAI voice status");
+	if (
+		voiceStatus.realtimeAgentProvider !== "xai" ||
+		voiceStatus.realtimeAgentModel !== "grok-voice-think-fast-1.0" ||
+		voiceStatus.realtimeAgentVoice !== "ara" ||
+		voiceStatus.speechOutputProvider !== "openai"
+	) {
+		throw new Error(`voice-smoke: xAI voice status mismatch ${JSON.stringify(voiceStatus)}`);
+	}
+	await handle.stop();
 }
 
 async function assertFakeVoiceBridgeElevenLabsTts(): Promise<void> {
@@ -2745,6 +2929,8 @@ class FakeBridgeRealtime extends EventEmitter {
 	closed = false;
 	connectOptions:
 		| {
+				model?: string;
+				voice?: string;
 				tools?: { name: string }[];
 				responseOutputModality?: string;
 		  }
@@ -2757,7 +2943,12 @@ class FakeBridgeRealtime extends EventEmitter {
 	responses = 0;
 	cancelResponses = 0;
 
-	async connect(options: { tools?: { name: string }[]; responseOutputModality?: string }): Promise<void> {
+	async connect(options: {
+		model?: string;
+		voice?: string;
+		tools?: { name: string }[];
+		responseOutputModality?: string;
+	}): Promise<void> {
 		this.connected = true;
 		this.connectOptions = options;
 	}

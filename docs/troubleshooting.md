@@ -106,7 +106,7 @@ pnpm voice:native:clean
 pnpm voice:native:test
 ```
 
-For live checks, use [Discord Voice Live Runbook](discord-voice-live-runbook.md).
+For live checks, use [Discord Voice Live Runbook](qa/discord-voice-live-runbook.md).
 
 ## Voice Speaks With The Wrong TTS Provider
 
@@ -121,6 +121,9 @@ Env vars override profile settings. Look for:
 
 - `CLANKY_DISCORD_VOICE_TTS_PROVIDER`
 - `CLANKY_VOICE_TTS_PROVIDER`
+- `CLANKY_DISCORD_VOICE_REALTIME_AGENT_PROVIDER`
+- `CLANKY_VOICE_REALTIME_AGENT_PROVIDER`
+- `XAI_API_KEY`
 - `CLANKY_ELEVENLABS_API_KEY`
 - `ELEVENLABS_API_KEY`
 - `CLANKY_ELEVENLABS_VOICE_ID`
@@ -128,6 +131,8 @@ Env vars override profile settings. Look for:
 Profile settings can be changed with:
 
 ```text
+/discord-voice set realtime-provider xai
+/discord-voice set xai-model grok-voice-latest
 /discord-voice set tts-provider elevenlabs
 /discord-voice set elevenlabs-voice <voice-id>
 ```
@@ -219,4 +224,3 @@ The GitHub Pages workflow builds only on docs-relevant path changes:
 
 The broader `pnpm check` command can fail on unrelated active code changes. Use
 `pnpm docs:build` to validate docs-only changes.
-

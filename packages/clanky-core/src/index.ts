@@ -254,6 +254,7 @@ export {
 	type ResolvedXAiApiKey,
 	removeStoredXAiCredential,
 	resolveXAiApiKey,
+	resolveXAiApiKeySync,
 	saveStoredXAiApiKey,
 	type XAiCredentialStatus,
 } from "./xai-credentials.ts";

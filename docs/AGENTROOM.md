@@ -167,13 +167,21 @@ Agent-owned Discord voice env:
 - `CLANKY_DISCORD_VOICE_CHANNEL_ID`
 - `OPENAI_API_KEY`, `CLANKY_OPENAI_API_KEY`, or stored `/openai-login`
 - `CLANKY_DISCORD_VOICE_TTS_PROVIDER` or `CLANKY_VOICE_TTS_PROVIDER`
-  (default `openai`; set to `elevenlabs` to use external ElevenLabs speech)
-- `CLANKY_OPENAI_REALTIME_MODEL` (default `gpt-realtime-2`)
-- `CLANKY_OPENAI_REALTIME_VOICE` (default `marin`; used by the default
-  OpenAI speech path)
+  selects only the speech output provider (default `openai`; set to
+  `elevenlabs` to use external ElevenLabs speech)
+- `CLANKY_DISCORD_VOICE_REALTIME_AGENT_PROVIDER` or
+  `CLANKY_VOICE_REALTIME_AGENT_PROVIDER` selects the realtime reasoning/tool
+  agent provider (`openai` or `xai`; default `openai`)
+- `CLANKY_OPENAI_REALTIME_MODEL` controls the OpenAI Realtime reasoning/tool
+  agent model (default `gpt-realtime-2`)
+- `CLANKY_OPENAI_REALTIME_VOICE` (default `marin`; used by the default OpenAI
+  speech output path)
 - `CLANKY_OPENAI_REALTIME_REASONING_EFFORT` (default `low` with
   `gpt-realtime-2`; supported values: `minimal`, `low`, `medium`, `high`,
   `xhigh`)
+- `XAI_API_KEY`, `CLANKY_XAI_REALTIME_MODEL` (default `grok-voice-latest`),
+  and `CLANKY_XAI_REALTIME_VOICE` (default `eve`) when using
+  `CLANKY_DISCORD_VOICE_REALTIME_AGENT_PROVIDER=xai`
 - `CLANKY_OPENAI_REALTIME_TRANSCRIPTION_MODEL` (default
   `gpt-realtime-whisper`)
 - `CLANKY_OPENAI_REALTIME_TRANSCRIPTION_DELAY` (default `low`; supported
@@ -191,8 +199,8 @@ Agent-owned Discord voice env:
 - `CLANKY_DISCORD_VOICE_SPEAKER_TRANSCRIPTION_IDLE_CLOSE_MS` (default `120000`)
   closes inactive per-speaker transcription sessions
 - `CLANKY_DISCORD_VOICE_TRANSCRIPT_RESPONSE_BATCH_DELAY_MS` (default `350`)
-  batches near-simultaneous speaker transcripts before asking the voice model to
-  respond
+  batches near-simultaneous speaker transcripts before asking the realtime voice
+  agent to respond
 - `CLANKY_DISCORD_VOICE_VIDEO_FRAME_INTERVAL_MS` (default `2000`) throttles
   automatic Realtime attachment of decoded screen-share frames; snapshot
   requests still attach the latest decoded frame immediately.
@@ -203,17 +211,22 @@ Voice reuses the agent-owned Discord client and token when text chat is
 agent-owned. If room-owned text chat suppresses the text bridge, voice can still
 log in with the same Discord credential using a voice-only client. Native
 Discord Go Live screen watching depends on user-token/selfbot gateway behavior;
-room-owned Discord connectors remain text/chat owner only. The Realtime voice
+room-owned Discord connectors remain text/chat owner only. The realtime voice
 bridge transcribes each active Discord speaker through a separate streaming
-transcription session, then sends labeled transcript turns into the main voice
-response session. The tool surface includes `ask_pi`, `list_screen_shares`,
-`start_screen_watch`, `stop_screen_watch`, and `see_screenshare_snapshot`.
-OpenAI Realtime is the default speech path; when ElevenLabs speech is selected,
-Realtime returns text and Clanky streams that text through ElevenLabs before
-playing the PCM audio through `clankvox`. The `/discord-voice` advanced
-settings can store the speech provider, ElevenLabs voice id, model, output
-format, and base URL in the active profile. `/elevenlabs-login` stores the API
-key in the profile auth store. Env vars still override profile settings.
+transcription session, then sends labeled transcript turns into the main
+realtime voice agent session. The tool surface includes `ask_pi`,
+`list_screen_shares`, `start_screen_watch`, `stop_screen_watch`, and
+`see_screenshare_snapshot`.
+The default `openai` speech output path means the selected realtime agent
+returns audio directly. When ElevenLabs speech is selected, the selected
+realtime agent returns text and Clanky streams that text through ElevenLabs
+before playing the PCM audio through `clankvox`. The speech output provider is
+separate from the realtime reasoning/tool agent provider; xAI Grok Voice is
+selected with `realtime-provider xai`, not with `tts-provider`. The
+`/discord-voice` advanced settings can store the realtime agent provider, xAI
+model/voice, speech output provider, ElevenLabs voice id, model, output format,
+and base URL in the active profile. `/xai-login` and `/elevenlabs-login` store
+API keys in the profile auth store. Env vars still override profile settings.
 
 The bundled native helper can be validated or prebuilt with `pnpm
 voice:native:test` and `pnpm voice:build`. If no release binary exists, the
@@ -231,7 +244,7 @@ group audio overlap, output audio, tool calls, Pi delegation, stream watch, and
 screen frames all occurred. The individual `CLANKY_DISCORD_VOICE_REQUIRE_*`
 flags can be used for narrower checks. The harness prints a checklist for the
 enabled requirements after joining voice. Set `CLANKY_DISCORD_VOICE_SCRIPTED_PROMPT` to inject an
-initial text prompt into the Realtime voice session after join; this can trigger
+initial text prompt into the realtime voice agent session after join; this can trigger
 spoken output or an `ask_pi` tool call without manual voice setup. Set
 `CLANKY_DISCORD_VOICE_STOP_WHEN_VALID=1` to stop the live run as soon as all
 enabled positive validation counters pass; error-only validation still runs for

@@ -6,6 +6,7 @@ import {
 	type DiscordSubagentStore,
 	resolveElevenLabsApiKeySync,
 	resolveOpenAiApiKeySync,
+	resolveXAiApiKeySync,
 } from "@clanky/core";
 import type {
 	AgentSessionEvent,
@@ -15,7 +16,11 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { type ClankyAgentDiscordGatewayConfig, resolveAgentDiscordCredentialConfig } from "./agentDiscordGateway.ts";
 import type { ClankyThinkingLevel } from "./clankyDefaults.ts";
-import type { DiscordVoiceTtsProvider, StoredDiscordVoiceSettings } from "./discordVoiceSettings.ts";
+import type {
+	DiscordVoiceRealtimeAgentProvider,
+	DiscordVoiceTtsProvider,
+	StoredDiscordVoiceSettings,
+} from "./discordVoiceSettings.ts";
 import { DiscordVoiceSubagentCoordinator } from "./discordVoiceSubagentCoordinator.ts";
 import { DEFAULT_DISCORD_WAKE_NAMES, dedupeWakeNames, parseDiscordWakeNamesFromEnv } from "./discordWakeNames.ts";
 import { type RuntimeTurnQueue, SerialRuntimeTurnQueue } from "./runtimeTurnQueue.ts";
@@ -58,6 +63,7 @@ import {
 	type OpenAiRealtimeTranscriptionConnectOptions,
 	type OpenAiRealtimeTranscriptionDelay,
 } from "./voice/openAiRealtimeClient.ts";
+import { XAiRealtimeClient } from "./voice/xAiRealtimeClient.ts";
 import type { VoiceSupervisorDelegateHandle } from "./voiceSupervisorExtension.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -71,12 +77,17 @@ export interface ClankyAgentDiscordVoiceConfig {
 	allowedGuildIds?: string[];
 	allowedChannelIds?: string[];
 	wakeNames?: string[];
+	realtimeAgentProvider?: DiscordVoiceRealtimeAgentProvider;
 	ttsProvider?: DiscordVoiceTtsProvider;
 	openAiApiKey: string;
 	openAiBaseUrl?: string;
 	openAiRealtimeModel: string;
 	openAiRealtimeVoice: string;
 	openAiRealtimeReasoningEffort?: OpenAiRealtimeReasoningEffort;
+	xAiApiKey?: string;
+	xAiBaseUrl?: string;
+	xAiRealtimeModel?: string;
+	xAiRealtimeVoice?: string;
 	elevenLabsApiKey?: string;
 	elevenLabsBaseUrl?: string;
 	elevenLabsVoiceId?: string;
@@ -204,6 +215,7 @@ interface VoiceBridgeStats {
 
 export interface ClankyAgentDiscordVoiceDependencies {
 	createRealtime?(options: OpenAiRealtimeClientOptions): VoiceRealtimeClientLike;
+	createXAiRealtime?(options: OpenAiRealtimeClientOptions): VoiceRealtimeClientLike;
 	createTranscriptionRealtime?(options: OpenAiRealtimeClientOptions): DiscordVoiceSpeakerTranscriptionRealtime;
 	spawnVox?(
 		guildId: string,
@@ -219,6 +231,7 @@ export interface ClankyAgentDiscordVoiceDependencies {
 }
 
 interface VoiceRealtimeClientLike extends ClankvoxRealtimeBridgeRealtime {
+	readonly supportsInputVideoFrames?: boolean;
 	connect(options: OpenAiRealtimeConnectOptions): Promise<void>;
 	close(): Promise<void>;
 	requestTextUtterance(text: string): void;
@@ -326,6 +339,7 @@ interface SpeakerTranscriptLine {
 
 interface ResolvedVoiceDependencies {
 	createRealtime(options: OpenAiRealtimeClientOptions): VoiceRealtimeClientLike;
+	createXAiRealtime(options: OpenAiRealtimeClientOptions): VoiceRealtimeClientLike;
 	createTranscriptionRealtime(options: OpenAiRealtimeClientOptions): DiscordVoiceSpeakerTranscriptionRealtime;
 	spawnVox(
 		guildId: string,
@@ -343,6 +357,8 @@ interface ResolvedVoiceDependencies {
 export const DEFAULT_REALTIME_MODEL = "gpt-realtime-2";
 const DEFAULT_REALTIME_VOICE = "marin";
 const DEFAULT_REALTIME_REASONING_EFFORT: OpenAiRealtimeReasoningEffort = "low";
+export const DEFAULT_XAI_REALTIME_MODEL = "grok-voice-latest";
+const DEFAULT_XAI_REALTIME_VOICE = "eve";
 const DEFAULT_REALTIME_TRANSCRIPTION_MODEL = "gpt-realtime-whisper";
 const DEFAULT_REALTIME_TRANSCRIPTION_DELAY: OpenAiRealtimeTranscriptionDelay = "low";
 const DEFAULT_VIDEO_FRAME_AUTO_ATTACH_INTERVAL_MS = 2_000;
@@ -425,6 +441,7 @@ function resolveVoiceDependencies(
 ): ResolvedVoiceDependencies {
 	return {
 		createRealtime: dependencies?.createRealtime ?? ((options) => new OpenAiRealtimeClient(options)),
+		createXAiRealtime: dependencies?.createXAiRealtime ?? ((options) => new XAiRealtimeClient(options)),
 		createTranscriptionRealtime:
 			dependencies?.createTranscriptionRealtime ?? ((options) => new OpenAiRealtimeTranscriptionClient(options)),
 		spawnVox:
@@ -479,18 +496,36 @@ export function resolveAgentDiscordVoiceConfig(
 		parseDiscordVoiceTtsProvider(env.CLANKY_DISCORD_VOICE_TTS_PROVIDER ?? env.CLANKY_VOICE_TTS_PROVIDER) ??
 		storedSettings?.ttsProvider ??
 		"openai";
+	const realtimeAgentProvider =
+		parseDiscordVoiceRealtimeAgentProvider(
+			env.CLANKY_DISCORD_VOICE_REALTIME_AGENT_PROVIDER ?? env.CLANKY_VOICE_REALTIME_AGENT_PROVIDER,
+		) ??
+		storedSettings?.realtimeAgentProvider ??
+		"openai";
 	const openAiApiKey = resolveOpenAiApiKeySync(env, authStorage);
 	if (openAiApiKey === undefined) {
 		throw new Error(
-			"OpenAI credentials are required when Discord voice is enabled. Run /openai-login or set OPENAI_API_KEY/CLANKY_OPENAI_API_KEY.",
+			"OpenAI credentials are required for Discord voice speaker transcription. Run /openai-login or set OPENAI_API_KEY/CLANKY_OPENAI_API_KEY.",
+		);
+	}
+	const xAiApiKey = realtimeAgentProvider === "xai" ? resolveXAiApiKeySync(env, authStorage) : undefined;
+	if (realtimeAgentProvider === "xai" && xAiApiKey === undefined) {
+		throw new Error(
+			"xAI credentials are required when Discord voice realtime agent provider is xai. Run /xai-login or set XAI_API_KEY.",
 		);
 	}
 	const model =
 		cleanOptionalString(env.CLANKY_OPENAI_REALTIME_MODEL) ??
 		storedSettings?.openAiRealtimeModel ??
 		DEFAULT_REALTIME_MODEL;
+	const xAiModel =
+		cleanOptionalString(env.CLANKY_XAI_REALTIME_MODEL) ??
+		cleanOptionalString(env.CLANKY_XAI_VOICE_MODEL) ??
+		storedSettings?.xAiRealtimeModel ??
+		DEFAULT_XAI_REALTIME_MODEL;
 	const voiceConfig: ClankyAgentDiscordVoiceConfig = {
 		enabled: true,
+		realtimeAgentProvider,
 		ttsProvider,
 		openAiApiKey: openAiApiKey.value,
 		openAiRealtimeModel: model,
@@ -498,6 +533,12 @@ export function resolveAgentDiscordVoiceConfig(
 			cleanOptionalString(env.CLANKY_OPENAI_REALTIME_VOICE) ??
 			storedSettings?.openAiRealtimeVoice ??
 			DEFAULT_REALTIME_VOICE,
+		xAiRealtimeModel: xAiModel,
+		xAiRealtimeVoice:
+			cleanOptionalString(env.CLANKY_XAI_REALTIME_VOICE) ??
+			cleanOptionalString(env.CLANKY_XAI_VOICE) ??
+			storedSettings?.xAiRealtimeVoice ??
+			DEFAULT_XAI_REALTIME_VOICE,
 		openAiRealtimeTranscriptionModel:
 			cleanOptionalString(env.CLANKY_OPENAI_REALTIME_TRANSCRIPTION_MODEL) ?? DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
 		openAiRealtimeTranscriptionDelay:
@@ -518,6 +559,9 @@ export function resolveAgentDiscordVoiceConfig(
 	}
 	if (wakeNames.length > 0) {
 		voiceConfig.wakeNames = wakeNames;
+	}
+	if (xAiApiKey !== undefined) {
+		voiceConfig.xAiApiKey = xAiApiKey.value;
 	}
 	if (ttsProvider === "elevenlabs") {
 		const elevenLabsApiKey = resolveElevenLabsApiKeySync(env, authStorage);
@@ -565,13 +609,15 @@ export function resolveAgentDiscordVoiceConfig(
 	const reasoningEffort =
 		parseRealtimeReasoningEffort(env.CLANKY_OPENAI_REALTIME_REASONING_EFFORT) ??
 		storedSettings?.openAiRealtimeReasoningEffort;
-	if (reasoningEffort !== undefined) {
+	if (realtimeAgentProvider === "openai" && reasoningEffort !== undefined) {
 		voiceConfig.openAiRealtimeReasoningEffort = reasoningEffort;
-	} else if (model === DEFAULT_REALTIME_MODEL) {
+	} else if (realtimeAgentProvider === "openai" && model === DEFAULT_REALTIME_MODEL) {
 		voiceConfig.openAiRealtimeReasoningEffort = DEFAULT_REALTIME_REASONING_EFFORT;
 	}
 	const baseUrl = env.CLANKY_OPENAI_BASE_URL?.trim() || env.OPENAI_BASE_URL?.trim();
 	if (baseUrl !== undefined && baseUrl.length > 0) voiceConfig.openAiBaseUrl = baseUrl;
+	const xAiBaseUrl = env.CLANKY_XAI_BASE_URL?.trim() || env.XAI_BASE_URL?.trim();
+	if (xAiBaseUrl !== undefined && xAiBaseUrl.length > 0) voiceConfig.xAiBaseUrl = xAiBaseUrl;
 	const clankvoxBin = env.CLANKY_CLANKVOX_BIN?.trim();
 	if (clankvoxBin !== undefined && clankvoxBin.length > 0) voiceConfig.clankvoxBin = clankvoxBin;
 	const clankvoxDir = env.CLANKY_CLANKVOX_DIR?.trim();
@@ -601,8 +647,8 @@ export async function startAgentDiscordVoiceBridge(
 					sessionDir: input.subagentSessionDir,
 					guildId: config.guildId,
 					channelId: config.channelId,
-					model: config.openAiRealtimeModel,
-					voice: config.openAiRealtimeVoice,
+					model: realtimeAgentModelForConfig(config),
+					voice: realtimeAgentVoiceForConfig(config),
 					...(config.openAiRealtimeReasoningEffort === undefined
 						? {}
 						: { reasoningEffort: config.openAiRealtimeReasoningEffort }),
@@ -678,9 +724,13 @@ class AgentDiscordVoiceDynamicHandle implements ClankyAgentDiscordVoiceHandle {
 			allowedGuildIds: this.config.allowedGuildIds ?? [],
 			allowedChannelIds: this.config.allowedChannelIds ?? [],
 			wakeNames: resolveVoiceBargeInWakeWords(this.config),
+			realtimeAgentProvider: this.config.realtimeAgentProvider ?? "openai",
+			realtimeAgentModel: realtimeAgentModelForConfig(this.config),
+			realtimeAgentVoice: realtimeAgentVoiceForConfig(this.config),
+			speechOutputProvider: this.config.ttsProvider ?? "openai",
 			ttsProvider: this.config.ttsProvider ?? "openai",
-			model: this.config.openAiRealtimeModel,
-			voice: this.config.openAiRealtimeVoice,
+			model: realtimeAgentModelForConfig(this.config),
+			voice: realtimeAgentVoiceForConfig(this.config),
 			elevenLabsVoiceId: this.config.elevenLabsVoiceId,
 			elevenLabsModel: this.config.elevenLabsModel,
 			elevenLabsOutputFormat: this.config.elevenLabsOutputFormat,
@@ -800,12 +850,16 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		try {
 			const guild = await this.resolveGuild(this.config.guildId);
 			this.guild = guild;
-			const realtimeOptions: ConstructorParameters<typeof OpenAiRealtimeClient>[0] = {
+			const openAiRealtimeOptions: OpenAiRealtimeClientOptions = {
 				apiKey: this.config.openAiApiKey,
 				logger: (level, event, details) => this.logVoice(level, event, details),
 			};
-			if (this.config.openAiBaseUrl !== undefined) realtimeOptions.baseUrl = this.config.openAiBaseUrl;
-			realtime = this.dependencies.createRealtime(realtimeOptions);
+			if (this.config.openAiBaseUrl !== undefined) openAiRealtimeOptions.baseUrl = this.config.openAiBaseUrl;
+			const realtimeOptions = this.realtimeAgentClientOptions(openAiRealtimeOptions);
+			realtime =
+				(this.config.realtimeAgentProvider ?? "openai") === "xai"
+					? this.dependencies.createXAiRealtime(realtimeOptions)
+					: this.dependencies.createRealtime(realtimeOptions);
 			const voxOptions: ClankvoxSpawnOptions = {
 				selfDeaf: false,
 				selfMute: false,
@@ -818,18 +872,25 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			this.realtime = realtime;
 			this.vox = vox;
 			this.speechSynthesizer = speechSynthesizer;
-			this.speakerTranscription = this.createSpeakerTranscription(vox, realtimeOptions);
+			this.speakerTranscription = this.createSpeakerTranscription(vox, openAiRealtimeOptions);
 			this.bindVox(vox);
 			this.bindRealtime(realtime);
 			const connectOptions: OpenAiRealtimeConnectOptions = {
-				model: this.config.openAiRealtimeModel,
-				voice: this.config.openAiRealtimeVoice,
-				instructions: buildRealtimeInstructions(this.discordConfig, this.config.ttsProvider ?? "openai"),
-				tools: buildVoiceTools(),
+				model: this.realtimeAgentModel(),
+				voice: this.realtimeAgentVoice(),
+				instructions: buildRealtimeInstructions(this.discordConfig, this.config.ttsProvider ?? "openai", {
+					supportsScreenShareSnapshots: (this.config.realtimeAgentProvider ?? "openai") === "openai",
+				}),
+				tools: buildVoiceTools({
+					supportsScreenShareSnapshots: (this.config.realtimeAgentProvider ?? "openai") === "openai",
+				}),
 				toolChoice: "auto",
 				responseOutputModality: (this.config.ttsProvider ?? "openai") === "elevenlabs" ? "text" : "audio",
 			};
-			if (this.config.openAiRealtimeReasoningEffort !== undefined) {
+			if (
+				(this.config.realtimeAgentProvider ?? "openai") === "openai" &&
+				this.config.openAiRealtimeReasoningEffort !== undefined
+			) {
 				connectOptions.reasoningEffort = this.config.openAiRealtimeReasoningEffort;
 			}
 			await realtime.connect(connectOptions);
@@ -894,6 +955,26 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		return this.subagents?.setThinkingLevel(level) ?? 0;
 	}
 
+	private realtimeAgentClientOptions(openAiRealtimeOptions: OpenAiRealtimeClientOptions): OpenAiRealtimeClientOptions {
+		if ((this.config.realtimeAgentProvider ?? "openai") !== "xai") return openAiRealtimeOptions;
+		const apiKey = this.config.xAiApiKey;
+		if (apiKey === undefined || apiKey.length === 0) throw new Error("XAI_API_KEY is required for xAI voice.");
+		const options: OpenAiRealtimeClientOptions = {
+			apiKey,
+			logger: (level, event, details) => this.logVoice(level, event, details),
+		};
+		if (this.config.xAiBaseUrl !== undefined) options.baseUrl = this.config.xAiBaseUrl;
+		return options;
+	}
+
+	private realtimeAgentModel(): string {
+		return realtimeAgentModelForConfig(this.config);
+	}
+
+	private realtimeAgentVoice(): string {
+		return realtimeAgentVoiceForConfig(this.config);
+	}
+
 	private logVoice(level: "info" | "warn" | "error", event: string, details?: JsonRecord): void {
 		this.logVoiceLine(`[${level}] ${event}${formatVoiceLogDetails(details)}`);
 	}
@@ -918,9 +999,13 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			allowedGuildIds: this.config.allowedGuildIds ?? [],
 			allowedChannelIds: this.config.allowedChannelIds ?? [],
 			wakeNames: this.voiceBargeInWakeWords(),
+			realtimeAgentProvider: this.config.realtimeAgentProvider ?? "openai",
+			realtimeAgentModel: this.realtimeAgentModel(),
+			realtimeAgentVoice: this.realtimeAgentVoice(),
+			speechOutputProvider: this.config.ttsProvider ?? "openai",
 			ttsProvider: this.config.ttsProvider ?? "openai",
-			model: this.config.openAiRealtimeModel,
-			voice: this.config.openAiRealtimeVoice,
+			model: this.realtimeAgentModel(),
+			voice: this.realtimeAgentVoice(),
 			elevenLabsVoiceId: this.config.elevenLabsVoiceId,
 			elevenLabsModel: this.config.elevenLabsModel,
 			elevenLabsOutputFormat: this.config.elevenLabsOutputFormat,
@@ -1022,8 +1107,9 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			scopeId,
 			voiceSubagentId: `discord-voice:${scopeId}`,
 			workerSubagentId: `voice-worker:${scopeId}`,
-			model: this.config.openAiRealtimeModel,
-			voice: this.config.openAiRealtimeVoice,
+			realtimeAgentProvider: this.config.realtimeAgentProvider ?? "openai",
+			model: this.realtimeAgentModel(),
+			voice: this.realtimeAgentVoice(),
 			realtimeConnected: this.realtime !== undefined,
 			voxAlive: this.vox?.isAlive === true,
 			supervisor: this.subagents?.status(),
@@ -1279,6 +1365,10 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 	}
 
 	private maybeAppendDecodedVideoFrame(frame: ClankvoxDecodedVideoFrame): void {
+		if (this.realtime?.supportsInputVideoFrames === false) {
+			this.stats.videoFrameAutoAttachSkipCount += 1;
+			return;
+		}
 		const now = Date.now();
 		const intervalMs = this.config.videoFrameAutoAttachIntervalMs ?? DEFAULT_VIDEO_FRAME_AUTO_ATTACH_INTERVAL_MS;
 		if (now - this.lastVideoFrameAttachedAt < intervalMs) {
@@ -1933,6 +2023,13 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		if (this.latestFrame === undefined) {
 			return { ok: false, error: "no screen-share frame has been decoded yet" };
 		}
+		if (this.realtime?.supportsInputVideoFrames === false) {
+			return {
+				ok: false,
+				error: "the selected realtime voice agent does not support Discord screen-share frame attachments",
+				realtimeAgentProvider: this.config.realtimeAgentProvider ?? "openai",
+			};
+		}
 		this.realtime?.appendInputVideoFrame({ mimeType: "image/jpeg", dataBase64: this.latestFrame.jpegBase64 });
 		this.stats.snapshotSuccessCount += 1;
 		this.stats.videoFrameAttachCount += 1;
@@ -2128,6 +2225,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 function buildRealtimeInstructions(
 	config: ClankyAgentDiscordGatewayConfig,
 	ttsProvider: DiscordVoiceTtsProvider = "openai",
+	options: { supportsScreenShareSnapshots?: boolean } = {},
 ): string {
 	const lines = [
 		"You are Clanky in a Discord group voice channel.",
@@ -2138,9 +2236,6 @@ function buildRealtimeInstructions(
 		"Use pi_subagents when users ask about workers, subagents, queue depth, active work, session files, or failures.",
 		"The voice session has a small control surface by design; do not mirror main Pi tools directly. Delegate work with ask_pi and inspect state with pi_status or pi_subagents.",
 		"Use list_screen_shares when you need to inspect active Discord Go Live streams before choosing one.",
-		"Use start_screen_watch when a user asks you to look at a Discord Go Live screen share.",
-		"Use stop_screen_watch when the active Discord Go Live screen watch is no longer needed or before changing context.",
-		"Use see_screenshare_snapshot when you need the current screen-share image.",
 		"Use Pi as the reasoning and skill layer: for music/video requests that are search-like, ambiguous, or not already a direct URL, call ask_pi first and ask it to resolve a playable URL.",
 		"Use play_music_url only when you already have an http(s) media URL. It plays audio into Discord voice.",
 		"Use play_video_url only when you already have an http(s) video URL. It starts Discord Go Live publish and, by default, plays the audio into voice too.",
@@ -2148,6 +2243,15 @@ function buildRealtimeInstructions(
 		"Use media_pause, media_resume, media_stop, and media_status for live voice media controls.",
 		`Discord credential kind: ${config.credentialKind}.`,
 	];
+	if (options.supportsScreenShareSnapshots ?? true) {
+		lines.push(
+			"Use start_screen_watch when a user asks you to look at a Discord Go Live screen share.",
+			"Use stop_screen_watch when the active Discord Go Live screen watch is no longer needed or before changing context.",
+			"Use see_screenshare_snapshot when you need the current screen-share image.",
+		);
+	} else {
+		lines.push("This realtime agent cannot inspect Discord screen-share image frames directly.");
+	}
 	if (ttsProvider === "elevenlabs") {
 		lines.push(
 			"Your text output is spoken by ElevenLabs external TTS; write directly speakable text and avoid markdown formatting or stage directions unless requested.",
@@ -2156,8 +2260,8 @@ function buildRealtimeInstructions(
 	return lines.join("\n");
 }
 
-function buildVoiceTools(): OpenAiRealtimeTool[] {
-	return [
+function buildVoiceTools(options: { supportsScreenShareSnapshots?: boolean } = {}): OpenAiRealtimeTool[] {
+	const tools: OpenAiRealtimeTool[] = [
 		{
 			type: "function",
 			name: "ask_pi",
@@ -2215,38 +2319,6 @@ function buildVoiceTools(): OpenAiRealtimeTool[] {
 			type: "function",
 			name: "list_screen_shares",
 			description: "List active Discord Go Live screen shares discovered in this voice channel.",
-			parameters: {
-				type: "object",
-				properties: {},
-				additionalProperties: false,
-			},
-		},
-		{
-			type: "function",
-			name: "start_screen_watch",
-			description: "Start watching the most relevant active Discord Go Live screen share.",
-			parameters: {
-				type: "object",
-				properties: {
-					target: { type: "string", description: "Optional user id, channel id, or stream key hint." },
-				},
-				additionalProperties: false,
-			},
-		},
-		{
-			type: "function",
-			name: "stop_screen_watch",
-			description: "Stop the active Discord Go Live screen watch and unsubscribe from its video frames.",
-			parameters: {
-				type: "object",
-				properties: {},
-				additionalProperties: false,
-			},
-		},
-		{
-			type: "function",
-			name: "see_screenshare_snapshot",
-			description: "Attach the latest decoded Discord screen-share frame to the realtime conversation.",
 			parameters: {
 				type: "object",
 				properties: {},
@@ -2344,6 +2416,45 @@ function buildVoiceTools(): OpenAiRealtimeTool[] {
 			parameters: { type: "object", properties: {}, additionalProperties: false },
 		},
 	];
+	if (options.supportsScreenShareSnapshots ?? true) {
+		tools.splice(
+			4,
+			0,
+			{
+				type: "function",
+				name: "start_screen_watch",
+				description: "Start watching the most relevant active Discord Go Live screen share.",
+				parameters: {
+					type: "object",
+					properties: {
+						target: { type: "string", description: "Optional user id, channel id, or stream key hint." },
+					},
+					additionalProperties: false,
+				},
+			},
+			{
+				type: "function",
+				name: "stop_screen_watch",
+				description: "Stop the active Discord Go Live screen watch and unsubscribe from its video frames.",
+				parameters: {
+					type: "object",
+					properties: {},
+					additionalProperties: false,
+				},
+			},
+			{
+				type: "function",
+				name: "see_screenshare_snapshot",
+				description: "Attach the latest decoded Discord screen-share frame to the realtime conversation.",
+				parameters: {
+					type: "object",
+					properties: {},
+					additionalProperties: false,
+				},
+			},
+		);
+	}
+	return tools;
 }
 
 interface RealtimeFunctionCallEnvelope {
@@ -2451,6 +2562,27 @@ function parseDiscordVoiceTtsProvider(value: string | undefined): DiscordVoiceTt
 	if (normalized === "openai" || normalized === "realtime") return "openai";
 	if (normalized === "elevenlabs" || normalized === "eleven_labs" || normalized === "11labs") return "elevenlabs";
 	return undefined;
+}
+
+function parseDiscordVoiceRealtimeAgentProvider(
+	value: string | undefined,
+): DiscordVoiceRealtimeAgentProvider | undefined {
+	const normalized = value?.trim().toLowerCase();
+	if (normalized === "openai") return "openai";
+	if (normalized === "xai" || normalized === "grok") return "xai";
+	return undefined;
+}
+
+function realtimeAgentModelForConfig(config: ClankyAgentDiscordVoiceConfig): string {
+	return (config.realtimeAgentProvider ?? "openai") === "xai"
+		? (config.xAiRealtimeModel ?? DEFAULT_XAI_REALTIME_MODEL)
+		: config.openAiRealtimeModel;
+}
+
+function realtimeAgentVoiceForConfig(config: ClankyAgentDiscordVoiceConfig): string {
+	return (config.realtimeAgentProvider ?? "openai") === "xai"
+		? (config.xAiRealtimeVoice ?? DEFAULT_XAI_REALTIME_VOICE)
+		: config.openAiRealtimeVoice;
 }
 
 function parseOptionalStringList(value: string | undefined): string[] | undefined {

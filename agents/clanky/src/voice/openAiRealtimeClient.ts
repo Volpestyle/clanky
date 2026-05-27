@@ -59,6 +59,7 @@ const TRANSCRIPT_EVENTS = new Set([
 ]);
 
 export class OpenAiRealtimeClient extends EventEmitter {
+	readonly supportsInputVideoFrames = true;
 	private readonly apiKey: string;
 	private readonly baseUrl: string;
 	private readonly safetyIdentifier: string | undefined;

@@ -27,8 +27,10 @@ import {
 	saveStoredDiscordCredential,
 } from "@clanky/core";
 import type { AuthStorage, ExtensionCommandContext, ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import { DEFAULT_XAI_REALTIME_MODEL } from "./agentDiscordVoice.ts";
 import type { ClankyDiscordGatewayController, DiscordVoiceStartProgress } from "./discordGatewayController.ts";
 import type {
+	DiscordVoiceRealtimeAgentProvider,
 	DiscordVoiceSettingsAccessor,
 	DiscordVoiceTtsProvider,
 	StoredDiscordVoiceSettings,
@@ -119,18 +121,61 @@ const DISCORD_VOICE_COMMAND_COMPLETIONS = [
 	{
 		value: "set model ",
 		label: "set model <openai-realtime-model>",
-		description: "Override the OpenAI Realtime model for Discord voice.",
+		description: "Override the OpenAI Realtime agent model for Discord voice.",
+	},
+	{
+		value: "set realtime-provider xai",
+		description: "Use xAI Grok Voice as the realtime reasoning/tool agent.",
+		aliases: ["set realtime-agent-provider xai"],
+	},
+	{
+		value: "set realtime-provider openai",
+		description: "Use OpenAI Realtime as the realtime reasoning/tool agent.",
+		aliases: ["set realtime-agent-provider openai"],
+	},
+	{
+		value: "set realtime-provider default",
+		description: "Clear the realtime agent provider override.",
+		aliases: [
+			"set realtime-provider clear",
+			"set realtime-agent-provider default",
+			"set realtime-agent-provider clear",
+		],
 	},
 	{
 		value: "set voice ",
 		label: "set voice <openai-realtime-voice>",
-		description: "Override the OpenAI Realtime audio voice.",
+		description: "Override the OpenAI Realtime output voice.",
+	},
+	{
+		value: "set xai-model grok-voice-latest",
+		description: "Use the default xAI Grok Voice realtime model.",
+	},
+	{
+		value: "set xai-model ",
+		label: "set xai-model <model-id>",
+		description: "Override the xAI Grok Voice realtime model.",
+	},
+	{
+		value: "set xai-model default",
+		description: "Clear the xAI Grok Voice realtime model override.",
+		aliases: ["set xai-model clear"],
+	},
+	{
+		value: "set xai-voice ",
+		label: "set xai-voice <voice-id>",
+		description: "Override the xAI Grok Voice output voice.",
+	},
+	{
+		value: "set xai-voice default",
+		description: "Clear the xAI Grok Voice output voice override.",
+		aliases: ["set xai-voice clear"],
 	},
 	{ value: "set tts-provider elevenlabs", description: "Use ElevenLabs speech for Discord voice output." },
-	{ value: "set tts-provider openai", description: "Use OpenAI Realtime audio for Discord voice output." },
+	{ value: "set tts-provider openai", description: "Use selected realtime agent audio for Discord voice output." },
 	{
 		value: "set tts-provider default",
-		description: "Clear the speech provider override.",
+		description: "Clear the speech output provider override.",
 		aliases: ["set tts-provider clear"],
 	},
 	{
@@ -178,14 +223,14 @@ const DISCORD_VOICE_COMMAND_COMPLETIONS = [
 		description: "Clear the ElevenLabs base URL override.",
 		aliases: ["set elevenlabs-base-url clear"],
 	},
-	{ value: "set reasoning minimal", description: "Set Realtime reasoning effort to minimal." },
-	{ value: "set reasoning low", description: "Set Realtime reasoning effort to low." },
-	{ value: "set reasoning medium", description: "Set Realtime reasoning effort to medium." },
-	{ value: "set reasoning high", description: "Set Realtime reasoning effort to high." },
-	{ value: "set reasoning xhigh", description: "Set Realtime reasoning effort to xhigh." },
+	{ value: "set reasoning minimal", description: "Set OpenAI Realtime agent reasoning effort to minimal." },
+	{ value: "set reasoning low", description: "Set OpenAI Realtime agent reasoning effort to low." },
+	{ value: "set reasoning medium", description: "Set OpenAI Realtime agent reasoning effort to medium." },
+	{ value: "set reasoning high", description: "Set OpenAI Realtime agent reasoning effort to high." },
+	{ value: "set reasoning xhigh", description: "Set OpenAI Realtime agent reasoning effort to xhigh." },
 	{
 		value: "set reasoning default",
-		description: "Clear the Realtime reasoning effort override.",
+		description: "Clear the OpenAI Realtime agent reasoning effort override.",
 		aliases: ["set reasoning clear"],
 	},
 	{
@@ -514,8 +559,22 @@ function formatDiscordBridgeStatus(status: unknown): string {
 		} else if (voice.mode === "dynamic") {
 			lines.push("Allowed voice channels: all channels the Discord credential can access.");
 		}
-		if (typeof voice.model === "string") lines.push(`Realtime model: ${voice.model}.`);
-		if (typeof voice.ttsProvider === "string") lines.push(`Speech provider: ${voice.ttsProvider}.`);
+		const realtimeAgentProvider = readStatusString(voice, "realtimeAgentProvider") ?? "openai";
+		const realtimeAgentModel = readStatusString(voice, "realtimeAgentModel") ?? readStatusString(voice, "model");
+		const speechOutputProvider =
+			readStatusString(voice, "speechOutputProvider") ?? readStatusString(voice, "ttsProvider") ?? "openai";
+		lines.push(`Realtime agent provider: ${formatRealtimeAgentProviderLabel(realtimeAgentProvider)}.`);
+		if (realtimeAgentModel !== undefined) lines.push(`Realtime agent model: ${realtimeAgentModel}.`);
+		if (typeof voice.reasoningEffort === "string") {
+			lines.push(`Realtime agent reasoning effort: ${voice.reasoningEffort}.`);
+		}
+		lines.push(
+			`Speech output provider: ${formatSpeechOutputProviderLabel(speechOutputProvider, realtimeAgentProvider)}.`,
+		);
+		const realtimeAgentVoice = readStatusString(voice, "realtimeAgentVoice") ?? readStatusString(voice, "voice");
+		if (speechOutputProvider !== "elevenlabs" && realtimeAgentVoice !== undefined) {
+			lines.push(`${formatRealtimeAgentProviderLabel(realtimeAgentProvider)} speech voice: ${realtimeAgentVoice}.`);
+		}
 		if (typeof voice.elevenLabsVoiceId === "string") lines.push(`ElevenLabs voice id: ${voice.elevenLabsVoiceId}.`);
 		if (typeof voice.elevenLabsModel === "string") lines.push(`ElevenLabs model: ${voice.elevenLabsModel}.`);
 		if (typeof voice.elevenLabsOutputFormat === "string")
@@ -594,7 +653,9 @@ function discordVoiceUsage(path: string | undefined): string {
 		"  /discord-voice allow-server <guild-id> [more-guild-ids...]",
 		"  /discord-voice allow-channel <voice-channel-id> [more-channel-ids...]",
 		"  /discord-voice allow <voice-channel-id> [more-channel-ids...]",
+		"  /discord-voice set realtime-provider xai",
 		"  /discord-voice set tts-provider elevenlabs",
+		"  /discord-voice set xai-model grok-voice-latest",
 		"  /discord-voice set elevenlabs-voice <voice-id>",
 		"  /discord-voice set elevenlabs-output-format pcm_24000",
 		"  /elevenlabs-login",
@@ -602,6 +663,9 @@ function discordVoiceUsage(path: string | undefined): string {
 	];
 	if (path !== undefined) lines.push("", `Profile settings file: ${path}`);
 	lines.push("", "Env vars still work and override profile voice settings when present.");
+	lines.push(
+		"`tts-provider` is only the speech output provider; the realtime reasoning/tool agent is configured separately.",
+	);
 	return lines.join("\n");
 }
 
@@ -627,9 +691,23 @@ function formatDiscordVoiceSettings(settings: StoredDiscordVoiceSettings | undef
 	} else {
 		lines.push("Allowed voice channels: all channels the Discord credential can access.");
 	}
-	if (settings.openAiRealtimeModel !== undefined) lines.push(`Stored Realtime model: ${settings.openAiRealtimeModel}.`);
-	if (settings.openAiRealtimeVoice !== undefined) lines.push(`Stored Realtime voice: ${settings.openAiRealtimeVoice}.`);
-	lines.push(`Speech provider: ${settings.ttsProvider ?? "openai"}.`);
+	const realtimeAgentProvider = settings.realtimeAgentProvider ?? "openai";
+	lines.push(`Realtime agent provider: ${formatRealtimeAgentProviderLabel(realtimeAgentProvider)}.`);
+	if (settings.openAiRealtimeModel !== undefined) {
+		lines.push(`Stored realtime agent model: ${settings.openAiRealtimeModel}.`);
+	}
+	if (settings.openAiRealtimeVoice !== undefined) {
+		lines.push(`Stored OpenAI speech voice: ${settings.openAiRealtimeVoice}.`);
+	}
+	if (settings.xAiRealtimeModel !== undefined) {
+		lines.push(`Stored xAI Grok Voice model: ${settings.xAiRealtimeModel}.`);
+	}
+	if (settings.xAiRealtimeVoice !== undefined) {
+		lines.push(`Stored xAI Grok Voice output voice: ${settings.xAiRealtimeVoice}.`);
+	}
+	lines.push(
+		`Speech output provider: ${formatSpeechOutputProviderLabel(settings.ttsProvider ?? "openai", realtimeAgentProvider)}.`,
+	);
 	if (settings.elevenLabsVoiceId !== undefined)
 		lines.push(`Stored ElevenLabs voice id: ${settings.elevenLabsVoiceId}.`);
 	if (settings.elevenLabsModel !== undefined) lines.push(`Stored ElevenLabs model: ${settings.elevenLabsModel}.`);
@@ -640,7 +718,7 @@ function formatDiscordVoiceSettings(settings: StoredDiscordVoiceSettings | undef
 		lines.push(`Stored ElevenLabs base URL: ${settings.elevenLabsBaseUrl}.`);
 	}
 	if (settings.openAiRealtimeReasoningEffort !== undefined) {
-		lines.push(`Stored Realtime reasoning effort: ${settings.openAiRealtimeReasoningEffort}.`);
+		lines.push(`Stored realtime agent reasoning effort: ${settings.openAiRealtimeReasoningEffort}.`);
 	}
 	if (settings.videoFrameAutoAttachIntervalMs !== undefined) {
 		lines.push(`Stored video frame auto-attach interval: ${settings.videoFrameAutoAttachIntervalMs} ms.`);
@@ -660,12 +738,26 @@ function formatDiscordVoiceEnvOverrides(): string[] {
 	if (allowedGuildIds !== undefined) lines.push(`Env allowed server override: ${allowedGuildIds}.`);
 	const allowedChannelIds = cleanArg(process.env.CLANKY_DISCORD_VOICE_ALLOWED_CHANNEL_IDS);
 	if (allowedChannelIds !== undefined) lines.push(`Env allowed voice channel override: ${allowedChannelIds}.`);
+	const realtimeAgentProvider = cleanArg(
+		process.env.CLANKY_DISCORD_VOICE_REALTIME_AGENT_PROVIDER ?? process.env.CLANKY_VOICE_REALTIME_AGENT_PROVIDER,
+	);
+	if (realtimeAgentProvider !== undefined) {
+		lines.push(`Env realtime agent provider override: ${realtimeAgentProvider}.`);
+	}
 	const ttsProvider = cleanArg(process.env.CLANKY_DISCORD_VOICE_TTS_PROVIDER ?? process.env.CLANKY_VOICE_TTS_PROVIDER);
-	if (ttsProvider !== undefined) lines.push(`Env speech provider override: ${ttsProvider}.`);
+	if (ttsProvider !== undefined) lines.push(`Env speech output provider override: ${ttsProvider}.`);
 	const model = cleanArg(process.env.CLANKY_OPENAI_REALTIME_MODEL);
-	if (model !== undefined) lines.push(`Env Realtime model override: ${model}.`);
+	if (model !== undefined) lines.push(`Env OpenAI Realtime agent model override: ${model}.`);
 	const voice = cleanArg(process.env.CLANKY_OPENAI_REALTIME_VOICE);
-	if (voice !== undefined) lines.push(`Env Realtime voice override: ${voice}.`);
+	if (voice !== undefined) lines.push(`Env OpenAI speech voice override: ${voice}.`);
+	const xAiModel = cleanArg(process.env.CLANKY_XAI_REALTIME_MODEL ?? process.env.CLANKY_XAI_VOICE_MODEL);
+	if (xAiModel !== undefined) lines.push(`Env xAI Grok Voice model override: ${xAiModel}.`);
+	const xAiVoice = cleanArg(process.env.CLANKY_XAI_REALTIME_VOICE ?? process.env.CLANKY_XAI_VOICE);
+	if (xAiVoice !== undefined) lines.push(`Env xAI Grok Voice output voice override: ${xAiVoice}.`);
+	const xAiApiKey = cleanArg(process.env.XAI_API_KEY);
+	if (xAiApiKey !== undefined) lines.push("Env xAI API key override is set.");
+	const xAiBaseUrl = cleanArg(process.env.CLANKY_XAI_BASE_URL ?? process.env.XAI_BASE_URL);
+	if (xAiBaseUrl !== undefined) lines.push(`Env xAI API base URL override: ${xAiBaseUrl}.`);
 	const elevenLabsVoice = cleanArg(process.env.CLANKY_ELEVENLABS_VOICE_ID);
 	if (elevenLabsVoice !== undefined) lines.push(`Env ElevenLabs voice override: ${elevenLabsVoice}.`);
 	const elevenLabsModel = cleanArg(process.env.CLANKY_ELEVENLABS_MODEL);
@@ -687,7 +779,14 @@ function hasDiscordVoiceEnvConfiguration(): boolean {
 		cleanArg(process.env.CLANKY_DISCORD_VOICE_CHANNEL_ID) !== undefined ||
 		cleanArg(process.env.CLANKY_DISCORD_VOICE_ALLOWED_GUILD_IDS) !== undefined ||
 		cleanArg(process.env.CLANKY_DISCORD_VOICE_ALLOWED_CHANNEL_IDS) !== undefined ||
+		cleanArg(
+			process.env.CLANKY_DISCORD_VOICE_REALTIME_AGENT_PROVIDER ?? process.env.CLANKY_VOICE_REALTIME_AGENT_PROVIDER,
+		) !== undefined ||
 		cleanArg(process.env.CLANKY_DISCORD_VOICE_TTS_PROVIDER ?? process.env.CLANKY_VOICE_TTS_PROVIDER) !== undefined ||
+		cleanArg(process.env.CLANKY_XAI_REALTIME_MODEL ?? process.env.CLANKY_XAI_VOICE_MODEL) !== undefined ||
+		cleanArg(process.env.CLANKY_XAI_REALTIME_VOICE ?? process.env.CLANKY_XAI_VOICE) !== undefined ||
+		cleanArg(process.env.XAI_API_KEY) !== undefined ||
+		cleanArg(process.env.CLANKY_XAI_BASE_URL ?? process.env.XAI_BASE_URL) !== undefined ||
 		cleanArg(process.env.CLANKY_ELEVENLABS_VOICE_ID) !== undefined ||
 		cleanArg(process.env.CLANKY_ELEVENLABS_MODEL) !== undefined ||
 		cleanArg(process.env.CLANKY_ELEVENLABS_OUTPUT_FORMAT) !== undefined ||
@@ -855,8 +954,8 @@ async function runDiscordVoiceJoin(
 		next.allowedChannelIds = mergeDiscordIds(current.allowedChannelIds, [channelId]);
 	}
 	const configureAdvanced = await ctx.ui.confirm(
-		"Configure advanced Realtime settings?",
-		"Optional: model, voice, reasoning effort, and video frame auto-attach interval.",
+		"Configure advanced voice settings?",
+		"Optional: realtime agent model/reasoning, speech output provider/voice, and video frame auto-attach interval.",
 	);
 	if (configureAdvanced) next = await collectDiscordVoiceAdvancedSettings(ctx, next);
 	deps.voiceSettings?.write(next);
@@ -870,67 +969,167 @@ async function runDiscordVoiceAdvancedWizard(
 	ctx: ExtensionCommandContext,
 ): Promise<void> {
 	const current = deps.voiceSettings?.read() ?? { enabled: false };
-	const choice = await ctx.ui.select("Discord voice advanced settings", [
-		`Speech provider (${current.ttsProvider ?? "openai"})`,
-		`ElevenLabs API key (${formatElevenLabsCredentialLabel(deps)})`,
-		`Realtime model (${current.openAiRealtimeModel ?? "default"})`,
-		`Realtime voice (${current.openAiRealtimeVoice ?? "default"})`,
-		`ElevenLabs voice id (${current.elevenLabsVoiceId ?? "not set"})`,
-		`ElevenLabs model (${current.elevenLabsModel ?? "default"})`,
-		`ElevenLabs output format (${current.elevenLabsOutputFormat ?? DEFAULT_ELEVENLABS_OUTPUT_FORMAT})`,
-		`ElevenLabs base URL (${current.elevenLabsBaseUrl ?? "default"})`,
-		`Reasoning effort (${current.openAiRealtimeReasoningEffort ?? "default"})`,
-		`Video frame interval (${formatFrameIntervalLabel(current.videoFrameAutoAttachIntervalMs)})`,
-		"Clear advanced overrides",
-		"Back",
-	]);
-	if (choice === undefined || choice === "Back") return;
+	const menu = discordVoiceAdvancedMenu(current, formatElevenLabsCredentialLabel(deps));
+	const choiceLabel = await ctx.ui.select(
+		"Discord voice advanced settings",
+		menu.map((item) => item.label),
+	);
+	const choice = menu.find((item) => item.label === choiceLabel);
+	if (choice === undefined || choice.action === "back") return;
 	let next: StoredDiscordVoiceSettings = { ...current };
-	if (choice.startsWith("Speech provider")) {
-		next = await collectDiscordVoiceTtsProvider(ctx, next);
-	} else if (choice.startsWith("ElevenLabs API key")) {
-		await runElevenLabsLogin(
-			{
-				authStorage: deps.authStorage,
-				authFilePath: deps.authFilePath,
-				baseUrl: () => deps.voiceSettings?.read()?.elevenLabsBaseUrl,
-				...(deps.gatewayController === undefined ? {} : { gatewayController: deps.gatewayController }),
-			},
-			ctx,
-			{ reload: false },
-		);
-		return;
-	} else if (choice.startsWith("Realtime model")) {
-		next = await collectDiscordVoiceModel(ctx, next);
-	} else if (choice.startsWith("Realtime voice")) {
-		next = await collectDiscordVoiceVoice(ctx, next);
-	} else if (choice.startsWith("ElevenLabs voice id")) {
-		next = await collectDiscordVoiceElevenLabsVoice(ctx, next);
-	} else if (choice.startsWith("ElevenLabs model")) {
-		next = await collectDiscordVoiceElevenLabsModel(ctx, next);
-	} else if (choice.startsWith("ElevenLabs output format")) {
-		next = await collectDiscordVoiceElevenLabsOutputFormat(ctx, next);
-	} else if (choice.startsWith("ElevenLabs base URL")) {
-		next = await collectDiscordVoiceElevenLabsBaseUrl(ctx, next);
-	} else if (choice.startsWith("Reasoning effort")) {
-		next = await collectDiscordVoiceReasoning(ctx, next);
-	} else if (choice.startsWith("Video frame interval")) {
-		next = await collectDiscordVoiceFrameInterval(ctx, next);
-	} else if (choice === "Clear advanced overrides") {
-		delete next.openAiRealtimeModel;
-		delete next.openAiRealtimeVoice;
-		delete next.openAiRealtimeReasoningEffort;
-		delete next.ttsProvider;
-		delete next.elevenLabsVoiceId;
-		delete next.elevenLabsModel;
-		delete next.elevenLabsOutputFormat;
-		delete next.elevenLabsBaseUrl;
-		delete next.videoFrameAutoAttachIntervalMs;
+	switch (choice.action) {
+		case "realtime-provider":
+			next = await collectDiscordVoiceRealtimeAgentProvider(ctx, next);
+			break;
+		case "speech-provider":
+			next = await collectDiscordVoiceTtsProvider(ctx, next);
+			break;
+		case "elevenlabs-api-key":
+			await runElevenLabsLogin(
+				{
+					authStorage: deps.authStorage,
+					authFilePath: deps.authFilePath,
+					baseUrl: () => deps.voiceSettings?.read()?.elevenLabsBaseUrl,
+					...(deps.gatewayController === undefined ? {} : { gatewayController: deps.gatewayController }),
+				},
+				ctx,
+				{ reload: false },
+			);
+			return;
+		case "openai-model":
+			next = await collectDiscordVoiceModel(ctx, next);
+			break;
+		case "openai-voice":
+			next = await collectDiscordVoiceVoice(ctx, next);
+			break;
+		case "openai-reasoning":
+			next = await collectDiscordVoiceReasoning(ctx, next);
+			break;
+		case "openai-frame-interval":
+			next = await collectDiscordVoiceFrameInterval(ctx, next);
+			break;
+		case "xai-model":
+			next = await collectDiscordVoiceXAiModel(ctx, next);
+			break;
+		case "xai-voice":
+			next = await collectDiscordVoiceXAiVoice(ctx, next);
+			break;
+		case "elevenlabs-voice":
+			next = await collectDiscordVoiceElevenLabsVoice(ctx, next);
+			break;
+		case "elevenlabs-model":
+			next = await collectDiscordVoiceElevenLabsModel(ctx, next);
+			break;
+		case "elevenlabs-output-format":
+			next = await collectDiscordVoiceElevenLabsOutputFormat(ctx, next);
+			break;
+		case "elevenlabs-base-url":
+			next = await collectDiscordVoiceElevenLabsBaseUrl(ctx, next);
+			break;
+		case "clear":
+			delete next.realtimeAgentProvider;
+			delete next.openAiRealtimeModel;
+			delete next.openAiRealtimeVoice;
+			delete next.openAiRealtimeReasoningEffort;
+			delete next.xAiRealtimeModel;
+			delete next.xAiRealtimeVoice;
+			delete next.ttsProvider;
+			delete next.elevenLabsVoiceId;
+			delete next.elevenLabsModel;
+			delete next.elevenLabsOutputFormat;
+			delete next.elevenLabsBaseUrl;
+			delete next.videoFrameAutoAttachIntervalMs;
+			break;
 	}
 	deps.voiceSettings?.write(next);
 	const lines = ["Discord voice advanced settings updated."];
 	await restartDiscordBridgeAfterVoiceSettingsChange(deps, lines, ctx);
 	ctx.ui.notify(lines.join("\n"));
+}
+
+type DiscordVoiceAdvancedAction =
+	| "realtime-provider"
+	| "speech-provider"
+	| "openai-model"
+	| "openai-voice"
+	| "openai-reasoning"
+	| "openai-frame-interval"
+	| "xai-model"
+	| "xai-voice"
+	| "elevenlabs-api-key"
+	| "elevenlabs-voice"
+	| "elevenlabs-model"
+	| "elevenlabs-output-format"
+	| "elevenlabs-base-url"
+	| "clear"
+	| "back";
+
+interface DiscordVoiceAdvancedMenuItem {
+	action: DiscordVoiceAdvancedAction;
+	label: string;
+}
+
+function discordVoiceAdvancedMenu(
+	current: StoredDiscordVoiceSettings,
+	elevenLabsCredentialLabel: string,
+): DiscordVoiceAdvancedMenuItem[] {
+	return [
+		{
+			action: "realtime-provider",
+			label: `Realtime agent: provider (${formatRealtimeAgentProviderLabel(current.realtimeAgentProvider ?? "openai")})`,
+		},
+		{
+			action: "speech-provider",
+			label: `Speech output: provider (${formatTtsProviderMenuLabel(current.ttsProvider)})`,
+		},
+		{ action: "openai-model", label: `Realtime agent: OpenAI model (${current.openAiRealtimeModel ?? "default"})` },
+		{ action: "openai-voice", label: `Speech output: OpenAI voice (${current.openAiRealtimeVoice ?? "default"})` },
+		{
+			action: "xai-model",
+			label: `Realtime agent: xAI model (${current.xAiRealtimeModel ?? DEFAULT_XAI_REALTIME_MODEL})`,
+		},
+		{ action: "xai-voice", label: `Speech output: xAI voice (${current.xAiRealtimeVoice ?? "default"})` },
+		{
+			action: "openai-reasoning",
+			label: `Realtime agent: OpenAI reasoning effort (${current.openAiRealtimeReasoningEffort ?? "default"})`,
+		},
+		{
+			action: "openai-frame-interval",
+			label: `Realtime agent: video frame interval (${formatFrameIntervalLabel(current.videoFrameAutoAttachIntervalMs)})`,
+		},
+		{ action: "elevenlabs-api-key", label: `ElevenLabs TTS: API key (${elevenLabsCredentialLabel})` },
+		{ action: "elevenlabs-voice", label: `ElevenLabs TTS: voice id (${current.elevenLabsVoiceId ?? "not set"})` },
+		{ action: "elevenlabs-model", label: `ElevenLabs TTS: model (${current.elevenLabsModel ?? "default"})` },
+		{
+			action: "elevenlabs-output-format",
+			label: `ElevenLabs TTS: output format (${current.elevenLabsOutputFormat ?? DEFAULT_ELEVENLABS_OUTPUT_FORMAT})`,
+		},
+		{
+			action: "elevenlabs-base-url",
+			label: `ElevenLabs TTS: API base URL (${current.elevenLabsBaseUrl ?? "default"})`,
+		},
+		{ action: "clear", label: "Reset: clear advanced overrides" },
+		{ action: "back", label: "Back" },
+	];
+}
+
+function formatTtsProviderMenuLabel(provider: StoredDiscordVoiceSettings["ttsProvider"]): string {
+	if (provider === "elevenlabs") return "ElevenLabs TTS audio";
+	if (provider === "openai") return "OpenAI Realtime audio";
+	return "OpenAI Realtime audio default";
+}
+
+function formatRealtimeAgentProviderLabel(provider: string): string {
+	if (provider === "openai") return "OpenAI Realtime";
+	if (provider === "xai") return "xAI Grok Voice";
+	return provider;
+}
+
+function formatSpeechOutputProviderLabel(provider: string, realtimeAgentProvider = "openai"): string {
+	if (provider === "elevenlabs") return "ElevenLabs TTS";
+	if (provider === "openai" && realtimeAgentProvider === "xai") return "xAI Grok Voice audio";
+	if (provider === "openai") return "OpenAI Realtime audio";
+	return provider;
 }
 
 async function runDiscordVoiceAllowedGuildsWizard(
@@ -1191,23 +1390,62 @@ async function runDiscordVoiceSet(
 			}
 		}
 	} else if (field === "model") {
-		const value = await readDiscordVoiceValue(ctx, rawValue, "OpenAI Realtime model:", current.openAiRealtimeModel);
+		const value = await readDiscordVoiceValue(
+			ctx,
+			rawValue,
+			"OpenAI Realtime agent model:",
+			current.openAiRealtimeModel,
+		);
 		if (value === undefined) return ctx.ui.notify(discordVoiceUsage(deps.voiceSettings?.path), "warning");
 		next.openAiRealtimeModel = value;
-		line = `Realtime model set to ${value}.`;
+		line = `OpenAI Realtime agent model set to ${value}.`;
+	} else if (field === "realtime-provider" || field === "realtime-agent-provider") {
+		const provider = parseDiscordVoiceRealtimeAgentProvider(rawValue);
+		if (provider !== undefined) {
+			next.realtimeAgentProvider = provider;
+			line = `Discord voice realtime agent provider set to ${formatRealtimeAgentProviderLabel(provider)}.`;
+		} else if (rawValue === "clear" || rawValue === "default") {
+			delete next.realtimeAgentProvider;
+			line = "Discord voice realtime agent provider override cleared.";
+		}
 	} else if (field === "voice") {
-		const value = await readDiscordVoiceValue(ctx, rawValue, "OpenAI Realtime voice:", current.openAiRealtimeVoice);
+		const value = await readDiscordVoiceValue(ctx, rawValue, "OpenAI speech voice:", current.openAiRealtimeVoice);
 		if (value === undefined) return ctx.ui.notify(discordVoiceUsage(deps.voiceSettings?.path), "warning");
 		next.openAiRealtimeVoice = value;
-		line = `Realtime voice set to ${value}.`;
+		line = `OpenAI speech voice set to ${value}.`;
+	} else if (field === "xai-model" || field === "grok-model") {
+		const value = await readDiscordVoiceValue(
+			ctx,
+			rawValue,
+			"xAI Grok Voice realtime model:",
+			current.xAiRealtimeModel,
+		);
+		if (value === undefined) return ctx.ui.notify(discordVoiceUsage(deps.voiceSettings?.path), "warning");
+		if (value === "clear" || value === "default") {
+			delete next.xAiRealtimeModel;
+			line = "xAI Grok Voice realtime model override cleared.";
+		} else {
+			next.xAiRealtimeModel = value;
+			line = `xAI Grok Voice realtime model set to ${value}.`;
+		}
+	} else if (field === "xai-voice" || field === "grok-voice") {
+		const value = await readDiscordVoiceValue(ctx, rawValue, "xAI Grok Voice output voice:", current.xAiRealtimeVoice);
+		if (value === undefined) return ctx.ui.notify(discordVoiceUsage(deps.voiceSettings?.path), "warning");
+		if (value === "clear" || value === "default") {
+			delete next.xAiRealtimeVoice;
+			line = "xAI Grok Voice output voice override cleared.";
+		} else {
+			next.xAiRealtimeVoice = value;
+			line = `xAI Grok Voice output voice set to ${value}.`;
+		}
 	} else if (field === "tts-provider" || field === "speech-provider") {
 		const provider = parseDiscordVoiceTtsProvider(rawValue);
 		if (provider !== undefined) {
 			next.ttsProvider = provider;
-			line = `Discord voice speech provider set to ${provider}.`;
+			line = `Discord voice speech output provider set to ${formatSpeechOutputProviderLabel(provider, next.realtimeAgentProvider ?? "openai")}.`;
 		} else if (rawValue === "clear" || rawValue === "default") {
 			delete next.ttsProvider;
-			line = "Discord voice speech provider override cleared.";
+			line = "Discord voice speech output provider override cleared.";
 		}
 	} else if (field === "elevenlabs-voice" || field === "elevenlabs-voice-id") {
 		const value = await readDiscordVoiceValue(ctx, rawValue, "ElevenLabs voice id:", current.elevenLabsVoiceId);
@@ -1263,10 +1501,10 @@ async function runDiscordVoiceSet(
 	} else if (field === "reasoning") {
 		if (rawValue === "clear" || rawValue === "default") {
 			delete next.openAiRealtimeReasoningEffort;
-			line = "Realtime reasoning effort cleared.";
+			line = "OpenAI Realtime agent reasoning effort cleared.";
 		} else if (isRealtimeReasoningEffort(rawValue)) {
 			next.openAiRealtimeReasoningEffort = rawValue;
-			line = `Realtime reasoning effort set to ${rawValue}.`;
+			line = `OpenAI Realtime agent reasoning effort set to ${rawValue}.`;
 		}
 	} else if (field === "frame-interval" || field === "frame_interval") {
 		const value = parseNonNegativeIntegerArg(rawValue);
@@ -1295,12 +1533,29 @@ async function collectDiscordVoiceAdvancedSettings(
 	return await collectDiscordVoiceFrameInterval(ctx, next);
 }
 
+async function collectDiscordVoiceRealtimeAgentProvider(
+	ctx: ExtensionCommandContext,
+	settings: StoredDiscordVoiceSettings,
+): Promise<StoredDiscordVoiceSettings> {
+	const value = await ctx.ui.select("Discord voice realtime agent provider:", [
+		"OpenAI Realtime",
+		"xAI Grok Voice",
+		"Keep current/default",
+		"Clear override",
+	]);
+	if (value === undefined || value === "Keep current/default") return settings;
+	const next = { ...settings };
+	if (value === "Clear override") delete next.realtimeAgentProvider;
+	else next.realtimeAgentProvider = value === "xAI Grok Voice" ? "xai" : "openai";
+	return next;
+}
+
 async function collectDiscordVoiceTtsProvider(
 	ctx: ExtensionCommandContext,
 	settings: StoredDiscordVoiceSettings,
 ): Promise<StoredDiscordVoiceSettings> {
-	const value = await ctx.ui.select("Discord voice speech provider:", [
-		"OpenAI Realtime voice",
+	const value = await ctx.ui.select("Discord voice speech output provider:", [
+		"OpenAI Realtime audio",
 		"ElevenLabs",
 		"Keep current/default",
 		"Clear override",
@@ -1318,7 +1573,7 @@ async function collectDiscordVoiceModel(
 ): Promise<StoredDiscordVoiceSettings> {
 	const value = cleanArg(
 		await ctx.ui.input(
-			"OpenAI Realtime model:",
+			"OpenAI Realtime agent model:",
 			settings.openAiRealtimeModel ?? "blank keeps current/default; type clear to remove override",
 		),
 	);
@@ -1335,7 +1590,7 @@ async function collectDiscordVoiceVoice(
 ): Promise<StoredDiscordVoiceSettings> {
 	const value = cleanArg(
 		await ctx.ui.input(
-			"OpenAI Realtime voice:",
+			"OpenAI speech voice:",
 			settings.openAiRealtimeVoice ?? "blank keeps current/default; type clear to remove override",
 		),
 	);
@@ -1343,6 +1598,40 @@ async function collectDiscordVoiceVoice(
 	const next = { ...settings };
 	if (value === "clear" || value === "default") delete next.openAiRealtimeVoice;
 	else next.openAiRealtimeVoice = value;
+	return next;
+}
+
+async function collectDiscordVoiceXAiModel(
+	ctx: ExtensionCommandContext,
+	settings: StoredDiscordVoiceSettings,
+): Promise<StoredDiscordVoiceSettings> {
+	const value = cleanArg(
+		await ctx.ui.input(
+			"xAI Grok Voice realtime model:",
+			settings.xAiRealtimeModel ?? "blank keeps current/default; type clear to remove override",
+		),
+	);
+	if (value === undefined) return settings;
+	const next = { ...settings };
+	if (value === "clear" || value === "default") delete next.xAiRealtimeModel;
+	else next.xAiRealtimeModel = value;
+	return next;
+}
+
+async function collectDiscordVoiceXAiVoice(
+	ctx: ExtensionCommandContext,
+	settings: StoredDiscordVoiceSettings,
+): Promise<StoredDiscordVoiceSettings> {
+	const value = cleanArg(
+		await ctx.ui.input(
+			"xAI Grok Voice output voice:",
+			settings.xAiRealtimeVoice ?? "blank keeps current/default; type clear to remove override",
+		),
+	);
+	if (value === undefined) return settings;
+	const next = { ...settings };
+	if (value === "clear" || value === "default") delete next.xAiRealtimeVoice;
+	else next.xAiRealtimeVoice = value;
 	return next;
 }
 
@@ -1424,7 +1713,7 @@ async function collectDiscordVoiceReasoning(
 	ctx: ExtensionCommandContext,
 	settings: StoredDiscordVoiceSettings,
 ): Promise<StoredDiscordVoiceSettings> {
-	const value = await ctx.ui.select("OpenAI Realtime reasoning effort:", [
+	const value = await ctx.ui.select("OpenAI Realtime agent reasoning effort:", [
 		"Keep current/default",
 		"minimal",
 		"low",
@@ -1674,6 +1963,15 @@ function parseDiscordVoiceTtsProvider(value: string | undefined): DiscordVoiceTt
 	const normalized = value?.trim().toLowerCase();
 	if (normalized === "openai" || normalized === "realtime") return "openai";
 	if (normalized === "elevenlabs" || normalized === "eleven_labs" || normalized === "11labs") return "elevenlabs";
+	return undefined;
+}
+
+function parseDiscordVoiceRealtimeAgentProvider(
+	value: string | undefined,
+): DiscordVoiceRealtimeAgentProvider | undefined {
+	const normalized = value?.trim().toLowerCase();
+	if (normalized === "openai") return "openai";
+	if (normalized === "xai" || normalized === "grok") return "xai";
 	return undefined;
 }
 

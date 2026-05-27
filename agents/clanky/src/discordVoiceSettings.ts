@@ -4,6 +4,7 @@ import { type ElevenLabsPcmOutputFormat, parseElevenLabsPcmOutputFormat } from "
 import type { OpenAiRealtimeReasoningEffort } from "./voice/openAiRealtimeClient.ts";
 
 export type DiscordVoiceTtsProvider = "openai" | "elevenlabs";
+export type DiscordVoiceRealtimeAgentProvider = "openai" | "xai";
 
 export interface StoredDiscordVoiceSettings {
 	enabled: boolean;
@@ -11,10 +12,13 @@ export interface StoredDiscordVoiceSettings {
 	channelId?: string;
 	allowedGuildIds?: string[];
 	allowedChannelIds?: string[];
+	realtimeAgentProvider?: DiscordVoiceRealtimeAgentProvider;
 	ttsProvider?: DiscordVoiceTtsProvider;
 	openAiRealtimeModel?: string;
 	openAiRealtimeVoice?: string;
 	openAiRealtimeReasoningEffort?: OpenAiRealtimeReasoningEffort;
+	xAiRealtimeModel?: string;
+	xAiRealtimeVoice?: string;
 	elevenLabsVoiceId?: string;
 	elevenLabsModel?: string;
 	elevenLabsOutputFormat?: ElevenLabsPcmOutputFormat;
@@ -69,11 +73,18 @@ export function sanitizeStoredDiscordVoiceSettings(settings: StoredDiscordVoiceS
 	if (allowedGuildIds.length > 0) sanitized.allowedGuildIds = allowedGuildIds;
 	const allowedChannelIds = cleanStringList(settings.allowedChannelIds);
 	if (allowedChannelIds.length > 0) sanitized.allowedChannelIds = allowedChannelIds;
+	if (isDiscordVoiceRealtimeAgentProvider(settings.realtimeAgentProvider)) {
+		sanitized.realtimeAgentProvider = settings.realtimeAgentProvider;
+	}
 	if (isDiscordVoiceTtsProvider(settings.ttsProvider)) sanitized.ttsProvider = settings.ttsProvider;
 	const model = cleanString(settings.openAiRealtimeModel);
 	if (model !== undefined) sanitized.openAiRealtimeModel = model;
 	const voice = cleanString(settings.openAiRealtimeVoice);
 	if (voice !== undefined) sanitized.openAiRealtimeVoice = voice;
+	const xAiModel = cleanString(settings.xAiRealtimeModel);
+	if (xAiModel !== undefined) sanitized.xAiRealtimeModel = xAiModel;
+	const xAiVoice = cleanString(settings.xAiRealtimeVoice);
+	if (xAiVoice !== undefined) sanitized.xAiRealtimeVoice = xAiVoice;
 	const elevenLabsVoiceId = cleanString(settings.elevenLabsVoiceId);
 	if (elevenLabsVoiceId !== undefined) sanitized.elevenLabsVoiceId = elevenLabsVoiceId;
 	const elevenLabsModel = cleanString(settings.elevenLabsModel);
@@ -107,9 +118,14 @@ function parseStoredDiscordVoiceSettings(value: unknown): StoredDiscordVoiceSett
 	if (Array.isArray(record.allowedChannelIds)) {
 		settings.allowedChannelIds = record.allowedChannelIds.filter((item): item is string => typeof item === "string");
 	}
+	if (isDiscordVoiceRealtimeAgentProvider(record.realtimeAgentProvider)) {
+		settings.realtimeAgentProvider = record.realtimeAgentProvider;
+	}
 	if (isDiscordVoiceTtsProvider(record.ttsProvider)) settings.ttsProvider = record.ttsProvider;
 	if (typeof record.openAiRealtimeModel === "string") settings.openAiRealtimeModel = record.openAiRealtimeModel;
 	if (typeof record.openAiRealtimeVoice === "string") settings.openAiRealtimeVoice = record.openAiRealtimeVoice;
+	if (typeof record.xAiRealtimeModel === "string") settings.xAiRealtimeModel = record.xAiRealtimeModel;
+	if (typeof record.xAiRealtimeVoice === "string") settings.xAiRealtimeVoice = record.xAiRealtimeVoice;
 	if (typeof record.elevenLabsVoiceId === "string") settings.elevenLabsVoiceId = record.elevenLabsVoiceId;
 	if (typeof record.elevenLabsModel === "string") settings.elevenLabsModel = record.elevenLabsModel;
 	const elevenLabsOutputFormat = parseElevenLabsPcmOutputFormat(readString(record.elevenLabsOutputFormat));
@@ -152,4 +168,8 @@ function isRealtimeReasoningEffort(value: unknown): value is OpenAiRealtimeReaso
 
 function isDiscordVoiceTtsProvider(value: unknown): value is DiscordVoiceTtsProvider {
 	return value === "openai" || value === "elevenlabs";
+}
+
+function isDiscordVoiceRealtimeAgentProvider(value: unknown): value is DiscordVoiceRealtimeAgentProvider {
+	return value === "openai" || value === "xai";
 }
