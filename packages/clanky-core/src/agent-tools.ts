@@ -24,6 +24,7 @@ import type {
 	DiscordRecentAttachmentsResult,
 	DiscordSendMessageInput,
 } from "./discord/operator.ts";
+import type { ClankyMcpServerStatus } from "./mcp/client.ts";
 import type { OpenAiImageGenerateInput, XAiImageGenerateInput, XAiVideoGenerateInput } from "./media/operator.ts";
 import type {
 	ForgetMemoryInput,
@@ -2558,6 +2559,28 @@ function messageTimestamp(message: ClankyMessageEndEvent["message"]): string {
 	return new Date().toISOString();
 }
 
+type McpCallResultDetails = {
+	isError?: boolean;
+	content?: Array<{ type?: string; text?: string }>;
+};
+
+function formatMcpCallPreview(details: McpCallResultDetails | null, maxLength: number): string {
+	if (!details) return "";
+	const blocks = details.content ?? [];
+	const textParts: string[] = [];
+	for (const block of blocks) {
+		if (typeof block.text === "string" && block.text.length > 0) {
+			textParts.push(block.text.replace(/\s+/g, " ").trim());
+		}
+	}
+	if (textParts.length === 0) {
+		const nonText = blocks.find((block) => typeof block.type === "string" && block.type.length > 0);
+		return nonText?.type ? `[${nonText.type} content]` : "";
+	}
+	const joined = textParts.join(" | ");
+	return joined.length > maxLength ? `${joined.slice(0, maxLength - 1)}…` : joined;
+}
+
 function formatMcpArgsSummary(args: unknown, maxLength: number): string {
 	if (args === undefined || args === null) return "";
 	if (typeof args !== "object") {
@@ -2639,6 +2662,30 @@ export function createClankyToolDefinitions(handlers: ClankyAgentToolHandlers): 
 					text.setText(`${title} ${target}`);
 					return text;
 				},
+				renderResult(result, _options, theme, context) {
+					const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+					const title = theme.fg("toolTitle", theme.bold("mcp_list_tools"));
+					const statuses = Array.isArray(result.details) ? (result.details as ClankyMcpServerStatus[]) : [];
+					if (statuses.length === 0) {
+						text.setText(`${title} ${theme.fg("toolOutput", "no servers")}`);
+						return text;
+					}
+					let totalTools = 0;
+					const lines: string[] = [];
+					for (const status of statuses) {
+						if (status.error) {
+							lines.push(`  ${theme.fg("error", status.server)}: ${status.error}`);
+							continue;
+						}
+						const count = status.tools?.length ?? 0;
+						totalTools += count;
+						const label = `${count} ${count === 1 ? "tool" : "tools"}`;
+						lines.push(`  ${theme.fg("accent", status.server)}: ${theme.fg("toolOutput", label)}`);
+					}
+					const summary = `${statuses.length} ${statuses.length === 1 ? "server" : "servers"}, ${totalTools} ${totalTools === 1 ? "tool" : "tools"}`;
+					text.setText(`${title} ${theme.fg("toolOutput", summary)}\n${lines.join("\n")}`);
+					return text;
+				},
 			}),
 		);
 	}
@@ -2668,6 +2715,20 @@ export function createClankyToolDefinitions(handlers: ClankyAgentToolHandlers): 
 					const summary = formatMcpArgsSummary(args?.arguments, 120);
 					const argsPart = summary ? ` ${theme.fg("toolOutput", `(${summary})`)}` : "";
 					text.setText(`${title} ${target}${argsPart}`);
+					return text;
+				},
+				renderResult(result, _options, theme, context) {
+					const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+					const args = context.args as { server?: string; tool?: string } | undefined;
+					const server = typeof args?.server === "string" && args.server.length > 0 ? args.server : "?";
+					const tool = typeof args?.tool === "string" && args.tool.length > 0 ? args.tool : "?";
+					const title = theme.fg("toolTitle", theme.bold("mcp_call"));
+					const target = theme.fg("accent", `${server}::${tool}`);
+					const details = (result.details ?? null) as McpCallResultDetails | null;
+					const status = details?.isError === true ? theme.fg("error", "error") : theme.fg("toolOutput", "ok");
+					const preview = formatMcpCallPreview(details, 200);
+					const previewPart = preview ? `\n  ${theme.fg("toolOutput", preview)}` : "";
+					text.setText(`${title} ${target} ${status}${previewPart}`);
 					return text;
 				},
 			}),
