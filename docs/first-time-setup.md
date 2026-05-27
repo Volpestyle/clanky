@@ -15,7 +15,8 @@ Clanky, start with the [Pi quickstart](https://pi.dev/docs/latest/quickstart).
 - This repository checked out locally.
 - An OpenAI API key or another Pi-supported model auth path.
 - Optional: a Discord bot token for the current agent-owned chat gateway
-  adapter.
+  adapter. Discord is today's adapter; the Clanky boundary is the
+  communication gateway abstraction.
 - Optional: Rust/Cargo for the bundled Discord voice media helper.
 - Optional: Playwright Chromium for browser automation routes.
 - Optional: xAI, ElevenLabs, Linear, or AgentRoom credentials for those specific
@@ -95,7 +96,7 @@ If you are starting from AgentRoom, you can configure the shared non-secret
 defaults once:
 
 ```bash
-agent-room init --room my-project --runtime herdr --clanky --work-tracker linear --linear-team team_123
+agent-room init --room my-project --runtime herdr --clanky --work-tracker linear --tracker-team team_123
 clanky --cwd /path/to/my-project
 ```
 
@@ -135,7 +136,8 @@ change that at runtime with:
 Clanky's built-in messaging is the local Pi session thread. External chat
 platforms are optional gateways into that thread or into profile-local
 subagents. The current built-in adapter is agent-owned Discord, where Clanky
-uses its own profile credential and owns the gateway.
+uses its own profile credential and owns the gateway. Future communication
+adapters should plug into the same ownership model.
 
 ```text
 /discord-login
@@ -233,9 +235,9 @@ agent-room launch clanky --harness pi --command clanky --cwd .
 ```
 
 Inside Clanky, `/setup` shows whether the process is enrolled in AgentRoom.
-AgentRoom participation does not decide Discord ownership. Use
+AgentRoom participation does not decide gateway ownership. Use
 `CLANKY_CHAT_GATEWAY_OWNER=room` when an AgentRoom room-owned connector owns the
-Discord conversation.
+external conversation.
 
 See [AgentRoom Integration](AGENTROOM.md) for the full contract.
 

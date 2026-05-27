@@ -9,7 +9,7 @@ export const site: DocsSiteInfo = {
 	id: "clanky-docs",
 	title: "Clanky Docs",
 	description:
-		"Clanky is a personal Pi agent for local work, profile memory, Discord text and voice, media, skills, and AgentRoom participation.",
+		"Clanky is a personal Pi agent for local work, profile memory, communication gateways, voice/media adapters, skills, and AgentRoom participation.",
 	badge: "localhost",
 	logo: {
 		src: "branding/clanky-icon-32.png",
@@ -21,7 +21,7 @@ export const site: DocsSiteInfo = {
 		baseUrl: "https://volpestyle.github.io/docs/clanky",
 		title: "Clanky",
 		blurb:
-			"Clanky is a personal Pi agent for local work, profile memory, Discord text and voice, media, skills, and AgentRoom participation. Start with the Pi TUI and use the command reference only when you need exact commands.",
+			"Clanky is a personal Pi agent for local work, profile memory, communication gateways, voice/media adapters, skills, and AgentRoom participation. Discord is today's concrete text/voice adapter, not the product boundary. Start with the Pi TUI and use references only when you need exact commands.",
 	},
 	siteLinks: createAgentWorkspaceSiteLinks(),
 };
@@ -33,7 +33,7 @@ export const docsMeta: DocMeta[] = [
 		slug: "start-here",
 		title: "Start Here",
 		description:
-			"What users can do, what Clanky should handle, and the mental model for Pi, profiles, Discord, voice, and AgentRoom.",
+			"What users can do, what Clanky should handle, and the mental model for Pi, profiles, communication gateways, voice/media, and AgentRoom.",
 		source: "docs/start-here.md",
 		group: "Start",
 	},
@@ -68,8 +68,16 @@ export const docsMeta: DocMeta[] = [
 	{
 		slug: "using-clanky",
 		title: "Using Clanky",
-		description: "Day-to-day TUI, memory, Discord, voice, web/media, AgentRoom, skills, and connected tool workflows.",
+		description: "Day-to-day TUI, memory, communication gateways, voice/media, AgentRoom, skills, and connected tool workflows.",
 		source: "docs/using-clanky.md",
+		group: "Operations",
+	},
+	{
+		slug: "communication-gateways",
+		title: "Communication Gateways",
+		description:
+			"Clanky's chat and voice/media gateway abstraction, ownership model, subagent routing, and why Discord is one adapter.",
+		source: "docs/communication-gateways.md",
 		group: "Operations",
 	},
 	{
@@ -82,7 +90,7 @@ export const docsMeta: DocMeta[] = [
 	{
 		slug: "memory-and-privacy",
 		title: "Memory And Privacy",
-		description: "Profile-local state, credential storage, memory policy, Discord boundaries, and voice logs.",
+		description: "Profile-local state, credential storage, memory policy, gateway boundaries, and voice logs.",
 		source: "docs/memory-and-privacy.md",
 		group: "Reference",
 	},

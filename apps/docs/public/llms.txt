@@ -1,10 +1,10 @@
 # Clanky
 
-> Clanky is a personal Pi agent for local work, profile memory, Discord text and voice, media, skills, and AgentRoom participation. Start with the Pi TUI and use the command reference only when you need exact commands.
+> Clanky is a personal Pi agent for local work, profile memory, communication gateways, voice/media adapters, skills, and AgentRoom participation. Discord is today's concrete text/voice adapter, not the product boundary. Start with the Pi TUI and use references only when you need exact commands.
 
 ## Start
 
-- [Start Here](https://volpestyle.github.io/docs/clanky/?doc=start-here): What users can do, what Clanky should handle, and the mental model for Pi, profiles, Discord, voice, and AgentRoom.
+- [Start Here](https://volpestyle.github.io/docs/clanky/?doc=start-here): What users can do, what Clanky should handle, and the mental model for Pi, profiles, communication gateways, voice/media, and AgentRoom.
 - [Overview](https://volpestyle.github.io/docs/clanky/?doc=overview): Clanky's operating model, setup paths, bundled skills, and local development entry points.
 - [Pi Foundation](https://volpestyle.github.io/docs/clanky/?doc=pi-foundation): What Clanky inherits from Pi, what Clanky adds, and why Pi commands still matter.
 
@@ -15,13 +15,14 @@
 
 ## Operations
 
-- [Using Clanky](https://volpestyle.github.io/docs/clanky/?doc=using-clanky): Day-to-day TUI, memory, Discord, voice, web/media, AgentRoom, skills, and connected tool workflows.
+- [Using Clanky](https://volpestyle.github.io/docs/clanky/?doc=using-clanky): Day-to-day TUI, memory, communication gateways, voice/media, AgentRoom, skills, and connected tool workflows.
+- [Communication Gateways](https://volpestyle.github.io/docs/clanky/?doc=communication-gateways): Clanky's chat and voice/media gateway abstraction, ownership model, subagent routing, and why Discord is one adapter.
 - [AgentRoom Integration](https://volpestyle.github.io/docs/clanky/?doc=agentroom): Room participation, gateway ownership, launch contract, and runtime environment boundaries.
 
 ## Reference
 
 - [Command Reference](https://volpestyle.github.io/docs/clanky/?doc=command-reference): CLI commands, inherited Pi slash commands, Clanky slash commands, and tool families.
-- [Memory And Privacy](https://volpestyle.github.io/docs/clanky/?doc=memory-and-privacy): Profile-local state, credential storage, memory policy, Discord boundaries, and voice logs.
+- [Memory And Privacy](https://volpestyle.github.io/docs/clanky/?doc=memory-and-privacy): Profile-local state, credential storage, memory policy, gateway boundaries, and voice logs.
 - [Troubleshooting](https://volpestyle.github.io/docs/clanky/?doc=troubleshooting): Profile, auth, Discord, voice, web, media, MCP, AgentRoom, and docs build fixes.
 
 ## Advanced

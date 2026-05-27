@@ -41,9 +41,9 @@ Useful Pi editor patterns still apply:
 /setup fresh
 ```
 
-Use `/setup status` when you want a compact view of profile paths, OpenAI, chat
-gateway ownership, Discord adapter status, Discord voice, ElevenLabs, xAI, and
-AgentRoom participation.
+Use `/setup status` when you want a compact view of profile paths, OpenAI,
+gateway ownership, current Discord adapter status, Discord voice, ElevenLabs,
+xAI, and AgentRoom participation.
 
 ## Memory Workflow
 
@@ -73,7 +73,7 @@ Use `/memory reflect` near the end of a busy day or long session. It only runs
 when there is enough recent transcript to review, and it should propose
 memories before saving anything that lacks explicit confirmation.
 
-## Chat Gateway Workflow
+## Communication Gateway Workflow
 
 Clanky's built-in messaging is the local Pi session thread. External chat
 platforms are gateways that can deliver messages to that thread or to a
@@ -88,7 +88,8 @@ Accepted gateway chat may route to a dedicated subagent. That gives the
 external conversation its own Pi session and context window while the main TUI
 session remains available. The Discord adapter can inspect Discord, ask main
 Clanky for recent main-session context, and delegate durable work back to the
-main worker.
+main worker. Future communication adapters should follow the same ownership and
+routing model rather than changing Clanky's core session model.
 
 Use the live subagent panel in the TUI:
 
@@ -138,7 +139,8 @@ use `/discord-voice join` or the `discord_voice_join` tool for explicit join
 intent.
 
 For architecture and live validation, see
-[Discord Voice Architecture](discord-voice-architecture.md) and
+[Communication Gateways](communication-gateways.md),
+[Discord Voice Architecture](discord-voice-architecture.md), and
 [Discord Voice Live Runbook](qa/discord-voice-live-runbook.md).
 
 ## Web And Media Workflow
@@ -175,9 +177,9 @@ clanky --home ./.clanky-room --profile clanky-lead --cwd .
 clanky --home ./.clanky-room --profile clanky-reviewer --cwd .
 ```
 
-Use `CLANKY_CHAT_GATEWAY_OWNER=room` when the room connector owns Discord.
-Leave it unset or set it to `agent` when this Clanky profile owns the Discord
-bridge.
+Use `CLANKY_CHAT_GATEWAY_OWNER=room` when the room connector owns the external
+conversation. Leave it unset or set it to `agent` when this Clanky profile owns
+the gateway.
 
 ## Skills Workflow
 
@@ -193,8 +195,9 @@ Commands:
 /skill:<skill-name>
 ```
 
-Bundled operator skills cover Discord, web/browser work, media generation,
-AgentRoom operation, Linear bridging, log dives, and Pi TUI coding behavior.
+Bundled operator skills cover communication gateways, Discord today,
+web/browser work, media generation, AgentRoom operation, Linear bridging, log
+dives, and Pi TUI coding behavior.
 
 ## Connected Tool Workflow
 
@@ -203,8 +206,8 @@ task needs them. You only need this section when adding or debugging tool
 servers.
 
 Clanky can auto-add AgentRoom tools when enrolled in an AgentRoom room or when
-`.agentroom/config.yaml` exists. It can also auto-add Discord tools when the
-profile has the right Discord credential.
+`.agentroom/config.yaml` exists. It can also auto-add provider tools for the
+current gateway adapter when the profile has the right credential.
 
 Inspect configured servers:
 

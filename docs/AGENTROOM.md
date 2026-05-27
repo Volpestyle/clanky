@@ -6,9 +6,15 @@ command, not as source code vendored into the AgentRoom repository.
 ## Gateway Boundary
 
 Clanky's native messaging is its Pi session thread. Discord, AgentRoom
-send/read, and future Slack-style integrations are gateways that can feed that
-thread, receive replies from it, or route work to profile-local subagents. A
-gateway can be absent entirely and Clanky still works as a local Pi agent.
+send/read, and future Slack, Telegram, SMS, webhook, or huddle-style
+integrations are gateways that can feed that thread, receive replies from it,
+or route work to profile-local subagents. A gateway can be absent entirely and
+Clanky still works as a local Pi agent.
+
+This is a communication abstraction layer, not a Discord-only design. Discord
+text and Discord voice are today's concrete adapters; future Telegram, Slack,
+SMS, webhook, huddle, or other messaging surfaces should plug in at the same
+ownership boundary.
 
 Voice and video are separate media gateways. The current production adapter is
 Discord voice through ClankVox; a future Slack huddle adapter should plug in at
@@ -74,7 +80,7 @@ The gateway library is the same in both Discord cases (`@agentroom/chat-discord`
 which implements the chat gateway provider contract). Only the lifecycle owner
 differs.
 
-One Discord conversation should have exactly one owner. Do not point both an
+One external conversation should have exactly one owner. Do not point both an
 agent-owned gateway and a room-owned gateway at the same channel or DM.
 
 ## Ownership
@@ -124,7 +130,7 @@ AgentRoom can write the shared non-secret defaults directly into
 `.agentroom/config.yaml`:
 
 ```bash
-agent-room init --room my-project --runtime herdr --clanky --work-tracker linear --linear-team team_123
+agent-room init --room my-project --runtime herdr --clanky --work-tracker linear --tracker-team team_123
 ```
 
 Clanky treats that as a launch default only. Explicit `--home`, `--profile`,
@@ -169,7 +175,7 @@ Gateway startup is controlled separately:
 - default: `CLANKY_CHAT_GATEWAY_OWNER=agent` behavior, so Clanky may start its
   own gateway when `CLANKY_DISCORD_TOKEN` is present.
 - `CLANKY_CHAT_GATEWAY_OWNER=room`: suppress Clanky's gateway because the
-  relevant Discord conversation is room-owned.
+  relevant external conversation is room-owned.
 - `CLANKY_CHAT_GATEWAY_OWNER=off` or `CLANKY_DISABLE_CHAT_GATEWAY=1`: no
   in-process Clanky gateway.
 

@@ -1,6 +1,6 @@
 # Clanky - Full Docs
 
-> Clanky is a personal Pi agent for local work, profile memory, Discord text and voice, media, skills, and AgentRoom participation. Start with the Pi TUI and use the command reference only when you need exact commands.
+> Clanky is a personal Pi agent for local work, profile memory, communication gateways, voice/media adapters, skills, and AgentRoom participation. Discord is today's concrete text/voice adapter, not the product boundary. Start with the Pi TUI and use references only when you need exact commands.
 
 Generated from the live docs site. Each section below is one page; see the heading and source path for context.
 
@@ -29,12 +29,13 @@ Clanky gives you a local agent that can carry personal context across tools:
   slash commands
 - keep profile-local auth, memory, sessions, skills, and connector settings
 - ask Clanky to remember source-grounded facts, then inspect or forget them
-- connect external chat gateways, with Discord as the current agent-owned
-  adapter for DMs, mentions, replies, and optional channel binding
+- connect external communication gateways, with Discord as the current
+  agent-owned text adapter for DMs, mentions, replies, and optional channel
+  binding
 - let gateway requests run through subagents while the foreground session keeps
   working
-- join Discord voice through the current media adapter, hear speakers, speak
-  back, and delegate durable work to Pi
+- join live voice through the current Discord/ClankVox media adapter, hear
+  speakers, speak back, and delegate durable work to Pi
 - use web, browser, media generation, Linear, Discord, and other connected tool
   skills when configured
 - join an AgentRoom room as a normal Pi harness while keeping profile ownership
@@ -68,7 +69,7 @@ flowchart TB
   thread["Canonical Clanky thread<br/>Pi session messaging"]
   clanky["Clanky layer<br/>persona, memory, profile, skills, gateway adapters"]
   profile["Profile stores<br/>auth, sessions, memory, voice, subagents"]
-  chat["Chat gateways<br/>Discord today, others later"]
+  chat["Communication gateways<br/>Discord today, others later"]
   voice["Voice/media gateways<br/>ClankVox Discord today"]
   vox["ClankVox<br/>RTP, Opus, DAVE, Go Live"]
   room["AgentRoom<br/>optional coordination room"]
@@ -85,8 +86,9 @@ flowchart TB
 Pi is the generic agent harness. Clanky configures that harness with personal
 state, memory, skills, and gateway adapters. The local Pi session thread is
 Clanky's built-in messaging; Discord text, AgentRoom send/read, and future
-Slack-style integrations are gateways into or out of that thread. ClankVox sits
-under the current Discord voice adapter as deterministic transport code.
+Slack, Telegram, SMS, webhook, or huddle-style integrations are gateways into
+or out of that thread. ClankVox sits under the current Discord voice adapter as
+deterministic transport code.
 AgentRoom sits around Clanky when you want multi-agent coordination.
 
 ## First Path To Try
@@ -115,7 +117,7 @@ Summarize this repository and tell me how to run the non-live checks.
 ```
 
 That proves the Pi TUI, Clanky profile setup, model auth path, context loading,
-and basic tool use before you involve Discord or voice.
+and basic tool use before you involve communication gateways or voice.
 
 ## Normal Personal Profile
 
@@ -144,6 +146,8 @@ is unsupported.
 - [First-Time Setup](first-time-setup.md): prerequisites, install, fresh-user
   test, and connector setup.
 - [Using Clanky](using-clanky.md): day-to-day workflows once the profile works.
+- [Communication Gateways](communication-gateways.md): chat and voice/media
+  gateway abstraction, ownership, and subagent routing.
 - [Command Reference](command-reference.md): CLI commands, Pi slash commands,
   Clanky slash commands, and model-facing tools.
 - [Memory And Privacy](memory-and-privacy.md): profile state, auth storage,
@@ -170,7 +174,7 @@ Source: `README.md` - https://volpestyle.github.io/docs/clanky/?doc=overview
 ![Clanky](/branding/clanky-logo-512.png)
 
 Clanky is a personal Pi agent with profile state, memory, a canonical Pi
-session thread, chat and voice gateway adapters, subagents, media tools,
+session thread, communication gateway adapters, subagents, media tools,
 work-tracker refs, bundled skills, and AgentRoom participation.
 
 It is not a separate daemon or scheduler. Pi supplies the terminal agent
@@ -190,13 +194,13 @@ Use Clanky as the agent that is always yours:
 - keep separate profiles for personal work, room leads, reviewers, voice tests,
   or temporary experiments
 - store and inspect source-grounded memories with explicit privacy controls
-- connect external chat gateways, with Discord as the current agent-owned
-  adapter for DMs, mentions, replies, and channel bindings
+- connect external communication gateways, with Discord as the current
+  agent-owned text adapter for DMs, mentions, replies, and channel bindings
 - let gateway side requests route to subagents while the main TUI session keeps
   working
-- join Discord voice through the current ClankVox media adapter, transcribe
-  speakers, speak through Realtime or ElevenLabs, and delegate durable work
-  back to Pi
+- join live voice through the current Discord/ClankVox media adapter,
+  transcribe speakers, speak through Realtime or ElevenLabs, and delegate
+  durable work back to Pi
 - generate or inspect web/media artifacts through the bundled operator skills
 - participate in AgentRoom as a lead, worker, reviewer, or standalone personal
   agent
@@ -235,7 +239,7 @@ flowchart TB
   thread["Clanky Pi session thread<br/>canonical messaging"]
   clanky["Clanky runtime"]
   profile["Profile<br/>auth, memory, sessions, skills"]
-  chat["Chat gateway adapters<br/>Discord today, others later"]
+  chat["Communication gateway adapters<br/>Discord today, others later"]
   voice["Voice/media gateway adapters<br/>ClankVox Discord today"]
   vox["ClankVox<br/>native media plane"]
   room["AgentRoom<br/>optional room participation"]
@@ -256,7 +260,8 @@ Read it as:
 - Clanky configures Pi with persona, profile state, memory, skills, connectors,
   and voice/media capabilities.
 - Clanky's built-in messaging is the Pi session thread. Discord, AgentRoom, and
-  future Slack-style integrations are gateways into or out of that thread.
+  future Slack, Telegram, SMS, webhook, or huddle-style integrations are
+  gateways into or out of that thread.
 - ClankVox is a subprocess below Clanky for the current Discord media transport.
 - AgentRoom is optional room infrastructure around Clanky; it does not own
   Clanky's profile.
@@ -292,10 +297,10 @@ For a persistent profile:
 clanky --home ~/.clanky --profile personal --cwd .
 ```
 
-## Chat Gateways And Voice
+## Communication Gateways And Voice
 
-Agent-owned chat gateways are configured from inside the TUI. Discord is the
-current built-in chat adapter:
+Agent-owned communication gateways are configured from inside the TUI. Discord
+is the current built-in chat adapter:
 
 ```text
 /discord-login
@@ -318,6 +323,8 @@ through `ask_pi`, and the bundled ClankVox Rust media process:
 For the full voice map, use
 [Discord Voice Architecture](docs/discord-voice-architecture.md). For the native
 media subprocess, jump to [ClankVox Docs](docs://clankvox-docs/overview).
+For the cross-channel abstraction, use
+[Communication Gateways](docs/communication-gateways.md).
 
 ## AgentRoom
 
@@ -336,8 +343,9 @@ Room participation and gateway ownership are separate:
 - room-owned chat: AgentRoom owns the connector bot and routes the
   conversation through the room
 
-One Discord conversation should have one owner. Use
-`CLANKY_CHAT_GATEWAY_OWNER=room` when an AgentRoom connector owns that chat.
+One external conversation should have one owner. Use
+`CLANKY_CHAT_GATEWAY_OWNER=room` when an AgentRoom connector owns that gateway
+conversation.
 
 For the room side, jump to [AgentRoom Ecosystem Tour](docs://agent-room-docs/ecosystem).
 
@@ -346,8 +354,10 @@ For the room side, jump to [AgentRoom Ecosystem Tour](docs://agent-room-docs/eco
 - [Start Here](docs/start-here.md): new-user product path.
 - [Pi Foundation](docs/pi-foundation.md): what Pi owns and what Clanky adds.
 - [First-Time Setup](docs/first-time-setup.md): install, auth, connectors.
-- [Using Clanky](docs/using-clanky.md): daily TUI, memory, Discord, voice,
-  media, AgentRoom, skills, and connected tool workflows.
+- [Using Clanky](docs/using-clanky.md): daily TUI, memory, communication
+  gateways, voice/media, AgentRoom, skills, and connected tool workflows.
+- [Communication Gateways](docs/communication-gateways.md): chat and
+  voice/media gateway abstraction and ownership.
 - [Command Reference](docs/command-reference.md): CLI and slash commands.
 - [Memory And Privacy](docs/memory-and-privacy.md): profile-local state and
   privacy controls.
@@ -438,8 +448,9 @@ is appended to the startup prompt as well. It also uses Pi's `skillsOverride` to
 merge bundled/profile Clanky skills with Pi-discovered skills.
 
 Clanky's built-in messaging is still Pi's session thread. Discord text,
-AgentRoom send/read, and future Slack-style integrations are gateways into or
-out of that thread; they do not replace the native session model.
+AgentRoom send/read, and future Slack, Telegram, SMS, webhook, or huddle-style
+integrations are gateways into or out of that thread; they do not replace the
+native session model.
 
 ## Runtime Flow
 
@@ -524,8 +535,9 @@ personal-agent capabilities:
   `discord_voice_leave` for the current Discord voice adapter.
 - Coordination: `main_session_context`, `delegate_to_main_worker`,
   `subagent_status`.
-- Work trackers and MCP: `work_tracker_create_issue`, `work_tracker_link`,
-  `mcp_list_tools`, `mcp_call`.
+- Work trackers and MCP: `work_tracker_link`, `mcp_list_tools`, `mcp_call`.
+  Tracker-specific creation, comments, and status updates go through installed
+  MCP servers, CLIs, or skills.
 
 The user usually does not call model-facing tools directly. They become
 available to the model when Clanky decides they match the request and the
@@ -554,7 +566,8 @@ Clanky, start with the [Pi quickstart](https://pi.dev/docs/latest/quickstart).
 - This repository checked out locally.
 - An OpenAI API key or another Pi-supported model auth path.
 - Optional: a Discord bot token for the current agent-owned chat gateway
-  adapter.
+  adapter. Discord is today's adapter; the Clanky boundary is the
+  communication gateway abstraction.
 - Optional: Rust/Cargo for the bundled Discord voice media helper.
 - Optional: Playwright Chromium for browser automation routes.
 - Optional: xAI, ElevenLabs, Linear, or AgentRoom credentials for those specific
@@ -634,7 +647,7 @@ If you are starting from AgentRoom, you can configure the shared non-secret
 defaults once:
 
 ```bash
-agent-room init --room my-project --runtime herdr --clanky --work-tracker linear --linear-team team_123
+agent-room init --room my-project --runtime herdr --clanky --work-tracker linear --tracker-team team_123
 clanky --cwd /path/to/my-project
 ```
 
@@ -674,7 +687,8 @@ change that at runtime with:
 Clanky's built-in messaging is the local Pi session thread. External chat
 platforms are optional gateways into that thread or into profile-local
 subagents. The current built-in adapter is agent-owned Discord, where Clanky
-uses its own profile credential and owns the gateway.
+uses its own profile credential and owns the gateway. Future communication
+adapters should plug into the same ownership model.
 
 ```text
 /discord-login
@@ -772,9 +786,9 @@ agent-room launch clanky --harness pi --command clanky --cwd .
 ```
 
 Inside Clanky, `/setup` shows whether the process is enrolled in AgentRoom.
-AgentRoom participation does not decide Discord ownership. Use
+AgentRoom participation does not decide gateway ownership. Use
 `CLANKY_CHAT_GATEWAY_OWNER=room` when an AgentRoom room-owned connector owns the
-Discord conversation.
+external conversation.
 
 See [AgentRoom Integration](AGENTROOM.md) for the full contract.
 
@@ -823,7 +837,8 @@ you are editing.
 The active profile owns durable personal Clanky configuration and state:
 
 - `<profileDir>/auth.json` stores profile credentials such as OpenAI,
-  agent-owned gateway adapters, xAI, and ElevenLabs with `0600` permissions.
+  agent-owned communication gateway adapters, xAI, and ElevenLabs with `0600`
+  permissions.
 - `<profileDir>/discord-voice.json` stores non-secret Discord voice settings
   edited by `/discord-voice`.
 - `<profileDir>/models.json` stores custom model registry entries used by Pi's
@@ -872,7 +887,8 @@ the active source in status output.
 Clanky profile config and AgentRoom room config are separate:
 
 - Clanky owns personal credentials, profile memory, persona state, sessions,
-  skills, Clanky's native Pi session thread, and agent-owned gateway settings.
+  skills, Clanky's native Pi session thread, and agent-owned communication
+  gateway settings.
 - AgentRoom owns `.agentroom/config.yaml`, runtime topology, room-owned chat
   gateways, room routes, and audited room coordination.
 
@@ -890,7 +906,6 @@ workTracker:
     linear:
       type: linear
       tokenEnv: LINEAR_API_KEY
-      commandEnv: AGENTROOM_LINEAR_COMMAND
       teamId: team_123
 
 clanky:
@@ -901,8 +916,11 @@ clanky:
 
 Precedence remains explicit: `--home` / `--profile` and `CLANKY_HOME` /
 `CLANKY_PROFILE` win over the portable Clanky defaults. The AgentRoom block can
-set default work tracker selection and Linear team id, but it only names secret
-environment variables; it does not store API keys.
+set the selected work tracker and provider-local defaults such as a team id, but
+it only names secret environment variables; it does not store API keys or make
+Clanky own provider-specific API calls. Tracker creation, comments, and status
+updates still go through the installed MCP server, CLI, or skill for that
+provider.
 
 ## Rule For New Settings
 
@@ -966,9 +984,9 @@ Useful Pi editor patterns still apply:
 /setup fresh
 ```
 
-Use `/setup status` when you want a compact view of profile paths, OpenAI, chat
-gateway ownership, Discord adapter status, Discord voice, ElevenLabs, xAI, and
-AgentRoom participation.
+Use `/setup status` when you want a compact view of profile paths, OpenAI,
+gateway ownership, current Discord adapter status, Discord voice, ElevenLabs,
+xAI, and AgentRoom participation.
 
 ## Memory Workflow
 
@@ -998,7 +1016,7 @@ Use `/memory reflect` near the end of a busy day or long session. It only runs
 when there is enough recent transcript to review, and it should propose
 memories before saving anything that lacks explicit confirmation.
 
-## Chat Gateway Workflow
+## Communication Gateway Workflow
 
 Clanky's built-in messaging is the local Pi session thread. External chat
 platforms are gateways that can deliver messages to that thread or to a
@@ -1013,7 +1031,8 @@ Accepted gateway chat may route to a dedicated subagent. That gives the
 external conversation its own Pi session and context window while the main TUI
 session remains available. The Discord adapter can inspect Discord, ask main
 Clanky for recent main-session context, and delegate durable work back to the
-main worker.
+main worker. Future communication adapters should follow the same ownership and
+routing model rather than changing Clanky's core session model.
 
 Use the live subagent panel in the TUI:
 
@@ -1063,7 +1082,8 @@ use `/discord-voice join` or the `discord_voice_join` tool for explicit join
 intent.
 
 For architecture and live validation, see
-[Discord Voice Architecture](discord-voice-architecture.md) and
+[Communication Gateways](communication-gateways.md),
+[Discord Voice Architecture](discord-voice-architecture.md), and
 [Discord Voice Live Runbook](qa/discord-voice-live-runbook.md).
 
 ## Web And Media Workflow
@@ -1100,9 +1120,9 @@ clanky --home ./.clanky-room --profile clanky-lead --cwd .
 clanky --home ./.clanky-room --profile clanky-reviewer --cwd .
 ```
 
-Use `CLANKY_CHAT_GATEWAY_OWNER=room` when the room connector owns Discord.
-Leave it unset or set it to `agent` when this Clanky profile owns the Discord
-bridge.
+Use `CLANKY_CHAT_GATEWAY_OWNER=room` when the room connector owns the external
+conversation. Leave it unset or set it to `agent` when this Clanky profile owns
+the gateway.
 
 ## Skills Workflow
 
@@ -1118,8 +1138,9 @@ Commands:
 /skill:<skill-name>
 ```
 
-Bundled operator skills cover Discord, web/browser work, media generation,
-AgentRoom operation, Linear bridging, log dives, and Pi TUI coding behavior.
+Bundled operator skills cover communication gateways, Discord today,
+web/browser work, media generation, AgentRoom operation, Linear bridging, log
+dives, and Pi TUI coding behavior.
 
 ## Connected Tool Workflow
 
@@ -1128,8 +1149,8 @@ task needs them. You only need this section when adding or debugging tool
 servers.
 
 Clanky can auto-add AgentRoom tools when enrolled in an AgentRoom room or when
-`.agentroom/config.yaml` exists. It can also auto-add Discord tools when the
-profile has the right Discord credential.
+`.agentroom/config.yaml` exists. It can also auto-add provider tools for the
+current gateway adapter when the profile has the right credential.
 
 Inspect configured servers:
 
@@ -1147,6 +1168,102 @@ CLANKY_DISCORD_MCP=0
 
 ---
 
+# Communication Gateways
+
+Source: `docs/communication-gateways.md` - https://volpestyle.github.io/docs/clanky/?doc=communication-gateways
+
+# Communication Gateways
+
+Clanky is not a Discord agent. Clanky is a personal Pi agent with a
+communication gateway layer. Discord text and Discord voice are the current
+concrete adapters, but the product model is meant to support other messaging
+and live communication surfaces.
+
+## Core Model
+
+```mermaid
+flowchart TB
+  human["Human"]
+  thread["Canonical Pi session thread"]
+  clanky["Clanky runtime<br/>persona, tools, memory, skills"]
+  chat["Chat gateway adapters<br/>Discord today, Slack/Telegram/SMS/webhooks later"]
+  media["Voice/media gateway adapters<br/>ClankVox Discord today, other huddles later"]
+  subagents["Profile-local subagents"]
+  room["AgentRoom<br/>optional room"]
+
+  human --> thread
+  thread --> clanky
+  chat <--> thread
+  chat --> subagents
+  clanky --> media
+  clanky <--> room
+```
+
+The canonical local conversation is still the Pi session thread. External
+systems are adapters into or out of that thread, or into profile-local subagents
+when side work should not interrupt the foreground session.
+
+## Chat Gateways
+
+A chat gateway can deliver inbound messages, receive replies, and route accepted
+side requests to subagents. The current built-in chat adapter is agent-owned
+Discord, which handles DMs, mentions, replies, optional channel binding, and
+model-mediated skip/reply decisions.
+
+Future chat adapters should follow the same shape:
+
+- normalize inbound messages before Clanky sees them
+- keep provider credentials in the owning process or profile
+- make skip/reply/delegate decisions explicit
+- let the main Pi session stay useful while gateway side work runs elsewhere
+- avoid making the external platform the source of truth
+
+## Voice And Media Gateways
+
+Voice/media gateways are separate from chat gateways. The current production
+adapter is Discord voice through ClankVox. It uses Clanky's TypeScript control
+plane, realtime model sessions, speech output providers, Pi delegation through
+`ask_pi`, and the native ClankVox media process.
+
+The same boundary should hold for future Slack huddles, WebRTC calls, or other
+live media surfaces: Clanky owns the control plane and profile settings, while a
+media adapter owns provider-specific transport.
+
+## Ownership
+
+Gateway ownership is independent from AgentRoom participation:
+
+- **Agent-owned gateway:** Clanky owns the credential and gateway lifecycle for
+  its profile. This is the default personal-agent path.
+- **Room-owned gateway:** AgentRoom owns the connector and routes the
+  conversation into a room channel or lead agent. Clanky can still participate
+  in that room as a normal Pi harness.
+- **No gateway:** Clanky remains a local Pi agent with memory, skills, and tools.
+
+One external conversation should have exactly one owner. Do not attach the same
+conversation to both Clanky and AgentRoom.
+
+## Subagents
+
+Gateway subagents are profile-local Clanky sessions. They are useful for
+handling accepted side requests while the foreground TUI keeps working. They are
+not AgentRoom workers and they do not create a separate credential boundary.
+
+Use AgentRoom when the work needs a shared room, audited runtime flow, task
+shadows, durable handoffs, or multiple independent coding agents.
+
+## Where The Details Live
+
+- [Using Clanky](using-clanky.md): daily chat and voice workflows.
+- [AgentRoom Integration](AGENTROOM.md): gateway ownership when Clanky joins a
+  room.
+- [Memory And Privacy](memory-and-privacy.md): profile-local credential and
+  transcript boundaries.
+- [Discord Voice Architecture](discord-voice-architecture.md): current Discord
+  voice/media implementation.
+
+---
+
 # AgentRoom Integration
 
 Source: `docs/AGENTROOM.md` - https://volpestyle.github.io/docs/clanky/?doc=agentroom
@@ -1159,9 +1276,15 @@ command, not as source code vendored into the AgentRoom repository.
 ## Gateway Boundary
 
 Clanky's native messaging is its Pi session thread. Discord, AgentRoom
-send/read, and future Slack-style integrations are gateways that can feed that
-thread, receive replies from it, or route work to profile-local subagents. A
-gateway can be absent entirely and Clanky still works as a local Pi agent.
+send/read, and future Slack, Telegram, SMS, webhook, or huddle-style
+integrations are gateways that can feed that thread, receive replies from it,
+or route work to profile-local subagents. A gateway can be absent entirely and
+Clanky still works as a local Pi agent.
+
+This is a communication abstraction layer, not a Discord-only design. Discord
+text and Discord voice are today's concrete adapters; future Telegram, Slack,
+SMS, webhook, huddle, or other messaging surfaces should plug in at the same
+ownership boundary.
 
 Voice and video are separate media gateways. The current production adapter is
 Discord voice through ClankVox; a future Slack huddle adapter should plug in at
@@ -1227,7 +1350,7 @@ The gateway library is the same in both Discord cases (`@agentroom/chat-discord`
 which implements the chat gateway provider contract). Only the lifecycle owner
 differs.
 
-One Discord conversation should have exactly one owner. Do not point both an
+One external conversation should have exactly one owner. Do not point both an
 agent-owned gateway and a room-owned gateway at the same channel or DM.
 
 ## Ownership
@@ -1277,7 +1400,7 @@ AgentRoom can write the shared non-secret defaults directly into
 `.agentroom/config.yaml`:
 
 ```bash
-agent-room init --room my-project --runtime herdr --clanky --work-tracker linear --linear-team team_123
+agent-room init --room my-project --runtime herdr --clanky --work-tracker linear --tracker-team team_123
 ```
 
 Clanky treats that as a launch default only. Explicit `--home`, `--profile`,
@@ -1322,7 +1445,7 @@ Gateway startup is controlled separately:
 - default: `CLANKY_CHAT_GATEWAY_OWNER=agent` behavior, so Clanky may start its
   own gateway when `CLANKY_DISCORD_TOKEN` is present.
 - `CLANKY_CHAT_GATEWAY_OWNER=room`: suppress Clanky's gateway because the
-  relevant Discord conversation is room-owned.
+  relevant external conversation is room-owned.
 - `CLANKY_CHAT_GATEWAY_OWNER=off` or `CLANKY_DISABLE_CHAT_GATEWAY=1`: no
   in-process Clanky gateway.
 
@@ -1577,7 +1700,8 @@ are available and credentials/policy allow it:
   `discord_voice_leave`.
 - Coordination: `main_session_context`, `delegate_to_main_worker`,
   `subagent_status`.
-- Work tracking: `work_tracker_create_issue`, `work_tracker_link`.
+- Work tracking: `work_tracker_link` for binding issues created or found through
+  MCP, CLI, or tracker-specific skills.
 - MCP: `mcp_list_tools`, `mcp_call`.
 
 `task_create` and `schedule_cron` exist in the shared tool layer, but are only
@@ -1613,8 +1737,8 @@ Important profile files:
 | `profiles/<profile>/memory/` | Source-grounded memory data. |
 | `profiles/<profile>/SELF.md` | Profile-local self memory. |
 | `profiles/<profile>/skills/` | Profile-local Clanky skills. |
-| `profiles/<profile>/subagents/` | Discord and voice subagent state and sessions. |
-| `profiles/<profile>/work-trackers/` | Provider-neutral tracker refs and outbox state. |
+| `profiles/<profile>/subagents/` | Gateway and voice subagent state and sessions. |
+| `profiles/<profile>/work-trackers/` | Provider-neutral tracker refs. |
 | `profiles/<profile>/discord-voice.json` | Stored voice settings. |
 | `profiles/<profile>/discord-bridge.log` | Discord bridge log. |
 | `profiles/<profile>/discord-voice.log` | Discord voice log. |
@@ -1699,12 +1823,12 @@ Export:
 ## Gateway Privacy Boundary
 
 Agent-owned gateways use Clanky's own profile credential. Room-owned gateways
-use AgentRoom's connector credential. For the current Discord adapter, those
-credentials should not cross:
+use AgentRoom's connector credential. For any gateway adapter, including the
+current Discord adapter, those credentials should not cross:
 
 - Clanky must not read AgentRoom room connector tokens.
 - AgentRoom must not read Clanky's profile token.
-- One Discord conversation should not be owned by both at once.
+- One external conversation should not be owned by both at once.
 
 Gateway subagents are profile-local Clanky sessions. They are not AgentRoom
 workers and do not create a separate credential boundary.
@@ -2040,16 +2164,17 @@ Minimum credential set:
 
 ## Linear
 
-Required only for live Linear issue creation or link updates from Clanky tools.
+Required only when the installed Linear MCP, CLI, or skill is used for live
+Linear issue creation, comments, or status updates.
 
 ```bash
 LINEAR_API_KEY=... clanky --home ~/.clanky --profile personal
 ```
 
-Expected result: `work_tracker_create_issue` can create Linear issues when
-Linear is the selected provider, and `work_tracker_link` can persist tracker
-refs. If tracker credentials are unavailable, Clanky should report the skipped
-tracker update explicitly rather than pretending it happened.
+Expected result: the Linear integration can create or update the issue, then
+`work_tracker_link` can persist the tracker ref. If tracker credentials or tools
+are unavailable, Clanky should report the skipped tracker update explicitly
+rather than pretending it happened.
 
 ## xAI Media
 

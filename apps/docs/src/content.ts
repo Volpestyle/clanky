@@ -1,6 +1,7 @@
 import { defineDocsConfig } from "@volpestyle/night-compiler";
 import agentroom from "../../../docs/AGENTROOM.md?raw";
 import commandReference from "../../../docs/command-reference.md?raw";
+import communicationGateways from "../../../docs/communication-gateways.md?raw";
 import configuration from "../../../docs/configuration.md?raw";
 import voiceArchitecture from "../../../docs/discord-voice-architecture.md?raw";
 import firstTimeSetup from "../../../docs/first-time-setup.md?raw";
@@ -17,6 +18,7 @@ import { defaultDocSlug, docsMeta, groups, site } from "./docs-manifest";
 const markdownBySource = {
 	"docs/AGENTROOM.md": agentroom,
 	"docs/command-reference.md": commandReference,
+	"docs/communication-gateways.md": communicationGateways,
 	"docs/configuration.md": configuration,
 	"docs/discord-voice-architecture.md": voiceArchitecture,
 	"docs/first-time-setup.md": firstTimeSetup,

@@ -21,8 +21,8 @@ Important profile files:
 | `profiles/<profile>/memory/` | Source-grounded memory data. |
 | `profiles/<profile>/SELF.md` | Profile-local self memory. |
 | `profiles/<profile>/skills/` | Profile-local Clanky skills. |
-| `profiles/<profile>/subagents/` | Discord and voice subagent state and sessions. |
-| `profiles/<profile>/work-trackers/` | Provider-neutral tracker refs and outbox state. |
+| `profiles/<profile>/subagents/` | Gateway and voice subagent state and sessions. |
+| `profiles/<profile>/work-trackers/` | Provider-neutral tracker refs. |
 | `profiles/<profile>/discord-voice.json` | Stored voice settings. |
 | `profiles/<profile>/discord-bridge.log` | Discord bridge log. |
 | `profiles/<profile>/discord-voice.log` | Discord voice log. |
@@ -107,12 +107,12 @@ Export:
 ## Gateway Privacy Boundary
 
 Agent-owned gateways use Clanky's own profile credential. Room-owned gateways
-use AgentRoom's connector credential. For the current Discord adapter, those
-credentials should not cross:
+use AgentRoom's connector credential. For any gateway adapter, including the
+current Discord adapter, those credentials should not cross:
 
 - Clanky must not read AgentRoom room connector tokens.
 - AgentRoom must not read Clanky's profile token.
-- One Discord conversation should not be owned by both at once.
+- One external conversation should not be owned by both at once.
 
 Gateway subagents are profile-local Clanky sessions. They are not AgentRoom
 workers and do not create a separate credential boundary.
