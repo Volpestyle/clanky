@@ -41,7 +41,7 @@ Clanky configures Pi for a personal agent:
 - Persona markdown from `agents/clanky/persona/SELF.md`.
 - Profile paths under `~/.clanky` by default.
 - Profile auth storage for OpenAI, Discord, xAI, and ElevenLabs credentials.
-- Clanky memory, profile status, skills, Linear links, and subagent stores.
+- Clanky memory, profile status, skills, work-tracker refs, and subagent stores.
 - Bundled Clanky skills plus profile-local Clanky skills.
 - Discord text gateway ownership, Discord subagents, and Discord operator tools.
 - Discord voice settings, voice bridge, voice logs, and realtime voice-agent
@@ -94,7 +94,7 @@ uses its own home and profile layout instead:
       skills/
       memory/
       SELF.md
-      linear/
+      work-trackers/
       subagents/
       index.db
       cron/
@@ -139,8 +139,8 @@ personal-agent capabilities:
   `discord_voice_leave`.
 - Coordination: `main_session_context`, `delegate_to_main_worker`,
   `subagent_status`.
-- Linear and MCP: `linear_create_issue`, `linear_link`, `mcp_list_tools`,
-  `mcp_call`.
+- Work trackers and MCP: `work_tracker_create_issue`, `work_tracker_link`,
+  `mcp_list_tools`, `mcp_call`.
 
 The user usually does not call model-facing tools directly. They become
 available to the model when Clanky decides they match the request and the

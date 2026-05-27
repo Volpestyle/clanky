@@ -8,8 +8,8 @@ mental model is:
 - Pi is the terminal agent foundation: model runtime, TUI, sessions, built-in
   tools, context files, extensions, skills, and slash command mechanics.
 - Clanky is the personal layer on top: persona, profile-local state, memory,
-  Discord text and voice, media generation, web lookup, Linear links, MCP
-  servers, and AgentRoom-aware coordination.
+  Discord text and voice, media generation, web lookup, native work-tracker
+  refs, MCP servers, and AgentRoom-aware coordination.
 
 That means a new user should learn Clanky as a Pi-powered agent, not as a
 separate daemon. When `pnpm clanky` starts, it builds a Pi runtime, injects the
@@ -27,7 +27,7 @@ Pi's interactive TUI.
 | Discord voice | Join a configured voice channel, transcribe speakers, speak through Realtime or ElevenLabs, and delegate durable work to Pi. |
 | Web and media | Use OpenAI hosted web search, Playwright or Chrome CDP routes, OpenAI image generation, and xAI image/video generation. |
 | AgentRoom | Participate in an AgentRoom room as a normal Pi harness while keeping profile state and connector ownership explicit. |
-| Linear and MCP | Create/link Linear issues when credentials exist and call configured external MCP tools. |
+| Work tracking and MCP | Keep native Clanky task refs, link external tracker issues, use Linear when configured, and call configured external MCP tools. |
 
 ## First Path To Try
 
@@ -75,7 +75,8 @@ Inside Clanky:
 
 Use `--home` and `--profile` whenever you want isolation. Profiles are the
 boundary for sessions, memory, skills, auth, voice settings, subagents, and
-Linear state. Running two live Clankies on the same profile is unsupported.
+work-tracker state. Running two live Clankies on the same profile is
+unsupported.
 
 ## Docs Map
 

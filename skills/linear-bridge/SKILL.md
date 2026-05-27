@@ -8,6 +8,6 @@ deps: []
 
 # Linear Bridge
 
-Keep Linear comments concise and technical. Include the action taken, verification performed, and any remaining risk. When linking swarm work, preserve the task id, originating session id, and relevant file scope.
+Keep Linear comments concise and technical. Include the action taken, verification performed, and any remaining risk. Use Clanky's provider-neutral work tracker tools for links and issue creation, with `providerKind: "linear"`. When linking agent work, preserve the task id, originating session id, and relevant file scope.
 
 If Linear credentials or MCP tools are not available, report `tracker_update_skipped` with the reason.

@@ -67,7 +67,7 @@ agent-owned gateway and a room-owned gateway at the same channel or DM.
 
 ## Ownership
 
-- Clanky owns persona, memory, profile state, Linear stores, skills, and Pi
+- Clanky owns persona, memory, profile state, work-tracker stores, skills, and Pi
   `InteractiveMode` wiring.
 - AgentRoom owns rooms, runtime providers, task/event audit, send/read
   coordination, and room-owned chat gateway lifecycle.
@@ -104,9 +104,20 @@ change.
 
 Multiple Clanky instances in the same workspace **must** use separate
 `--profile <name>` flags, and typically `--home ./.clanky-room` for
-room-scoped state, so memory, sessions, and Linear links do not collide.
+room-scoped state, so memory, sessions, and work-tracker refs do not collide.
 Profiles are the only isolation boundary; sharing a profile across two live
 Clankies is unsupported.
+
+AgentRoom can write the shared non-secret defaults directly into
+`.agentroom/config.yaml`:
+
+```bash
+agent-room init --room my-project --runtime herdr --clanky --work-tracker linear --linear-team team_123
+```
+
+Clanky treats that as a launch default only. Explicit `--home`, `--profile`,
+`CLANKY_HOME`, and `CLANKY_PROFILE` still win, and API keys remain in env vars
+or Clanky's profile auth store.
 
 ## Launch Contract
 
@@ -154,8 +165,7 @@ Agent-owned Discord env:
 
 - `CLANKY_DISCORD_TOKEN`
 - `CLANKY_DISCORD_CREDENTIAL_KIND=bot-token|user-token` (default `bot-token`)
-- `CLANKY_DISCORD_CONVERSATION_ID` or legacy alias
-  `CLANKY_DISCORD_CHANNEL_ID`
+- `CLANKY_DISCORD_CONVERSATION_ID`
 - `CLANKY_DISCORD_PROVIDER_ID` (default `clanky-discord`)
 - `CLANKY_DISCORD_ENGAGEMENT_WINDOW_MINUTES` (default `5`; `0` disables)
 - `CLANKY_DISCORD_WAKE_NAMES` (comma-separated, default `clanky,clank`)

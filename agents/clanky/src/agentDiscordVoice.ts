@@ -90,7 +90,16 @@ interface AskPiResult {
 	target: VoicePiDelegationTarget;
 }
 
-const MIN_REALTIME_AUDIO_OUTPUT_DELAY_MS = 1;
+const MIN_REALTIME_AUDIO_OUTPUT_DELAY_MS = 10;
+const REALTIME_AUDIO_OUTPUT_TARGET_CHUNK_MS = 80;
+const REALTIME_AUDIO_OUTPUT_MAX_COALESCED_CHUNK_MS = 140;
+const REALTIME_AUDIO_OUTPUT_MAX_BACKLOG_MS = 8_000;
+const REALTIME_AUDIO_OUTPUT_MAX_CLANKVOX_BUFFER_MS = 4_000;
+const REALTIME_AUDIO_OUTPUT_BACKPRESSURE_RETRY_MS = 40;
+const VOICE_MUSIC_DUCK_GAIN = 0.22;
+const VOICE_MUSIC_DUCK_FADE_MS = 180;
+const VOICE_MUSIC_UNDUCK_FADE_MS = 650;
+const VOICE_MUSIC_UNDUCK_DELAY_MS = 250;
 
 export interface ClankyAgentDiscordVoiceConfig {
 	enabled: boolean;
@@ -190,8 +199,12 @@ interface VoiceBridgeStats {
 	discordInputAudioEndCount: number;
 	voiceBargeInAcceptedCount: number;
 	voiceBargeInSuppressedCount: number;
+	voiceMusicListenGateSuppressedCount: number;
 	realtimeAudioDeltaCount: number;
 	realtimeAudioDeltaBytes: number;
+	realtimeAudioCoalescedChunkCount: number;
+	realtimeAudioBackpressureDelayCount: number;
+	realtimeAudioBackpressureDropCount: number;
 	discordOutputAudioSendCount: number;
 	discordOutputAudioDropCount: number;
 	realtimeEventCount: number;
@@ -284,6 +297,7 @@ interface VoiceVoxClientLike extends ClankvoxRealtimeBridgeVox {
 	on(event: "ipcError", listener: (event: JsonRecord) => void): unknown;
 	on(event: "transportState", listener: (state: ClankvoxTransportState) => void): unknown;
 	on(event: "playerState", listener: (status: string) => void): unknown;
+	on(event: "ttsPlaybackState", listener: (status: string) => void): unknown;
 	on(event: "musicIdle", listener: () => void): unknown;
 	on(event: "musicError", listener: (message: string) => void): unknown;
 	on(event: "musicGainReached", listener: (gain: number) => void): unknown;
@@ -433,8 +447,12 @@ function createVoiceBridgeStats(): VoiceBridgeStats {
 		discordInputAudioEndCount: 0,
 		voiceBargeInAcceptedCount: 0,
 		voiceBargeInSuppressedCount: 0,
+		voiceMusicListenGateSuppressedCount: 0,
 		realtimeAudioDeltaCount: 0,
 		realtimeAudioDeltaBytes: 0,
+		realtimeAudioCoalescedChunkCount: 0,
+		realtimeAudioBackpressureDelayCount: 0,
+		realtimeAudioBackpressureDropCount: 0,
 		discordOutputAudioSendCount: 0,
 		discordOutputAudioDropCount: 0,
 		realtimeEventCount: 0,
@@ -859,11 +877,13 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 	private transcriptResponseTimer: TimerHandle | undefined;
 	private realtimeToolResponseTimer: TimerHandle | undefined;
 	private realtimeAudioOutputTimer: TimerHandle | undefined;
+	private musicUnduckTimer: TimerHandle | undefined;
 	private speechSynthesisQueue: Promise<void> = Promise.resolve();
 	private speechSynthesisGeneration = 0;
 	private speechSynthesisAbortController: AbortController | undefined;
 	private externalSpeechActiveCount = 0;
 	private assistantSpeechActiveUntilMs = 0;
+	private musicDuckedForSpeech = false;
 	private realtimeResponseActive = false;
 	private realtimeToolResponsePending = false;
 	private voiceLogFailureReported = false;
@@ -994,9 +1014,11 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		this.clearTranscriptResponseTimer();
 		this.clearRealtimeToolResponseTimer();
 		this.clearRealtimeAudioOutputQueue();
+		this.clearMusicUnduckTimer();
 		this.realtimeToolResponsePending = false;
 		this.cancelExternalSpeechSynthesis();
 		this.assistantSpeechActiveUntilMs = 0;
+		this.musicDuckedForSpeech = false;
 		this.clearStreamPublish("voice_bridge_stop", true);
 		this.streamDiscovery?.stop();
 		this.streamDiscovery = undefined;
@@ -1344,9 +1366,15 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 				eventType: transcript.eventType,
 			});
 			const assistantWasSpeaking = this.isAssistantSpeechActive();
-			const addressedAssistant = transcriptAddressesAssistant(text, this.voiceBargeInWakeWords());
+			const wakeWords = this.voiceBargeInWakeWords();
+			const directlyAddressedAssistant = transcriptDirectlyAddressesAssistant(text, wakeWords);
+			const addressedAssistant = directlyAddressedAssistant || transcriptLikelyAddressesAssistant(text, wakeWords);
+			const musicControlRequest = looksLikeMusicControlRequest(text);
+			if (this.shouldSuppressTranscriptWhileMusicPlaying(text, directlyAddressedAssistant, musicControlRequest)) {
+				return;
+			}
 			if (assistantWasSpeaking) {
-				if (!addressedAssistant) {
+				if (!addressedAssistant && !musicControlRequest) {
 					this.stats.voiceBargeInSuppressedCount += 1;
 					return;
 				}
@@ -1357,7 +1385,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 				userId: transcript.userId,
 				displayName,
 				text,
-				interruptedAssistant: assistantWasSpeaking && addressedAssistant,
+				interruptedAssistant: assistantWasSpeaking && (addressedAssistant || musicControlRequest),
 			});
 			return;
 		}
@@ -1372,6 +1400,22 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			this.transcriptResponseTimer = undefined;
 			this.flushSpeakerTranscriptsForResponse();
 		}, delayMs);
+	}
+
+	private shouldSuppressTranscriptWhileMusicPlaying(
+		text: string,
+		directlyAddressedAssistant: boolean,
+		musicControlRequest: boolean,
+	): boolean {
+		if (!this.isMusicPlayingForReservedListening()) return false;
+		if (directlyAddressedAssistant || musicControlRequest) return false;
+		this.stats.voiceMusicListenGateSuppressedCount += 1;
+		this.logVoice("info", "voice_music_listen_gate_suppressed", {
+			reason: "music_playing_requires_direct_address",
+			musicStatus: this.musicStatus,
+			text: truncateStatusText(text, 160),
+		});
+		return true;
 	}
 
 	private flushSpeakerTranscriptsForResponse(): void {
@@ -1390,6 +1434,12 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 					"Interruption policy: a speaker explicitly addressed Clanky while Clanky was speaking. Treat that as an intentional interruption and answer that addressed request now.",
 				]
 			: [];
+		const musicModeLines = this.isMusicPlayingForReservedListening()
+			? [
+					"",
+					"Music mode: music is currently playing. Be reserved, keep any response very brief, and only continue because this batch directly addressed Clanky or requested media control.",
+				]
+			: [];
 		realtime.requestTextUtterance(
 			[
 				...participantLines,
@@ -1397,6 +1447,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 				"",
 				...transcriptLines,
 				...interruptionLines,
+				...musicModeLines,
 				"",
 				`Voice participation eagerness: ${this.config.participationEagerness ?? DEFAULT_PARTICIPATION_EAGERNESS}/100.`,
 				"Decide whether Clanky should speak now. If speaking would feel natural, respond briefly in the Discord voice channel. If not, call voice_stay_silent and do not say that you are staying silent.",
@@ -1417,6 +1468,13 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		const timer = this.realtimeToolResponseTimer;
 		if (timer === undefined) return;
 		this.realtimeToolResponseTimer = undefined;
+		clearTimeout(timer);
+	}
+
+	private clearMusicUnduckTimer(): void {
+		const timer = this.musicUnduckTimer;
+		if (timer === undefined) return;
+		this.musicUnduckTimer = undefined;
 		clearTimeout(timer);
 	}
 
@@ -1445,13 +1503,20 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		vox.on("playerState", (status) => {
 			this.applyMusicPlayerState(status);
 		});
+		vox.on("ttsPlaybackState", (status) => {
+			this.handleTtsPlaybackState(status);
+		});
 		vox.on("musicIdle", () => {
 			this.musicStatus = "idle";
+			this.musicDuckedForSpeech = false;
+			this.clearMusicUnduckTimer();
 		});
 		vox.on("musicError", (message) => {
 			this.stats.musicErrorCount += 1;
 			this.musicStatus = "error";
 			this.musicLastError = message;
+			this.musicDuckedForSpeech = false;
+			this.clearMusicUnduckTimer();
 		});
 		vox.on("musicGainReached", (gain) => {
 			this.musicGain = gain;
@@ -1601,6 +1666,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 						this.stats.discordOutputAudioDropCount += 1;
 						return;
 					}
+					this.beginMusicDuckForAssistantSpeech("external_tts_audio");
 					activeVox.sendAudio(chunk.pcmBase64, chunk.sampleRate);
 					this.rememberAssistantSpeechOutput(chunk.pcmBase64, chunk.sampleRate);
 					this.stats.discordOutputAudioSendCount += 1;
@@ -1632,6 +1698,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		this.realtimeToolResponsePending = false;
 		this.assistantSpeechActiveUntilMs = 0;
 		this.vox?.stopTtsPlayback();
+		this.scheduleMusicUnduckAfterAssistantSpeech("assistant_interrupted");
 		if (this.realtimeResponseActive) {
 			this.realtimeResponseActive = false;
 			this.realtime?.cancelResponse();
@@ -1642,25 +1709,73 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		const normalizedPcm = pcmBase64.trim();
 		const bytes = base64DecodedByteLength(normalizedPcm);
 		if (normalizedPcm.length === 0 || bytes <= 0 || sampleRate <= 0) return;
-		this.realtimeAudioOutputQueue.push({
+		const durationMs = Math.max(MIN_REALTIME_AUDIO_OUTPUT_DELAY_MS, pcm16DurationMs(bytes, sampleRate));
+		const backlogMs = this.estimatedAssistantOutputBacklogMs();
+		if (backlogMs + durationMs > REALTIME_AUDIO_OUTPUT_MAX_BACKLOG_MS) {
+			this.stats.realtimeAudioBackpressureDropCount += 1;
+			this.stats.discordOutputAudioDropCount += 1;
+			if (
+				this.stats.realtimeAudioBackpressureDropCount === 1 ||
+				this.stats.realtimeAudioBackpressureDropCount % 25 === 0
+			) {
+				this.logVoice("warn", "realtime_audio_output_backpressure_drop", {
+					backlogMs: Math.round(backlogMs),
+					droppedDurationMs: Math.round(durationMs),
+					droppedChunks: this.stats.realtimeAudioBackpressureDropCount,
+				});
+			}
+			return;
+		}
+		this.pushRealtimeAudioOutputChunk({
 			pcmBase64: normalizedPcm,
 			sampleRate,
-			durationMs: Math.max(MIN_REALTIME_AUDIO_OUTPUT_DELAY_MS, pcm16DurationMs(bytes, sampleRate)),
+			durationMs,
 		});
 		this.rememberAssistantSpeechOutput(normalizedPcm, sampleRate);
 		this.drainRealtimeAudioOutputQueue();
 	}
 
+	private pushRealtimeAudioOutputChunk(chunk: RealtimeAudioOutputChunk): void {
+		const previous = this.realtimeAudioOutputQueue[this.realtimeAudioOutputQueue.length - 1];
+		if (
+			previous !== undefined &&
+			previous.sampleRate === chunk.sampleRate &&
+			previous.durationMs < REALTIME_AUDIO_OUTPUT_TARGET_CHUNK_MS &&
+			previous.durationMs + chunk.durationMs <= REALTIME_AUDIO_OUTPUT_MAX_COALESCED_CHUNK_MS
+		) {
+			const combined = Buffer.concat([
+				Buffer.from(previous.pcmBase64, "base64"),
+				Buffer.from(chunk.pcmBase64, "base64"),
+			]);
+			previous.pcmBase64 = combined.toString("base64");
+			previous.durationMs += chunk.durationMs;
+			this.stats.realtimeAudioCoalescedChunkCount += 1;
+			return;
+		}
+		this.realtimeAudioOutputQueue.push(chunk);
+	}
+
 	private drainRealtimeAudioOutputQueue(): void {
 		if (this.realtimeAudioOutputTimer !== undefined) return;
-		const chunk = this.realtimeAudioOutputQueue.shift();
+		const chunk = this.realtimeAudioOutputQueue[0];
 		if (chunk === undefined) return;
+		const clankvoxTtsBufferMs = this.clankvoxTtsBufferMs();
+		if (clankvoxTtsBufferMs > REALTIME_AUDIO_OUTPUT_MAX_CLANKVOX_BUFFER_MS) {
+			this.stats.realtimeAudioBackpressureDelayCount += 1;
+			this.realtimeAudioOutputTimer = setTimeout(() => {
+				this.realtimeAudioOutputTimer = undefined;
+				this.drainRealtimeAudioOutputQueue();
+			}, REALTIME_AUDIO_OUTPUT_BACKPRESSURE_RETRY_MS);
+			return;
+		}
+		this.realtimeAudioOutputQueue.shift();
 		const vox = this.vox;
 		if (vox === undefined) {
 			this.stats.discordOutputAudioDropCount += 1 + this.realtimeAudioOutputQueue.length;
 			this.realtimeAudioOutputQueue.length = 0;
 			return;
 		}
+		this.beginMusicDuckForAssistantSpeech("realtime_audio_output");
 		vox.sendAudio(chunk.pcmBase64, chunk.sampleRate);
 		this.stats.discordOutputAudioSendCount += 1;
 		this.realtimeAudioOutputTimer = setTimeout(
@@ -1679,6 +1794,19 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		if (timer !== undefined) clearTimeout(timer);
 	}
 
+	private estimatedAssistantOutputBacklogMs(): number {
+		const predictedSpeechMs = Math.max(0, this.assistantSpeechActiveUntilMs - Date.now());
+		return Math.max(predictedSpeechMs, this.queuedRealtimeAudioOutputMs() + this.clankvoxTtsBufferMs());
+	}
+
+	private queuedRealtimeAudioOutputMs(): number {
+		return this.realtimeAudioOutputQueue.reduce((total, chunk) => total + chunk.durationMs, 0);
+	}
+
+	private clankvoxTtsBufferMs(): number {
+		return Math.max(0, this.mediaBufferDepth.ttsSamples) / 48;
+	}
+
 	private rememberAssistantSpeechOutput(pcmBase64: string, sampleRate: number): void {
 		const bytes = base64DecodedByteLength(pcmBase64);
 		if (bytes <= 0 || sampleRate <= 0) return;
@@ -1694,6 +1822,65 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			this.mediaBufferDepth.ttsSamples > 0 ||
 			Date.now() < this.assistantSpeechActiveUntilMs
 		);
+	}
+
+	private isMusicPlayingForReservedListening(): boolean {
+		return this.musicStatus === "playing";
+	}
+
+	private beginMusicDuckForAssistantSpeech(reason: string): void {
+		if (this.musicStatus !== "playing") return;
+		const vox = this.vox;
+		if (vox === undefined) return;
+		this.clearMusicUnduckTimer();
+		if (this.musicDuckedForSpeech) return;
+		this.musicDuckedForSpeech = true;
+		vox.musicSetGain(VOICE_MUSIC_DUCK_GAIN, VOICE_MUSIC_DUCK_FADE_MS);
+		this.logVoice("info", "voice_music_duck", {
+			reason,
+			target: VOICE_MUSIC_DUCK_GAIN,
+			fadeMs: VOICE_MUSIC_DUCK_FADE_MS,
+		});
+	}
+
+	private scheduleMusicUnduckAfterAssistantSpeech(reason: string): void {
+		if (!this.musicDuckedForSpeech) return;
+		this.clearMusicUnduckTimer();
+		this.musicUnduckTimer = setTimeout(() => {
+			this.musicUnduckTimer = undefined;
+			this.maybeUnduckMusicAfterAssistantSpeech(reason);
+		}, VOICE_MUSIC_UNDUCK_DELAY_MS);
+	}
+
+	private maybeUnduckMusicAfterAssistantSpeech(reason: string): void {
+		if (!this.musicDuckedForSpeech) return;
+		if (this.musicStatus !== "playing") {
+			this.musicDuckedForSpeech = false;
+			return;
+		}
+		if (this.externalSpeechActiveCount > 0 || this.realtimeAudioOutputTimer !== undefined) {
+			this.scheduleMusicUnduckAfterAssistantSpeech(reason);
+			return;
+		}
+		if (this.realtimeAudioOutputQueue.length > 0 || this.mediaBufferDepth.ttsSamples > 0) {
+			this.scheduleMusicUnduckAfterAssistantSpeech(reason);
+			return;
+		}
+		this.musicDuckedForSpeech = false;
+		this.vox?.musicSetGain(1.0, VOICE_MUSIC_UNDUCK_FADE_MS);
+		this.logVoice("info", "voice_music_unduck", {
+			reason,
+			target: 1.0,
+			fadeMs: VOICE_MUSIC_UNDUCK_FADE_MS,
+		});
+	}
+
+	private handleTtsPlaybackState(status: string): void {
+		const normalized = status.trim().toLowerCase();
+		if (normalized === "idle") {
+			this.mediaBufferDepth = { ...this.mediaBufferDepth, ttsSamples: 0 };
+			this.scheduleMusicUnduckAfterAssistantSpeech("tts_playback_idle");
+		}
 	}
 
 	private voiceBargeInWakeWords(): string[] {
@@ -2051,6 +2238,8 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		const vox = this.requireVox();
 		vox.musicPause();
 		this.musicStatus = this.musicStatus === "idle" ? "idle" : "paused";
+		this.musicDuckedForSpeech = false;
+		this.clearMusicUnduckTimer();
 		if (this.streamPublish.active && this.streamPublish.streamKey !== undefined) {
 			this.streamDiscovery?.setPublishPaused(this.streamPublish.streamKey, true);
 			vox.streamPublishPause();
@@ -2087,6 +2276,8 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		const vox = this.requireVox();
 		vox.musicStop();
 		this.musicStatus = "idle";
+		this.musicDuckedForSpeech = false;
+		this.clearMusicUnduckTimer();
 		this.clearStreamPublish("media_stop", true);
 		return { ok: true, media: this.mediaStatus() };
 	}
@@ -2398,6 +2589,10 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		const normalized = status.trim().toLowerCase();
 		if (normalized === "playing" || normalized === "paused" || normalized === "idle") {
 			this.musicStatus = normalized;
+			if (normalized !== "playing") {
+				this.musicDuckedForSpeech = false;
+				this.clearMusicUnduckTimer();
+			}
 		}
 	}
 
@@ -2459,6 +2654,7 @@ function buildRealtimeInstructions(
 		"When a Discord voice channel participant list is provided, use it as live room context. Muted participants can listen but may not be able to talk; deafened participants may not hear you.",
 		`Participation eagerness: ${participationEagerness}/100. Lower values mean behave like a quieter participant; higher values mean join more often and help steer the room.`,
 		"When a transcript batch is side chatter, backchanneling, or not a natural moment for Clanky to speak, call voice_stay_silent instead of producing speech. Do not say that you are staying silent.",
+		"When music is playing, behave like a reserved music player: speak only for direct Clanky address or explicit media controls.",
 		"Always speak for direct Clanky address, explicit tool/media requests, urgent corrections, or clear follow-ups to Clanky's last turn.",
 		"Keep replies short enough for spoken conversation, and avoid reading long tool output verbatim.",
 		"Use ask_pi for durable work, memory-backed answers, coding tasks, Linear, MCP, or anything that should go through the Pi agent runtime.",
@@ -3327,13 +3523,54 @@ function resolveVoiceBargeInWakeWords(
 	return dedupeWakeNames([...DEFAULT_VOICE_BARGE_IN_WAKE_WORDS, ...(config.wakeNames ?? []), username ?? ""]);
 }
 
-function transcriptAddressesAssistant(text: string, wakeWords: readonly string[]): boolean {
+function transcriptDirectlyAddressesAssistant(text: string, wakeWords: readonly string[]): boolean {
 	for (const wakeWord of wakeWords) {
 		if (isVoiceWakeNameAddressed({ transcript: text, botName: wakeWord })) return true;
 		if (containsVoiceWakeNameMention({ transcript: text, botName: wakeWord })) return true;
+	}
+	return false;
+}
+
+function transcriptLikelyAddressesAssistant(text: string, wakeWords: readonly string[]): boolean {
+	for (const wakeWord of wakeWords) {
 		if (hasLikelyVoiceWakeNameCue({ transcript: text, botName: wakeWord })) return true;
 	}
 	return false;
+}
+
+function looksLikeMusicControlRequest(text: string): boolean {
+	const tokens = tokenizeWakeTokens(text);
+	if (tokens.length === 0) return false;
+	const tokenSet = new Set(tokens);
+	const hasMediaNoun = tokens.some((token) =>
+		["music", "song", "track", "audio", "playlist", "radio", "tune", "sound", "volume", "media", "video"].includes(
+			token,
+		),
+	);
+	const hasControlVerb = tokens.some((token) =>
+		[
+			"pause",
+			"paused",
+			"resume",
+			"continue",
+			"stop",
+			"skip",
+			"restart",
+			"replay",
+			"play",
+			"quiet",
+			"quieter",
+			"louder",
+			"mute",
+			"unmute",
+			"lower",
+			"raise",
+			"turn",
+		].includes(token),
+	);
+	if (hasMediaNoun && hasControlVerb) return true;
+	if ((tokenSet.has("pause") || tokenSet.has("resume") || tokenSet.has("stop")) && tokenSet.has("it")) return true;
+	return tokenSet.has("resume") && (tokenSet.has("playing") || tokenSet.has("playback"));
 }
 
 function isVoiceWakeNameAddressed({ transcript, botName = "" }: { transcript: string; botName?: string }): boolean {

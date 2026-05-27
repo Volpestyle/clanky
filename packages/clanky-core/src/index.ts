@@ -16,8 +16,6 @@ export {
 	type DiscordVoiceOperationProgress,
 	type ExternalMcpCallToolInput,
 	type ExternalMcpListToolsInput,
-	type LinearCreateIssueToolInput,
-	type LinearLinkToolInput,
 	type MainAgentActivityToolInput,
 	type MainAgentCancelToolInput,
 	type MainSessionContextToolInput,
@@ -35,9 +33,22 @@ export {
 	shouldUseMediaOperatorSkill,
 	type TaskCreateToolInput,
 	type WebSearchToolInput,
+	type WorkTrackerCreateIssueToolInput,
+	type WorkTrackerLinkToolInput,
 	type XAiImageGenerateToolInput,
 	type XAiVideoGenerateToolInput,
 } from "./agent-tools.ts";
+export {
+	maybeLoadAgentRoomPortableConfig,
+	type PortableAgentRoomConfig,
+	type PortableClankyChatGatewayOwner,
+	type PortableClankyConfig,
+	type PortableClankyDefaults,
+	type PortableWorkTrackerConfig,
+	type PortableWorkTrackerProviderConfig,
+	resolvePortableClankyDefaults,
+	withAgentRoomPortableEnv,
+} from "./agentroom-config.ts";
 export {
 	type ClankyChatGatewayOwner,
 	type ClankyChatMode,
@@ -118,19 +129,6 @@ export {
 	type LinearPostCommentInput,
 	type LinearPostCommentResult,
 } from "./linear/client.ts";
-export {
-	type CreateLinearLinkInput,
-	type LinearLink,
-	LinearLinkStore,
-} from "./linear/links.ts";
-export {
-	type CreateLinearOutboxEntryInput,
-	type LinearOutboxEntry,
-	type LinearOutboxKind,
-	type LinearOutboxStatus,
-	LinearOutboxStore,
-	type MarkLinearOutboxPostedInput,
-} from "./linear/outbox.ts";
 export {
 	type ClankyMcpServerConfig,
 	type ClankyMcpServerStatus,
@@ -253,6 +251,23 @@ export {
 	runOpenAiWebSearch,
 	type WebBackendStatusOptions,
 } from "./web/operator.ts";
+export {
+	type CreateWorkTrackerOutboxEntryInput,
+	type MarkWorkTrackerOutboxPostedInput,
+	type WorkTrackerOutboxEntry,
+	type WorkTrackerOutboxKind,
+	type WorkTrackerOutboxStatus,
+	WorkTrackerOutboxStore,
+} from "./work-tracker/outbox.ts";
+export {
+	type CreateWorkTrackerRefInput,
+	normalizeWorkTrackerProviderKind,
+	type WorkTrackerCreateIssueInput,
+	type WorkTrackerIssueRef,
+	type WorkTrackerProviderKind,
+	type WorkTrackerRef,
+	WorkTrackerRefStore,
+} from "./work-tracker/refs.ts";
 export {
 	DEFAULT_XAI_PROVIDER_ID,
 	getXAiCredentialStatus,

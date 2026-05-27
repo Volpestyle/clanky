@@ -81,9 +81,10 @@ Required only for live Linear issue creation or link updates from Clanky tools.
 LINEAR_API_KEY=... pnpm clanky --home ~/.clanky --profile personal
 ```
 
-Expected result: Linear-backed tool calls can create or link issues. If Linear
-credentials are unavailable, Clanky should report the skipped tracker update
-explicitly rather than pretending it happened.
+Expected result: `work_tracker_create_issue` can create Linear issues when
+Linear is the selected provider, and `work_tracker_link` can persist tracker
+refs. If tracker credentials are unavailable, Clanky should report the skipped
+tracker update explicitly rather than pretending it happened.
 
 ## xAI Media
 

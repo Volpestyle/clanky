@@ -27,9 +27,9 @@ The active profile owns durable personal Clanky configuration and state:
   edited by `/discord-voice`.
 - `<profileDir>/models.json` stores custom model registry entries used by Pi's
   model selector.
-- `<profileDir>/SELF.md`, `memory/`, `sessions/`, `subagents/`, `linear/`, and
-  `cron/` store profile-local memory, session, multitasking, work, and scheduled
-  job state.
+- `<profileDir>/SELF.md`, `memory/`, `sessions/`, `subagents/`,
+  `work-trackers/`, and `cron/` store profile-local memory, session,
+  multitasking, work, and scheduled job state.
 
 The TUI setup and status commands edit or report these stores:
 
@@ -77,6 +77,30 @@ Clanky profile config and AgentRoom room config are separate:
 When Clanky is launched in AgentRoom, `AGENTROOM=1` means room participation
 only. It does not move Clanky's profile credentials into AgentRoom and it does
 not make Clanky read a room-owned connector token.
+
+There is one portable non-secret overlap: when Clanky starts inside a project
+with `.agentroom/config.yaml`, it reads these optional blocks as defaults:
+
+```yaml
+workTracker:
+  default: linear
+  providers:
+    linear:
+      type: linear
+      tokenEnv: LINEAR_API_KEY
+      commandEnv: AGENTROOM_LINEAR_COMMAND
+      teamId: team_123
+
+clanky:
+  home: .clanky-room
+  profile: lead
+  chatGatewayOwner: room
+```
+
+Precedence remains explicit: `--home` / `--profile` and `CLANKY_HOME` /
+`CLANKY_PROFILE` win over the portable Clanky defaults. The AgentRoom block can
+set default work tracker selection and Linear team id, but it only names secret
+environment variables; it does not store API keys.
 
 ## Rule For New Settings
 

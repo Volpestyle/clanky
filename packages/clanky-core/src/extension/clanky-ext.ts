@@ -4,11 +4,11 @@ export {
 	createClankyToolDefinitions,
 	type ExternalMcpCallToolInput,
 	type ExternalMcpListToolsInput,
-	type LinearCreateIssueToolInput,
-	type LinearLinkToolInput,
 	type MemoryForgetToolInput,
 	type MemoryRememberToolInput,
 	type MemorySearchToolInput,
 	type ScheduleCronToolInput,
 	type TaskCreateToolInput,
+	type WorkTrackerCreateIssueToolInput,
+	type WorkTrackerLinkToolInput,
 } from "../agent-tools.ts";

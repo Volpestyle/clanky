@@ -28,6 +28,7 @@ interface ClankySetupWizardDeps {
 	discordProviderId: string;
 	gatewayController: ClankyDiscordGatewayController;
 	voiceSettings: DiscordVoiceSettingsAccessor;
+	env?: NodeJS.ProcessEnv;
 }
 
 type SetupChoice = "status" | "openai" | "discord" | "voice" | "elevenlabs" | "xai" | "agentroom" | "done";
@@ -158,9 +159,10 @@ function setupTitle(deps: ClankySetupWizardDeps): string {
 }
 
 function setupOptions(deps: ClankySetupWizardDeps): string[] {
-	const openAiStatus = getOpenAiCredentialStatus(process.env, deps.authStorage, DEFAULT_OPENAI_PROVIDER_ID);
-	const elevenLabsStatus = getElevenLabsCredentialStatus(process.env, deps.authStorage, DEFAULT_ELEVENLABS_PROVIDER_ID);
-	const xaiStatus = getXAiCredentialStatus(process.env, deps.authStorage, DEFAULT_XAI_PROVIDER_ID);
+	const env = setupEnv(deps);
+	const openAiStatus = getOpenAiCredentialStatus(env, deps.authStorage, DEFAULT_OPENAI_PROVIDER_ID);
+	const elevenLabsStatus = getElevenLabsCredentialStatus(env, deps.authStorage, DEFAULT_ELEVENLABS_PROVIDER_ID);
+	const xaiStatus = getXAiCredentialStatus(env, deps.authStorage, DEFAULT_XAI_PROVIDER_ID);
 	const voiceSettings = deps.voiceSettings.read();
 	return [
 		"Status",
@@ -169,7 +171,7 @@ function setupOptions(deps: ClankySetupWizardDeps): string[] {
 		`Voice / Discord voice [${voiceSettings?.enabled === true ? "enabled" : "disabled"}]`,
 		`Voice / ElevenLabs [${elevenLabsStatus.available ? "set" : "missing"}]`,
 		`Media / xAI [${xaiStatus.available ? "set" : "missing"}]`,
-		`AgentRoom [${isAgentRoomEnrolled(process.env) ? "participating" : "not enrolled"}]`,
+		`AgentRoom [${isAgentRoomEnrolled(env) ? "participating" : "not enrolled"}]`,
 		"Done",
 	];
 }
@@ -187,11 +189,12 @@ function parseSetupChoice(choice: string | undefined): SetupChoice {
 }
 
 function formatClankySetupStatus(deps: ClankySetupWizardDeps): string {
-	const openAiStatus = getOpenAiCredentialStatus(process.env, deps.authStorage, DEFAULT_OPENAI_PROVIDER_ID);
-	const elevenLabsStatus = getElevenLabsCredentialStatus(process.env, deps.authStorage, DEFAULT_ELEVENLABS_PROVIDER_ID);
-	const xaiStatus = getXAiCredentialStatus(process.env, deps.authStorage, DEFAULT_XAI_PROVIDER_ID);
+	const env = setupEnv(deps);
+	const openAiStatus = getOpenAiCredentialStatus(env, deps.authStorage, DEFAULT_OPENAI_PROVIDER_ID);
+	const elevenLabsStatus = getElevenLabsCredentialStatus(env, deps.authStorage, DEFAULT_ELEVENLABS_PROVIDER_ID);
+	const xaiStatus = getXAiCredentialStatus(env, deps.authStorage, DEFAULT_XAI_PROVIDER_ID);
 	const storedDiscord = loadStoredDiscordCredential(deps.authStorage, deps.discordProviderId);
-	const envDiscord = process.env.CLANKY_DISCORD_TOKEN?.trim();
+	const envDiscord = env.CLANKY_DISCORD_TOKEN?.trim();
 	const voiceSettings = deps.voiceSettings.read();
 	const lines = [
 		"Clanky setup",
@@ -201,11 +204,12 @@ function formatClankySetupStatus(deps: ClankySetupWizardDeps): string {
 		"",
 		`OpenAI: ${openAiStatus.available ? (openAiStatus.activeSource ?? "configured") : "missing"}`,
 		`Discord text: ${discordCredentialLabel(envDiscord, storedDiscord)}`,
-		`Discord owner: ${resolveClankyChatGatewayOwner(process.env)} (${resolveClankyChatMode(process.env)})`,
+		`Discord owner: ${resolveClankyChatGatewayOwner(env)} (${resolveClankyChatMode(env)})`,
 		`Discord voice: ${voiceSettings?.enabled === true ? "enabled" : "disabled"}`,
 		`ElevenLabs: ${elevenLabsStatus.available ? (elevenLabsStatus.activeSource ?? "configured") : "missing"}`,
 		`xAI media: ${xaiStatus.available ? (xaiStatus.activeSource ?? "configured") : "missing"}`,
-		`AgentRoom: ${isAgentRoomEnrolled(process.env) ? "participating" : "not enrolled"}`,
+		`AgentRoom: ${isAgentRoomEnrolled(env) ? "participating" : "not enrolled"}`,
+		`Work tracker: ${env.CLANKY_WORK_TRACKER ?? "profile/default"} (${env.CLANKY_WORK_TRACKER_PROVIDER_KIND ?? "unknown"})`,
 		"",
 		"Connector ownership:",
 		"Clanky-owned credentials live in this profile auth store.",
@@ -218,11 +222,12 @@ function formatClankySetupStatus(deps: ClankySetupWizardDeps): string {
 }
 
 function formatClankyStatusDashboard(deps: ClankySetupWizardDeps): string {
-	const openAiStatus = getOpenAiCredentialStatus(process.env, deps.authStorage, DEFAULT_OPENAI_PROVIDER_ID);
-	const elevenLabsStatus = getElevenLabsCredentialStatus(process.env, deps.authStorage, DEFAULT_ELEVENLABS_PROVIDER_ID);
-	const xaiStatus = getXAiCredentialStatus(process.env, deps.authStorage, DEFAULT_XAI_PROVIDER_ID);
+	const env = setupEnv(deps);
+	const openAiStatus = getOpenAiCredentialStatus(env, deps.authStorage, DEFAULT_OPENAI_PROVIDER_ID);
+	const elevenLabsStatus = getElevenLabsCredentialStatus(env, deps.authStorage, DEFAULT_ELEVENLABS_PROVIDER_ID);
+	const xaiStatus = getXAiCredentialStatus(env, deps.authStorage, DEFAULT_XAI_PROVIDER_ID);
 	const storedDiscord = loadStoredDiscordCredential(deps.authStorage, deps.discordProviderId);
-	const envDiscord = process.env.CLANKY_DISCORD_TOKEN?.trim();
+	const envDiscord = env.CLANKY_DISCORD_TOKEN?.trim();
 	const voiceSettings = deps.voiceSettings.read();
 	const bridge = deps.gatewayController.status();
 	const lines = [
@@ -242,9 +247,10 @@ function formatClankyStatusDashboard(deps: ClankySetupWizardDeps): string {
 		`ElevenLabs: ${elevenLabsStatus.available ? (elevenLabsStatus.activeSource ?? "configured") : "missing"}`,
 		"",
 		"Runtime",
-		`Chat mode: ${resolveClankyChatMode(process.env)}`,
-		`Gateway owner: ${resolveClankyChatGatewayOwner(process.env)}`,
-		`AgentRoom: ${isAgentRoomEnrolled(process.env) ? "participating" : "not enrolled"}`,
+		`Chat mode: ${resolveClankyChatMode(env)}`,
+		`Gateway owner: ${resolveClankyChatGatewayOwner(env)}`,
+		`AgentRoom: ${isAgentRoomEnrolled(env) ? "participating" : "not enrolled"}`,
+		`Work tracker: ${env.CLANKY_WORK_TRACKER ?? "profile/default"} (${env.CLANKY_WORK_TRACKER_PROVIDER_KIND ?? "unknown"})`,
 	];
 	const nextSteps = formatStatusNextSteps(
 		openAiStatus.available,
@@ -275,7 +281,7 @@ function discordCredentialLabel(
 }
 
 function hasDiscordCredential(deps: ClankySetupWizardDeps): boolean {
-	const envToken = process.env.CLANKY_DISCORD_TOKEN?.trim();
+	const envToken = setupEnv(deps).CLANKY_DISCORD_TOKEN?.trim();
 	return (
 		(envToken !== undefined && envToken.length > 0) ||
 		loadStoredDiscordCredential(deps.authStorage, deps.discordProviderId) !== undefined
@@ -306,12 +312,15 @@ function formatStatusActive(active: boolean | undefined): string {
 }
 
 function formatAgentRoomParticipation(deps: ClankySetupWizardDeps): string {
+	const env = setupEnv(deps);
 	const lines = [
 		"AgentRoom participation",
-		`Current mode: ${resolveClankyChatMode(process.env)}`,
-		`AGENTROOM: ${process.env.AGENTROOM === "1" ? "1" : "not set"}`,
-		`AGENTROOM_AGENT_ID: ${process.env.AGENTROOM_AGENT_ID ?? "not set"}`,
-		`AGENTROOM_ROOM_ID: ${process.env.AGENTROOM_ROOM_ID ?? "not set"}`,
+		`Current mode: ${resolveClankyChatMode(env)}`,
+		`AGENTROOM: ${env.AGENTROOM === "1" ? "1" : "not set"}`,
+		`AGENTROOM_AGENT_ID: ${env.AGENTROOM_AGENT_ID ?? "not set"}`,
+		`AGENTROOM_ROOM_ID: ${env.AGENTROOM_ROOM_ID ?? "not set"}`,
+		`Portable config: ${env.CLANKY_AGENTROOM_CONFIG ?? "not set"}`,
+		`Work tracker: ${env.CLANKY_WORK_TRACKER ?? "profile/default"}`,
 		"",
 		"These values only mean Clanky is participating in a room.",
 		"They do not transfer Clanky's personal Discord token to AgentRoom.",
@@ -323,6 +332,10 @@ function formatAgentRoomParticipation(deps: ClankySetupWizardDeps): string {
 		`Current profile remains isolated at ${deps.paths.profileDir}.`,
 	];
 	return lines.join("\n");
+}
+
+function setupEnv(deps: ClankySetupWizardDeps): NodeJS.ProcessEnv {
+	return deps.env ?? process.env;
 }
 
 function formatFreshUserHelp(deps: ClankySetupWizardDeps): string {

@@ -11,6 +11,7 @@ import {
 	loadClankySkills,
 	loadStoredDiscordCredential,
 	resolveClankyPaths,
+	resolvePortableClankyDefaults,
 } from "@clanky/core";
 import {
 	AuthStorage,
@@ -213,6 +214,7 @@ function buildRuntimeFactory(opts: {
 	discordProviderId: string;
 	gatewayController: ClankyDiscordGatewayController;
 	discordVoiceSettings: DiscordVoiceSettingsStore;
+	env: NodeJS.ProcessEnv;
 	defaultThinkingLevel: () => ClankyThinkingLevel;
 	additionalExtensionFactories?: ExtensionFactory[];
 }): CreateAgentSessionRuntimeFactory {
@@ -224,10 +226,12 @@ function buildRuntimeFactory(opts: {
 		discordProviderId,
 		gatewayController,
 		discordVoiceSettings,
+		env,
 		defaultThinkingLevel,
 		additionalExtensionFactories = [],
 	} = opts;
 	const handlers = createClankyHandlers(paths, stores, {
+		env,
 		authStorage,
 		mainSessionContext: async (input) => gatewayController.mainSessionContext(input),
 		mainAgentActivity: async (input) => gatewayController.mainAgentActivity(input),
@@ -447,11 +451,15 @@ function formatEffortUpdate(
 	return lines.join("\n");
 }
 
-function createClankyWelcomeExtensionFactory(input: { authStorage: AuthStorage; profile: string }): ExtensionFactory {
+function createClankyWelcomeExtensionFactory(input: {
+	authStorage: AuthStorage;
+	profile: string;
+	env: NodeJS.ProcessEnv;
+}): ExtensionFactory {
 	return (pi) => {
 		pi.on("session_start", async (_event, ctx) => {
 			if (!ctx.hasUI) return;
-			const status = getOpenAiCredentialStatus(process.env, input.authStorage);
+			const status = getOpenAiCredentialStatus(input.env, input.authStorage);
 			if (status.available) {
 				ctx.ui.setHeader(undefined);
 				return;
@@ -518,13 +526,19 @@ function formatClankyVoiceFooterStatus(status: unknown): string | undefined {
  */
 export async function createClankyRuntime(options: RunClankyOptions = {}) {
 	const cwd = options.cwd ?? process.cwd();
+	const portableDefaults = resolvePortableClankyDefaults({
+		cwd,
+		...(options.homeDir !== undefined ? { explicitHomeDir: options.homeDir } : {}),
+		...(options.profile !== undefined ? { explicitProfile: options.profile } : {}),
+	});
 	const pathsOptions: Parameters<typeof resolveClankyPaths>[0] = {};
-	if (options.homeDir !== undefined) pathsOptions.homeDir = options.homeDir;
-	if (options.profile !== undefined) pathsOptions.profile = options.profile;
+	if (portableDefaults.homeDir !== undefined) pathsOptions.homeDir = portableDefaults.homeDir;
+	if (portableDefaults.profile !== undefined) pathsOptions.profile = portableDefaults.profile;
 	const paths = resolveClankyPaths(pathsOptions);
+	const runtimeEnv = portableDefaults.env;
 	const basePersona = await loadPersona(resolvePackageRoot());
 	const authStorage = AuthStorage.create(paths.authFile);
-	const discordProviderId = resolveDefaultDiscordProviderId();
+	const discordProviderId = resolveDefaultDiscordProviderId(runtimeEnv);
 	const discordVoiceSettings = new DiscordVoiceSettingsStore(paths.discordVoiceSettingsFile);
 	const stores = createClankyStores(paths);
 	const voiceLogPath = `${paths.profileDir}/discord-voice.log`;
@@ -538,6 +552,7 @@ export async function createClankyRuntime(options: RunClankyOptions = {}) {
 		paths,
 		bridgeLogPath: `${paths.profileDir}/discord-bridge.log`,
 		voiceLogPath,
+		env: runtimeEnv,
 		readVoiceSettings: () => discordVoiceSettings.read(),
 		voiceSupervisorDelegate,
 	});
@@ -549,6 +564,7 @@ export async function createClankyRuntime(options: RunClankyOptions = {}) {
 		discordProviderId,
 		gatewayController,
 		discordVoiceSettings,
+		env: runtimeEnv,
 	};
 	const createRuntime = buildRuntimeFactory({
 		...runtimeFactoryOptions,
@@ -557,6 +573,7 @@ export async function createClankyRuntime(options: RunClankyOptions = {}) {
 			createClankyWelcomeExtensionFactory({
 				authStorage,
 				profile: paths.profile,
+				env: runtimeEnv,
 			}),
 			createClankyVoiceStatusExtensionFactory(gatewayController),
 			createClankySetupExtensionFactory({
@@ -565,6 +582,7 @@ export async function createClankyRuntime(options: RunClankyOptions = {}) {
 				discordProviderId,
 				gatewayController,
 				voiceSettings: discordVoiceSettings,
+				env: runtimeEnv,
 			}),
 			createClankyVoiceLogsExtensionFactory({
 				voiceLogPath,

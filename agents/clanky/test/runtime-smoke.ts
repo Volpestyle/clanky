@@ -23,6 +23,7 @@ import {
 	DEFAULT_XAI_PROVIDER_ID,
 	resolveClankyPaths,
 	resolveMcpServerConfigs,
+	resolvePortableClankyDefaults,
 	saveStoredDiscordCredential,
 	saveStoredElevenLabsApiKey,
 	saveStoredOpenAiApiKey,
@@ -82,6 +83,7 @@ async function main(): Promise<void> {
 	await assertClankySetupExtensionCommand();
 	await assertClankyVoiceLogsExtensionCommand();
 	await assertDiscordGatewayControllerStartup();
+	await assertAgentRoomPortableConfigDefaults();
 	const tmpRoot = await mkdtemp(join(tmpdir(), "clanky-agent-smoke-"));
 	const homeDir = join(tmpRoot, "home");
 	const cwd = join(tmpRoot, "work");
@@ -204,6 +206,68 @@ function mainSessionContextHasText(value: unknown, expected: string): boolean {
 		const text = (entry as Record<string, unknown>).text;
 		return typeof text === "string" && text.includes(expected);
 	});
+}
+
+async function assertAgentRoomPortableConfigDefaults(): Promise<void> {
+	const tmpRoot = await mkdtemp(join(tmpdir(), "clanky-agentroom-portable-"));
+	const cwd = join(tmpRoot, "work");
+	await mkdir(join(cwd, ".agentroom"), { recursive: true });
+	await writeFile(
+		join(cwd, ".agentroom", "config.yaml"),
+		`room:
+  id: portable-smoke
+
+runtime:
+  default: fake
+
+workTracker:
+  default: linear
+  providers:
+    linear:
+      type: linear
+      tokenEnv: LINEAR_API_KEY
+      commandEnv: AGENTROOM_LINEAR_COMMAND
+      teamId: team_123
+
+clanky:
+  home: .clanky-room
+  profile: lead
+  chatGatewayOwner: room
+
+runtimes:
+  fake:
+    type: fake
+
+storage:
+  driver: jsonl
+  path: .agentroom/events.jsonl
+`,
+	);
+	try {
+		const defaults = resolvePortableClankyDefaults({ cwd, env: {} });
+		if (defaults.homeDir !== join(cwd, ".clanky-room")) {
+			throw new Error(`smoke: portable Clanky home mismatch: ${defaults.homeDir}`);
+		}
+		if (defaults.profile !== "lead") {
+			throw new Error(`smoke: portable Clanky profile mismatch: ${defaults.profile}`);
+		}
+		if (defaults.env.CLANKY_CHAT_GATEWAY_OWNER !== "room") {
+			throw new Error("smoke: portable Clanky chat owner was not applied");
+		}
+		if (defaults.env.CLANKY_WORK_TRACKER !== "linear" || defaults.env.CLANKY_LINEAR_TEAM_ID !== "team_123") {
+			throw new Error(`smoke: portable work tracker env mismatch: ${JSON.stringify(defaults.env)}`);
+		}
+		const { runtime, paths } = await createClankyRuntime({ cwd });
+		try {
+			if (paths.homeDir !== join(cwd, ".clanky-room") || paths.profile !== "lead") {
+				throw new Error(`smoke: runtime did not adopt portable Clanky config: ${JSON.stringify(paths)}`);
+			}
+		} finally {
+			await runtime.dispose();
+		}
+	} finally {
+		await rm(tmpRoot, { recursive: true, force: true });
+	}
 }
 
 function assertAgentDiscordVoiceConfig(): void {

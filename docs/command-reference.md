@@ -196,7 +196,7 @@ are available and credentials/policy allow it:
   `discord_voice_leave`.
 - Coordination: `main_session_context`, `delegate_to_main_worker`,
   `subagent_status`.
-- Linear: `linear_create_issue`, `linear_link`.
+- Work tracking: `work_tracker_create_issue`, `work_tracker_link`.
 - MCP: `mcp_list_tools`, `mcp_call`.
 
 `task_create` and `schedule_cron` exist in the shared tool layer, but are only

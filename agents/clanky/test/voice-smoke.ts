@@ -84,6 +84,9 @@ async function main(): Promise<void> {
 	await assertFakeVoiceBridgeXAiRealtimeAgent();
 	await assertFakeVoiceBridgeElevenLabsTts();
 	await assertFakeVoiceBridgeBargeInPolicy();
+	await assertFakeVoiceBridgeMusicReservedListening();
+	await assertFakeVoiceBridgeMusicSpeechDucking();
+	await assertFakeVoiceBridgeRealtimeAudioBackpressure();
 	await assertFakeVoiceBridgeSubagents();
 	await assertFakeVoiceBridgeRealtimeMediaTools();
 	await assertFakeVoiceBridgeRealtimeBatchToolResponse();
@@ -1949,6 +1952,206 @@ async function assertFakeVoiceBridgeBargeInPolicy(): Promise<void> {
 	if (stats.voiceBargeInSuppressedCount !== 1 || stats.voiceBargeInAcceptedCount !== 2) {
 		throw new Error("voice-smoke: barge-in stats were not counted");
 	}
+	await handle.stop();
+}
+
+async function assertFakeVoiceBridgeMusicReservedListening(): Promise<void> {
+	const realtime = new FakeBridgeRealtime();
+	const vox = new FakeBridgeClankvox();
+	const transcripts = [
+		"That's crazy man. I don't know how you that's happening",
+		"Can you pause music",
+		"hey clanky, what are you doing",
+	];
+	const handle = await startAgentDiscordVoiceBridge({
+		runtime: new FakeVoiceRuntime() as never,
+		client: new FakeVoiceDiscordClient() as never,
+		discordConfig: {
+			providerId: "clanky-discord",
+			token: "discord-token",
+			credentialKind: "bot-token",
+			source: "env",
+		},
+		config: {
+			enabled: true,
+			guildId: "guild-1",
+			channelId: "voice-1",
+			openAiApiKey: "openai-key",
+			openAiRealtimeModel: DEFAULT_REALTIME_MODEL,
+			openAiRealtimeVoice: "marin",
+			transcriptResponseBatchDelayMs: 0,
+		},
+		joinRequested: true,
+		dependencies: {
+			createRealtime() {
+				return realtime;
+			},
+			createTranscriptionRealtime() {
+				return new FakeSpeakerTranscriptionRealtime(transcripts.shift() ?? "extra transcript");
+			},
+			async spawnVox() {
+				return vox;
+			},
+			createStreamDiscovery() {
+				return new FakeVoiceStreamDiscovery({
+					streamKey: "guild:guild-1:voice-1:streamer-1",
+					guildId: "guild-1",
+					channelId: "voice-1",
+					userId: "streamer-1",
+					endpoint: "voice.example",
+					token: "stream-token",
+					rtcServerId: "9002",
+					updatedAt: Date.now(),
+				});
+			},
+		},
+	});
+	if (handle === undefined) throw new Error("voice-smoke: music reserved-listening bridge did not start");
+	vox.emit("playerState", "playing");
+	vox.emit("speakingStart", "speaker-1");
+	vox.emit("userAudio", "speaker-1", Buffer.alloc(4_800, 1));
+	vox.emit("userAudioEnd", "speaker-1");
+	await sleep(10);
+	if (realtime.textUtterances.length !== 0) {
+		throw new Error("voice-smoke: music side chatter should not reach realtime as a response prompt");
+	}
+	const statsAfterSideChatter = expectRecord(handle.status().stats, "music reserved stats");
+	if (statsAfterSideChatter.voiceMusicListenGateSuppressedCount !== 1) {
+		throw new Error("voice-smoke: music reserved-listening suppression was not counted");
+	}
+	vox.emit("speakingStart", "speaker-2");
+	vox.emit("userAudio", "speaker-2", Buffer.alloc(4_800, 2));
+	vox.emit("userAudioEnd", "speaker-2");
+	await waitUntil(
+		() => realtime.textUtterances.some((text) => text.includes("Can you pause music")),
+		"music control transcript",
+	);
+	vox.emit("speakingStart", "speaker-3");
+	vox.emit("userAudio", "speaker-3", Buffer.alloc(4_800, 3));
+	vox.emit("userAudioEnd", "speaker-3");
+	await waitUntil(
+		() => realtime.textUtterances.some((text) => text.includes("hey clanky, what are you doing")),
+		"named music transcript",
+	);
+	await handle.stop();
+}
+
+async function assertFakeVoiceBridgeMusicSpeechDucking(): Promise<void> {
+	const realtime = new FakeBridgeRealtime();
+	const vox = new FakeBridgeClankvox();
+	const handle = await startAgentDiscordVoiceBridge({
+		runtime: new FakeVoiceRuntime() as never,
+		client: new FakeVoiceDiscordClient() as never,
+		discordConfig: {
+			providerId: "clanky-discord",
+			token: "discord-token",
+			credentialKind: "bot-token",
+			source: "env",
+		},
+		config: {
+			enabled: true,
+			guildId: "guild-1",
+			channelId: "voice-1",
+			openAiApiKey: "openai-key",
+			openAiRealtimeModel: DEFAULT_REALTIME_MODEL,
+			openAiRealtimeVoice: "marin",
+		},
+		joinRequested: true,
+		dependencies: {
+			createRealtime() {
+				return realtime;
+			},
+			async spawnVox() {
+				return vox;
+			},
+			createStreamDiscovery() {
+				return new FakeVoiceStreamDiscovery({
+					streamKey: "guild:guild-1:voice-1:streamer-1",
+					guildId: "guild-1",
+					channelId: "voice-1",
+					userId: "streamer-1",
+					endpoint: "voice.example",
+					token: "stream-token",
+					rtcServerId: "9002",
+					updatedAt: Date.now(),
+				});
+			},
+		},
+	});
+	if (handle === undefined) throw new Error("voice-smoke: music ducking bridge did not start");
+	vox.emit("playerState", "playing");
+	const audioChunk = Buffer.alloc(4_800, 7).toString("base64");
+	realtime.emit("audio_delta", audioChunk);
+	await waitUntil(() => vox.audioSends.length === 1, "ducked realtime audio send");
+	if (vox.musicGainSets[0]?.target !== 0.22) {
+		throw new Error("voice-smoke: realtime speech did not duck music before playback");
+	}
+	vox.emit("ttsPlaybackState", "idle");
+	await waitUntil(() => vox.musicGainSets.some((gain) => gain.target === 1), "music unduck after TTS idle");
+	await handle.stop();
+}
+
+async function assertFakeVoiceBridgeRealtimeAudioBackpressure(): Promise<void> {
+	const realtime = new FakeBridgeRealtime();
+	const vox = new FakeBridgeClankvox();
+	const handle = await startAgentDiscordVoiceBridge({
+		runtime: new FakeVoiceRuntime() as never,
+		client: new FakeVoiceDiscordClient() as never,
+		discordConfig: {
+			providerId: "clanky-discord",
+			token: "discord-token",
+			credentialKind: "bot-token",
+			source: "env",
+		},
+		config: {
+			enabled: true,
+			guildId: "guild-1",
+			channelId: "voice-1",
+			openAiApiKey: "openai-key",
+			openAiRealtimeModel: DEFAULT_REALTIME_MODEL,
+			openAiRealtimeVoice: "marin",
+		},
+		joinRequested: true,
+		dependencies: {
+			createRealtime() {
+				return realtime;
+			},
+			async spawnVox() {
+				return vox;
+			},
+			createStreamDiscovery() {
+				return new FakeVoiceStreamDiscovery({
+					streamKey: "guild:guild-1:voice-1:streamer-1",
+					guildId: "guild-1",
+					channelId: "voice-1",
+					userId: "streamer-1",
+					endpoint: "voice.example",
+					token: "stream-token",
+					rtcServerId: "9002",
+					updatedAt: Date.now(),
+				});
+			},
+		},
+	});
+	if (handle === undefined) throw new Error("voice-smoke: realtime audio backpressure bridge did not start");
+	vox.emit("bufferDepth", 240_000, 0);
+	const audioChunk = Buffer.alloc(4_800, 9).toString("base64");
+	for (let index = 0; index < 40; index += 1) {
+		realtime.emit("audio_delta", audioChunk);
+	}
+	await waitUntil(() => {
+		const stats = expectRecord(handle.status().stats, "realtime backpressure stats");
+		return Number(stats.realtimeAudioBackpressureDelayCount) > 0;
+	}, "realtime audio backpressure delay");
+	if (vox.audioSends.length !== 0) {
+		throw new Error("voice-smoke: realtime audio sent while native TTS buffer was over the backpressure threshold");
+	}
+	const statsWhileBlocked = expectRecord(handle.status().stats, "blocked realtime backpressure stats");
+	if (Number(statsWhileBlocked.realtimeAudioBackpressureDropCount) === 0) {
+		throw new Error("voice-smoke: realtime audio backlog overflow was not dropped");
+	}
+	vox.emit("bufferDepth", 0, 0);
+	await waitUntil(() => vox.audioSends.length > 0, "realtime audio resumes after backpressure");
 	await handle.stop();
 }
 

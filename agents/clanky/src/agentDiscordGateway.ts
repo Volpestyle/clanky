@@ -201,11 +201,9 @@ export interface ClankyAgentDiscordGatewayHandle {
  * Precedence:
  *  1. Owner gate. If `CLANKY_CHAT_GATEWAY_OWNER` resolves to `room` or
  *     `off` the agent-owned gateway is suppressed entirely.
- *  2. `CLANKY_DISCORD_TOKEN` env (matches the existing Linear creds
- *     pattern — env always wins over stored). Companion env vars
+ *  2. `CLANKY_DISCORD_TOKEN` env always wins over stored credentials. Companion env vars
  *     `CLANKY_DISCORD_CREDENTIAL_KIND`, `CLANKY_DISCORD_PROVIDER_ID`,
- *     `CLANKY_DISCORD_CONVERSATION_ID` (or legacy
- *     `CLANKY_DISCORD_CHANNEL_ID`) take effect when env is the source.
+ *     and `CLANKY_DISCORD_CONVERSATION_ID` take effect when env is the source.
  *  3. Stored credential in profile `AuthStorage` under the configured
  *     provider id (default `clanky-discord`), saved via `/discord-login`.
  *     Env vars for credential kind / conversation id still override
@@ -235,8 +233,7 @@ export function resolveAgentDiscordCredentialConfig(
 	authStorage?: AuthStorage,
 ): ClankyAgentDiscordGatewayConfig | undefined {
 	const providerId = env.CLANKY_DISCORD_PROVIDER_ID?.trim() || DEFAULT_CLANKY_DISCORD_PROVIDER_ID;
-	const envConversationId =
-		env.CLANKY_DISCORD_CONVERSATION_ID?.trim() || env.CLANKY_DISCORD_CHANNEL_ID?.trim() || undefined;
+	const envConversationId = env.CLANKY_DISCORD_CONVERSATION_ID?.trim() || undefined;
 	const envCredentialKindRaw = env.CLANKY_DISCORD_CREDENTIAL_KIND?.trim();
 
 	const envToken = env.CLANKY_DISCORD_TOKEN?.trim();

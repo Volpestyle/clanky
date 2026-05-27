@@ -483,6 +483,11 @@ export class ClankvoxIpcClient extends EventEmitter {
 			if (status.length > 0) this.emit("playerState", status);
 			return;
 		}
+		if (type === "tts_playback_state") {
+			const status = stringValue(msg.status).trim();
+			if (status.length > 0) this.emit("ttsPlaybackState", status);
+			return;
+		}
 		if (type === "music_idle") {
 			this.emit("musicIdle");
 			return;

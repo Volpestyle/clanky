@@ -90,6 +90,17 @@ The TUI setup commands write the active profile, while env vars remain
 launch-time overrides. See [Configuration Model](configuration.md) for the
 source-of-truth rules and the AgentRoom boundary.
 
+If you are starting from AgentRoom, you can configure the shared non-secret
+defaults once:
+
+```bash
+agent-room init --room my-project --runtime herdr --clanky --work-tracker linear --linear-team team_123
+pnpm clanky --cwd /path/to/my-project
+```
+
+With no explicit Clanky home/profile overrides, Clanky adopts the `clanky` and
+`workTracker` blocks from `.agentroom/config.yaml`.
+
 ## Model Auth
 
 Clanky can use Pi's normal `/login` flow or Clanky's profile-local OpenAI key

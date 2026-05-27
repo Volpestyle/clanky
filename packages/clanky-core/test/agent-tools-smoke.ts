@@ -9,8 +9,6 @@ import {
 	type DiscordVoiceJoinToolInput,
 	type ExternalMcpCallToolInput,
 	type ExternalMcpListToolsInput,
-	type LinearCreateIssueToolInput,
-	type LinearLinkToolInput,
 	type MainAgentActivityToolInput,
 	type MainAgentCancelToolInput,
 	type MainSessionContextToolInput,
@@ -28,6 +26,8 @@ import {
 	shouldStartAgentChatGateway,
 	type TaskCreateToolInput,
 	type WebSearchToolInput,
+	type WorkTrackerCreateIssueToolInput,
+	type WorkTrackerLinkToolInput,
 	type XAiImageGenerateToolInput,
 	type XAiVideoGenerateToolInput,
 } from "@clanky/core";
@@ -46,13 +46,17 @@ const handlers: ClankyAgentToolHandlers = {
 		calls.push(`schedule:${input.schedule}:${input.prompt}`);
 		return { scheduled: true, input };
 	},
-	linearLink: async (input) => {
-		calls.push(`linear:${input.issueId}:${input.sessionId ?? input.taskId ?? "none"}`);
-		return { link: input };
+	workTrackerCreateIssue: async (input) => {
+		calls.push(`tracker-create:${input.providerKind ?? "default"}:${input.title}`);
+		return {
+			issue: { providerId: input.providerId ?? "linear", providerKind: input.providerKind ?? "linear", ...input },
+		};
 	},
-	linearCreateIssue: async (input) => {
-		calls.push(`linear-create:${input.teamId}:${input.title}`);
-		return { issue: { issueId: "issue-tool", identifier: "PROJ-100", ...input } };
+	workTrackerLink: async (input) => {
+		calls.push(
+			`tracker:${input.providerKind ?? "custom"}:${input.issueId}:${input.sessionId ?? input.taskId ?? "none"}`,
+		);
+		return { ref: input };
 	},
 	externalMcpCall: async (input) => {
 		calls.push(`mcp-call:${input.server}:${input.tool}`);
@@ -187,8 +191,8 @@ const expectedNames = [
 	"schedule_cron",
 	"mcp_list_tools",
 	"mcp_call",
-	"linear_create_issue",
-	"linear_link",
+	"work_tracker_create_issue",
+	"work_tracker_link",
 	"task_create",
 	"main_session_context",
 	"main_agent_activity",
@@ -221,16 +225,19 @@ await executeTool(tools, "schedule_cron", {
 	idempotency_key: "agent-tools-cron-smoke",
 } satisfies ScheduleCronToolInput);
 
-await executeTool(tools, "linear_create_issue", {
+await executeTool(tools, "work_tracker_create_issue", {
+	provider_kind: "linear",
 	team_id: "team-1",
-	title: "Linear smoke",
-	description: "Linear create smoke description",
-} satisfies LinearCreateIssueToolInput);
+	title: "Tracker smoke",
+	description: "Tracker create smoke description",
+} satisfies WorkTrackerCreateIssueToolInput);
 
-await executeTool(tools, "linear_link", {
-	issueId: "PROJ-1",
+await executeTool(tools, "work_tracker_link", {
+	provider_kind: "github-issues",
+	issueId: "123",
+	identifier: "owner/repo#123",
 	sessionId: "session-smoke",
-} satisfies LinearLinkToolInput);
+} satisfies WorkTrackerLinkToolInput);
 
 await executeTool(tools, "mcp_call", {
 	server: "faux",
@@ -244,6 +251,8 @@ await executeTool(tools, "mcp_list_tools", {
 await executeTool(tools, "task_create", {
 	title: "Task smoke",
 	priority: "high",
+	tracker_provider_kind: "github-issues",
+	tracker_issue_id: "123",
 } satisfies TaskCreateToolInput);
 
 await executeTool(tools, "main_session_context", {
@@ -338,8 +347,8 @@ await assertRecentDiscordAttachmentsLoadsMediaSources();
 
 const expectedCallPrefixes = [
 	"schedule:",
-	"linear-create:",
-	"linear:",
+	"tracker-create:",
+	"tracker:",
 	"mcp-call:",
 	"mcp-list:",
 	"task:",

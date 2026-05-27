@@ -18,9 +18,9 @@ export interface ClankyPaths {
 	skillUsageFile: string;
 	memoryDir: string;
 	selfMemoryFile: string;
-	linearDir: string;
-	linearLinksFile: string;
-	linearOutboxFile: string;
+	workTrackersDir: string;
+	workTrackerRefsFile: string;
+	workTrackerOutboxFile: string;
 	subagentsDir: string;
 	subagentsDbFile: string;
 	subagentSessionsDir: string;
@@ -55,9 +55,9 @@ export function resolveClankyPaths(options: ResolveClankyPathsOptions = {}): Cla
 		skillUsageFile: join(profileDir, "skills", ".usage.json"),
 		memoryDir: join(profileDir, "memory"),
 		selfMemoryFile: join(profileDir, "SELF.md"),
-		linearDir: join(profileDir, "linear"),
-		linearLinksFile: join(profileDir, "linear", "links.json"),
-		linearOutboxFile: join(profileDir, "linear", "outbox.json"),
+		workTrackersDir: join(profileDir, "work-trackers"),
+		workTrackerRefsFile: join(profileDir, "work-trackers", "refs.json"),
+		workTrackerOutboxFile: join(profileDir, "work-trackers", "outbox.json"),
 		subagentsDir: join(profileDir, "subagents"),
 		subagentsDbFile: join(profileDir, "subagents", "subagents.db"),
 		subagentSessionsDir: join(profileDir, "subagents", "sessions"),

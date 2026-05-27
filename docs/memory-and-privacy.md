@@ -22,7 +22,7 @@ Important profile files:
 | `profiles/<profile>/SELF.md` | Profile-local self memory. |
 | `profiles/<profile>/skills/` | Profile-local Clanky skills. |
 | `profiles/<profile>/subagents/` | Discord and voice subagent state and sessions. |
-| `profiles/<profile>/linear/` | Linear links and outbox state. |
+| `profiles/<profile>/work-trackers/` | Provider-neutral tracker refs and outbox state. |
 | `profiles/<profile>/discord-voice.json` | Stored voice settings. |
 | `profiles/<profile>/discord-bridge.log` | Discord bridge log. |
 | `profiles/<profile>/discord-voice.log` | Discord voice log. |

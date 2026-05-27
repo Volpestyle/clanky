@@ -3,9 +3,10 @@
 ![Clanky](/branding/clanky-logo-512.png)
 
 Clanky is a standalone personal Pi agent. It owns its persona, profile-local
-state, memory, Linear stores, and bundled skills. It does not run its own
-daemon, scheduler, HTTP server, WebSocket server, or multi-agent room
-system.
+state, memory, native work-tracker refs, and bundled skills. It does not run
+its own daemon, scheduler, HTTP server, WebSocket server, or multi-agent room
+system. Linear is the built-in tracker provider today, but the core work
+tracking model is provider-neutral.
 
 New to Clanky? Start with [docs/start-here.md](docs/start-here.md), then read
 [docs/pi-foundation.md](docs/pi-foundation.md). The upstream Pi harness docs
@@ -287,8 +288,8 @@ host does not already have it.
 ## Layout
 
 - `agents/clanky` is the runnable `@clanky/agent` package and `clanky` bin.
-- `packages/clanky-core` contains Clanky memory, Linear stores, profile paths,
-  state storage, skills loading, and model-facing tools.
+- `packages/clanky-core` contains Clanky memory, work-tracker stores, profile
+  paths, state storage, skills loading, and model-facing tools.
 - `skills/` contains bundled Clanky skills.
 - `agents/clanky/persona/SELF.md` is the static persona injected into Pi's
   system prompt.

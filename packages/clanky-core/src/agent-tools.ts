@@ -23,8 +23,6 @@ import type {
 	DiscordRecentAttachmentsResult,
 	DiscordSendMessageInput,
 } from "./discord/operator.ts";
-import type { LinearCreateIssueInput } from "./linear/client.ts";
-import type { CreateLinearLinkInput } from "./linear/links.ts";
 import type { OpenAiImageGenerateInput, XAiImageGenerateInput, XAiVideoGenerateInput } from "./media/operator.ts";
 import type {
 	ForgetMemoryInput,
@@ -41,6 +39,12 @@ import type { CreateClankySkillInput } from "./skills/loader.ts";
 import { extractIndexableMessageText, type SessionIndexMessageInput } from "./state/index-db.ts";
 import type { ClankySubagentState, ClankySubagentSummary } from "./subagents/store.ts";
 import type { OpenAiWebSearchInput } from "./web/operator.ts";
+import type {
+	CreateWorkTrackerRefInput,
+	WorkTrackerCreateIssueInput,
+	WorkTrackerProviderKind,
+} from "./work-tracker/refs.ts";
+import { normalizeWorkTrackerProviderKind } from "./work-tracker/refs.ts";
 
 type ClankyMessageEndEvent = {
 	message: Parameters<typeof extractIndexableMessageText>[0];
@@ -60,17 +64,42 @@ const scheduleCronSchema = Type.Object({
 	idempotency_key: Type.Optional(Type.String()),
 });
 
-const linearLinkSchema = Type.Object({
+const workTrackerProviderKindSchema = Type.Union([
+	Type.Literal("native"),
+	Type.Literal("linear"),
+	Type.Literal("github-issues"),
+	Type.Literal("github"),
+	Type.Literal("jira"),
+	Type.Literal("custom"),
+]);
+
+const workTrackerLinkSchema = Type.Object({
+	providerId: Type.Optional(Type.String()),
+	provider_id: Type.Optional(Type.String()),
+	providerKind: Type.Optional(workTrackerProviderKindSchema),
+	provider_kind: Type.Optional(workTrackerProviderKindSchema),
+	trackerKind: Type.Optional(workTrackerProviderKindSchema),
+	tracker_kind: Type.Optional(workTrackerProviderKindSchema),
 	issueId: Type.Optional(Type.String()),
 	issue_id: Type.Optional(Type.String()),
+	identifier: Type.Optional(Type.String()),
+	title: Type.Optional(Type.String()),
+	url: Type.Optional(Type.String()),
 	sessionId: Type.Optional(Type.String()),
 	session_id: Type.Optional(Type.String()),
 	taskId: Type.Optional(Type.String()),
 	task_id: Type.Optional(Type.String()),
 	note: Type.Optional(Type.String()),
+	metadata: Type.Optional(Type.Unknown()),
 });
 
-const linearCreateIssueSchema = Type.Object({
+const workTrackerCreateIssueSchema = Type.Object({
+	providerId: Type.Optional(Type.String()),
+	provider_id: Type.Optional(Type.String()),
+	providerKind: Type.Optional(workTrackerProviderKindSchema),
+	provider_kind: Type.Optional(workTrackerProviderKindSchema),
+	trackerKind: Type.Optional(workTrackerProviderKindSchema),
+	tracker_kind: Type.Optional(workTrackerProviderKindSchema),
 	teamId: Type.Optional(Type.String()),
 	team_id: Type.Optional(Type.String()),
 	title: Type.String(),
@@ -84,6 +113,7 @@ const linearCreateIssueSchema = Type.Object({
 	priority: Type.Optional(Type.Number()),
 	labelIds: Type.Optional(Type.Array(Type.String())),
 	label_ids: Type.Optional(Type.Array(Type.String())),
+	metadata: Type.Optional(Type.Unknown()),
 });
 
 const externalMcpCallSchema = Type.Object({
@@ -134,8 +164,16 @@ const taskCreateSchema = Type.Object({
 	priority: Type.Optional(Type.Union([Type.Literal("low"), Type.Literal("normal"), Type.Literal("high")])),
 	sessionId: Type.Optional(Type.String()),
 	session_id: Type.Optional(Type.String()),
-	linearIssue: Type.Optional(Type.String()),
-	linear_issue: Type.Optional(Type.String()),
+	trackerProviderId: Type.Optional(Type.String()),
+	tracker_provider_id: Type.Optional(Type.String()),
+	trackerProviderKind: Type.Optional(workTrackerProviderKindSchema),
+	tracker_provider_kind: Type.Optional(workTrackerProviderKindSchema),
+	trackerIssueId: Type.Optional(Type.String()),
+	tracker_issue_id: Type.Optional(Type.String()),
+	trackerIdentifier: Type.Optional(Type.String()),
+	tracker_identifier: Type.Optional(Type.String()),
+	trackerUrl: Type.Optional(Type.String()),
+	tracker_url: Type.Optional(Type.String()),
 });
 
 const memoryScopeSchema = Type.Union([
@@ -397,8 +435,8 @@ const discordVoiceJoinSchema = Type.Object({
 });
 
 export type ScheduleCronToolInput = Static<typeof scheduleCronSchema>;
-export type LinearCreateIssueToolInput = Static<typeof linearCreateIssueSchema>;
-export type LinearLinkToolInput = Static<typeof linearLinkSchema>;
+export type WorkTrackerCreateIssueToolInput = Static<typeof workTrackerCreateIssueSchema>;
+export type WorkTrackerLinkToolInput = Static<typeof workTrackerLinkSchema>;
 export type ExternalMcpCallToolInput = Static<typeof externalMcpCallSchema>;
 export type ExternalMcpListToolsInput = Static<typeof externalMcpListToolsSchema>;
 export type MainSessionContextToolInput = Static<typeof mainSessionContextSchema>;
@@ -441,8 +479,8 @@ export interface ClankyBeforeProviderRequestInput {
 
 export interface ClankyAgentToolHandlers {
 	scheduleCron?: (input: ScheduleCronToolInput) => Promise<unknown>;
-	linearCreateIssue?: (input: LinearCreateIssueInput) => Promise<unknown>;
-	linearLink?: (input: CreateLinearLinkInput) => Promise<unknown>;
+	workTrackerCreateIssue?: (input: WorkTrackerCreateIssueInput) => Promise<unknown>;
+	workTrackerLink?: (input: CreateWorkTrackerRefInput) => Promise<unknown>;
 	externalMcpCall?: (input: ExternalMcpCallToolInput) => Promise<unknown>;
 	externalMcpListTools?: (input: ExternalMcpListToolsInput) => Promise<unknown>;
 	mainSessionContext?: (input: MainSessionContextToolInput) => Promise<unknown>;
@@ -2204,7 +2242,8 @@ function memoryToolAudit(
 		const atom = readRecord(event.details, "atom");
 		const candidate = readRecord(event.details, "candidate");
 		const memoryId = atom === undefined ? undefined : readString(atom, "id");
-		const summary = (atom === undefined ? undefined : readString(atom, "claim")) ?? readString(candidate ?? {}, "claim");
+		const summary =
+			(atom === undefined ? undefined : readString(atom, "claim")) ?? readString(candidate ?? {}, "claim");
 		const action = saved ? "upsert" : "propose";
 		return {
 			content: `social_memory_op: ${action}${memoryId === undefined ? "" : ` ${memoryId}`}`,
@@ -2538,8 +2577,8 @@ export function createClankyToolDefinitions(handlers: ClankyAgentToolHandlers): 
 			}),
 		);
 	}
-	const linearLink = handlers.linearLink;
-	const linearCreateIssue = handlers.linearCreateIssue;
+	const workTrackerLink = handlers.workTrackerLink;
+	const workTrackerCreateIssue = handlers.workTrackerCreateIssue;
 	const externalMcpListTools = handlers.externalMcpListTools;
 	if (externalMcpListTools !== undefined) {
 		tools.push(
@@ -2579,34 +2618,41 @@ export function createClankyToolDefinitions(handlers: ClankyAgentToolHandlers): 
 			}),
 		);
 	}
-	if (linearCreateIssue !== undefined) {
+	if (workTrackerCreateIssue !== undefined) {
 		tools.push(
 			defineTool({
-				name: "linear_create_issue",
-				label: "Linear Create Issue",
-				description: "Create a Linear issue in a known team using configured Linear credentials.",
-				promptSnippet: "linear_create_issue: create a Linear issue when new tracked work needs to be filed.",
+				name: "work_tracker_create_issue",
+				label: "Work Tracker Create Issue",
+				description: "Create an issue in the configured external work tracker provider.",
+				promptSnippet:
+					"work_tracker_create_issue: create tracked work through the selected tracker provider when durable tracking is requested.",
 				promptGuidelines: [
-					"Use linear_link after creating an issue if the current Clanky session should stay bound to it.",
+					"Use task_create for native Clanky-only tasks.",
+					"Set provider_kind when the user names a provider such as Linear, GitHub Issues, or Jira.",
+					"Provider-specific fields such as team_id are allowed through this generic tool when the provider needs them.",
 				],
-				parameters: linearCreateIssueSchema,
+				parameters: workTrackerCreateIssueSchema,
 				async execute(_toolCallId, params) {
-					return toolResult(await linearCreateIssue(normalizeLinearCreateIssueToolInput(params)));
+					return toolResult(await workTrackerCreateIssue(normalizeWorkTrackerCreateIssueToolInput(params)));
 				},
 			}),
 		);
 	}
-	if (linearLink !== undefined) {
+	if (workTrackerLink !== undefined) {
 		tools.push(
 			defineTool({
-				name: "linear_link",
-				label: "Linear Link",
-				description: "Persist a link between a Linear issue and a Clanky session or task.",
-				promptSnippet: "linear_link: bind a Linear issue to the current session or a task.",
-				parameters: linearLinkSchema,
+				name: "work_tracker_link",
+				label: "Work Tracker Link",
+				description: "Persist a provider-neutral link between a work tracker issue and a Clanky session or task.",
+				promptSnippet: "work_tracker_link: bind an external tracker issue to the current Clanky session or task.",
+				promptGuidelines: [
+					"Use provider_kind/provider_id to distinguish Linear, GitHub Issues, Jira, or custom trackers.",
+					"Use task_create without a tracker ref when the user only wants native Clanky tracking.",
+				],
+				parameters: workTrackerLinkSchema,
 				async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-					const input = normalizeLinearLinkToolInput(params, ctx.sessionManager.getSessionId());
-					return toolResult(await linearLink(input));
+					const input = normalizeWorkTrackerLinkToolInput(params, ctx.sessionManager.getSessionId());
+					return toolResult(await workTrackerLink(input));
 				},
 			}),
 		);
@@ -2617,7 +2663,7 @@ export function createClankyToolDefinitions(handlers: ClankyAgentToolHandlers): 
 			defineTool({
 				name: "task_create",
 				label: "Task Create",
-				description: "Create a lightweight Clanky task record tied to the current session and optional Linear issue.",
+				description: "Create a lightweight native Clanky task tied to the current session and optional tracker ref.",
 				promptSnippet: "task_create: record a local Clanky task for follow-up or lightweight work tracking.",
 				parameters: taskCreateSchema,
 				async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -3642,12 +3688,16 @@ function normalizeScheduleCronToolInput(input: ScheduleCronToolInput): ScheduleC
 	return output;
 }
 
-function normalizeLinearCreateIssueToolInput(input: LinearCreateIssueToolInput): LinearCreateIssueInput {
+function normalizeWorkTrackerCreateIssueToolInput(input: WorkTrackerCreateIssueToolInput): WorkTrackerCreateIssueInput {
+	const output: WorkTrackerCreateIssueInput = { title: input.title };
+	const providerId = input.providerId ?? input.provider_id;
+	if (providerId !== undefined) output.providerId = providerId;
+	const providerKind = normalizeWorkTrackerKind(
+		input.providerKind ?? input.provider_kind ?? input.trackerKind ?? input.tracker_kind,
+	);
+	if (providerKind !== undefined) output.providerKind = providerKind;
 	const teamId = input.teamId ?? input.team_id;
-	if (teamId === undefined || teamId.trim().length === 0) {
-		throw new Error("linear_create_issue requires teamId or team_id");
-	}
-	const output: LinearCreateIssueInput = { teamId, title: input.title };
+	if (teamId !== undefined) output.teamId = teamId;
 	if (input.description !== undefined) output.description = input.description;
 	const assigneeId = input.assigneeId ?? input.assignee_id;
 	if (assigneeId !== undefined) output.assigneeId = assigneeId;
@@ -3658,29 +3708,69 @@ function normalizeLinearCreateIssueToolInput(input: LinearCreateIssueToolInput):
 	if (input.priority !== undefined) output.priority = input.priority;
 	const labelIds = input.labelIds ?? input.label_ids;
 	if (labelIds !== undefined) output.labelIds = labelIds;
+	const metadata = metadataRecord(input.metadata);
+	if (metadata !== undefined) output.metadata = metadata;
 	return output;
 }
 
-function normalizeLinearLinkToolInput(input: LinearLinkToolInput, defaultSessionId: string): CreateLinearLinkInput {
+function normalizeWorkTrackerLinkToolInput(
+	input: WorkTrackerLinkToolInput,
+	defaultSessionId: string,
+): CreateWorkTrackerRefInput {
 	const issueId = input.issueId ?? input.issue_id;
 	if (issueId === undefined || issueId.trim().length === 0) {
-		throw new Error("linear_link requires issueId or issue_id");
+		throw new Error("work_tracker_link requires issueId or issue_id");
 	}
-	const output: CreateLinearLinkInput = { issueId };
+	const output: CreateWorkTrackerRefInput = { issueId };
+	const providerId = input.providerId ?? input.provider_id;
+	if (providerId !== undefined) output.providerId = providerId;
+	const providerKind = normalizeWorkTrackerKind(
+		input.providerKind ?? input.provider_kind ?? input.trackerKind ?? input.tracker_kind,
+	);
+	if (providerKind !== undefined) output.providerKind = providerKind;
+	if (input.identifier !== undefined) output.identifier = input.identifier;
+	if (input.title !== undefined) output.title = input.title;
+	if (input.url !== undefined) output.url = input.url;
 	const sessionId = input.sessionId ?? input.session_id;
 	const taskId = input.taskId ?? input.task_id;
 	if (sessionId !== undefined) output.sessionId = sessionId;
 	if (taskId !== undefined) output.taskId = taskId;
 	if (output.sessionId === undefined && output.taskId === undefined) output.sessionId = defaultSessionId;
 	if (input.note !== undefined) output.note = input.note;
+	const metadata = metadataRecord(input.metadata);
+	if (metadata !== undefined) output.metadata = metadata;
 	return output;
 }
 
 function normalizeTaskCreateToolInput(input: TaskCreateToolInput, defaultSessionId: string): TaskCreateToolInput {
 	const output: TaskCreateToolInput = { ...input };
 	if (output.sessionId === undefined) output.sessionId = input.session_id ?? defaultSessionId;
-	if (output.linearIssue === undefined && input.linear_issue !== undefined) output.linearIssue = input.linear_issue;
+	if (output.trackerProviderId === undefined && input.tracker_provider_id !== undefined) {
+		output.trackerProviderId = input.tracker_provider_id;
+	}
+	if (output.trackerIssueId === undefined && input.tracker_issue_id !== undefined) {
+		output.trackerIssueId = input.tracker_issue_id;
+	}
+	if (output.trackerIdentifier === undefined && input.tracker_identifier !== undefined) {
+		output.trackerIdentifier = input.tracker_identifier;
+	}
+	if (output.trackerUrl === undefined && input.tracker_url !== undefined) {
+		output.trackerUrl = input.tracker_url;
+	}
+	if (output.trackerProviderKind === undefined) {
+		const trackerProviderKind = normalizeWorkTrackerKind(input.tracker_provider_kind ?? input.trackerProviderKind);
+		if (trackerProviderKind !== undefined) output.trackerProviderKind = trackerProviderKind;
+	}
 	return output;
+}
+
+function normalizeWorkTrackerKind(value: string | undefined): WorkTrackerProviderKind | undefined {
+	return normalizeWorkTrackerProviderKind(value);
+}
+
+function metadataRecord(value: unknown): Record<string, unknown> | undefined {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+	return value as Record<string, unknown>;
 }
 
 function normalizeMemoryRememberToolInput(input: MemoryRememberToolInput, cwd: string): RememberMemoryInput {
