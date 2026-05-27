@@ -175,8 +175,6 @@ export function DocsApp({ config }: { config: DocsSiteConfig }) {
 							<span className="truncate">{config.site.title}</span>
 						</a>
 
-						<SiteLinks config={config} className="hidden lg:flex" />
-
 						<div className="ml-auto hidden w-full max-w-sm items-center md:flex">
 							<SearchTrigger onOpen={() => setIsPaletteOpen(true)} />
 						</div>
@@ -344,7 +342,7 @@ function SiteLinks({
 }: {
 	config: DocsSiteConfig;
 	className?: string;
-	mode?: "desktop" | "mobile";
+	mode?: "desktop" | "mobile" | "sidebar";
 }) {
 	const links = config.site.siteLinks ?? [];
 	if (links.length === 0) {
@@ -362,7 +360,12 @@ function SiteLinks({
 
 	return (
 		<nav
-			className={cn("flex flex-wrap items-center gap-1", mode === "mobile" && "items-stretch", className)}
+			className={cn(
+				"flex flex-wrap items-center gap-1",
+				mode === "mobile" && "items-stretch",
+				mode === "sidebar" && "flex-col flex-nowrap items-stretch gap-1",
+				className,
+			)}
 			aria-label="Documentation sites"
 		>
 			{topLevelLinks.map((link) => {
@@ -371,9 +374,10 @@ function SiteLinks({
 					return <SiteLinkPill key={link.id} link={link} isCurrent={link.id === config.site.id} />;
 				}
 
-				if (mode === "mobile") {
+				if (mode === "mobile" || mode === "sidebar") {
 					const isFamilyCurrent =
 						link.id === config.site.id || childLinks.some((childLink) => childLink.id === config.site.id);
+					const isChildCurrent = childLinks.some((childLink) => childLink.id === config.site.id);
 					return (
 						<span key={link.id} className="group/site-link-family flex flex-col items-stretch">
 							<SiteLinkPill
@@ -381,8 +385,14 @@ function SiteLinks({
 								isCurrent={link.id === config.site.id}
 								hasChildren
 								familyHighlighted={isFamilyCurrent}
+								childExpanded={isChildCurrent}
 							/>
-							<span className="grid grid-rows-[0fr] opacity-0 transition-[grid-template-rows,opacity] duration-300 ease-in group-hover/site-link-family:grid-rows-[1fr] group-hover/site-link-family:opacity-100 group-focus-within/site-link-family:grid-rows-[1fr] group-focus-within/site-link-family:opacity-100">
+							<span
+								className={cn(
+									"grid transition-[grid-template-rows,opacity] duration-300 ease-in group-hover/site-link-family:grid-rows-[1fr] group-hover/site-link-family:opacity-100 group-focus-within/site-link-family:grid-rows-[1fr] group-focus-within/site-link-family:opacity-100",
+									isChildCurrent ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
+								)}
+							>
 								<span className="overflow-hidden">
 									<span className="ml-3 mt-1 flex flex-col gap-1 border-l pl-2">
 										{childLinks.map((childLink) => (
@@ -428,6 +438,7 @@ function SiteLinkPill({
 	parentLabel,
 	hasChildren = false,
 	familyHighlighted = false,
+	childExpanded = false,
 	layout = "inline",
 }: {
 	link: DocsSiteLink;
@@ -436,6 +447,7 @@ function SiteLinkPill({
 	parentLabel?: string;
 	hasChildren?: boolean;
 	familyHighlighted?: boolean;
+	childExpanded?: boolean;
 	layout?: "inline" | "submenu";
 }) {
 	const isSubmenuRow = layout === "submenu";
@@ -482,7 +494,10 @@ function SiteLinkPill({
 			)}
 			{hasChildren && (
 				<ChevronDownIcon
-					className="ml-0.5 size-3 shrink-0 text-muted-foreground transition-transform duration-150 group-hover/site-link-family:rotate-180 group-focus-within/site-link-family:rotate-180"
+					className={cn(
+						"ml-0.5 size-3 shrink-0 text-muted-foreground transition-transform duration-150 group-hover/site-link-family:rotate-180 group-focus-within/site-link-family:rotate-180",
+						childExpanded && "rotate-180",
+					)}
 					aria-hidden="true"
 				/>
 			)}
@@ -516,9 +531,16 @@ function Sidebar({ config, activeSlug, search, onNavigate, onOpenSearch }: Sideb
 	const [filter, setFilter] = useState("");
 
 	const filteredDocs = useMemo(() => filterDocsForSidebar(filter, config.docs, search), [config.docs, filter, search]);
+	const hasSiteLinks = (config.site.siteLinks ?? []).length > 0;
 
 	return (
 		<div className="flex h-full flex-col">
+			{hasSiteLinks && (
+				<div className="flex flex-col gap-2 border-b p-4">
+					<div className="px-1 font-medium text-muted-foreground text-xs uppercase tracking-wider">Docs</div>
+					<SiteLinks config={config} mode="sidebar" />
+				</div>
+			)}
 			<div className="flex flex-col gap-2 border-b p-4">
 				<SearchTrigger onOpen={onOpenSearch} />
 				<SidebarFilter value={filter} onChange={setFilter} />
