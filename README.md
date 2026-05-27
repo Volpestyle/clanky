@@ -10,6 +10,10 @@ It is not a separate daemon or scheduler. Pi supplies the terminal agent
 runtime. Clanky adds the personal layer. AgentRoom supplies the multi-agent room
 when Clanky needs to coordinate with other agents.
 
+Use Clanky when you want one agent that is yours. Use AgentRoom when you need a
+shared room around multiple agents, runtime audit, task shadows, handoffs, and
+mobile checks.
+
 ## 1. What You Can Do
 
 Use Clanky as the agent that is always yours:
@@ -30,13 +34,10 @@ Use Clanky as the agent that is always yours:
 - participate in AgentRoom as a lead, worker, reviewer, or standalone personal
   agent
 
-> GIF slot: `docs/assets/gifs/clanky-tui-discord.gif`  
-> Capture: local TUI work continuing while a Discord mention routes through a
-> subagent, then delegates a durable task back to the main Clanky session.
-
-> GIF slot: `docs/assets/gifs/clankvox-voice-live.gif`  
-> Capture: Discord voice live run with speaker transcript, spoken response,
-> `ask_pi` delegation, and screen-watch or media counters.
+<!-- Capture backlog:
+- docs/assets/gifs/clanky-tui-discord.gif: local TUI work continuing while a Discord mention routes through a subagent.
+- docs/assets/gifs/clankvox-voice-live.gif: Discord voice live run with speaker transcript, spoken response, ask_pi delegation, and screen-watch or media counters.
+-->
 
 ## 2. What To Let Clanky Handle
 
@@ -99,7 +100,7 @@ Run the fresh-user flow first so you can test onboarding without touching your
 real profile:
 
 ```bash
-cd /Users/jamesvolpe/dev/agents/clanky-pi
+cd /path/to/clanky-pi
 pnpm install
 pnpm dev:setup:fresh
 ```
@@ -121,7 +122,7 @@ Summarize this repository and tell me how to run the non-live checks.
 For a persistent profile:
 
 ```bash
-pnpm clanky --home ~/.clanky --profile personal --cwd .
+clanky --home ~/.clanky --profile personal --cwd .
 ```
 
 ## Chat Gateways And Voice
@@ -179,7 +180,7 @@ For the room side, jump to [AgentRoom Ecosystem Tour](docs://agent-room-docs/eco
 - [Pi Foundation](docs/pi-foundation.md): what Pi owns and what Clanky adds.
 - [First-Time Setup](docs/first-time-setup.md): install, auth, connectors.
 - [Using Clanky](docs/using-clanky.md): daily TUI, memory, Discord, voice,
-  media, AgentRoom, skills, and MCP workflows.
+  media, AgentRoom, skills, and connected tool workflows.
 - [Command Reference](docs/command-reference.md): CLI and slash commands.
 - [Memory And Privacy](docs/memory-and-privacy.md): profile-local state and
   privacy controls.
@@ -191,7 +192,7 @@ For the room side, jump to [AgentRoom Ecosystem Tour](docs://agent-room-docs/eco
 ```bash
 pnpm check
 pnpm smoke
-pnpm clanky --help
+clanky --help
 pnpm docs:dev
 ```
 

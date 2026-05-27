@@ -14,9 +14,9 @@ inside Clanky.
 Run Clanky:
 
 ```bash
-pnpm clanky
-pnpm clanky --profile personal --home ~/.clanky --cwd .
-pnpm clanky --message "Summarize this repository"
+clanky
+clanky --profile personal --home ~/.clanky --cwd .
+clanky --message "Summarize this repository"
 ```
 
 Options:
@@ -31,21 +31,21 @@ Options:
 Discord operator CLI:
 
 ```bash
-pnpm clanky discord guilds
-pnpm clanky discord channels <guild-id-or-name> --since 24h
-pnpm clanky discord messages <channel-id> --limit 50
-pnpm clanky discord recent [guild-id-or-name] --since 24h
-pnpm clanky discord send <channel-id> "message text" --file ./path.png
-pnpm clanky discord emojis <guild-id-or-name>
-pnpm clanky discord react <channel-id> <message-id> <emoji>
+clanky discord guilds
+clanky discord channels <guild-id-or-name> --since 24h
+clanky discord messages <channel-id> --limit 50
+clanky discord recent [guild-id-or-name] --since 24h
+clanky discord send <channel-id> "message text" --file ./path.png
+clanky discord emojis <guild-id-or-name>
+clanky discord react <channel-id> <message-id> <emoji>
 ```
 
 Log dive CLI:
 
 ```bash
-pnpm clanky logs
-pnpm clanky logs --profile personal --home ~/.clanky --session latest
-pnpm clanky logs --json
+clanky logs
+clanky logs --profile personal --home ~/.clanky --session latest
+clanky logs --json
 ```
 
 ## Setup Slash Commands

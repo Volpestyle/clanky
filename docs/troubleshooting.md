@@ -32,7 +32,7 @@ Check:
 Fix launch flags:
 
 ```bash
-pnpm clanky --home ~/.clanky --profile personal --cwd .
+clanky --home ~/.clanky --profile personal --cwd .
 ```
 
 For disposable testing, prefer:
@@ -68,7 +68,7 @@ Check:
 ```text
 /subagents status
 /subagents modal
-pnpm clanky logs --profile personal --home ~/.clanky
+clanky logs --profile personal --home ~/.clanky
 ```
 
 Use AgentRoom for real multi-agent room work. Clanky subagents are only the

@@ -9,7 +9,7 @@ export const site: DocsSiteInfo = {
 	id: "clanky-docs",
 	title: "Clanky Docs",
 	description:
-		"Clanky is a personal Pi agent for local work, memory, Discord text and voice, subagents, media, and AgentRoom participation.",
+		"Clanky is a personal Pi agent for local work, profile memory, Discord text and voice, media, skills, and AgentRoom participation.",
 	badge: "localhost",
 	logo: {
 		src: "branding/clanky-icon-32.png",
@@ -21,13 +21,12 @@ export const site: DocsSiteInfo = {
 		baseUrl: "https://volpestyle.github.io/docs/clanky",
 		title: "Clanky",
 		blurb:
-			"Clanky is a personal Pi agent for local work, memory, Discord text and voice, subagents, media, and AgentRoom participation.",
-		excludeGroupsFromFull: ["Maintainer"],
+			"Clanky is a personal Pi agent for local work, profile memory, Discord text and voice, media, skills, and AgentRoom participation. Start with the Pi TUI and use the command reference only when you need exact commands.",
 	},
 	siteLinks: createAgentWorkspaceSiteLinks(),
 };
 
-export const groups: DocGroup[] = ["Start", "Setup", "Operations", "Reference", "Advanced", "Maintainer"];
+export const groups: DocGroup[] = ["Start", "Setup", "Operations", "Reference", "Advanced"];
 
 export const docsMeta: DocMeta[] = [
 	{
@@ -69,9 +68,9 @@ export const docsMeta: DocMeta[] = [
 	{
 		slug: "using-clanky",
 		title: "Using Clanky",
-		description: "Day-to-day TUI, memory, Discord, voice, web/media, AgentRoom, skills, and MCP workflows.",
+		description: "Day-to-day TUI, memory, Discord, voice, web/media, AgentRoom, skills, and connected tool workflows.",
 		source: "docs/using-clanky.md",
-		group: "Setup",
+		group: "Operations",
 	},
 	{
 		slug: "command-reference",
@@ -106,14 +105,14 @@ export const docsMeta: DocMeta[] = [
 		title: "Live Gates",
 		description: "Credentialed checks for model auth, Discord text and voice, Linear, xAI media, and AgentRoom launch.",
 		source: "docs/qa/live-gates.md",
-		group: "Operations",
+		group: "Advanced",
 	},
 	{
 		slug: "discord-voice-live-runbook",
 		title: "Discord Voice Live Runbook",
 		description: "Preflight and copyable live validation commands for Discord voice, media, and Go Live checks.",
 		source: "docs/qa/discord-voice-live-runbook.md",
-		group: "Operations",
+		group: "Advanced",
 	},
 	{
 		slug: "discord-voice-architecture",
@@ -122,27 +121,6 @@ export const docsMeta: DocMeta[] = [
 			"End-to-end control-plane, media-plane, Realtime, and Pi delegation flow for Clanky's Discord voice agent.",
 		source: "docs/discord-voice-architecture.md",
 		group: "Advanced",
-	},
-	{
-		slug: "memory-plan",
-		title: "Memory Plan (archived)",
-		description: "Historical profile-local memory direction and implementation notes.",
-		source: "docs/archive/memory-plan.md",
-		group: "Maintainer",
-	},
-	{
-		slug: "plan",
-		title: "v1 Plan (archived)",
-		description: "Historical v1 daemon architecture, package layout, roadmap, and success criteria.",
-		source: "docs/archive/plan.md",
-		group: "Maintainer",
-	},
-	{
-		slug: "v1-audit",
-		title: "v1 Audit (archived)",
-		description: "Historical prompt-to-artifact checklist, roadmap audit, and live gate preflight evidence.",
-		source: "docs/archive/v1-audit.md",
-		group: "Maintainer",
 	},
 ];
 

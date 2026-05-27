@@ -23,14 +23,14 @@ Clanky gives you a local agent that can carry personal context across tools:
   working
 - join Discord voice through the current media adapter, hear speakers, speak
   back, and delegate durable work to Pi
-- use web, browser, media generation, Linear, Discord, and MCP skills when
-  configured
+- use web, browser, media generation, Linear, Discord, and other connected tool
+  skills when configured
 - join an AgentRoom room as a normal Pi harness while keeping profile ownership
   explicit
 
-> GIF slot: `docs/assets/gifs/clanky-tui-discord.gif`  
-> Capture: foreground Clanky working in the local TUI while Discord routes a
-> mention through a subagent and returns a useful handoff.
+<!-- Capture backlog:
+- docs/assets/gifs/clanky-tui-discord.gif: foreground Clanky working in the local TUI while Discord routes a mention through a subagent and returns a useful handoff.
+-->
 
 ## 2. What To Let Clanky Handle
 
@@ -83,7 +83,7 @@ Use the fresh-user script first. It creates a temporary Clanky home so you can
 test onboarding without touching your real profile.
 
 ```bash
-cd /Users/jamesvolpe/dev/agents/clanky-pi
+cd /path/to/clanky-pi
 pnpm install
 pnpm dev:setup:fresh
 ```
@@ -110,7 +110,7 @@ and basic tool use before you involve Discord or voice.
 After the fresh run works, start a persistent profile:
 
 ```bash
-pnpm clanky --home ~/.clanky --profile personal --cwd .
+clanky --home ~/.clanky --profile personal --cwd .
 ```
 
 Inside Clanky:

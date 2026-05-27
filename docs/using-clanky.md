@@ -6,7 +6,7 @@ Once setup is done, treat Clanky as your personal Pi agent. Start it in the repo
 or workspace you want it to work on:
 
 ```bash
-pnpm clanky --home ~/.clanky --profile personal --cwd .
+clanky --home ~/.clanky --profile personal --cwd .
 ```
 
 The current working directory matters because Pi uses it for tool execution,
@@ -171,8 +171,8 @@ lifecycle. Clanky owns its profile state and agent-owned connectors.
 Use separate profiles for multiple live Clankies:
 
 ```bash
-pnpm clanky --home ./.clanky-room --profile clanky-lead --cwd .
-pnpm clanky --home ./.clanky-room --profile clanky-reviewer --cwd .
+clanky --home ./.clanky-room --profile clanky-lead --cwd .
+clanky --home ./.clanky-room --profile clanky-reviewer --cwd .
 ```
 
 Use `CLANKY_CHAT_GATEWAY_OWNER=room` when the room connector owns Discord.
@@ -196,12 +196,15 @@ Commands:
 Bundled operator skills cover Discord, web/browser work, media generation,
 AgentRoom operation, Linear bridging, log dives, and Pi TUI coding behavior.
 
-## External MCP Workflow
+## Connected Tool Workflow
 
-Clanky auto-adds AgentRoom MCP when enrolled in an AgentRoom room or when
-`.agentroom/config.yaml` exists. It also auto-adds Discord MCP by default and
-can inject stored profile Discord credentials when no Discord MCP token env var
-is set.
+Most users should treat connected tools as something Clanky chooses when the
+task needs them. You only need this section when adding or debugging tool
+servers.
+
+Clanky can auto-add AgentRoom tools when enrolled in an AgentRoom room or when
+`.agentroom/config.yaml` exists. It can also auto-add Discord tools when the
+profile has the right Discord credential.
 
 Inspect configured servers:
 
