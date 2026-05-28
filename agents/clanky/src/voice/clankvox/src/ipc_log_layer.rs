@@ -1,10 +1,10 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use tracing::{Event, Subscriber};
-use tracing_subscriber::layer::Context;
 use tracing_subscriber::Layer;
+use tracing_subscriber::layer::Context;
 
-use crate::ipc::{send_msg, OutMsg};
+use crate::ipc::{OutMsg, send_msg};
 
 /// A flag that gates whether the IPC layer should attempt to send.
 /// Set to `true` once the IPC writer thread is ready.

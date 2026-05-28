@@ -1,5 +1,4 @@
 import { readFile } from "node:fs/promises";
-import { basename } from "node:path";
 import {
 	type AgentToolResult,
 	type BeforeProviderRequestEvent,
@@ -11,7 +10,7 @@ import {
 	type SessionMessageEntry,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, decodeKittyPrintable, matchesKey, Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import { type ClankyCommandCompletionSpec, completeClankyCommandArgument } from "./command-completions.ts";
 import type {
@@ -529,8 +528,6 @@ const SUBAGENT_PANEL_STATUS_KEY = "clanky-subagents";
 const SUBAGENT_PANEL_REFRESH_MS = 2000;
 const SUBAGENT_PANEL_MAX_ROWS = 7;
 const SUBAGENT_BROWSER_REFRESH_MS = 2000;
-const SUBAGENT_BROWSER_MAX_ROWS = 14;
-const SUBAGENT_TRANSCRIPT_MAX_ROWS = 22;
 const SUBAGENT_MODAL_WIDTH = "100%";
 const SUBAGENT_MODAL_MAX_HEIGHT = "100%";
 const SUBAGENT_MODAL_MIN_WIDTH = 72;
@@ -786,6 +783,7 @@ class SubagentPanelController {
 					theme,
 					done,
 					requestRender: () => tui.requestRender(),
+					getViewportRows: () => tui.terminal.rows,
 				}),
 			{
 				overlay: true,
@@ -816,6 +814,7 @@ class SubagentPanelController {
 					theme,
 					done,
 					requestRender: () => tui.requestRender(),
+					getViewportRows: () => tui.terminal.rows,
 					initialSelectedId: selectedId,
 					initialMode: "detail",
 					detailBackBehavior: "close",
@@ -1000,6 +999,7 @@ interface SubagentBrowserOptions {
 	theme: ExtensionContext["ui"]["theme"];
 	done: (result: undefined) => void;
 	requestRender: () => void;
+	getViewportRows: () => number;
 	initialSelectedId?: string;
 	initialMode?: "list" | "detail";
 	detailBackBehavior?: "list" | "close";
@@ -1027,6 +1027,7 @@ class SubagentBrowserComponent {
 	private readonly theme: ExtensionContext["ui"]["theme"];
 	private readonly done: (result: undefined) => void;
 	private readonly requestRender: () => void;
+	private readonly getViewportRows: () => number;
 	private readonly timer: ReturnType<typeof setInterval>;
 	private readonly detailBackBehavior: "list" | "close";
 
@@ -1038,6 +1039,7 @@ class SubagentBrowserComponent {
 		this.theme = options.theme;
 		this.done = options.done;
 		this.requestRender = options.requestRender;
+		this.getViewportRows = options.getViewportRows;
 		this.mode = options.initialMode ?? "list";
 		this.detailBackBehavior = options.detailBackBehavior ?? "list";
 		if (this.mode === "detail") {
@@ -1199,8 +1201,9 @@ class SubagentBrowserComponent {
 			this.requestRender();
 			return;
 		}
-		if (isPrintableInput(data)) {
-			this.draft += data.replace(/\r?\n/g, " ");
+		const printable = printableInput(data);
+		if (printable !== undefined) {
+			this.draft += printable.replace(/\r?\n/g, " ");
 			this.sendStatus = undefined;
 			this.requestRender();
 		}
@@ -1307,82 +1310,87 @@ class SubagentBrowserComponent {
 	}
 
 	private ensureSelectedVisible(): void {
-		if (this.summaries.length === 0) {
-			this.selectedIndex = 0;
-			this.listScroll = 0;
-			return;
-		}
-		this.selectedIndex = Math.min(Math.max(0, this.selectedIndex), this.summaries.length - 1);
-		const maxScroll = Math.max(0, this.summaries.length - SUBAGENT_BROWSER_MAX_ROWS);
-		if (this.selectedIndex < this.listScroll) {
-			this.listScroll = this.selectedIndex;
-		} else if (this.selectedIndex >= this.listScroll + SUBAGENT_BROWSER_MAX_ROWS) {
-			this.listScroll = this.selectedIndex - SUBAGENT_BROWSER_MAX_ROWS + 1;
-		}
-		this.listScroll = Math.min(Math.max(0, this.listScroll), maxScroll);
+		this.ensureListVisible(this.estimatedListRowCapacity());
+	}
+
+	private estimatedListRowCapacity(): number {
+		// Mirrors the row capacity formula in renderList: viewport minus header/hint/blank/column-header/footer.
+		return Math.max(1, this.getViewportRows() - 5);
 	}
 
 	private renderList(width: number): string[] {
-		const contentWidth = Math.max(20, width - 4);
+		const contentWidth = Math.max(20, width);
+		const viewportRows = this.getViewportRows();
 		const counts = subagentCounts(this.summaries);
-		this.ensureSelectedVisible();
-		const lines = [
-			formatSubagentWorkspaceCrumbs(
-				this.theme,
-				["Clanky", "Subagents"],
-				[
-					counts.running > 0 ? this.theme.fg("accent", `${counts.running} running`) : this.theme.fg("dim", "0 running"),
-					counts.queued > 0 ? this.theme.fg("warning", `${counts.queued} queued`) : this.theme.fg("dim", "0 queued"),
-					counts.failed > 0 ? this.theme.fg("error", `${counts.failed} failed`) : undefined,
-				],
-			),
-			"Up/Down select  PgUp/PgDn page  Home/End jump  Enter open subagent  r refresh  Esc/q close",
+		const headerParts = [
+			this.theme.bold("Subagents"),
+			counts.running > 0 ? this.theme.fg("accent", `${counts.running} running`) : this.theme.fg("dim", "0 running"),
+			counts.queued > 0 ? this.theme.fg("warning", `${counts.queued} queued`) : this.theme.fg("dim", "0 queued"),
+			counts.failed > 0 ? this.theme.fg("error", `${counts.failed} failed`) : undefined,
+		].filter((part): part is string => part !== undefined);
+		const lines: string[] = [
+			headerParts.join(this.theme.fg("dim", "  ·  ")),
+			this.theme.fg("dim", "↑↓ select  PgUp/PgDn page  Home/End jump  Enter open  r refresh  Esc/q close"),
 			"",
 		];
+		// Reserve top rows; remainder of viewport is for rows.
+		const reservedTop = lines.length;
+		const rowCapacity = Math.max(3, viewportRows - reservedTop - 1);
 		if (this.summaries.length === 0) {
-			lines.push("No Clanky subagents yet.");
+			lines.push(this.theme.fg("dim", "No Clanky subagents yet."));
 		} else {
 			lines.push(this.theme.fg("dim", "  state     kind     queue  effort       scope / active work"));
-			const visibleSummaries = this.summaries.slice(this.listScroll, this.listScroll + SUBAGENT_BROWSER_MAX_ROWS);
+			const rowsForList = Math.max(1, rowCapacity - 2);
+			this.ensureListVisible(rowsForList);
+			const visibleSummaries = this.summaries.slice(this.listScroll, this.listScroll + rowsForList);
 			for (const [visibleIndex, summary] of visibleSummaries.entries()) {
 				const index = this.listScroll + visibleIndex;
 				const selected = index === this.selectedIndex;
 				const row = formatSubagentBrowserRow(summary, contentWidth - 2, this.theme, selected);
-				lines.push(`${selected ? ">" : " "} ${row}`);
+				const cursor = selected ? this.theme.fg("accent", ">") : " ";
+				lines.push(`${cursor} ${row}`);
 			}
-			if (this.summaries.length > SUBAGENT_BROWSER_MAX_ROWS) {
-				const end = Math.min(this.summaries.length, this.listScroll + SUBAGENT_BROWSER_MAX_ROWS);
+			if (this.summaries.length > rowsForList) {
+				const end = Math.min(this.summaries.length, this.listScroll + rowsForList);
 				lines.push(this.theme.fg("dim", `  showing ${this.listScroll + 1}-${end} of ${this.summaries.length}`));
 			}
 		}
-		return renderPlainBox(lines, width, this.theme);
+		return padToViewport(lines, viewportRows);
 	}
 
 	private renderDetail(width: number): string[] {
 		const selected = this.selectedSummary();
-		const contentWidth = Math.max(20, width - 4);
-		const title = selected === undefined ? "Subagent" : (selected.scopeName ?? selected.scopeId);
-		const lines = [
-			formatSubagentWorkspaceCrumbs(
-				this.theme,
-				["Clanky", "Subagents", title],
-				[
-					selected === undefined ? undefined : formatSubagentStateTheme(selected.state, this.theme),
-					selected === undefined ? undefined : formatSubagentKind(selected.kind, this.theme),
-				],
-			),
-			selected === undefined ? "No subagent selected." : formatSubagentDetailMeta(selected, contentWidth, this.theme),
-			"Type to message this subagent  Enter send  Up/Down scroll  PgUp/PgDn page  Ctrl+R refresh  Esc back",
+		const contentWidth = Math.max(20, width);
+		const viewportRows = this.getViewportRows();
+		const composerLines = renderSubagentComposer(
+			this.draft,
+			this.sendStatus,
+			this.sending,
+			contentWidth,
+			this.theme,
+			selected?.kind,
+		);
+		const headerLines: string[] = [
+			renderSubagentChatHeader(selected, this.theme),
+			this.theme.fg("dim", "↑↓ scroll  PgUp/PgDn page  Enter send  Ctrl+R refresh  Esc back"),
+			"",
 		];
-		if (this.detailError !== undefined) {
-			lines.push("");
+		// One blank row separates transcript from composer.
+		const reservedRows = headerLines.length + 1 + composerLines.length;
+		const transcriptCapacity = Math.max(3, viewportRows - reservedRows);
+		const lines = [...headerLines];
+		if (selected === undefined) {
+			lines.push(this.theme.fg("dim", "No subagent selected."));
+		} else if (this.detailError !== undefined) {
 			lines.push(this.theme.fg("warning", `No transcript: ${this.detailError}`));
 		} else if (this.transcript.length === 0) {
-			lines.push("");
-			lines.push("No transcript messages yet.");
+			lines.push(this.theme.fg("dim", "No transcript messages yet."));
 		} else {
 			const rendered = renderTranscriptRows(this.transcript, contentWidth, this.theme);
-			const maxScroll = Math.max(0, rendered.length - SUBAGENT_TRANSCRIPT_MAX_ROWS);
+			// Reserve one row inside the transcript region for a status line so the user
+			// always sees how much history is above/below the visible window.
+			const innerCapacity = Math.max(1, transcriptCapacity - 1);
+			const maxScroll = Math.max(0, rendered.length - innerCapacity);
 			this.detailMaxScroll = maxScroll;
 			if (this.detailFollowTail || this.detailScroll === Number.MAX_SAFE_INTEGER) {
 				this.detailScroll = maxScroll;
@@ -1390,35 +1398,57 @@ class SubagentBrowserComponent {
 			} else {
 				this.detailScroll = Math.min(Math.max(0, this.detailScroll), maxScroll);
 			}
-			const end = Math.min(rendered.length, this.detailScroll + SUBAGENT_TRANSCRIPT_MAX_ROWS);
-			lines.push(
-				this.theme.fg(
-					"dim",
-					`History ${this.transcript.length} msgs  lines ${this.detailScroll + 1}-${end}/${rendered.length}${
-						this.detailFollowTail ? "  tail" : ""
-					}`,
-				),
-			);
-			lines.push("");
+			const end = Math.min(rendered.length, this.detailScroll + innerCapacity);
+			const above = this.detailScroll;
+			const below = Math.max(0, rendered.length - end);
+			lines.push(this.renderScrollStatus(above, below, rendered.length));
 			lines.push(...rendered.slice(this.detailScroll, end));
-			lines.push("");
-			lines.push(renderSubagentDetailFooter(this.detailScroll, end, rendered.length, this.detailFollowTail));
 		}
-		lines.push("");
-		lines.push(...renderSubagentComposer(this.draft, this.sendStatus, this.sending, contentWidth, this.theme));
-		return renderPlainBox(lines, width, this.theme);
+		// Pad transcript region so the composer sits at the bottom of the viewport.
+		const transcriptUsed = lines.length - headerLines.length;
+		const padCount = Math.max(1, transcriptCapacity - transcriptUsed + 1);
+		for (let i = 0; i < padCount; i += 1) lines.push("");
+		lines.push(...composerLines);
+		return padToViewport(lines, viewportRows);
+	}
+
+	private renderScrollStatus(above: number, below: number, total: number): string {
+		if (total === 0) return this.theme.fg("dim", "  (no history)");
+		const sep = this.theme.fg("dim", "  ·  ");
+		const totalLabel = this.theme.fg("dim", `${total} row${total === 1 ? "" : "s"}`);
+		if (above === 0 && below === 0) return `  ${totalLabel}`;
+		const aboveLabel = above > 0 ? this.theme.fg("accent", `↑ ${above} above`) : this.theme.fg("dim", "↑ top");
+		const belowLabel = below > 0 ? this.theme.fg("accent", `↓ ${below} below`) : this.theme.fg("dim", "↓ tail");
+		const tail = !this.detailFollowTail && below === 0 ? `${sep}${this.theme.fg("dim", "(End to follow)")}` : "";
+		return `  ${totalLabel}${sep}${aboveLabel}${sep}${belowLabel}${tail}`;
 	}
 
 	private listPageSize(): number {
-		return Math.max(1, SUBAGENT_BROWSER_MAX_ROWS - 2);
+		return Math.max(1, Math.floor(this.getViewportRows() / 2));
 	}
 
 	private detailPageSize(): number {
-		return Math.max(1, SUBAGENT_TRANSCRIPT_MAX_ROWS - 4);
+		return Math.max(1, Math.floor(this.getViewportRows() / 2));
 	}
 
 	private detailHalfPageSize(): number {
 		return Math.max(1, Math.floor(this.detailPageSize() / 2));
+	}
+
+	private ensureListVisible(rowsForList: number): void {
+		if (this.summaries.length === 0) {
+			this.selectedIndex = 0;
+			this.listScroll = 0;
+			return;
+		}
+		this.selectedIndex = Math.min(Math.max(0, this.selectedIndex), this.summaries.length - 1);
+		const maxScroll = Math.max(0, this.summaries.length - rowsForList);
+		if (this.selectedIndex < this.listScroll) {
+			this.listScroll = this.selectedIndex;
+		} else if (this.selectedIndex >= this.listScroll + rowsForList) {
+			this.listScroll = this.selectedIndex - rowsForList + 1;
+		}
+		this.listScroll = Math.min(Math.max(0, this.listScroll), maxScroll);
 	}
 }
 
@@ -1647,36 +1677,38 @@ function formatSubagentBrowserRow(
 	return truncateStyledLine(`${state} ${kind} ${queue}  ${effort} ${active}  ${summary}  ${age}`, width);
 }
 
-function formatSubagentDetailMeta(
-	subagent: ClankySubagentSummary,
-	width: number,
+function renderSubagentChatHeader(
+	subagent: ClankySubagentSummary | undefined,
 	theme: ExtensionContext["ui"]["theme"],
 ): string {
-	const queue = subagent.queueDepth > 0 ? `queue ${subagent.queueDepth}` : "queue empty";
-	const effort = stripAnsi(formatSubagentEffort(subagent.thinkingLevel, theme));
-	const age = `updated ${formatRelativeAge(subagent.updatedAt)} ago`;
-	const session = subagent.sessionFile === undefined ? "no session file" : basename(subagent.sessionFile);
-	const summary = subagent.activeSummary ?? "idle";
-	return truncatePlain(
-		`${subagent.state}  ${subagent.kind}  ${queue}  ${effort}  ${age}  ${session}  ${summary}`,
-		width,
+	if (subagent === undefined) return theme.bold("Subagent");
+	const kindColor = subagentKindThemeColor(subagent.kind);
+	const bar = theme.fg(kindColor, "▍");
+	const scope = theme.bold(theme.fg(kindColor, truncatePlain(subagent.scopeName ?? subagent.scopeId, 48)));
+	const kind = theme.fg("dim", subagentKindLabel(subagent.kind));
+	const state = stripAnsi(formatSubagentStateTheme(subagent.state, theme)).trim();
+	const stateStyled =
+		subagent.state === "running"
+			? theme.fg("accent", state)
+			: subagent.state === "queued"
+				? theme.fg("warning", state)
+				: subagent.state === "failed"
+					? theme.fg("error", state)
+					: theme.fg("dim", state);
+	const queue = subagent.queueDepth > 0 ? theme.fg("warning", `queue ${subagent.queueDepth}`) : undefined;
+	const age = theme.fg("dim", formatRelativeAge(subagent.updatedAt));
+	const parts = [scope, kind, stateStyled, queue, age].filter(
+		(part): part is string => part !== undefined && part.length > 0,
 	);
+	return `${bar} ${parts.join(theme.fg("dim", "  ·  "))}`;
 }
 
-function formatSubagentWorkspaceCrumbs(
-	theme: ExtensionContext["ui"]["theme"],
-	parts: readonly string[],
-	pills: readonly (string | undefined)[] = [],
-): string {
-	const visibleParts = parts.filter((part) => part.trim().length > 0);
-	const crumbText = visibleParts
-		.map((part, index) => {
-			const text = truncatePlain(part, index === visibleParts.length - 1 ? 48 : 18);
-			return index === visibleParts.length - 1 ? theme.fg("accent", text) : theme.fg("dim", text);
-		})
-		.join(theme.fg("dim", " > "));
-	const visiblePills = pills.filter((pill): pill is string => pill !== undefined);
-	return visiblePills.length === 0 ? crumbText : `${crumbText}  ${visiblePills.join("  ")}`;
+function subagentKindThemeColor(kind: string): "accent" | "warning" | "success" | "customMessageLabel" {
+	if (kind === "discord-voice") return "accent";
+	if (kind === "voice-worker") return "warning";
+	if (kind === "voice-general") return "success";
+	if (kind.startsWith("discord-")) return "customMessageLabel";
+	return "accent";
 }
 
 function formatSubagentKind(kind: string, theme: ExtensionContext["ui"]["theme"]): string {
@@ -1711,17 +1743,24 @@ function renderSubagentComposer(
 	sending: boolean,
 	width: number,
 	theme: ExtensionContext["ui"]["theme"],
+	subagentKind: string | undefined,
 ): string[] {
-	const prompt = draft.length === 0 ? "Message subagent or run /commands..." : draft;
-	const promptLines = wrapTranscriptText(prompt, Math.max(12, width - 4));
-	const visiblePromptLines = promptLines.slice(Math.max(0, promptLines.length - 3));
-	const lines = [
-		theme.fg("borderMuted", "-".repeat(Math.max(8, Math.min(width, 72)))),
-		...visiblePromptLines.map((line, index) => {
-			const prefix = index === 0 ? "> " : "  ";
-			return `${theme.fg("accent", prefix)}${draft.length === 0 ? theme.fg("dim", line) : theme.fg("text", line)}`;
-		}),
-	];
+	const accent = subagentKind === undefined ? "accent" : subagentKindThemeColor(subagentKind);
+	const empty = draft.length === 0;
+	const innerWidth = Math.max(12, width - 4);
+	const draftLines = empty ? [""] : wrapTranscriptText(draft, innerWidth);
+	const visibleLines = draftLines.slice(Math.max(0, draftLines.length - 3));
+	const lastIndex = visibleLines.length - 1;
+	const lines: string[] = [theme.fg("borderMuted", "─".repeat(Math.max(8, width)))];
+	for (const [index, line] of visibleLines.entries()) {
+		const prefix = index === 0 ? `${theme.fg(accent, ">")} ` : "  ";
+		if (empty && index === 0) {
+			lines.push(`${prefix}${CURSOR_MARKER}${theme.fg("dim", "Message subagent...")}`);
+		} else {
+			const cursorSuffix = !empty && index === lastIndex ? CURSOR_MARKER : "";
+			lines.push(`${prefix}${theme.fg("text", line)}${cursorSuffix}`);
+		}
+	}
 	if (sending) {
 		lines.push(theme.fg("dim", "sending..."));
 	} else if (status !== undefined) {
@@ -1730,16 +1769,18 @@ function renderSubagentComposer(
 	return lines;
 }
 
+function padToViewport(lines: string[], viewportRows: number): string[] {
+	if (viewportRows <= 0) return lines;
+	if (lines.length >= viewportRows) return lines.slice(0, viewportRows);
+	const padded = [...lines];
+	while (padded.length < viewportRows) padded.push("");
+	return padded;
+}
+
 function formatSubagentSendAccepted(result: SendSubagentMessageResult): string {
 	if (result.mode === "followUp") return "Queued behind the active subagent turn.";
 	if (result.mode === "handled") return "Command handled by the subagent runtime.";
 	return "Sent to subagent.";
-}
-
-function renderSubagentDetailFooter(start: number, end: number, total: number, followTail: boolean): string {
-	if (total <= SUBAGENT_TRANSCRIPT_MAX_ROWS) return `${total} rendered line${total === 1 ? "" : "s"}`;
-	const position = start <= 0 ? "top" : end >= total ? "bottom" : "scroll";
-	return `${position} ${start + 1}-${end}/${total}${followTail ? "  following tail" : ""}`;
 }
 
 function formatSubagentState(state: ClankySubagentState, ctx: ExtensionContext): string {
@@ -1855,22 +1896,6 @@ function truncateStyledLine(value: string, maxLength: number): string {
 	const remaining = target - visible;
 	if (remaining <= 0) return `${out}...${reset}`;
 	return `${out}${tail.slice(0, remaining)}...${reset}`;
-}
-
-function renderPlainBox(lines: readonly string[], width: number, theme: ExtensionContext["ui"]["theme"]): string[] {
-	const boxWidth = Math.max(24, width);
-	const contentWidth = Math.max(1, boxWidth - 4);
-	const top = theme.fg("borderMuted", `+${"-".repeat(boxWidth - 2)}+`);
-	const bottom = theme.fg("borderMuted", `+${"-".repeat(boxWidth - 2)}+`);
-	const body = lines.map((line, index) => {
-		const plain = truncateStyledLine(line, contentWidth);
-		const padded = padStyledRight(plain, contentWidth);
-		const rendered = `| ${padded} |`;
-		if (index === 0) return theme.bold(rendered);
-		if (index === 1) return theme.fg("dim", rendered);
-		return rendered;
-	});
-	return [top, ...body, bottom];
 }
 
 function resolveSelectedIndex(
@@ -2024,49 +2049,49 @@ function renderTranscriptRows(
 	const rows: string[] = [];
 	for (const [index, message] of messages.entries()) {
 		if (index > 0) rows.push("");
-		rows.push(formatTranscriptHeader(message, width, theme));
-		const wrapped = wrapTranscriptText(message.text, Math.max(10, width - 2));
-		if (wrapped.length === 0) {
-			rows.push(theme.fg("dim", "  (empty)"));
-		} else {
-			for (const line of wrapped) {
-				rows.push(line.length === 0 ? "" : formatTranscriptBodyLine(message.role, `  ${line}`, theme));
-			}
-		}
+		rows.push(...renderTranscriptMessage(message, width, theme));
 	}
 	return rows;
 }
 
-function formatTranscriptHeader(
+function renderTranscriptMessage(
 	message: SubagentTranscriptMessage,
 	width: number,
 	theme: ExtensionContext["ui"]["theme"],
-): string {
+): string[] {
+	const wrapped = wrapTranscriptText(message.text, Math.max(10, width - 4));
 	const timestamp = formatTranscriptTimestamp(message.timestamp);
-	const role = formatTranscriptRole(message.role, theme);
-	const speaker = message.speaker === undefined ? "" : theme.fg("muted", ` / ${message.speaker}`);
-	const prefix = timestamp === undefined ? "" : theme.fg("dim", `[${timestamp}] `);
-	return truncateStyledLine(`${prefix}${role}${speaker}`, width);
+	const timestampSuffix = timestamp === undefined ? "" : theme.fg("dim", `  ${timestamp}`);
+	if (message.role === "user") {
+		const speakerLabel = message.speaker ?? "you";
+		const label = `${theme.fg("accent", speakerLabel)}${timestampSuffix}`;
+		const lines = wrapped.length === 0 ? [""] : wrapped;
+		return [label, ...lines.map((line) => formatUserMessageBlock(line, width, theme))];
+	}
+	if (message.role === "assistant") {
+		const label = `${theme.fg("success", "clanky")}${timestampSuffix}`;
+		if (wrapped.length === 0) return [label, theme.fg("dim", "  (empty)")];
+		return [label, ...wrapped.map((line) => (line.length === 0 ? "" : `  ${line}`))];
+	}
+	if (message.role === "reasoning") {
+		const label = `${theme.fg("dim", "thinking")}${timestampSuffix}`;
+		return [
+			label,
+			...wrapped.map((line) => (line.length === 0 ? "" : theme.italic(theme.fg("thinkingText", `  ${line}`)))),
+		];
+	}
+	if (message.role === "tool") {
+		const label = `${theme.fg("toolTitle", "tool")}${timestampSuffix}`;
+		return [label, ...wrapped.map((line) => (line.length === 0 ? "" : theme.fg("toolOutput", `  ${line}`)))];
+	}
+	const label = `${theme.fg("dim", message.role)}${timestampSuffix}`;
+	return [label, ...wrapped.map((line) => (line.length === 0 ? "" : theme.fg("dim", `  ${line}`)))];
 }
 
-function formatTranscriptRole(role: SubagentTranscriptMessage["role"], theme: ExtensionContext["ui"]["theme"]): string {
-	if (role === "assistant") return theme.fg("success", "clanky");
-	if (role === "user") return theme.fg("accent", "user");
-	if (role === "reasoning") return theme.fg("warning", "reasoning");
-	if (role === "tool") return theme.fg("toolTitle", "tool");
-	return theme.fg("dim", role);
-}
-
-function formatTranscriptBodyLine(
-	role: SubagentTranscriptMessage["role"],
-	line: string,
-	theme: ExtensionContext["ui"]["theme"],
-): string {
-	if (role === "reasoning") return theme.fg("muted", line);
-	if (role === "tool") return theme.fg("toolOutput", line);
-	if (role === "system") return theme.fg("dim", line);
-	if (role === "user") return theme.fg("userMessageText", line);
-	return line;
+function formatUserMessageBlock(line: string, width: number, theme: ExtensionContext["ui"]["theme"]): string {
+	const innerWidth = Math.max(0, width - 4);
+	const padded = ` ${line.padEnd(innerWidth)} `;
+	return `  ${theme.bg("userMessageBg", theme.fg("userMessageText", padded))}`;
 }
 
 function formatTranscriptTimestamp(timestamp: string | undefined): string | undefined {
@@ -2124,79 +2149,64 @@ function wrapPlain(text: string, width: number): string[] {
 }
 
 function isUpKey(data: string): boolean {
-	return data === "\u001b[A";
+	return matchesKey(data, "up");
 }
 
 function isDownKey(data: string): boolean {
-	return data === "\u001b[B";
+	return matchesKey(data, "down");
 }
 
 function isSubagentPreviousKey(data: string): boolean {
-	return (
-		data === "\u001b\u001b[A" ||
-		data === "\u001bp" ||
-		data === "\u001bOa" ||
-		isModifiedArrowKey(data, "A") ||
-		isModifiedKittyArrowKey(data, "57419")
-	);
+	return data === "\u001b\u001b[A" || matchesKey(data, "alt+up") || matchesKey(data, "ctrl+up");
 }
 
 function isSubagentNextKey(data: string): boolean {
-	return (
-		data === "\u001b\u001b[B" ||
-		data === "\u001bn" ||
-		data === "\u001bOb" ||
-		isModifiedArrowKey(data, "B") ||
-		isModifiedKittyArrowKey(data, "57420")
-	);
-}
-
-function isModifiedArrowKey(data: string, arrowCode: "A" | "B"): boolean {
-	return new RegExp(`^\\u001b\\[1;(?:3|5)(?::[123])?${arrowCode}$`).test(data);
-}
-
-function isModifiedKittyArrowKey(data: string, codepoint: "57419" | "57420"): boolean {
-	return new RegExp(`^\\u001b\\[${codepoint};(?:3|5)(?::[123])?u$`).test(data);
+	return data === "\u001b\u001b[B" || matchesKey(data, "alt+down") || matchesKey(data, "ctrl+down");
 }
 
 function isPageUpKey(data: string): boolean {
-	return data === "\u001b[5~";
+	return matchesKey(data, "pageUp");
 }
 
 function isPageDownKey(data: string): boolean {
-	return data === "\u001b[6~";
+	return matchesKey(data, "pageDown");
 }
 
 function isHomeKey(data: string): boolean {
-	return data === "\u001b[H" || data === "\u001b[1~" || data === "\u001b[7~";
+	return matchesKey(data, "home");
 }
 
 function isEndKey(data: string): boolean {
-	return data === "\u001b[F" || data === "\u001b[4~" || data === "\u001b[8~";
+	return matchesKey(data, "end");
 }
 
 function isCtrlUKey(data: string): boolean {
-	return data === "\u0015";
+	return matchesKey(data, "ctrl+u");
 }
 
 function isCtrlDKey(data: string): boolean {
-	return data === "\u0004";
+	return matchesKey(data, "ctrl+d");
 }
 
 function isCtrlRKey(data: string): boolean {
-	return data === "\u0012";
+	return matchesKey(data, "ctrl+r");
 }
 
 function isEnterKey(data: string): boolean {
-	return data === "\r" || data === "\n";
+	return matchesKey(data, "enter");
 }
 
 function isEscapeKey(data: string): boolean {
-	return data === "\u001b";
+	return matchesKey(data, "escape");
 }
 
 function isBackspaceKey(data: string): boolean {
-	return data === "\u007f" || data === "\b";
+	return matchesKey(data, "backspace");
+}
+
+function printableInput(data: string): string | undefined {
+	if (isPrintableInput(data)) return data;
+	return decodeKittyPrintable(data);
 }
 
 function isPrintableInput(data: string): boolean {

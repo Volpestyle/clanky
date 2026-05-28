@@ -1,5 +1,5 @@
-use std::collections::hash_map::Entry;
 use std::collections::BTreeMap;
+use std::collections::hash_map::Entry;
 
 use audiopus::coder::Decoder as OpusDecoder;
 use audiopus::packet::Packet as OpusPacket;
@@ -9,10 +9,10 @@ use tokio::time;
 
 use crate::app_state::AppState;
 use crate::capture::{
-    normalize_sample_rate, normalize_silence_duration_ms, SpeakingState, UserCaptureState,
-    SPEAKING_TIMEOUT_MS,
+    SPEAKING_TIMEOUT_MS, SpeakingState, UserCaptureState, normalize_sample_rate,
+    normalize_silence_duration_ms,
 };
-use crate::ipc::{send_msg, OutMsg};
+use crate::ipc::{OutMsg, send_msg};
 use crate::ipc_protocol::CaptureCommand;
 use crate::video::{RemoteVideoState, UserVideoSubscription};
 use crate::video_decoder::PersistentVideoDecoder;
@@ -1118,8 +1118,8 @@ mod tests {
     use crate::video::UserVideoSubscription;
 
     use super::{
-        classify_rtp_sequence, should_reassert_sink_wants_for_waiting_keyframe,
-        update_speaking_state, RtpSeqClass,
+        RtpSeqClass, classify_rtp_sequence, should_reassert_sink_wants_for_waiting_keyframe,
+        update_speaking_state,
     };
 
     #[test]

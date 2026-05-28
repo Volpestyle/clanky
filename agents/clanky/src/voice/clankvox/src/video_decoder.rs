@@ -1,7 +1,7 @@
 use openh264::decoder::Decoder;
 use openh264_sys2::{
-    dsDataErrorConcealed, dsErrorFree, dsNoParamSets, dsRefLost, SBufferInfo,
-    DECODER_OPTION_ERROR_CON_IDC, DECODING_STATE,
+    DECODER_OPTION_ERROR_CON_IDC, DECODING_STATE, SBufferInfo, dsDataErrorConcealed, dsErrorFree,
+    dsNoParamSets, dsRefLost,
 };
 use std::os::raw::c_int;
 use std::ptr::{addr_of_mut, from_mut, null_mut};

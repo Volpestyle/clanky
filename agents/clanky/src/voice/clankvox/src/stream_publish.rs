@@ -113,6 +113,11 @@ fn kill_stream_publish_process_group(pid: u32, signal: libc::c_int) -> io::Resul
 }
 
 fn terminate_stream_publish_child(child: &mut std::process::Child, signal: libc::c_int) {
+    // If the child already exited, signaling its (now-zombie) process group
+    // returns EPERM/ESRCH on macOS and produces misleading log noise.
+    if matches!(child.try_wait(), Ok(Some(_))) {
+        return;
+    }
     if let Err(error) = kill_stream_publish_process_group(child.id(), signal) {
         if error.kind() != io::ErrorKind::NotFound {
             warn!(
@@ -1328,6 +1333,7 @@ impl AppState {
                 );
             }
             StreamPublishEvent::Error(message) => {
+                tracing::warn!(message = %message, "clankvox_stream_publish_error");
                 self.stop_stream_publish_runtime("stream_publish_error");
                 self.emit_transport_state(TransportRole::StreamPublish, "failed", Some(&message));
             }

@@ -723,6 +723,7 @@ async function assertSubagentPanelCommandWithSession(sessionFiles: {
 	const widgetPlacements = new Map<string, string | undefined>();
 	const notifications: string[] = [];
 	let detailLines: string[] | undefined;
+	let scrolledDetailLines: string[] | undefined;
 	let terminalInput: TerminalInputHandler | undefined;
 	const ctx = {
 		hasUI: true,
@@ -730,11 +731,21 @@ async function assertSubagentPanelCommandWithSession(sessionFiles: {
 			async custom(
 				factory: (tui: unknown, theme: unknown, keybindings: unknown, done: (result: undefined) => void) => unknown,
 			) {
+				let terminalRows = 12;
 				const component = factory(
-					{ requestRender() {} },
+					{
+						terminal: {
+							get rows() {
+								return terminalRows;
+							},
+						},
+						requestRender() {},
+					},
 					{
 						fg: (_color: string, text: string) => text,
+						bg: (_color: string, text: string) => text,
 						bold: (text: string) => text,
+						italic: (text: string) => text,
 					},
 					{},
 					() => undefined,
@@ -745,6 +756,10 @@ async function assertSubagentPanelCommandWithSession(sessionFiles: {
 				};
 				await new Promise((resolve) => setTimeout(resolve, 10));
 				detailLines = component.render(100);
+				component.handleInput?.("\u001b[1;1A");
+				scrolledDetailLines = component.render(100);
+				component.handleInput?.("G");
+				terminalRows = 24;
 				component.handleInput?.("ping from tui");
 				component.handleInput?.("\r");
 				await new Promise((resolve) => setTimeout(resolve, 10));
@@ -817,20 +832,23 @@ async function assertSubagentPanelCommandWithSession(sessionFiles: {
 	}
 	if (
 		detailLines === undefined ||
-		!detailLines.join("\n").includes("History 3 msgs") ||
-		!detailLines.join("\n").includes("effort medium") ||
-		!detailLines.join("\n").includes("rendered lines") ||
-		!detailLines.join("\n").includes("[2026-01-01 00:01] user / Smoke User") ||
-		!detailLines.join("\n").includes("[2026-01-01 00:02] reasoning") ||
-		!detailLines.join("\n").includes("[2026-01-01 00:02] clanky") ||
-		!detailLines.join("\n").includes("checking Smoke User subagent reasoning") ||
+		!detailLines.join("\n").includes("Smoke Guild") ||
+		!detailLines.join("\n").includes("queue 2") ||
+		!detailLines.join("\n").includes("11 rows") ||
+		!detailLines.join("\n").includes("clanky  2026-01-01 00:02") ||
 		detailLines.join("\n").includes("do-not-render") ||
-		!detailLines.join("\n").includes("hello discord") ||
-		!detailLines.join("\n").includes("second line") ||
 		!detailLines.join("\n").includes("hello back") ||
 		!detailLines.join("\n").includes("next step done")
 	) {
 		throw new Error(`smoke: /subagents enter did not render transcript: ${JSON.stringify(detailLines)}`);
+	}
+	if (
+		scrolledDetailLines === undefined ||
+		!scrolledDetailLines.join("\n").includes("↑ 5 above") ||
+		!scrolledDetailLines.join("\n").includes("↓ 1 below") ||
+		!scrolledDetailLines.join("\n").includes("checking Smoke User subagent reasoning")
+	) {
+		throw new Error(`smoke: /subagents did not scroll with Kitty arrow input: ${JSON.stringify(scrolledDetailLines)}`);
 	}
 	if (
 		sentSubagentMessages.length !== 1 ||

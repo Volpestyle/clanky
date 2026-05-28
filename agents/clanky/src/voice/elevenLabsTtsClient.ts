@@ -44,7 +44,7 @@ export class ElevenLabsTtsClient {
 
 	async synthesize(
 		text: string,
-		onAudio: (chunk: ElevenLabsTtsAudioChunk) => void,
+		onAudio: (chunk: ElevenLabsTtsAudioChunk) => Promise<void> | void,
 		options: ElevenLabsTtsSynthesizeOptions = {},
 	): Promise<void> {
 		const prompt = text.trim();
@@ -66,6 +66,7 @@ export class ElevenLabsTtsClient {
 			body: JSON.stringify({
 				text: prompt,
 				model_id: this.modelId,
+				voice_settings: { speed: 1.2 },
 			}),
 		};
 		if (options.signal !== undefined) requestInit.signal = options.signal;
@@ -95,7 +96,7 @@ export class ElevenLabsTtsClient {
 					chunk = chunk.subarray(0, chunk.length - 1);
 				}
 				if (chunk.length === 0) continue;
-				onAudio({ pcmBase64: chunk.toString("base64"), sampleRate });
+				await onAudio({ pcmBase64: chunk.toString("base64"), sampleRate });
 			}
 			if (remainder.length > 0) {
 				this.logger?.("warn", "elevenlabs_tts_odd_pcm_byte_discarded", { outputFormat: this.outputFormat });

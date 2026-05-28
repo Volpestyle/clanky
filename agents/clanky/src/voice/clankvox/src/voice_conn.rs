@@ -2549,9 +2549,7 @@ async fn udp_recv_loop(
                 let pct = per_packet_dave_marker_hits * 100 / per_packet_dave_marker_total;
                 info!(
                     per_packet_dave_marker_hits,
-                    per_packet_dave_marker_total,
-                    pct,
-                    "clankvox_per_packet_dave_marker_probe"
+                    per_packet_dave_marker_total, pct, "clankvox_per_packet_dave_marker_probe"
                 );
             }
         }
@@ -2593,7 +2591,14 @@ async fn udp_recv_loop(
         };
 
         let primary_candidate = video_depacketizers
-            .push(ssrc, codec, sequence, timestamp, marker, depacketize_payload)
+            .push(
+                ssrc,
+                codec,
+                sequence,
+                timestamp,
+                marker,
+                depacketize_payload,
+            )
             .map(|(frame, depacketizer_keyframe)| VideoFrameCandidate {
                 frame,
                 depacketizer_keyframe,
@@ -2648,9 +2653,8 @@ async fn udp_recv_loop(
         let (video_frame_opt, depacketizer_keyframe, needs_recovery, dave_decrypted) =
             if per_pkt_dave_ok && !assembled_has_dave_marker {
                 // Per-packet decrypt already handled — bypass frame-level DAVE
-                let candidate = primary_candidate.unwrap_or_else(|| {
-                    alternate_candidate.expect("at least one candidate exists")
-                });
+                let candidate = primary_candidate
+                    .unwrap_or_else(|| alternate_candidate.expect("at least one candidate exists"));
                 (
                     Some(candidate.frame),
                     candidate.depacketizer_keyframe,

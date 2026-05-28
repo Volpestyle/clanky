@@ -320,6 +320,16 @@ pub enum OutMsg {
         #[serde(rename = "musicSamples")]
         music_samples: usize,
     },
+    TtsBufferOverflow {
+        #[serde(rename = "droppedSamples")]
+        dropped_samples: usize,
+        #[serde(rename = "droppedMs")]
+        dropped_ms: f64,
+        #[serde(rename = "bufferSamples")]
+        buffer_samples: usize,
+        #[serde(rename = "bufferMs")]
+        buffer_ms: f64,
+    },
     Log {
         level: String,
         target: String,

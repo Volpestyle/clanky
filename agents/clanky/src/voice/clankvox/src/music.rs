@@ -130,6 +130,11 @@ fn kill_music_process_group(pid: u32, signal: libc::c_int) -> io::Result<()> {
 }
 
 fn terminate_music_child(child: &mut std::process::Child, signal: libc::c_int) {
+    // If the child already exited, signaling its (now-zombie) process group
+    // returns EPERM/ESRCH on macOS and produces misleading log noise.
+    if matches!(child.try_wait(), Ok(Some(_))) {
+        return;
+    }
     if let Err(error) = kill_music_process_group(child.id(), signal) {
         if error.kind() != io::ErrorKind::NotFound {
             warn!(pid = child.id(), error = %error, "failed to signal music process group");
