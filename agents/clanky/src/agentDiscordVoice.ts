@@ -903,6 +903,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 	private readonly completedToolCallIdSet = new Set<string>();
 	private readonly pendingSpeakerTranscriptLines: SpeakerTranscriptLine[] = [];
 	private readonly realtimeAudioOutputQueue: RealtimeAudioOutputChunk[] = [];
+	private realtimeAudioOutputQueuedMs = 0;
 	private readonly stats: VoiceBridgeStats = createVoiceBridgeStats();
 	private transcriptResponseTimer: TimerHandle | undefined;
 	private realtimeToolResponseTimer: TimerHandle | undefined;
@@ -1749,7 +1750,12 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		if (normalizedPcm.length === 0 || bytes <= 0 || sampleRate <= 0) return;
 		const durationMs = Math.max(MIN_REALTIME_AUDIO_OUTPUT_DELAY_MS, pcm16DurationMs(bytes, sampleRate));
 		const backlogMs = this.estimatedAssistantOutputBacklogMs();
-		if (!this.realtimeSupportsIncomingBackpressure() && backlogMs + durationMs > REALTIME_AUDIO_OUTPUT_MAX_BACKLOG_MS) {
+		const predictedBacklogMs = backlogMs + durationMs;
+		const chunks = splitPcm16Base64Chunks(normalizedPcm, sampleRate);
+		if (chunks.length === 0) return;
+		if (this.realtimeSupportsIncomingBackpressure()) {
+			this.pauseRealtimeIncomingForAudioBackpressure("realtime_audio_delta_received", predictedBacklogMs);
+		} else if (predictedBacklogMs > REALTIME_AUDIO_OUTPUT_MAX_BACKLOG_MS) {
 			this.stats.realtimeAudioBackpressureDropCount += 1;
 			this.stats.discordOutputAudioDropCount += 1;
 			if (
@@ -1764,12 +1770,10 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			}
 			return;
 		}
-		this.pushRealtimeAudioOutputChunk({
-			pcmBase64: normalizedPcm,
-			sampleRate,
-			durationMs,
-		});
-		this.rememberAssistantSpeechOutput(normalizedPcm, sampleRate);
+		for (const chunk of chunks) {
+			this.pushRealtimeAudioOutputChunk(chunk);
+		}
+		this.rememberAssistantSpeechDuration(durationMs);
 		this.updateRealtimeIncomingBackpressure("realtime_audio_enqueued");
 		this.drainRealtimeAudioOutputQueue();
 	}
@@ -1788,10 +1792,12 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			]);
 			previous.pcmBase64 = combined.toString("base64");
 			previous.durationMs += chunk.durationMs;
+			this.realtimeAudioOutputQueuedMs += chunk.durationMs;
 			this.stats.realtimeAudioCoalescedChunkCount += 1;
 			return;
 		}
 		this.realtimeAudioOutputQueue.push(chunk);
+		this.realtimeAudioOutputQueuedMs += chunk.durationMs;
 	}
 
 	private drainRealtimeAudioOutputQueue(): void {
@@ -1812,10 +1818,12 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			return;
 		}
 		this.realtimeAudioOutputQueue.shift();
+		this.realtimeAudioOutputQueuedMs = Math.max(0, this.realtimeAudioOutputQueuedMs - chunk.durationMs);
 		const vox = this.vox;
 		if (vox === undefined) {
 			this.stats.discordOutputAudioDropCount += 1 + this.realtimeAudioOutputQueue.length;
 			this.realtimeAudioOutputQueue.length = 0;
+			this.realtimeAudioOutputQueuedMs = 0;
 			return;
 		}
 		this.beginMusicDuckForAssistantSpeech("realtime_audio_output");
@@ -1835,6 +1843,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		const timer = this.realtimeAudioOutputTimer;
 		this.realtimeAudioOutputTimer = undefined;
 		this.realtimeAudioOutputQueue.length = 0;
+		this.realtimeAudioOutputQueuedMs = 0;
 		if (timer !== undefined) clearTimeout(timer);
 		this.resumeRealtimeIncomingAfterAudioBackpressure("realtime_audio_queue_cleared");
 	}
@@ -1852,17 +1861,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		}
 
 		const backlogMs = this.estimatedAssistantOutputBacklogMs();
-		if (!this.realtimeIncomingPausedForAudioBackpressure && backlogMs >= REALTIME_AUDIO_OUTPUT_MAX_BACKLOG_MS) {
-			this.realtimeIncomingPausedForAudioBackpressure = true;
-			this.stats.realtimeAudioBackpressurePauseCount += 1;
-			realtime.pauseIncoming();
-			this.logVoice("info", "realtime_audio_input_paused_for_backpressure", {
-				backlogMs: Math.round(backlogMs),
-				highWatermarkMs: REALTIME_AUDIO_OUTPUT_MAX_BACKLOG_MS,
-				reason,
-			});
-			return;
-		}
+		if (this.pauseRealtimeIncomingForAudioBackpressure(reason, backlogMs)) return;
 
 		if (this.realtimeIncomingPausedForAudioBackpressure && backlogMs <= REALTIME_AUDIO_OUTPUT_RESUME_BACKLOG_MS) {
 			this.realtimeIncomingPausedForAudioBackpressure = false;
@@ -1874,6 +1873,27 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 				reason,
 			});
 		}
+	}
+
+	private pauseRealtimeIncomingForAudioBackpressure(reason: string, backlogMs: number): boolean {
+		const realtime = this.realtime;
+		if (typeof realtime?.pauseIncoming !== "function" || typeof realtime.resumeIncoming !== "function") {
+			this.realtimeIncomingPausedForAudioBackpressure = false;
+			return false;
+		}
+		if (this.realtimeIncomingPausedForAudioBackpressure || backlogMs < REALTIME_AUDIO_OUTPUT_MAX_BACKLOG_MS) {
+			return false;
+		}
+
+		this.realtimeIncomingPausedForAudioBackpressure = true;
+		this.stats.realtimeAudioBackpressurePauseCount += 1;
+		realtime.pauseIncoming();
+		this.logVoice("info", "realtime_audio_input_paused_for_backpressure", {
+			backlogMs: Math.round(backlogMs),
+			highWatermarkMs: REALTIME_AUDIO_OUTPUT_MAX_BACKLOG_MS,
+			reason,
+		});
+		return true;
 	}
 
 	private resumeRealtimeIncomingAfterAudioBackpressure(reason: string): void {
@@ -1894,7 +1914,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 	}
 
 	private queuedRealtimeAudioOutputMs(): number {
-		return this.realtimeAudioOutputQueue.reduce((total, chunk) => total + chunk.durationMs, 0);
+		return this.realtimeAudioOutputQueuedMs;
 	}
 
 	private clankvoxTtsBufferMs(): number {
@@ -1905,6 +1925,10 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		const bytes = base64DecodedByteLength(pcmBase64);
 		if (bytes <= 0 || sampleRate <= 0) return;
 		const durationMs = pcm16DurationMs(bytes, sampleRate);
+		this.rememberAssistantSpeechDuration(durationMs);
+	}
+
+	private rememberAssistantSpeechDuration(durationMs: number): void {
 		if (durationMs < 1) return;
 		const now = Date.now();
 		this.assistantSpeechActiveUntilMs = Math.max(this.assistantSpeechActiveUntilMs, now) + durationMs;
@@ -1973,6 +1997,11 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		const normalized = status.trim().toLowerCase();
 		if (normalized === "idle") {
 			this.mediaBufferDepth = { ...this.mediaBufferDepth, ttsSamples: 0 };
+			if (this.realtimeAudioOutputQueue.length === 0) {
+				this.assistantSpeechActiveUntilMs = Math.min(this.assistantSpeechActiveUntilMs, Date.now());
+			}
+			this.updateRealtimeIncomingBackpressure("tts_playback_idle");
+			this.drainRealtimeAudioOutputQueue();
 			this.scheduleMusicUnduckAfterAssistantSpeech("tts_playback_idle");
 		}
 	}
@@ -3392,6 +3421,32 @@ function base64DecodedByteLength(value: string): number {
 	} catch {
 		return 0;
 	}
+}
+
+function splitPcm16Base64Chunks(pcmBase64: string, sampleRate: number): RealtimeAudioOutputChunk[] {
+	if (sampleRate <= 0) return [];
+	let pcm: Buffer;
+	try {
+		pcm = Buffer.from(pcmBase64, "base64");
+	} catch {
+		return [];
+	}
+	const usableLength = pcm.length - (pcm.length % 2);
+	if (usableLength <= 0) return [];
+
+	const maxSamples = Math.max(1, Math.floor((sampleRate * REALTIME_AUDIO_OUTPUT_TARGET_CHUNK_MS) / 1_000));
+	const maxBytes = Math.max(2, maxSamples * 2);
+	const chunks: RealtimeAudioOutputChunk[] = [];
+	for (let offset = 0; offset < usableLength; offset += maxBytes) {
+		const end = Math.min(usableLength, offset + maxBytes);
+		const slice = pcm.subarray(offset, end);
+		chunks.push({
+			pcmBase64: slice.toString("base64"),
+			sampleRate,
+			durationMs: Math.max(MIN_REALTIME_AUDIO_OUTPUT_DELAY_MS, pcm16DurationMs(slice.length, sampleRate)),
+		});
+	}
+	return chunks;
 }
 
 function pcm16DurationMs(byteLength: number, sampleRate: number): number {

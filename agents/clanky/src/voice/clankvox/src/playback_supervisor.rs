@@ -42,15 +42,23 @@ impl AppState {
                     let samples = convert_llm_to_48k_mono(&raw, sample_rate);
                     if !samples.is_empty() {
                         let mut emit_tts_buffered = false;
+                        let mut buffer_depth = None;
                         {
                             let mut guard = self.audio_send_state.lock();
                             if let Some(ref mut state) = *guard {
                                 state.push_pcm(samples);
+                                buffer_depth = Some((
+                                    state.tts_buffer_samples(),
+                                    state.music_buffer_samples(),
+                                ));
                                 if state.tts_buffer_samples() > 0 && !self.tts_playback_buffered {
                                     self.tts_playback_buffered = true;
                                     emit_tts_buffered = true;
                                 }
                             }
+                        }
+                        if let Some((tts, music)) = buffer_depth {
+                            send_buffer_depth(tts, music, "tts_pcm_enqueued");
                         }
                         if emit_tts_buffered {
                             send_tts_playback_state("buffered", "tts_pcm_enqueued");
