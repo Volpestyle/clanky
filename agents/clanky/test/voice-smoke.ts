@@ -82,6 +82,7 @@ async function main(): Promise<void> {
 	await assertFakeVoiceBridgeMusicReservedListening();
 	await assertFakeVoiceBridgeMusicSpeechDucking();
 	await assertFakeVoiceBridgeRealtimeAudioBackpressure();
+	await assertFakeVoiceBridgeRealtimeLargeAudioDeltaPacing();
 	await assertFakeVoiceBridgeSubagents();
 	await assertFakeVoiceBridgeRealtimeMediaTools();
 	await assertFakeVoiceBridgeRealtimeBatchToolResponse();
@@ -2075,7 +2076,7 @@ async function assertFakeVoiceBridgeMusicSpeechDucking(): Promise<void> {
 	});
 	if (handle === undefined) throw new Error("voice-smoke: music ducking bridge did not start");
 	vox.emit("playerState", "playing");
-	const audioChunk = Buffer.alloc(4_800, 7).toString("base64");
+	const audioChunk = Buffer.alloc(3_840, 7).toString("base64");
 	realtime.emit("audio_delta", audioChunk);
 	await waitUntil(() => vox.audioSends.length === 1, "ducked realtime audio send");
 	if (vox.musicGainSets[0]?.target !== 0.22) {
@@ -2129,6 +2130,16 @@ async function assertFakeVoiceBridgeRealtimeAudioBackpressure(): Promise<void> {
 		},
 	});
 	if (handle === undefined) throw new Error("voice-smoke: realtime audio backpressure bridge did not start");
+	vox.emit("bufferDepth", 480_000, 0);
+	await waitUntil(
+		() => realtime.incomingPaused && realtime.pauseIncomingCount === 1,
+		"native TTS depth pauses realtime",
+	);
+	vox.emit("ttsPlaybackState", "idle");
+	await waitUntil(
+		() => realtime.resumeIncomingCount === 1 && !realtime.incomingPaused,
+		"TTS idle resumes realtime reads",
+	);
 	vox.emit("bufferDepth", 240_000, 0);
 	const audioChunk = Buffer.alloc(4_800, 9).toString("base64");
 	let emittedChunks = 0;
@@ -2143,7 +2154,7 @@ async function assertFakeVoiceBridgeRealtimeAudioBackpressure(): Promise<void> {
 			Number(stats.realtimeAudioBackpressureDelayCount) > 0 && Number(stats.realtimeAudioBackpressurePauseCount) > 0
 		);
 	}, "realtime audio backpressure pause");
-	if (!realtime.incomingPaused || realtime.pauseIncomingCount !== 1 || emittedChunks >= 40) {
+	if (!realtime.incomingPaused || realtime.pauseIncomingCount !== 2 || emittedChunks >= 40) {
 		throw new Error("voice-smoke: realtime incoming reads were not paused at the high watermark");
 	}
 	if (vox.audioSends.length !== 0) {
@@ -2155,9 +2166,69 @@ async function assertFakeVoiceBridgeRealtimeAudioBackpressure(): Promise<void> {
 	}
 	vox.emit("bufferDepth", 0, 0);
 	await waitUntil(
-		() => vox.audioSends.length > 0 && realtime.resumeIncomingCount === 1 && !realtime.incomingPaused,
+		() => vox.audioSends.length > 0 && realtime.resumeIncomingCount === 2 && !realtime.incomingPaused,
 		"realtime audio resumes after backpressure",
 	);
+	await handle.stop();
+}
+
+async function assertFakeVoiceBridgeRealtimeLargeAudioDeltaPacing(): Promise<void> {
+	const realtime = new FakeBridgeRealtime();
+	const vox = new FakeBridgeClankvox();
+	const handle = await startAgentDiscordVoiceBridge({
+		runtime: new FakeVoiceRuntime() as never,
+		client: new FakeVoiceDiscordClient() as never,
+		discordCredential: {
+			providerId: "clanky-discord",
+			token: "discord-token",
+			credentialKind: "bot-token",
+			source: "env",
+		},
+		config: {
+			enabled: true,
+			guildId: "guild-1",
+			channelId: "voice-1",
+			openAiApiKey: "openai-key",
+			openAiRealtimeModel: DEFAULT_REALTIME_MODEL,
+			openAiRealtimeVoice: "marin",
+		},
+		joinRequested: true,
+		dependencies: {
+			createRealtime() {
+				return realtime;
+			},
+			async spawnVox() {
+				return vox;
+			},
+			createStreamDiscovery() {
+				return new FakeVoiceStreamDiscovery({
+					streamKey: "guild:guild-1:voice-1:streamer-1",
+					guildId: "guild-1",
+					channelId: "voice-1",
+					userId: "streamer-1",
+					endpoint: "voice.example",
+					token: "stream-token",
+					rtcServerId: "9002",
+					updatedAt: Date.now(),
+				});
+			},
+		},
+	});
+	if (handle === undefined) throw new Error("voice-smoke: large realtime audio bridge did not start");
+	const largeAudioDelta = Buffer.alloc(24_000 * 2 * 9, 11).toString("base64");
+	realtime.emit("audio_delta", largeAudioDelta);
+	await waitUntil(
+		() => realtime.incomingPaused && realtime.pauseIncomingCount === 1 && vox.audioSends.length === 1,
+		"large realtime audio delta is paused and paced",
+	);
+	const firstSendBytes = Buffer.from(vox.audioSends[0]?.pcmBase64 ?? "", "base64").length;
+	if (firstSendBytes > 3_840) {
+		throw new Error(`voice-smoke: large realtime delta was not split before native send (${firstSendBytes} bytes)`);
+	}
+	const stats = expectRecord(handle.status().stats, "large realtime audio stats");
+	if (Number(stats.realtimeAudioBackpressureDropCount) !== 0) {
+		throw new Error("voice-smoke: large realtime audio delta was dropped despite input backpressure support");
+	}
 	await handle.stop();
 }
 
