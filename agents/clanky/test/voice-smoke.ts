@@ -2131,22 +2131,33 @@ async function assertFakeVoiceBridgeRealtimeAudioBackpressure(): Promise<void> {
 	if (handle === undefined) throw new Error("voice-smoke: realtime audio backpressure bridge did not start");
 	vox.emit("bufferDepth", 240_000, 0);
 	const audioChunk = Buffer.alloc(4_800, 9).toString("base64");
+	let emittedChunks = 0;
 	for (let index = 0; index < 40; index += 1) {
+		if (realtime.incomingPaused) break;
 		realtime.emit("audio_delta", audioChunk);
+		emittedChunks += 1;
 	}
 	await waitUntil(() => {
 		const stats = expectRecord(handle.status().stats, "realtime backpressure stats");
-		return Number(stats.realtimeAudioBackpressureDelayCount) > 0;
-	}, "realtime audio backpressure delay");
+		return (
+			Number(stats.realtimeAudioBackpressureDelayCount) > 0 && Number(stats.realtimeAudioBackpressurePauseCount) > 0
+		);
+	}, "realtime audio backpressure pause");
+	if (!realtime.incomingPaused || realtime.pauseIncomingCount !== 1 || emittedChunks >= 40) {
+		throw new Error("voice-smoke: realtime incoming reads were not paused at the high watermark");
+	}
 	if (vox.audioSends.length !== 0) {
 		throw new Error("voice-smoke: realtime audio sent while native TTS buffer was over the backpressure threshold");
 	}
 	const statsWhileBlocked = expectRecord(handle.status().stats, "blocked realtime backpressure stats");
-	if (Number(statsWhileBlocked.realtimeAudioBackpressureDropCount) === 0) {
-		throw new Error("voice-smoke: realtime audio backlog overflow was not dropped");
+	if (Number(statsWhileBlocked.realtimeAudioBackpressureDropCount) !== 0) {
+		throw new Error("voice-smoke: realtime audio was dropped even though incoming reads can be paused");
 	}
 	vox.emit("bufferDepth", 0, 0);
-	await waitUntil(() => vox.audioSends.length > 0, "realtime audio resumes after backpressure");
+	await waitUntil(
+		() => vox.audioSends.length > 0 && realtime.resumeIncomingCount === 1 && !realtime.incomingPaused,
+		"realtime audio resumes after backpressure",
+	);
 	await handle.stop();
 }
 
@@ -3401,6 +3412,9 @@ class FakeBridgeRealtime extends EventEmitter {
 	commits = 0;
 	responses = 0;
 	cancelResponses = 0;
+	incomingPaused = false;
+	pauseIncomingCount = 0;
+	resumeIncomingCount = 0;
 
 	async connect(options: {
 		model?: string;
@@ -3431,6 +3445,16 @@ class FakeBridgeRealtime extends EventEmitter {
 
 	cancelResponse(): void {
 		this.cancelResponses += 1;
+	}
+
+	pauseIncoming(): void {
+		this.incomingPaused = true;
+		this.pauseIncomingCount += 1;
+	}
+
+	resumeIncoming(): void {
+		this.incomingPaused = false;
+		this.resumeIncomingCount += 1;
 	}
 
 	appendInputVideoFrame(input: { mimeType: string; dataBase64: string }): void {
@@ -3592,6 +3616,7 @@ class FakeBridgeClankvox extends EventEmitter {
 		const entry: { url: string; resolvedDirectUrl?: boolean } = { url };
 		if (resolvedDirectUrl !== undefined) entry.resolvedDirectUrl = resolvedDirectUrl;
 		this.musicPlays.push(entry);
+		queueMicrotask(() => this.emit("playerState", "playing"));
 	}
 
 	musicStop(): void {

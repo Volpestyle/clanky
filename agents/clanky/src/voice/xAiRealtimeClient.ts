@@ -30,6 +30,7 @@ export class XAiRealtimeClient extends EventEmitter {
 	private session: OpenAiRealtimeConnectOptions | undefined;
 	private inputAudioRemainder: Buffer<ArrayBufferLike> = Buffer.alloc(0);
 	private warnedAboutVideoFrames = false;
+	private incomingPaused = false;
 
 	constructor(options: OpenAiRealtimeClientOptions) {
 		super();
@@ -53,8 +54,10 @@ export class XAiRealtimeClient extends EventEmitter {
 			tools: options.tools ?? [],
 			toolChoice: options.toolChoice ?? "auto",
 		};
+		this.incomingPaused = false;
 		const ws = await this.openSocket(buildXAiRealtimeUrl(this.baseUrl, options.model));
 		this.ws = ws;
+		this.applyIncomingFlowControl(ws);
 		ws.on("message", (data) => this.handleIncoming(data));
 		ws.on("error", (error) => {
 			this.logger?.("error", "xai_realtime_ws_error", { error: error.message });
@@ -63,7 +66,10 @@ export class XAiRealtimeClient extends EventEmitter {
 		ws.on("close", (code, reason) => {
 			this.logger?.("warn", "xai_realtime_ws_closed", { code, reason: reason.toString("utf8") });
 			this.emit("socket_closed", { code, reason: reason.toString("utf8") });
-			if (this.ws === ws) this.ws = undefined;
+			if (this.ws === ws) {
+				this.ws = undefined;
+				this.incomingPaused = false;
+			}
 		});
 		this.sendSessionUpdate();
 	}
@@ -81,6 +87,20 @@ export class XAiRealtimeClient extends EventEmitter {
 
 	cancelResponse(): void {
 		this.send({ type: "response.cancel" });
+	}
+
+	pauseIncoming(): void {
+		if (this.incomingPaused) return;
+		this.incomingPaused = true;
+		this.applyIncomingFlowControl();
+		this.logger?.("info", "xai_realtime_incoming_paused");
+	}
+
+	resumeIncoming(): void {
+		if (!this.incomingPaused) return;
+		this.incomingPaused = false;
+		this.applyIncomingFlowControl();
+		this.logger?.("info", "xai_realtime_incoming_resumed");
 	}
 
 	createAudioResponse(): void {
@@ -125,6 +145,7 @@ export class XAiRealtimeClient extends EventEmitter {
 
 	async close(): Promise<void> {
 		this.inputAudioRemainder = Buffer.alloc(0);
+		this.incomingPaused = false;
 		const ws = this.ws;
 		this.ws = undefined;
 		if (ws === undefined || ws.readyState === WebSocket.CLOSED) return;
@@ -170,6 +191,12 @@ export class XAiRealtimeClient extends EventEmitter {
 		const session = this.session;
 		if (session === undefined) return;
 		this.send(buildXAiRealtimeSessionUpdateEvent(session));
+	}
+
+	private applyIncomingFlowControl(ws = this.ws): void {
+		if (ws === undefined || ws.readyState !== WebSocket.OPEN) return;
+		if (this.incomingPaused) ws.pause();
+		else ws.resume();
 	}
 
 	private send(payload: JsonRecord): void {
