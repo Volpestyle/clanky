@@ -34,6 +34,10 @@ interface OpenTabRequest {
 	active?: boolean;
 }
 
+const SHORT_OP_TIMEOUT_MS = 5_000;
+const NAVIGATE_OP_TIMEOUT_MS = 15_000;
+const WAIT_OP_MAX_MS = 30_000;
+
 export async function startBrowserBridgeServer(options: BrowserBridgeServerOptions = {}): Promise<() => Promise<void>> {
 	const env = options.env ?? process.env;
 	const paths = resolveBrowserBridgePaths({
@@ -116,6 +120,106 @@ export async function startBrowserBridgeServer(options: BrowserBridgeServerOptio
 			const result = await dispatch("open_tab", parsed as OpenTabRequest, 15_000);
 			res.writeHead(200, { "content-type": "application/json" });
 			res.end(JSON.stringify(result));
+			return;
+		}
+		if (url.pathname === "/screenshot") {
+			const params = requireRecord(parsed, "screenshot");
+			const tabId = optionalNumber(params, "tabId", "screenshot");
+			const result = await dispatch("screenshot", tabId === undefined ? {} : { tabId }, SHORT_OP_TIMEOUT_MS);
+			respondJson(res, 200, result);
+			return;
+		}
+		if (url.pathname === "/tabs/list") {
+			const result = await dispatch("list_tabs", {}, SHORT_OP_TIMEOUT_MS);
+			respondJson(res, 200, result);
+			return;
+		}
+		if (url.pathname === "/tabs/navigate") {
+			const params = requireRecord(parsed, "navigate");
+			const urlValue = requireString(params, "url", "navigate");
+			const tabId = optionalNumber(params, "tabId", "navigate");
+			const payload: Record<string, unknown> = { url: urlValue };
+			if (tabId !== undefined) payload.tabId = tabId;
+			const result = await dispatch("navigate", payload, NAVIGATE_OP_TIMEOUT_MS);
+			respondJson(res, 200, result);
+			return;
+		}
+		if (url.pathname === "/tabs/close") {
+			const params = requireRecord(parsed, "close_tab");
+			const tabId = requireNumber(params, "tabId", "close_tab");
+			const result = await dispatch("close_tab", { tabId }, SHORT_OP_TIMEOUT_MS);
+			respondJson(res, 200, result);
+			return;
+		}
+		if (url.pathname === "/input/click") {
+			const params = requireRecord(parsed, "click");
+			const tabId = requireNumber(params, "tabId", "click");
+			const x = requireNumber(params, "x", "click");
+			const y = requireNumber(params, "y", "click");
+			const payload: Record<string, unknown> = { tabId, x, y };
+			const button = optionalMouseButton(params, "click");
+			if (button !== undefined) payload.button = button;
+			const clickCount = optionalNumber(params, "clickCount", "click");
+			if (clickCount !== undefined) payload.clickCount = clickCount;
+			const result = await dispatch("click", payload, SHORT_OP_TIMEOUT_MS);
+			respondJson(res, 200, result);
+			return;
+		}
+		if (url.pathname === "/input/double-click") {
+			const params = requireRecord(parsed, "double_click");
+			const tabId = requireNumber(params, "tabId", "double_click");
+			const x = requireNumber(params, "x", "double_click");
+			const y = requireNumber(params, "y", "double_click");
+			const payload: Record<string, unknown> = { tabId, x, y };
+			const button = optionalMouseButton(params, "double_click");
+			if (button !== undefined) payload.button = button;
+			const result = await dispatch("double_click", payload, SHORT_OP_TIMEOUT_MS);
+			respondJson(res, 200, result);
+			return;
+		}
+		if (url.pathname === "/input/type") {
+			const params = requireRecord(parsed, "type");
+			const tabId = requireNumber(params, "tabId", "type");
+			const text = requireString(params, "text", "type");
+			const result = await dispatch("type", { tabId, text }, SHORT_OP_TIMEOUT_MS);
+			respondJson(res, 200, result);
+			return;
+		}
+		if (url.pathname === "/input/key") {
+			const params = requireRecord(parsed, "key");
+			const tabId = requireNumber(params, "tabId", "key");
+			const key = requireString(params, "key", "key");
+			const payload: Record<string, unknown> = { tabId, key };
+			const modifiers = optionalKeyModifiers(params, "key");
+			if (modifiers !== undefined) payload.modifiers = modifiers;
+			const result = await dispatch("key", payload, SHORT_OP_TIMEOUT_MS);
+			respondJson(res, 200, result);
+			return;
+		}
+		if (url.pathname === "/input/scroll") {
+			const params = requireRecord(parsed, "scroll");
+			const tabId = requireNumber(params, "tabId", "scroll");
+			const x = requireNumber(params, "x", "scroll");
+			const y = requireNumber(params, "y", "scroll");
+			const deltaX = requireNumber(params, "deltaX", "scroll");
+			const deltaY = requireNumber(params, "deltaY", "scroll");
+			const result = await dispatch("scroll", { tabId, x, y, deltaX, deltaY }, SHORT_OP_TIMEOUT_MS);
+			respondJson(res, 200, result);
+			return;
+		}
+		if (url.pathname === "/wait") {
+			const params = requireRecord(parsed, "wait");
+			const ms = requireNumber(params, "ms", "wait");
+			if (ms < 0 || !Number.isFinite(ms)) {
+				throw new Error("wait ms must be a non-negative finite number.");
+			}
+			if (ms > WAIT_OP_MAX_MS) {
+				throw new Error(`wait ms must be <= ${WAIT_OP_MAX_MS}.`);
+			}
+			await new Promise<void>((resolve) => {
+				setTimeout(resolve, ms);
+			});
+			respondJson(res, 200, { ok: true, waitedMs: ms });
 			return;
 		}
 		res.writeHead(404, { "content-type": "application/json" });
@@ -338,4 +442,71 @@ function parseJsonBody(body: string): unknown {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function respondJson(res: ServerResponse, status: number, body: unknown): void {
+	res.writeHead(status, { "content-type": "application/json" });
+	res.end(JSON.stringify(body));
+}
+
+function requireRecord(value: unknown, opName: string): Record<string, unknown> {
+	if (!isRecord(value)) {
+		throw new Error(`${opName} requires a JSON object body.`);
+	}
+	return value;
+}
+
+function requireNumber(record: Record<string, unknown>, field: string, opName: string): number {
+	const value = record[field];
+	if (typeof value !== "number" || !Number.isFinite(value)) {
+		throw new Error(`${opName} requires a finite number "${field}".`);
+	}
+	return value;
+}
+
+function optionalNumber(record: Record<string, unknown>, field: string, opName: string): number | undefined {
+	const value = record[field];
+	if (value === undefined) return undefined;
+	if (typeof value !== "number" || !Number.isFinite(value)) {
+		throw new Error(`${opName} field "${field}" must be a finite number when provided.`);
+	}
+	return value;
+}
+
+function requireString(record: Record<string, unknown>, field: string, opName: string): string {
+	const value = record[field];
+	if (typeof value !== "string" || value.length === 0) {
+		throw new Error(`${opName} requires a non-empty string "${field}".`);
+	}
+	return value;
+}
+
+function optionalMouseButton(record: Record<string, unknown>, opName: string): "left" | "right" | "middle" | undefined {
+	const value = record.button;
+	if (value === undefined) return undefined;
+	if (value !== "left" && value !== "right" && value !== "middle") {
+		throw new Error(`${opName} button must be "left", "right", or "middle".`);
+	}
+	return value;
+}
+
+function optionalKeyModifiers(
+	record: Record<string, unknown>,
+	opName: string,
+): { ctrl?: boolean; shift?: boolean; alt?: boolean; meta?: boolean } | undefined {
+	const value = record.modifiers;
+	if (value === undefined) return undefined;
+	if (!isRecord(value)) {
+		throw new Error(`${opName} modifiers must be an object when provided.`);
+	}
+	const out: { ctrl?: boolean; shift?: boolean; alt?: boolean; meta?: boolean } = {};
+	for (const flag of ["ctrl", "shift", "alt", "meta"] as const) {
+		const flagValue = value[flag];
+		if (flagValue === undefined) continue;
+		if (typeof flagValue !== "boolean") {
+			throw new Error(`${opName} modifiers.${flag} must be boolean when provided.`);
+		}
+		out[flag] = flagValue;
+	}
+	return out;
 }

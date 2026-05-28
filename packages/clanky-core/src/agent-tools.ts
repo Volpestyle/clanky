@@ -227,6 +227,68 @@ const browserOpenTabSchema = Type.Object({
 	active: Type.Optional(Type.Boolean()),
 });
 
+const browserMouseButtonSchema = Type.Union([Type.Literal("left"), Type.Literal("right"), Type.Literal("middle")]);
+
+const browserKeyModifiersSchema = Type.Object({
+	ctrl: Type.Optional(Type.Boolean()),
+	shift: Type.Optional(Type.Boolean()),
+	alt: Type.Optional(Type.Boolean()),
+	meta: Type.Optional(Type.Boolean()),
+});
+
+const browserScreenshotSchema = Type.Object({
+	tabId: Type.Optional(Type.Number()),
+});
+
+const browserListTabsSchema = Type.Object({});
+
+const browserNavigateSchema = Type.Object({
+	tabId: Type.Optional(Type.Number()),
+	url: Type.String(),
+});
+
+const browserCloseTabSchema = Type.Object({
+	tabId: Type.Number(),
+});
+
+const browserClickSchema = Type.Object({
+	tabId: Type.Number(),
+	x: Type.Number(),
+	y: Type.Number(),
+	button: Type.Optional(browserMouseButtonSchema),
+	clickCount: Type.Optional(Type.Number()),
+});
+
+const browserDoubleClickSchema = Type.Object({
+	tabId: Type.Number(),
+	x: Type.Number(),
+	y: Type.Number(),
+	button: Type.Optional(browserMouseButtonSchema),
+});
+
+const browserTypeSchema = Type.Object({
+	tabId: Type.Number(),
+	text: Type.String(),
+});
+
+const browserKeySchema = Type.Object({
+	tabId: Type.Number(),
+	key: Type.String(),
+	modifiers: Type.Optional(browserKeyModifiersSchema),
+});
+
+const browserScrollSchema = Type.Object({
+	tabId: Type.Number(),
+	x: Type.Number(),
+	y: Type.Number(),
+	deltaX: Type.Number(),
+	deltaY: Type.Number(),
+});
+
+const browserWaitSchema = Type.Object({
+	ms: Type.Number(),
+});
+
 const webSearchSchema = Type.Object({
 	query: Type.String(),
 	instructions: Type.Optional(Type.String()),
@@ -428,6 +490,16 @@ export type MemorySearchToolInput = Static<typeof memorySearchSchema>;
 export type MemoryForgetToolInput = Static<typeof memoryForgetSchema>;
 export type WebSearchToolInput = Static<typeof webSearchSchema>;
 export type BrowserOpenTabToolInput = Static<typeof browserOpenTabSchema>;
+export type BrowserScreenshotToolInput = Static<typeof browserScreenshotSchema>;
+export type BrowserListTabsToolInput = Static<typeof browserListTabsSchema>;
+export type BrowserNavigateToolInput = Static<typeof browserNavigateSchema>;
+export type BrowserCloseTabToolInput = Static<typeof browserCloseTabSchema>;
+export type BrowserClickToolInput = Static<typeof browserClickSchema>;
+export type BrowserDoubleClickToolInput = Static<typeof browserDoubleClickSchema>;
+export type BrowserTypeToolInput = Static<typeof browserTypeSchema>;
+export type BrowserKeyToolInput = Static<typeof browserKeySchema>;
+export type BrowserScrollToolInput = Static<typeof browserScrollSchema>;
+export type BrowserWaitToolInput = Static<typeof browserWaitSchema>;
 export type OpenAiImageGenerateToolInput = Static<typeof openAiImageGenerateSchema>;
 export type XAiImageGenerateToolInput = Static<typeof xaiImageGenerateSchema>;
 export type XAiVideoGenerateToolInput = Static<typeof xaiVideoGenerateSchema>;
@@ -483,6 +555,16 @@ export interface ClankyAgentToolHandlers {
 	webSearch?: (input: OpenAiWebSearchInput, signal?: AbortSignal) => Promise<unknown>;
 	webBackendStatus?: () => Promise<unknown>;
 	browserOpenTab?: (input: BrowserOpenTabToolInput) => Promise<unknown>;
+	browserScreenshot?: (input: BrowserScreenshotToolInput) => Promise<unknown>;
+	browserListTabs?: (input: BrowserListTabsToolInput) => Promise<unknown>;
+	browserNavigate?: (input: BrowserNavigateToolInput) => Promise<unknown>;
+	browserCloseTab?: (input: BrowserCloseTabToolInput) => Promise<unknown>;
+	browserClick?: (input: BrowserClickToolInput) => Promise<unknown>;
+	browserDoubleClick?: (input: BrowserDoubleClickToolInput) => Promise<unknown>;
+	browserType?: (input: BrowserTypeToolInput) => Promise<unknown>;
+	browserKey?: (input: BrowserKeyToolInput) => Promise<unknown>;
+	browserScroll?: (input: BrowserScrollToolInput) => Promise<unknown>;
+	browserWait?: (input: BrowserWaitToolInput) => Promise<unknown>;
 	openAiImageGenerate?: (input: OpenAiImageGenerateInput, signal?: AbortSignal) => Promise<unknown>;
 	xaiImageGenerate?: (input: XAiImageGenerateInput, signal?: AbortSignal) => Promise<unknown>;
 	xaiVideoGenerate?: (input: XAiVideoGenerateInput, signal?: AbortSignal) => Promise<unknown>;
@@ -677,14 +759,12 @@ export function createClankyExtensionFactories(
 }
 
 class SubagentPanelController {
-	private visible = false;
+	private visible = true;
 	private selectionActive = false;
 	private summaries: ClankySubagentSummary[] = [];
 	private selectedIndex = 0;
 	private listScroll = 0;
 	private timer: ReturnType<typeof setInterval> | undefined;
-	private pendingMetaEscapeTimer: ReturnType<typeof setTimeout> | undefined;
-	private pendingMetaEscape = false;
 	private unsubscribeInput: (() => void) | undefined;
 	private refreshRunning = false;
 	private readonly listSubagents: () => Promise<ClankySubagentSummary[]>;
@@ -853,7 +933,6 @@ class SubagentPanelController {
 			clearInterval(this.timer);
 			this.timer = undefined;
 		}
-		this.clearPendingMetaEscape();
 		this.unsubscribeInput?.();
 		this.unsubscribeInput = undefined;
 		ctx.ui.setWidget(SUBAGENT_PANEL_WIDGET_KEY, undefined);
@@ -864,33 +943,40 @@ class SubagentPanelController {
 		if (!this.visible) return undefined;
 		if (isEscapeKey(data) && this.selectionActive) {
 			this.selectionActive = false;
-			this.clearPendingMetaEscape();
 			this.renderPanel(ctx);
 			return { consume: true };
 		}
-		const pendingMetaEscape = this.pendingMetaEscape;
-		if (pendingMetaEscape) this.clearPendingMetaEscape();
-		if (
-			isSubagentPreviousKey(data) ||
-			(pendingMetaEscape && isUpKey(data)) ||
-			(this.selectionActive && (isUpKey(data) || data === "k"))
-		) {
-			this.selectionActive = true;
-			this.selectedIndex = Math.max(0, this.selectedIndex - 1);
-			this.ensureSelectedVisible(SUBAGENT_PANEL_MAX_ROWS);
-			this.renderPanel(ctx);
-			return { consume: true };
+		const editorEmpty = ctx.ui.getEditorText().trim().length === 0;
+		const hasSummaries = this.summaries.length > 0;
+		if (isUpKey(data)) {
+			if (this.selectionActive) {
+				if (this.selectedIndex <= 0) {
+					this.selectionActive = false;
+					this.renderPanel(ctx);
+					return { consume: true };
+				}
+				this.selectedIndex -= 1;
+				this.ensureSelectedVisible(SUBAGENT_PANEL_MAX_ROWS);
+				this.renderPanel(ctx);
+				return { consume: true };
+			}
+			return undefined;
 		}
-		if (
-			isSubagentNextKey(data) ||
-			(pendingMetaEscape && isDownKey(data)) ||
-			(this.selectionActive && (isDownKey(data) || data === "j"))
-		) {
-			this.selectionActive = true;
-			this.selectedIndex = Math.min(Math.max(0, this.summaries.length - 1), this.selectedIndex + 1);
-			this.ensureSelectedVisible(SUBAGENT_PANEL_MAX_ROWS);
-			this.renderPanel(ctx);
-			return { consume: true };
+		if (isDownKey(data)) {
+			if (this.selectionActive) {
+				this.selectedIndex = Math.min(this.summaries.length - 1, this.selectedIndex + 1);
+				this.ensureSelectedVisible(SUBAGENT_PANEL_MAX_ROWS);
+				this.renderPanel(ctx);
+				return { consume: true };
+			}
+			if (editorEmpty && hasSummaries) {
+				this.selectionActive = true;
+				this.selectedIndex = 0;
+				this.ensureSelectedVisible(SUBAGENT_PANEL_MAX_ROWS);
+				this.renderPanel(ctx);
+				return { consume: true };
+			}
+			return undefined;
 		}
 		if (isEnterKey(data) && this.selectionActive) {
 			const selected = this.selectedSummary();
@@ -901,33 +987,11 @@ class SubagentPanelController {
 			void this.refresh(ctx);
 			return { consume: true };
 		}
-		if (isEscapeKey(data)) {
-			this.setPendingMetaEscape();
-			return undefined;
-		}
 		if (this.selectionActive) {
 			this.selectionActive = false;
 			this.renderPanel(ctx);
 		}
 		return undefined;
-	}
-
-	private setPendingMetaEscape(): void {
-		this.clearPendingMetaEscape();
-		this.pendingMetaEscape = true;
-		this.pendingMetaEscapeTimer = setTimeout(() => {
-			this.pendingMetaEscape = false;
-			this.pendingMetaEscapeTimer = undefined;
-		}, 50);
-		this.pendingMetaEscapeTimer.unref?.();
-	}
-
-	private clearPendingMetaEscape(): void {
-		if (this.pendingMetaEscapeTimer !== undefined) {
-			clearTimeout(this.pendingMetaEscapeTimer);
-			this.pendingMetaEscapeTimer = undefined;
-		}
-		this.pendingMetaEscape = false;
 	}
 
 	private async refresh(ctx: ExtensionContext): Promise<void> {
@@ -1328,38 +1392,23 @@ class SubagentBrowserComponent {
 	private renderList(width: number): string[] {
 		const contentWidth = Math.max(20, width);
 		const viewportRows = this.getViewportRows();
-		const counts = subagentCounts(this.summaries);
-		const headerParts = [
-			this.theme.bold("Subagents"),
-			counts.running > 0 ? this.theme.fg("accent", `${counts.running} running`) : this.theme.fg("dim", "0 running"),
-			counts.queued > 0 ? this.theme.fg("warning", `${counts.queued} queued`) : this.theme.fg("dim", "0 queued"),
-			counts.failed > 0 ? this.theme.fg("error", `${counts.failed} failed`) : undefined,
-		].filter((part): part is string => part !== undefined);
-		const lines: string[] = [
-			headerParts.join(this.theme.fg("dim", "  ·  ")),
-			this.theme.fg("dim", "↑↓ select  PgUp/PgDn page  Home/End jump  Enter open  r refresh  Esc/q close"),
-			"",
-		];
-		// Reserve top rows; remainder of viewport is for rows.
+		const lines: string[] = [this.theme.fg("dim", "↑↓ select  Enter open  r refresh  Esc close"), ""];
 		const reservedTop = lines.length;
 		const rowCapacity = Math.max(3, viewportRows - reservedTop - 1);
 		if (this.summaries.length === 0) {
 			lines.push(this.theme.fg("dim", "No Clanky subagents yet."));
 		} else {
-			lines.push(this.theme.fg("dim", "  state     kind     queue  effort       scope / active work"));
-			const rowsForList = Math.max(1, rowCapacity - 2);
+			const rowsForList = Math.max(1, rowCapacity);
 			this.ensureListVisible(rowsForList);
 			const visibleSummaries = this.summaries.slice(this.listScroll, this.listScroll + rowsForList);
 			for (const [visibleIndex, summary] of visibleSummaries.entries()) {
 				const index = this.listScroll + visibleIndex;
 				const selected = index === this.selectedIndex;
-				const row = formatSubagentBrowserRow(summary, contentWidth - 2, this.theme, selected);
-				const cursor = selected ? this.theme.fg("accent", ">") : " ";
-				lines.push(`${cursor} ${row}`);
+				lines.push(formatSubagentBrowserRow(summary, contentWidth - 2, this.theme, selected));
 			}
 			if (this.summaries.length > rowsForList) {
 				const end = Math.min(this.summaries.length, this.listScroll + rowsForList);
-				lines.push(this.theme.fg("dim", `  showing ${this.listScroll + 1}-${end} of ${this.summaries.length}`));
+				lines.push(this.theme.fg("dim", `  ${this.listScroll + 1}–${end} of ${this.summaries.length}`));
 			}
 		}
 		return padToViewport(lines, viewportRows);
@@ -1378,8 +1427,8 @@ class SubagentBrowserComponent {
 			selected?.kind,
 		);
 		const headerLines: string[] = [
-			renderSubagentChatHeader(selected, this.theme),
-			this.theme.fg("dim", "↑↓/Ctrl+P/N scroll  PgUp/PgDn/Ctrl+B/F page  Enter send  Esc back"),
+			renderSubagentChatHeader(selected, this.theme, contentWidth),
+			this.theme.fg("dim", "↑↓ scroll  Enter send  Esc back"),
 			"",
 		];
 		// One blank row separates transcript from composer.
@@ -1603,40 +1652,13 @@ function formatSubagentPanelLines(
 	options: { includeEmpty?: boolean; selectionActive?: boolean; selectedIndex?: number; scroll?: number } = {},
 ): string[] {
 	if (summaries.length === 0) {
-		return options.includeEmpty === true
-			? [
-					ctx.ui.theme.bold(options.selectionActive === true ? "Subagents selecting" : "Subagents"),
-					ctx.ui.theme.fg(
-						"dim",
-						options.selectionActive === true
-							? "No Clanky subagents yet. Esc releases selection."
-							: "No Clanky subagents yet.",
-					),
-				]
-			: [];
+		return options.includeEmpty === true ? [ctx.ui.theme.fg("dim", "No Clanky subagents yet.")] : [];
 	}
-	const counts = subagentCounts(summaries);
 	const ordered = [...summaries].sort(compareSubagentsForPanel);
-	const lines = [
-		[
-			ctx.ui.theme.bold("Subagents"),
-			counts.running > 0 ? ctx.ui.theme.fg("accent", `${counts.running} running`) : ctx.ui.theme.fg("dim", "0 running"),
-			counts.queued > 0 ? ctx.ui.theme.fg("warning", `${counts.queued} queued`) : ctx.ui.theme.fg("dim", "0 queued"),
-			counts.failed > 0 ? ctx.ui.theme.fg("error", `${counts.failed} failed`) : undefined,
-		]
-			.filter((part): part is string => part !== undefined)
-			.join("  "),
-		ctx.ui.theme.fg(
-			"dim",
-			options.selectionActive === true
-				? "Up/Down select  Enter modal  Esc release"
-				: "/subagents focus selects  /subagents hides  /subagents modal opens browser",
-		),
-		ctx.ui.theme.fg("dim", "state     kind     queue  effort       scope / active work"),
-	];
 	const scroll = Math.min(Math.max(0, options.scroll ?? 0), Math.max(0, ordered.length - SUBAGENT_PANEL_MAX_ROWS));
 	const selectedIndex = options.selectedIndex ?? -1;
 	const visible = ordered.slice(scroll, scroll + SUBAGENT_PANEL_MAX_ROWS);
+	const lines: string[] = [];
 	for (const [visibleIndex, subagent] of visible.entries()) {
 		lines.push(
 			formatSubagentPanelRow(subagent, ctx, scroll + visibleIndex === selectedIndex, options.selectionActive === true),
@@ -1644,7 +1666,7 @@ function formatSubagentPanelLines(
 	}
 	if (ordered.length > SUBAGENT_PANEL_MAX_ROWS) {
 		const end = Math.min(ordered.length, scroll + SUBAGENT_PANEL_MAX_ROWS);
-		lines.push(ctx.ui.theme.fg("dim", `showing ${scroll + 1}-${end} of ${ordered.length}`));
+		lines.push(ctx.ui.theme.fg("dim", `  ${scroll + 1}–${end} of ${ordered.length}`));
 	}
 	return lines;
 }
@@ -1655,15 +1677,16 @@ function formatSubagentPanelRow(
 	selected = false,
 	focused = false,
 ): string {
-	const marker = selected && focused ? ">" : subagent.state === "running" ? "*" : " ";
-	const state = formatSubagentState(subagent.state, ctx);
-	const kind = formatSubagentKind(subagent.kind, ctx.ui.theme);
-	const queue = subagent.queueDepth > 0 ? String(subagent.queueDepth).padStart(5) : ctx.ui.theme.fg("dim", "    -");
-	const effort = padStyledRight(formatSubagentEffort(subagent.thinkingLevel, ctx.ui.theme), 14);
-	const scope = truncatePlain(subagent.scopeName ?? subagent.scopeId, 22);
-	const summary = truncatePlain(subagent.activeSummary ?? "idle", 44);
-	const age = ctx.ui.theme.fg("dim", formatRelativeAge(subagent.updatedAt));
-	return `${marker} ${state} ${kind} ${queue}  ${effort} ${scope} - ${summary} ${age}`;
+	const theme = ctx.ui.theme;
+	const tone = subagentTone(subagent);
+	const cursor = selected && focused ? theme.fg(tone.fg, "▸") : " ";
+	const dot = theme.fg(tone.fg, tone.dot);
+	const scope = truncatePlain(subagent.scopeName ?? subagent.scopeId, 24);
+	const scopeStyled = selected && focused ? theme.bold(theme.fg(tone.fg, scope)) : theme.fg(tone.fg, scope);
+	const summary = theme.fg("dim", truncatePlain(subagent.activeSummary ?? "idle", 48));
+	const queue = subagent.queueDepth > 0 ? `  ${theme.fg("warning", `↑${subagent.queueDepth}`)}` : "";
+	const age = theme.fg("dim", formatRelativeAge(subagent.updatedAt));
+	return `${cursor} ${dot} ${scopeStyled}  ${theme.fg("dim", "·")}  ${summary}${queue}  ${age}`;
 }
 
 function formatSubagentBrowserRow(
@@ -1672,42 +1695,33 @@ function formatSubagentBrowserRow(
 	theme: ExtensionContext["ui"]["theme"],
 	selected: boolean,
 ): string {
-	const queue =
-		subagent.queueDepth > 0 ? theme.fg("warning", String(subagent.queueDepth).padStart(5)) : theme.fg("dim", "    -");
-	const effort = padStyledRight(formatSubagentEffort(subagent.thinkingLevel, theme), 12);
-	const scope = truncatePlain(subagent.scopeName ?? subagent.scopeId, 24);
-	const summary = truncatePlain(subagent.activeSummary ?? "idle", Math.max(12, width - 68));
-	const state = formatSubagentStateTheme(subagent.state, theme);
-	const kind = formatSubagentKind(subagent.kind, theme);
-	const active = selected ? theme.fg("accent", scope.padEnd(24)) : scope.padEnd(24);
+	const tone = subagentTone(subagent);
+	const cursor = selected ? theme.fg(tone.fg, "▸") : " ";
+	const dot = theme.fg(tone.fg, tone.dot);
+	const scopeText = truncatePlain(subagent.scopeName ?? subagent.scopeId, 28);
+	const scope = selected ? theme.bold(theme.fg(tone.fg, scopeText)) : theme.fg(tone.fg, scopeText);
+	const summaryBudget = Math.max(12, width - 60);
+	const summary = theme.fg("dim", truncatePlain(subagent.activeSummary ?? "idle", summaryBudget));
+	const queue = subagent.queueDepth > 0 ? `  ${theme.fg("warning", `↑${subagent.queueDepth}`)}` : "";
 	const age = theme.fg("dim", formatRelativeAge(subagent.updatedAt));
-	return truncateStyledLine(`${state} ${kind} ${queue}  ${effort} ${active}  ${summary}  ${age}`, width);
+	return truncateStyledLine(`${cursor} ${dot} ${scope}  ${theme.fg("dim", "·")}  ${summary}${queue}  ${age}`, width);
 }
 
 function renderSubagentChatHeader(
 	subagent: ClankySubagentSummary | undefined,
 	theme: ExtensionContext["ui"]["theme"],
+	width: number,
 ): string {
 	if (subagent === undefined) return theme.bold("Subagent");
-	const kindColor = subagentKindThemeColor(subagent.kind);
-	const bar = theme.fg(kindColor, "▍");
-	const scope = theme.bold(theme.fg(kindColor, truncatePlain(subagent.scopeName ?? subagent.scopeId, 48)));
-	const kind = theme.fg("dim", subagentKindLabel(subagent.kind));
-	const state = stripAnsi(formatSubagentStateTheme(subagent.state, theme)).trim();
-	const stateStyled =
-		subagent.state === "running"
-			? theme.fg("accent", state)
-			: subagent.state === "queued"
-				? theme.fg("warning", state)
-				: subagent.state === "failed"
-					? theme.fg("error", state)
-					: theme.fg("dim", state);
-	const queue = subagent.queueDepth > 0 ? theme.fg("warning", `queue ${subagent.queueDepth}`) : undefined;
-	const age = theme.fg("dim", formatRelativeAge(subagent.updatedAt));
-	const parts = [scope, kind, stateStyled, queue, age].filter(
-		(part): part is string => part !== undefined && part.length > 0,
-	);
-	return `${bar} ${parts.join(theme.fg("dim", "  ·  "))}`;
+	const tone = subagentTone(subagent);
+	const scope = truncatePlain(subagent.scopeName ?? subagent.scopeId, 48);
+	const summary = subagent.activeSummary ?? subagentKindLabel(subagent.kind);
+	const rightAge = formatRelativeAge(subagent.updatedAt);
+	const rightLen = rightAge.length + 1;
+	const leftBudget = Math.max(8, width - rightLen - 2);
+	const left = `${tone.dot} ${scope}  ${truncatePlain(summary, Math.max(4, leftBudget - scope.length - 4))}`;
+	const padded = `${left}${" ".repeat(Math.max(0, leftBudget - left.length))}`;
+	return `${theme.bg(tone.bg, ` ${padded} `)}${theme.fg("dim", ` ${rightAge}`)}`;
 }
 
 function subagentKindThemeColor(kind: string): "accent" | "warning" | "success" | "customMessageLabel" {
@@ -1718,13 +1732,43 @@ function subagentKindThemeColor(kind: string): "accent" | "warning" | "success" 
 	return "accent";
 }
 
-function formatSubagentKind(kind: string, theme: ExtensionContext["ui"]["theme"]): string {
-	const label = subagentKindLabel(kind).padEnd(7);
-	if (kind === "discord-voice") return theme.fg("accent", label);
-	if (kind === "voice-worker") return theme.fg("warning", label);
-	if (kind === "voice-general") return theme.fg("success", label);
-	if (kind.startsWith("discord-")) return theme.fg("customMessageLabel", label);
-	return theme.fg("dim", label);
+type SubagentBg =
+	| "selectedBg"
+	| "userMessageBg"
+	| "customMessageBg"
+	| "toolPendingBg"
+	| "toolSuccessBg"
+	| "toolErrorBg";
+
+function subagentKindBgColor(kind: string): SubagentBg {
+	if (kind === "discord-voice") return "userMessageBg";
+	if (kind === "voice-worker") return "toolPendingBg";
+	if (kind === "voice-general") return "toolSuccessBg";
+	if (kind.startsWith("discord-")) return "customMessageBg";
+	return "selectedBg";
+}
+
+const SUBAGENT_DOTS = ["●", "◆", "■", "▲", "◐", "◑"] as const;
+
+function subagentDot(scopeId: string): string {
+	let h = 0;
+	for (let i = 0; i < scopeId.length; i++) h = (h * 31 + scopeId.charCodeAt(i)) | 0;
+	return SUBAGENT_DOTS[Math.abs(h) % SUBAGENT_DOTS.length] ?? "●";
+}
+
+interface SubagentTone {
+	fg: "accent" | "warning" | "success" | "customMessageLabel" | "error";
+	bg: SubagentBg;
+	dot: string;
+}
+
+function subagentTone(summary: ClankySubagentSummary): SubagentTone {
+	if (summary.state === "failed") return { fg: "error", bg: "toolErrorBg", dot: subagentDot(summary.scopeId) };
+	return {
+		fg: subagentKindThemeColor(summary.kind),
+		bg: subagentKindBgColor(summary.kind),
+		dot: subagentDot(summary.scopeId),
+	};
 }
 
 function subagentKindLabel(kind: string): string {
@@ -1733,15 +1777,6 @@ function subagentKindLabel(kind: string): string {
 	if (kind === "voice-worker") return "worker";
 	if (kind === "voice-general") return "general";
 	return truncatePlain(kind, 7);
-}
-
-function formatSubagentEffort(thinkingLevel: string | undefined, theme: ExtensionContext["ui"]["theme"]): string {
-	const value = thinkingLevel ?? "default";
-	const text = `effort ${value}`;
-	if (thinkingLevel === undefined) return theme.fg("dim", text);
-	if (thinkingLevel === "high" || thinkingLevel === "xhigh") return theme.fg("warning", text);
-	if (thinkingLevel === "off" || thinkingLevel === "minimal" || thinkingLevel === "low") return theme.fg("dim", text);
-	return theme.fg("muted", text);
 }
 
 function renderSubagentComposer(
@@ -1758,7 +1793,7 @@ function renderSubagentComposer(
 	const draftLines = empty ? [""] : wrapTranscriptText(draft, innerWidth);
 	const visibleLines = draftLines.slice(Math.max(0, draftLines.length - 3));
 	const lastIndex = visibleLines.length - 1;
-	const lines: string[] = [theme.fg("borderMuted", "─".repeat(Math.max(8, width)))];
+	const lines: string[] = [theme.fg(accent, "─".repeat(Math.max(8, width)))];
 	for (const [index, line] of visibleLines.entries()) {
 		const prefix = index === 0 ? `${theme.fg(accent, ">")} ` : "  ";
 		if (empty && index === 0) {
@@ -1788,19 +1823,6 @@ function formatSubagentSendAccepted(result: SendSubagentMessageResult): string {
 	if (result.mode === "followUp") return "Queued behind the active subagent turn.";
 	if (result.mode === "handled") return "Command handled by the subagent runtime.";
 	return "Sent to subagent.";
-}
-
-function formatSubagentState(state: ClankySubagentState, ctx: ExtensionContext): string {
-	return formatSubagentStateTheme(state, ctx.ui.theme);
-}
-
-function formatSubagentStateTheme(state: ClankySubagentState, theme: ExtensionContext["ui"]["theme"]): string {
-	const label = state.padEnd(8);
-	if (state === "running") return theme.fg("accent", label);
-	if (state === "queued") return theme.fg("warning", label);
-	if (state === "failed") return theme.fg("error", label);
-	if (state === "stale") return theme.fg("muted", label);
-	return theme.fg("dim", label);
 }
 
 function compareSubagentsForPanel(a: ClankySubagentSummary, b: ClankySubagentSummary): number {
@@ -1873,10 +1895,6 @@ function stripAnsi(value: string): string {
 
 function visibleLength(value: string): number {
 	return stripAnsi(value).length;
-}
-
-function padStyledRight(value: string, width: number): string {
-	return `${value}${" ".repeat(Math.max(0, width - visibleLength(value)))}`;
 }
 
 function truncateStyledLine(value: string, maxLength: number): string {
@@ -2161,14 +2179,6 @@ function isUpKey(data: string): boolean {
 
 function isDownKey(data: string): boolean {
 	return matchesKey(data, "down");
-}
-
-function isSubagentPreviousKey(data: string): boolean {
-	return data === "\u001b\u001b[A" || matchesKey(data, "alt+up") || matchesKey(data, "ctrl+up");
-}
-
-function isSubagentNextKey(data: string): boolean {
-	return data === "\u001b\u001b[B" || matchesKey(data, "alt+down") || matchesKey(data, "ctrl+down");
 }
 
 function isPageUpKey(data: string): boolean {
@@ -3031,6 +3041,223 @@ export function createClankyToolDefinitions(
 				parameters: browserOpenTabSchema,
 				async execute(_toolCallId, params) {
 					return toolResult(await browserOpenTab(params));
+				},
+			}),
+		);
+	}
+	const browserScreenshot = handlers.browserScreenshot;
+	if (browserScreenshot !== undefined) {
+		tools.push(
+			defineTool({
+				name: "browser_screenshot",
+				label: "Browser Screenshot",
+				description:
+					"Capture a PNG screenshot of a tab in the user's real browser via the Clanky browser bridge extension. Returns a base64 data URL plus pixel dimensions.",
+				promptSnippet:
+					"browser_screenshot: capture the user's real browser viewport as a PNG (CSS-pixel coordinates) so vision-driven input ops can target on-screen elements.",
+				promptGuidelines: [
+					"This targets the user's actual visible browser window — they will see whatever tab is captured.",
+					"Pair this with browser_click, browser_double_click, browser_type, browser_key, or browser_scroll: capture, decide coordinates from the screenshot, then act.",
+					"Omit tabId to capture the active tab in the focused window; pass tabId to capture a specific tab (use browser_list_tabs first to find it).",
+					"Coordinates returned by your vision pass are in CSS pixels of the visible viewport — pass them straight to the input ops with no devicePixelRatio adjustment.",
+				],
+				parameters: browserScreenshotSchema,
+				async execute(_toolCallId, params) {
+					return toolResult(await browserScreenshot(params));
+				},
+			}),
+		);
+	}
+	const browserListTabs = handlers.browserListTabs;
+	if (browserListTabs !== undefined) {
+		tools.push(
+			defineTool({
+				name: "browser_list_tabs",
+				label: "Browser List Tabs",
+				description:
+					"List all tabs currently open in the user's real browser (id, url, title, active, windowId) via the Clanky browser bridge extension.",
+				promptSnippet:
+					"browser_list_tabs: enumerate the user's real browser tabs to find a tabId before navigating, closing, screenshotting, or driving input.",
+				promptGuidelines: [
+					"Use this to discover the tabId of a tab the user is referring to before calling browser_navigate, browser_close_tab, browser_screenshot, or any input op.",
+					"This reads the user's actual browser state — do not use it for silent surveillance.",
+				],
+				parameters: browserListTabsSchema,
+				async execute(_toolCallId, params) {
+					return toolResult(await browserListTabs(params));
+				},
+			}),
+		);
+	}
+	const browserNavigate = handlers.browserNavigate;
+	if (browserNavigate !== undefined) {
+		tools.push(
+			defineTool({
+				name: "browser_navigate",
+				label: "Browser Navigate",
+				description:
+					"Navigate a tab in the user's real browser to a URL via the Clanky browser bridge extension. Opens a new tab if no tabId is provided.",
+				promptSnippet:
+					"browser_navigate: send the user's real browser tab to a URL (or open a new tab if tabId is omitted).",
+				promptGuidelines: [
+					"This drives the user's real browser — they will see the navigation happen.",
+					"Pass tabId to navigate an existing tab; omit it to open a new tab (similar to browser_open_tab but suitable for follow-up navigations within the same vision-ops flow).",
+					"URL must be http(s), about:, or chrome://.",
+				],
+				parameters: browserNavigateSchema,
+				async execute(_toolCallId, params) {
+					return toolResult(await browserNavigate(params));
+				},
+			}),
+		);
+	}
+	const browserCloseTab = handlers.browserCloseTab;
+	if (browserCloseTab !== undefined) {
+		tools.push(
+			defineTool({
+				name: "browser_close_tab",
+				label: "Browser Close Tab",
+				description: "Close a tab in the user's real browser via the Clanky browser bridge extension.",
+				promptSnippet: "browser_close_tab: close a tab in the user's real browser by tabId.",
+				promptGuidelines: [
+					"This closes a tab in the user's actual browser session — confirm with the user before closing tabs you didn't open yourself unless they explicitly asked.",
+					"Use browser_list_tabs first to find the tabId.",
+				],
+				parameters: browserCloseTabSchema,
+				async execute(_toolCallId, params) {
+					return toolResult(await browserCloseTab(params));
+				},
+			}),
+		);
+	}
+	const browserClick = handlers.browserClick;
+	if (browserClick !== undefined) {
+		tools.push(
+			defineTool({
+				name: "browser_click",
+				label: "Browser Click",
+				description:
+					"Send a mouse click at CSS-pixel viewport coordinates (x, y) in a tab of the user's real browser via CDP through the Clanky browser bridge extension.",
+				promptSnippet:
+					"browser_click: click at viewport coordinates (x, y) in the user's real browser. Pair with browser_screenshot to choose coordinates.",
+				promptGuidelines: [
+					"This drives the user's actual browser via CDP — the yellow 'extension is debugging this tab' bar will appear and is expected.",
+					"Always call browser_screenshot first and pick coordinates from that screenshot's pixel space (top-left origin, CSS pixels).",
+					'Defaults: button="left", clickCount=1. Use browser_double_click for double-clicks instead of passing clickCount=2.',
+				],
+				parameters: browserClickSchema,
+				async execute(_toolCallId, params) {
+					return toolResult(await browserClick(params));
+				},
+			}),
+		);
+	}
+	const browserDoubleClick = handlers.browserDoubleClick;
+	if (browserDoubleClick !== undefined) {
+		tools.push(
+			defineTool({
+				name: "browser_double_click",
+				label: "Browser Double Click",
+				description:
+					"Send a double-click at CSS-pixel viewport coordinates (x, y) in a tab of the user's real browser via CDP through the Clanky browser bridge extension.",
+				promptSnippet:
+					"browser_double_click: double-click at viewport coordinates (x, y) in the user's real browser. Pair with browser_screenshot to choose coordinates.",
+				promptGuidelines: [
+					"This drives the user's actual browser via CDP — the yellow debugging bar will appear and is expected.",
+					"Always call browser_screenshot first and pick coordinates from that screenshot's pixel space.",
+					'Defaults: button="left".',
+				],
+				parameters: browserDoubleClickSchema,
+				async execute(_toolCallId, params) {
+					return toolResult(await browserDoubleClick(params));
+				},
+			}),
+		);
+	}
+	const browserType = handlers.browserType;
+	if (browserType !== undefined) {
+		tools.push(
+			defineTool({
+				name: "browser_type",
+				label: "Browser Type",
+				description:
+					"Insert literal text into the currently-focused element of a tab in the user's real browser via CDP through the Clanky browser bridge extension.",
+				promptSnippet:
+					"browser_type: insert text into the focused input in the user's real browser. Click into the field with browser_click first.",
+				promptGuidelines: [
+					"This inserts text via CDP Input.insertText — works for ordinary text fields, not for special keys like Enter, Tab, or arrow keys.",
+					"For special keys use browser_key instead.",
+					"Click into the target input first with browser_click so it has focus, then call browser_type.",
+				],
+				parameters: browserTypeSchema,
+				async execute(_toolCallId, params) {
+					return toolResult(await browserType(params));
+				},
+			}),
+		);
+	}
+	const browserKey = handlers.browserKey;
+	if (browserKey !== undefined) {
+		tools.push(
+			defineTool({
+				name: "browser_key",
+				label: "Browser Key",
+				description:
+					"Dispatch a keyDown+keyUp pair for a single named key (with optional modifiers) into a tab of the user's real browser via CDP through the Clanky browser bridge extension.",
+				promptSnippet:
+					"browser_key: press a single key (Enter, Tab, Escape, ArrowLeft, etc.) in the user's real browser, optionally with ctrl/shift/alt/meta modifiers.",
+				promptGuidelines: [
+					'`key` matches DOM KeyboardEvent.key (e.g. "Enter", "Tab", "Escape", "ArrowLeft", "a").',
+					"For typing literal text, use browser_type. Use browser_key for control keys and shortcuts.",
+					"Modifiers are independent booleans: ctrl, shift, alt, meta.",
+				],
+				parameters: browserKeySchema,
+				async execute(_toolCallId, params) {
+					return toolResult(await browserKey(params));
+				},
+			}),
+		);
+	}
+	const browserScroll = handlers.browserScroll;
+	if (browserScroll !== undefined) {
+		tools.push(
+			defineTool({
+				name: "browser_scroll",
+				label: "Browser Scroll",
+				description:
+					"Send a mouseWheel event at CSS-pixel viewport coordinates (x, y) with deltaX/deltaY in a tab of the user's real browser via CDP through the Clanky browser bridge extension.",
+				promptSnippet:
+					"browser_scroll: scroll at viewport coordinates (x, y) by deltaX/deltaY pixels in the user's real browser. Pair with browser_screenshot to pick the scroll origin.",
+				promptGuidelines: [
+					"This dispatches a CDP mouseWheel event — positive deltaY scrolls down, positive deltaX scrolls right.",
+					"Coordinates are CSS pixels of the visible viewport; pick them from a recent browser_screenshot.",
+					"For large scrolls, send multiple smaller wheel events rather than one giant delta if the page is sluggish.",
+				],
+				parameters: browserScrollSchema,
+				async execute(_toolCallId, params) {
+					return toolResult(await browserScroll(params));
+				},
+			}),
+		);
+	}
+	const browserWait = handlers.browserWait;
+	if (browserWait !== undefined) {
+		tools.push(
+			defineTool({
+				name: "browser_wait",
+				label: "Browser Wait",
+				description:
+					"Pause for a fixed number of milliseconds on the bridge daemon (no browser round-trip). Useful between vision-driven browser ops while a page settles. Capped at 30000 ms.",
+				promptSnippet:
+					"browser_wait: pause briefly (<=30000 ms) between browser ops so the page can settle before the next browser_screenshot.",
+				promptGuidelines: [
+					"Use sparingly between input ops and screenshots — typical values are 200-2000 ms.",
+					"Hard cap is 30000 ms; the daemon will reject larger values.",
+					"This is a daemon-side timer, not a browser-side wait — it doesn't watch for navigation or readiness.",
+				],
+				parameters: browserWaitSchema,
+				async execute(_toolCallId, params) {
+					return toolResult(await browserWait(params));
 				},
 			}),
 		);

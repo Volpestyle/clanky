@@ -8,6 +8,75 @@ let configPromise = null;
 let ws = null;
 let reconnectTimer = null;
 
+const attachedTabs = new Set();
+
+const ALLOWED_URL_PREFIXES = ["http://", "https://", "about:", "chrome://"];
+
+function isAllowedUrl(url) {
+	if (typeof url !== "string" || url.length === 0) return false;
+	for (const prefix of ALLOWED_URL_PREFIXES) {
+		if (url.startsWith(prefix)) return true;
+	}
+	return false;
+}
+
+async function ensureAttached(tabId) {
+	if (attachedTabs.has(tabId)) return;
+	await chrome.debugger.attach({ tabId }, "1.3");
+	attachedTabs.add(tabId);
+}
+
+function cdpSend(tabId, method, params) {
+	return new Promise((resolve, reject) => {
+		chrome.debugger.sendCommand({ tabId }, method, params || {}, (result) => {
+			const err = chrome.runtime.lastError;
+			if (err) {
+				reject(new Error(err.message || `CDP ${method} failed`));
+				return;
+			}
+			resolve(result);
+		});
+	});
+}
+
+const MOD_BITS = { alt: 1, ctrl: 2, meta: 4, shift: 8 };
+
+function modifierBitmask(modifiers) {
+	if (!modifiers || typeof modifiers !== "object") return 0;
+	let mask = 0;
+	if (modifiers.alt) mask |= MOD_BITS.alt;
+	if (modifiers.ctrl) mask |= MOD_BITS.ctrl;
+	if (modifiers.meta) mask |= MOD_BITS.meta;
+	if (modifiers.shift) mask |= MOD_BITS.shift;
+	return mask;
+}
+
+const KEY_TABLE = {
+	Enter: { code: "Enter", windowsVirtualKeyCode: 13 },
+	Tab: { code: "Tab", windowsVirtualKeyCode: 9 },
+	Escape: { code: "Escape", windowsVirtualKeyCode: 27 },
+	Backspace: { code: "Backspace", windowsVirtualKeyCode: 8 },
+	Delete: { code: "Delete", windowsVirtualKeyCode: 46 },
+	ArrowUp: { code: "ArrowUp", windowsVirtualKeyCode: 38 },
+	ArrowDown: { code: "ArrowDown", windowsVirtualKeyCode: 40 },
+	ArrowLeft: { code: "ArrowLeft", windowsVirtualKeyCode: 37 },
+	ArrowRight: { code: "ArrowRight", windowsVirtualKeyCode: 39 },
+	Home: { code: "Home", windowsVirtualKeyCode: 36 },
+	End: { code: "End", windowsVirtualKeyCode: 35 },
+	PageUp: { code: "PageUp", windowsVirtualKeyCode: 33 },
+	PageDown: { code: "PageDown", windowsVirtualKeyCode: 34 },
+	" ": { code: "Space", windowsVirtualKeyCode: 32 },
+};
+
+function keyCodeFor(key) {
+	if (Object.prototype.hasOwnProperty.call(KEY_TABLE, key)) {
+		return KEY_TABLE[key];
+	}
+	return null;
+}
+
+const CDP_BUTTONS = new Set(["left", "right", "middle"]);
+
 function loadConfig() {
 	if (configPromise === null) {
 		configPromise = fetch(chrome.runtime.getURL("config.json"))
@@ -127,8 +196,126 @@ async function dispatch(message) {
 			active: Boolean(tab.active),
 		};
 	}
+	if (message.op === "screenshot") {
+		let tab;
+		if (typeof message.tabId === "number") {
+			tab = await chrome.tabs.get(message.tabId);
+		} else {
+			const win = await chrome.windows.getLastFocused({ populate: true });
+			tab = (win.tabs || []).find((t) => t.active);
+			if (!tab) throw new Error("no active tab in focused window");
+		}
+		const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+		return {
+			tabId: tab.id,
+			dataUrl,
+			width: tab.width ?? null,
+			height: tab.height ?? null,
+		};
+	}
+	if (message.op === "list_tabs") {
+		const tabs = await chrome.tabs.query({});
+		return {
+			tabs: tabs.map((t) => ({
+				tabId: t.id,
+				url: t.url || t.pendingUrl || "",
+				title: t.title || "",
+				active: Boolean(t.active),
+				windowId: t.windowId,
+			})),
+		};
+	}
+	if (message.op === "navigate") {
+		if (!isAllowedUrl(message.url)) {
+			throw new Error("url required (http(s)://, about:, or chrome://)");
+		}
+		if (typeof message.tabId === "number") {
+			const tab = await chrome.tabs.update(message.tabId, { url: message.url });
+			return { tabId: tab.id, url: tab.url || tab.pendingUrl || message.url };
+		}
+		const tab = await chrome.tabs.create({ url: message.url, active: true });
+		return { tabId: tab.id, url: tab.url || tab.pendingUrl || message.url };
+	}
+	if (message.op === "close_tab") {
+		if (typeof message.tabId !== "number") {
+			throw new Error("tabId required");
+		}
+		await chrome.tabs.remove(message.tabId);
+		attachedTabs.delete(message.tabId);
+		return { ok: true };
+	}
+	if (message.op === "click" || message.op === "double_click") {
+		if (typeof message.tabId !== "number") throw new Error("tabId required");
+		if (typeof message.x !== "number" || typeof message.y !== "number") {
+			throw new Error("x and y required");
+		}
+		const button = message.button || "left";
+		if (!CDP_BUTTONS.has(button)) throw new Error(`invalid button: ${button}`);
+		const clickCount = message.op === "double_click" ? 2 : (typeof message.clickCount === "number" ? message.clickCount : 1);
+		await ensureAttached(message.tabId);
+		const base = { x: message.x, y: message.y, button, clickCount };
+		await cdpSend(message.tabId, "Input.dispatchMouseEvent", { ...base, type: "mousePressed" });
+		await cdpSend(message.tabId, "Input.dispatchMouseEvent", { ...base, type: "mouseReleased" });
+		return { ok: true };
+	}
+	if (message.op === "type") {
+		if (typeof message.tabId !== "number") throw new Error("tabId required");
+		if (typeof message.text !== "string") throw new Error("text required");
+		await ensureAttached(message.tabId);
+		await cdpSend(message.tabId, "Input.insertText", { text: message.text });
+		return { ok: true };
+	}
+	if (message.op === "key") {
+		if (typeof message.tabId !== "number") throw new Error("tabId required");
+		if (typeof message.key !== "string" || message.key.length === 0) {
+			throw new Error("key required");
+		}
+		const modifiers = modifierBitmask(message.modifiers);
+		const known = keyCodeFor(message.key);
+		await ensureAttached(message.tabId);
+		const baseDown = { type: "keyDown", key: message.key, modifiers };
+		const baseUp = { type: "keyUp", key: message.key, modifiers };
+		if (known) {
+			Object.assign(baseDown, known);
+			Object.assign(baseUp, known);
+		} else if (message.key.length === 1) {
+			// Printable single char — give CDP a `text` so the page sees input.
+			baseDown.text = message.key;
+		}
+		await cdpSend(message.tabId, "Input.dispatchKeyEvent", baseDown);
+		await cdpSend(message.tabId, "Input.dispatchKeyEvent", baseUp);
+		return { ok: true };
+	}
+	if (message.op === "scroll") {
+		if (typeof message.tabId !== "number") throw new Error("tabId required");
+		if (typeof message.x !== "number" || typeof message.y !== "number") {
+			throw new Error("x and y required");
+		}
+		if (typeof message.deltaX !== "number" || typeof message.deltaY !== "number") {
+			throw new Error("deltaX and deltaY required");
+		}
+		await ensureAttached(message.tabId);
+		await cdpSend(message.tabId, "Input.dispatchMouseEvent", {
+			type: "mouseWheel",
+			x: message.x,
+			y: message.y,
+			deltaX: message.deltaX,
+			deltaY: message.deltaY,
+		});
+		return { ok: true };
+	}
 	throw new Error(`unknown op: ${message.op}`);
 }
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+	attachedTabs.delete(tabId);
+});
+
+chrome.debugger.onDetach.addListener((source) => {
+	if (source && typeof source.tabId === "number") {
+		attachedTabs.delete(source.tabId);
+	}
+});
 
 chrome.runtime.onStartup.addListener(connect);
 chrome.runtime.onInstalled.addListener(connect);
