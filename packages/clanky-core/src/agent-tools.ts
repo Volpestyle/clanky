@@ -10,7 +10,7 @@ import {
 	type SessionMessageEntry,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { CURSOR_MARKER, decodeKittyPrintable, matchesKey, Text } from "@earendil-works/pi-tui";
+import { Container, CURSOR_MARKER, decodeKittyPrintable, matchesKey, Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import { type ClankyCommandCompletionSpec, completeClankyCommandArgument } from "./command-completions.ts";
 import type {
@@ -614,8 +614,10 @@ const AGENTROOM_OPERATOR_SKILL_NAME = "clanky-agentroom-operator";
 const WORK_TRACKER_SKILL_NAME = "clanky-work-tracker";
 const SUBAGENT_PANEL_WIDGET_KEY = "clanky-subagents";
 const SUBAGENT_PANEL_STATUS_KEY = "clanky-subagents";
+const SUBAGENT_TRANSCRIPT_WIDGET_KEY = "clanky-subagent-transcript";
 const SUBAGENT_PANEL_REFRESH_MS = 2000;
 const SUBAGENT_PANEL_MAX_ROWS = 7;
+const SUBAGENT_TRANSCRIPT_TAIL_ROWS = 18;
 const SUBAGENT_BROWSER_REFRESH_MS = 2000;
 const SUBAGENT_MODAL_WIDTH = "100%";
 const SUBAGENT_MODAL_MAX_HEIGHT = "100%";
@@ -685,7 +687,24 @@ export function createClankyExtensionFactories(
 					: new SubagentPanelController(handlers.listSubagents, handlers.sendSubagentMessage);
 			registerClankyCommands(pi, handlers, subagentPanel);
 			subagentPanel?.registerLifecycle(pi);
-			pi.on("input", async (event) => {
+			pi.on("input", async (event, ctx) => {
+				if (event.source === "interactive") {
+					const target = subagentPanel?.getActiveTarget();
+					if (target !== undefined) {
+						const text = event.text.trim();
+						if (text.length > 0 && !text.startsWith("/")) {
+							const result = await subagentPanel?.dispatchInput({ id: target.id, text: event.text });
+							if (ctx.hasUI) {
+								if (result?.accepted === true) {
+									ctx.ui.notify(`→ ${target.summary.scopeName ?? target.summary.scopeId}`, "info");
+								} else {
+									ctx.ui.notify(`Subagent send failed: ${result?.message ?? "unknown error"}`, "error");
+								}
+							}
+							return { action: "handled" };
+						}
+					}
+				}
 				const transformed = maybeInjectWorkTrackerSkill(
 					maybeInjectAgentRoomOperatorSkill(
 						maybeInjectWebOperatorSkill(maybeInjectMediaOperatorSkill(event.text, env), env),
@@ -764,6 +783,7 @@ class SubagentPanelController {
 	private summaries: ClankySubagentSummary[] = [];
 	private selectedIndex = 0;
 	private listScroll = 0;
+	private activeTargetId: string | undefined;
 	private timer: ReturnType<typeof setInterval> | undefined;
 	private unsubscribeInput: (() => void) | undefined;
 	private refreshRunning = false;
@@ -778,6 +798,18 @@ class SubagentPanelController {
 	) {
 		this.listSubagents = listSubagents;
 		this.sendSubagentMessage = sendSubagentMessage;
+	}
+
+	getActiveTarget(): { id: string; summary: ClankySubagentSummary } | undefined {
+		if (this.activeTargetId === undefined) return undefined;
+		const summary = this.summaries.find((s) => s.id === this.activeTargetId);
+		if (summary === undefined) return undefined;
+		return { id: this.activeTargetId, summary };
+	}
+
+	async dispatchInput(input: SendSubagentMessageInput): Promise<SendSubagentMessageResult | undefined> {
+		if (this.sendSubagentMessage === undefined) return undefined;
+		return this.sendSubagentMessage(input);
 	}
 
 	registerLifecycle(pi: Parameters<ExtensionFactory>[0]): void {
@@ -886,7 +918,7 @@ class SubagentPanelController {
 	}
 
 	private async openSelectedTranscript(ctx: ExtensionContext): Promise<void> {
-		const selected = this.selectedSummary();
+		const selected = this.selectedIndex > 0 ? this.summaries[this.selectedIndex - 1] : undefined;
 		if (selected === undefined) return;
 		await this.openTranscript(ctx, selected.id);
 	}
@@ -936,6 +968,7 @@ class SubagentPanelController {
 		this.unsubscribeInput?.();
 		this.unsubscribeInput = undefined;
 		ctx.ui.setWidget(SUBAGENT_PANEL_WIDGET_KEY, undefined);
+		ctx.ui.setWidget(SUBAGENT_TRANSCRIPT_WIDGET_KEY, undefined);
 		ctx.ui.setStatus(SUBAGENT_PANEL_STATUS_KEY, undefined);
 	}
 
@@ -947,7 +980,7 @@ class SubagentPanelController {
 			return { consume: true };
 		}
 		const editorEmpty = ctx.ui.getEditorText().trim().length === 0;
-		const hasSummaries = this.summaries.length > 0;
+		const maxIndex = this.summaries.length; // 0 = main, 1..N = subagents
 		if (isUpKey(data)) {
 			if (this.selectionActive) {
 				if (this.selectedIndex <= 0) {
@@ -964,12 +997,12 @@ class SubagentPanelController {
 		}
 		if (isDownKey(data)) {
 			if (this.selectionActive) {
-				this.selectedIndex = Math.min(this.summaries.length - 1, this.selectedIndex + 1);
+				this.selectedIndex = Math.min(maxIndex, this.selectedIndex + 1);
 				this.ensureSelectedVisible(SUBAGENT_PANEL_MAX_ROWS);
 				this.renderPanel(ctx);
 				return { consume: true };
 			}
-			if (editorEmpty && hasSummaries) {
+			if (editorEmpty) {
 				this.selectionActive = true;
 				this.selectedIndex = 0;
 				this.ensureSelectedVisible(SUBAGENT_PANEL_MAX_ROWS);
@@ -979,8 +1012,15 @@ class SubagentPanelController {
 			return undefined;
 		}
 		if (isEnterKey(data) && this.selectionActive) {
-			const selected = this.selectedSummary();
-			if (selected !== undefined) void this.openTranscript(ctx, selected.id);
+			if (this.selectedIndex === 0) {
+				this.activeTargetId = undefined;
+			} else {
+				const summary = this.summaries[this.selectedIndex - 1];
+				if (summary !== undefined) this.activeTargetId = summary.id;
+			}
+			this.selectionActive = false;
+			this.renderPanel(ctx);
+			void this.refreshTranscript(ctx);
 			return { consume: true };
 		}
 		if (data === "r" && this.selectionActive) {
@@ -998,12 +1038,16 @@ class SubagentPanelController {
 		if (this.refreshRunning) return;
 		this.refreshRunning = true;
 		try {
-			const selectedId = this.selectedSummary()?.id;
+			const previousSubagent = this.selectedIndex > 0 ? this.summaries[this.selectedIndex - 1] : undefined;
 			this.summaries = [...(await this.listSubagents())].sort(compareSubagentsForPanel);
-			this.selectedIndex = resolveSelectedIndex(this.summaries, selectedId, this.selectedIndex);
+			if (previousSubagent !== undefined) {
+				const newIdx = this.summaries.findIndex((s) => s.id === previousSubagent.id);
+				this.selectedIndex = newIdx >= 0 ? newIdx + 1 : 0;
+			}
 			this.ensureSelectedVisible(SUBAGENT_PANEL_MAX_ROWS);
 			ctx.ui.setStatus(SUBAGENT_PANEL_STATUS_KEY, formatSubagentFooterStatus(this.summaries, ctx));
 			this.renderPanel(ctx);
+			await this.refreshTranscript(ctx);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			ctx.ui.setStatus(SUBAGENT_PANEL_STATUS_KEY, ctx.ui.theme.fg("error", "subagents error"));
@@ -1029,30 +1073,57 @@ class SubagentPanelController {
 			selectionActive: this.selectionActive,
 			selectedIndex: this.selectedIndex,
 			scroll: this.listScroll,
+			activeTargetId: this.activeTargetId,
 		});
 		ctx.ui.setWidget(SUBAGENT_PANEL_WIDGET_KEY, lines.length === 0 ? undefined : lines, {
 			placement: "belowEditor",
 		});
 	}
 
-	private selectedSummary(): ClankySubagentSummary | undefined {
-		return this.summaries[this.selectedIndex];
-	}
-
 	private ensureSelectedVisible(maxRows: number): void {
-		if (this.summaries.length === 0) {
-			this.selectedIndex = 0;
-			this.listScroll = 0;
-			return;
-		}
-		this.selectedIndex = Math.min(Math.max(0, this.selectedIndex), this.summaries.length - 1);
-		const maxScroll = Math.max(0, this.summaries.length - maxRows);
+		const total = this.summaries.length + 1; // +1 for "main" pseudo-row
+		this.selectedIndex = Math.min(Math.max(0, this.selectedIndex), total - 1);
+		const maxScroll = Math.max(0, total - maxRows);
 		if (this.selectedIndex < this.listScroll) {
 			this.listScroll = this.selectedIndex;
 		} else if (this.selectedIndex >= this.listScroll + maxRows) {
 			this.listScroll = this.selectedIndex - maxRows + 1;
 		}
 		this.listScroll = Math.min(Math.max(0, this.listScroll), maxScroll);
+	}
+
+	private async refreshTranscript(ctx: ExtensionContext): Promise<void> {
+		const target = this.getActiveTarget();
+		if (target === undefined || target.summary.sessionFile === undefined) {
+			ctx.ui.setWidget(SUBAGENT_TRANSCRIPT_WIDGET_KEY, undefined);
+			return;
+		}
+		const theme = ctx.ui.theme;
+		const width = process.stdout.columns ?? 80;
+		let transcriptLines: string[] = [];
+		try {
+			const transcript = await loadSubagentTranscript(target.summary.sessionFile);
+			if (transcript.length === 0) {
+				transcriptLines = [theme.fg("dim", "  (no transcript yet)")];
+			} else {
+				const rendered = renderTranscriptRows(transcript, width, theme);
+				transcriptLines = rendered.slice(Math.max(0, rendered.length - SUBAGENT_TRANSCRIPT_TAIL_ROWS));
+			}
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			transcriptLines = [theme.fg("error", `  transcript load failed: ${message}`)];
+		}
+		const header = renderSubagentChatHeader(target.summary, theme, width);
+		const lines = [header, ...transcriptLines];
+		ctx.ui.setWidget(
+			SUBAGENT_TRANSCRIPT_WIDGET_KEY,
+			() => {
+				const container = new Container();
+				for (const line of lines) container.addChild(new Text(line, 1, 0));
+				return container;
+			},
+			{ placement: "aboveEditor" },
+		);
 	}
 }
 
@@ -1649,26 +1720,49 @@ function formatSubagentFooterStatus(
 function formatSubagentPanelLines(
 	summaries: readonly ClankySubagentSummary[],
 	ctx: ExtensionContext,
-	options: { includeEmpty?: boolean; selectionActive?: boolean; selectedIndex?: number; scroll?: number } = {},
+	options: {
+		includeEmpty?: boolean;
+		selectionActive?: boolean;
+		selectedIndex?: number;
+		scroll?: number;
+		activeTargetId?: string | undefined;
+	} = {},
 ): string[] {
-	if (summaries.length === 0) {
-		return options.includeEmpty === true ? [ctx.ui.theme.fg("dim", "No Clanky subagents yet.")] : [];
-	}
 	const ordered = [...summaries].sort(compareSubagentsForPanel);
-	const scroll = Math.min(Math.max(0, options.scroll ?? 0), Math.max(0, ordered.length - SUBAGENT_PANEL_MAX_ROWS));
+	const total = ordered.length + 1; // +1 for main pseudo-row
+	const scroll = Math.min(Math.max(0, options.scroll ?? 0), Math.max(0, total - SUBAGENT_PANEL_MAX_ROWS));
 	const selectedIndex = options.selectedIndex ?? -1;
-	const visible = ordered.slice(scroll, scroll + SUBAGENT_PANEL_MAX_ROWS);
-	const lines: string[] = [];
-	for (const [visibleIndex, subagent] of visible.entries()) {
-		lines.push(
-			formatSubagentPanelRow(subagent, ctx, scroll + visibleIndex === selectedIndex, options.selectionActive === true),
-		);
+	const focused = options.selectionActive === true;
+	const activeTargetId = options.activeTargetId;
+	const rows: string[] = [];
+	rows.push(formatSubagentMainRow(ctx, selectedIndex === 0 && focused, activeTargetId === undefined));
+	for (const subagent of ordered) {
+		rows.push(formatSubagentPanelRow(subagent, ctx, false, false, activeTargetId === subagent.id));
 	}
-	if (ordered.length > SUBAGENT_PANEL_MAX_ROWS) {
-		const end = Math.min(ordered.length, scroll + SUBAGENT_PANEL_MAX_ROWS);
-		lines.push(ctx.ui.theme.fg("dim", `  ${scroll + 1}–${end} of ${ordered.length}`));
+	// Overwrite the selected row with focused styling
+	if (focused && selectedIndex > 0 && selectedIndex <= ordered.length) {
+		const summary = ordered[selectedIndex - 1];
+		if (summary !== undefined) {
+			rows[selectedIndex] = formatSubagentPanelRow(summary, ctx, true, true, activeTargetId === summary.id);
+		}
+	}
+	const visible = rows.slice(scroll, scroll + SUBAGENT_PANEL_MAX_ROWS);
+	const lines = [...visible];
+	if (total > SUBAGENT_PANEL_MAX_ROWS) {
+		const end = Math.min(total, scroll + SUBAGENT_PANEL_MAX_ROWS);
+		lines.push(ctx.ui.theme.fg("dim", `  ${scroll + 1}–${end} of ${total}`));
 	}
 	return lines;
+}
+
+function formatSubagentMainRow(ctx: ExtensionContext, selected: boolean, active: boolean): string {
+	const theme = ctx.ui.theme;
+	const cursor = selected ? theme.fg("accent", "▸") : " ";
+	const dot = active ? theme.fg("accent", "●") : theme.fg("dim", "○");
+	const label = "main";
+	const scopeStyled = active || selected ? theme.bold(theme.fg("accent", label)) : theme.fg("dim", label);
+	const note = theme.fg("dim", "clanky main session");
+	return `${cursor} ${dot} ${scopeStyled}  ${theme.fg("dim", "·")}  ${note}`;
 }
 
 function formatSubagentPanelRow(
@@ -1676,13 +1770,14 @@ function formatSubagentPanelRow(
 	ctx: ExtensionContext,
 	selected = false,
 	focused = false,
+	active = false,
 ): string {
 	const theme = ctx.ui.theme;
 	const tone = subagentTone(subagent);
 	const cursor = selected && focused ? theme.fg(tone.fg, "▸") : " ";
-	const dot = theme.fg(tone.fg, tone.dot);
+	const dot = active ? theme.fg(tone.fg, "●") : theme.fg("dim", "○");
 	const scope = truncatePlain(subagent.scopeName ?? subagent.scopeId, 24);
-	const scopeStyled = selected && focused ? theme.bold(theme.fg(tone.fg, scope)) : theme.fg(tone.fg, scope);
+	const scopeStyled = (selected && focused) || active ? theme.bold(theme.fg(tone.fg, scope)) : theme.fg(tone.fg, scope);
 	const summary = theme.fg("dim", truncatePlain(subagent.activeSummary ?? "idle", 48));
 	const queue = subagent.queueDepth > 0 ? `  ${theme.fg("warning", `↑${subagent.queueDepth}`)}` : "";
 	const age = theme.fg("dim", formatRelativeAge(subagent.updatedAt));

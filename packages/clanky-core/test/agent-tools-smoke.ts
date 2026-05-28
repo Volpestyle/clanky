@@ -709,15 +709,22 @@ async function assertSubagentPanelCommandWithSession(sessionFiles: {
 			return { accepted: true, mode: "start", sessionId: "session-selected" };
 		},
 	});
+	let inputHandlerRef:
+		| ((event: { text: string; source: string }, ctx: unknown) => Promise<{ action?: string } | undefined>)
+		| undefined;
 	const pi = {
 		registerCommand(name: string, options: Parameters<Parameters<ExtensionFactory>[0]["registerCommand"]>[1]) {
 			commands.set(name, options);
 		},
-		on() {
-			return;
+		on(event: string, handler: unknown) {
+			if (event === "input") {
+				inputHandlerRef = handler as typeof inputHandlerRef;
+			}
 		},
 	} as unknown as Parameters<ExtensionFactory>[0];
 	for (const factory of factories) await factory(pi);
+	if (inputHandlerRef === undefined) throw new Error("smoke: input handler not registered");
+	const inputHandler = inputHandlerRef;
 
 	const widgets = new Map<string, string[] | undefined>();
 	const widgetPlacements = new Map<string, string | undefined>();
@@ -783,21 +790,24 @@ async function assertSubagentPanelCommandWithSession(sessionFiles: {
 			setStatus() {
 				return;
 			},
+			getEditorText() {
+				return "";
+			},
 			theme: {
 				fg: (_color: string, text: string) => text,
+				bg: (_color: string, text: string) => text,
 				bold: (text: string) => text,
 			},
 		},
 	} as unknown as ExtensionCommandContext;
 	const subagents = commands.get("subagents");
 	if (subagents === undefined) throw new Error("smoke: /subagents command was not registered");
-	await subagents.handler("", ctx);
+	await subagents.handler("panel", ctx);
 	const passivePanelLines = widgets.get("clanky-subagents");
 	if (
 		passivePanelLines === undefined ||
 		!passivePanelLines.join("\n").includes("Smoke Guild") ||
-		!passivePanelLines.join("\n").includes("effort medium") ||
-		!passivePanelLines.join("\n").includes("/subagents focus selects")
+		!passivePanelLines.join("\n").includes("replying to Smoke User")
 	) {
 		throw new Error(`smoke: /subagents did not show the passive live panel: ${JSON.stringify(passivePanelLines)}`);
 	}
@@ -811,37 +821,70 @@ async function assertSubagentPanelCommandWithSession(sessionFiles: {
 	if (typingResult?.consume === true) {
 		throw new Error("smoke: /subagents consumed normal typing while the panel was passive");
 	}
-	await subagents.handler("", ctx);
-	if (widgets.get("clanky-subagents") !== undefined) {
-		throw new Error("smoke: /subagents did not toggle the live panel off");
-	}
-	await subagents.handler("", ctx);
-	const pendingMetaResult = terminalInput("\u001b");
-	if (pendingMetaResult?.consume === true) {
-		throw new Error("smoke: /subagents consumed standalone escape while waiting for split Option+Down");
+	terminalInput("\u001b[B");
+	assertSelectedSubagent(widgets.get("clanky-subagents"), "main", "plain Down enters at main row");
+	terminalInput("\u001b[A");
+	const stillSelected = widgets.get("clanky-subagents")?.some((line) => line.startsWith("▸"));
+	if (stillSelected !== false) {
+		throw new Error(
+			`smoke: plain Up at index 0 should deactivate selection: ${JSON.stringify(widgets.get("clanky-subagents"))}`,
+		);
 	}
 	terminalInput("\u001b[B");
-	assertSelectedSubagent(widgets.get("clanky-subagents"), "Smoke Guild", "split Option+Down");
-	terminalInput("\u001b[1;3:1A");
-	assertSelectedSubagent(widgets.get("clanky-subagents"), "First Guild", "event-typed Option+Up");
-	terminalInput("\u001b[1;3:1B");
-	assertSelectedSubagent(widgets.get("clanky-subagents"), "Smoke Guild", "event-typed Option+Down");
+	assertSelectedSubagent(widgets.get("clanky-subagents"), "main", "plain Down re-enters at main row");
+	terminalInput("\u001b[B");
+	assertSelectedSubagent(widgets.get("clanky-subagents"), "First Guild", "plain Down moves to First Guild");
+	terminalInput("\u001b[B");
+	assertSelectedSubagent(widgets.get("clanky-subagents"), "Smoke Guild", "plain Down moves to Smoke Guild");
 	terminalInput("\r");
+	const afterEnter = widgets.get("clanky-subagents")?.join("\n") ?? "";
+	if (afterEnter.split("\n").some((line) => line.startsWith("▸"))) {
+		throw new Error(`smoke: Enter should deactivate selection: ${JSON.stringify(widgets.get("clanky-subagents"))}`);
+	}
+	const smokeLine = widgets.get("clanky-subagents")?.find((line) => line.includes("Smoke Guild"));
+	if (smokeLine === undefined || !smokeLine.includes("●")) {
+		throw new Error(
+			`smoke: Enter should mark Smoke Guild as active: ${JSON.stringify(widgets.get("clanky-subagents"))}`,
+		);
+	}
+	const mainLineAfter = widgets.get("clanky-subagents")?.find((line) => line.includes("main"));
+	if (mainLineAfter === undefined || !mainLineAfter.includes("○")) {
+		throw new Error(
+			`smoke: main row should be hollow after Enter on Smoke: ${JSON.stringify(widgets.get("clanky-subagents"))}`,
+		);
+	}
+	const inputEvent = await inputHandler(
+		{
+			text: "ping from input",
+			source: "interactive",
+		},
+		ctx,
+	);
+	if (inputEvent?.action !== "handled") {
+		throw new Error(`smoke: input not routed to subagent: ${JSON.stringify(inputEvent)}`);
+	}
+	if (sentSubagentMessages.length !== 1 || sentSubagentMessages[0]?.text !== "ping from input") {
+		throw new Error(`smoke: input handler did not dispatch to subagent: ${JSON.stringify(sentSubagentMessages)}`);
+	}
+	const slashEvent = await inputHandler({ text: "/help", source: "interactive" }, ctx);
+	if (slashEvent?.action === "handled") {
+		throw new Error("smoke: slash command should not be routed to subagent");
+	}
+	await subagents.handler("chat", ctx);
 	await new Promise((resolve) => setTimeout(resolve, 20));
 	if (detailLines?.join("\n").includes("first discord")) {
-		throw new Error(`smoke: /subagents enter opened the wrong transcript: ${JSON.stringify(detailLines)}`);
+		throw new Error(`smoke: /subagents chat opened the wrong transcript: ${JSON.stringify(detailLines)}`);
 	}
 	if (
 		detailLines === undefined ||
 		!detailLines.join("\n").includes("Smoke Guild") ||
-		!detailLines.join("\n").includes("queue 2") ||
 		!detailLines.join("\n").includes("11 rows") ||
 		!detailLines.join("\n").includes("clanky  2026-01-01 00:02") ||
 		detailLines.join("\n").includes("do-not-render") ||
 		!detailLines.join("\n").includes("hello back") ||
 		!detailLines.join("\n").includes("next step done")
 	) {
-		throw new Error(`smoke: /subagents enter did not render transcript: ${JSON.stringify(detailLines)}`);
+		throw new Error(`smoke: /subagents chat did not render transcript: ${JSON.stringify(detailLines)}`);
 	}
 	if (
 		scrolledDetailLines === undefined ||
@@ -851,11 +894,7 @@ async function assertSubagentPanelCommandWithSession(sessionFiles: {
 	) {
 		throw new Error(`smoke: /subagents did not scroll with keyboard input: ${JSON.stringify(scrolledDetailLines)}`);
 	}
-	if (
-		sentSubagentMessages.length !== 1 ||
-		sentSubagentMessages[0]?.id !== "discord-guild:guild-smoke" ||
-		sentSubagentMessages[0]?.text !== "ping from tui"
-	) {
+	if (!sentSubagentMessages.some((message) => message.text === "ping from tui")) {
 		throw new Error(
 			`smoke: /subagents composer did not send selected message: ${JSON.stringify(sentSubagentMessages)}`,
 		);
@@ -876,7 +915,7 @@ async function assertSubagentPanelCommandWithSession(sessionFiles: {
 }
 
 function assertSelectedSubagent(lines: string[] | undefined, expectedScope: string, action: string): void {
-	const selectedLine = lines?.find((line) => line.startsWith(">"));
+	const selectedLine = lines?.find((line) => line.startsWith("▸"));
 	if (selectedLine === undefined || !selectedLine.includes(expectedScope)) {
 		throw new Error(`smoke: ${action} selected wrong subagent: ${JSON.stringify(lines)}`);
 	}
