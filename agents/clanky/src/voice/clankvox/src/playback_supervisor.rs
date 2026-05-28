@@ -271,6 +271,7 @@ impl AppState {
                 }
             }
             MusicEvent::Error(message) => {
+                tracing::warn!(message = %message, "clankvox_music_error");
                 self.music.reset();
                 drain_music_pcm_queue(&self.music_pcm_rx);
                 send_msg(&OutMsg::MusicError { message });

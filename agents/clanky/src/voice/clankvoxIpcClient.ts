@@ -52,6 +52,13 @@ export interface ClankvoxTransportState {
 	reason: string | null;
 }
 
+export interface ClankvoxTtsBufferOverflow {
+	droppedSamples: number;
+	droppedMs: number;
+	bufferSamples: number;
+	bufferMs: number;
+}
+
 type ClankvoxCommand =
 	| { type: "join"; guildId: string; channelId: string; selfDeaf: boolean; selfMute: boolean }
 	| { type: "voice_server"; data: JsonRecord }
@@ -503,6 +510,15 @@ export class ClankvoxIpcClient extends EventEmitter {
 		}
 		if (type === "buffer_depth") {
 			this.emit("bufferDepth", numberValue(msg.ttsSamples) ?? 0, numberValue(msg.musicSamples) ?? 0);
+			return;
+		}
+		if (type === "tts_buffer_overflow") {
+			this.emit("ttsBufferOverflow", {
+				droppedSamples: numberValue(msg.droppedSamples) ?? 0,
+				droppedMs: numberValue(msg.droppedMs) ?? 0,
+				bufferSamples: numberValue(msg.bufferSamples) ?? 0,
+				bufferMs: numberValue(msg.bufferMs) ?? 0,
+			} satisfies ClankvoxTtsBufferOverflow);
 			return;
 		}
 		if (type === "error") {

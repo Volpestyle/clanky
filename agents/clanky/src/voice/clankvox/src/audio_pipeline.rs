@@ -7,7 +7,7 @@ use audiopus::{Application, Channels, SampleRate};
 use parking_lot::Mutex;
 use tracing::{error, info, warn};
 
-use crate::ipc::{send_msg, OutMsg};
+use crate::ipc::{OutMsg, send_msg};
 
 struct GainEnvelope {
     current: f32,
@@ -123,13 +123,19 @@ impl AudioSendState {
         // through speech that is already queued for playback.
         if self.pcm_buffer.len() > MAX_PCM_BUFFER_SAMPLES {
             let overflow = self.pcm_buffer.len() - MAX_PCM_BUFFER_SAMPLES;
+            let overflow_ms = overflow as f64 / 48.0;
+            let buffer_samples = self.pcm_buffer.len();
+            let buffer_ms = buffer_samples as f64 / 48.0;
             warn!(
                 "TTS PCM buffer overflow: dropping {} newest samples ({:.1}ms), buffer was {} samples ({:.1}ms)",
-                overflow,
-                overflow as f64 / 48.0,
-                self.pcm_buffer.len(),
-                self.pcm_buffer.len() as f64 / 48.0
+                overflow, overflow_ms, buffer_samples, buffer_ms
             );
+            send_msg(&OutMsg::TtsBufferOverflow {
+                dropped_samples: overflow,
+                dropped_ms: overflow_ms,
+                buffer_samples,
+                buffer_ms,
+            });
             self.pcm_buffer.truncate(MAX_PCM_BUFFER_SAMPLES);
         }
         self.trailing_silence_frames = 0;

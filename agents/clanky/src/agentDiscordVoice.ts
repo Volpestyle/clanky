@@ -42,6 +42,7 @@ import {
 	ClankvoxIpcClient,
 	type ClankvoxSpawnOptions,
 	type ClankvoxTransportState,
+	type ClankvoxTtsBufferOverflow,
 } from "./voice/clankvoxIpcClient.ts";
 import type { ClankvoxRealtimeBridgeRealtime, ClankvoxRealtimeBridgeVox } from "./voice/clankvoxRealtimeBridge.ts";
 import {
@@ -99,6 +100,10 @@ const REALTIME_AUDIO_OUTPUT_MAX_BACKLOG_MS = 8_000;
 const REALTIME_AUDIO_OUTPUT_RESUME_BACKLOG_MS = 4_000;
 const REALTIME_AUDIO_OUTPUT_MAX_CLANKVOX_BUFFER_MS = 4_000;
 const REALTIME_AUDIO_OUTPUT_BACKPRESSURE_RETRY_MS = 40;
+const EXTERNAL_TTS_OUTPUT_MAX_BACKLOG_MS = 8_000;
+const EXTERNAL_TTS_OUTPUT_BACKPRESSURE_TIMEOUT_MS = 12_000;
+const EXTERNAL_TTS_SEGMENT_TARGET_CHARS = 520;
+const EXTERNAL_TTS_SEGMENT_MAX_CHARS = 900;
 const VOICE_MUSIC_DUCK_GAIN = 0.22;
 const VOICE_MUSIC_DUCK_FADE_MS = 180;
 const VOICE_MUSIC_UNDUCK_FADE_MS = 650;
@@ -205,6 +210,8 @@ interface VoiceBridgeStats {
 	realtimeAudioBackpressureDropCount: number;
 	realtimeAudioBackpressurePauseCount: number;
 	realtimeAudioBackpressureResumeCount: number;
+	audioOutputQueueMaxQueuedMs: number;
+	audioOutputQueueMaxBacklogMs: number;
 	discordOutputAudioSendCount: number;
 	discordOutputAudioDropCount: number;
 	realtimeEventCount: number;
@@ -243,8 +250,17 @@ interface VoiceBridgeStats {
 	videoFrameAttachCount: number;
 	videoFrameAutoAttachSkipCount: number;
 	externalTtsRequestCount: number;
+	externalTtsSegmentCount: number;
+	externalTtsSegmentedReplyCount: number;
 	externalTtsAudioBytes: number;
 	externalTtsErrorCount: number;
+	externalTtsBackpressureWaitCount: number;
+	externalTtsBackpressureTimeoutCount: number;
+	externalTtsAudioDropCount: number;
+	externalTtsAudioDropMs: number;
+	clankvoxTtsBufferMaxMs: number;
+	clankvoxTtsBufferOverflowCount: number;
+	clankvoxTtsBufferOverflowDropMs: number;
 	musicPlayRequestCount: number;
 	musicPauseRequestCount: number;
 	musicResumeRequestCount: number;
@@ -304,6 +320,9 @@ interface VoiceVoxClientLike extends ClankvoxRealtimeBridgeVox {
 	on(event: "musicError", listener: (message: string) => void): unknown;
 	on(event: "musicGainReached", listener: (gain: number) => void): unknown;
 	on(event: "bufferDepth", listener: (ttsSamples: number, musicSamples: number) => void): unknown;
+	on(event: "ttsBufferOverflow", listener: (event: ClankvoxTtsBufferOverflow) => void): unknown;
+	off(event: "playerState", listener: (status: string) => void): unknown;
+	off(event: "musicError", listener: (message: string) => void): unknown;
 	sendAudio(pcmBase64: string, sampleRate?: number): void;
 	stopPlayback(): void;
 	stopTtsPlayback(): void;
@@ -351,7 +370,7 @@ interface VoiceVoxClientLike extends ClankvoxRealtimeBridgeVox {
 interface VoiceSpeechSynthesizerLike {
 	synthesize(
 		text: string,
-		onAudio: (chunk: ElevenLabsTtsAudioChunk) => void,
+		onAudio: (chunk: ElevenLabsTtsAudioChunk) => Promise<void> | void,
 		options?: VoiceSpeechSynthesisOptions,
 	): Promise<void>;
 	dispose?(): Promise<void> | void;
@@ -457,6 +476,8 @@ function createVoiceBridgeStats(): VoiceBridgeStats {
 		realtimeAudioBackpressureDropCount: 0,
 		realtimeAudioBackpressurePauseCount: 0,
 		realtimeAudioBackpressureResumeCount: 0,
+		audioOutputQueueMaxQueuedMs: 0,
+		audioOutputQueueMaxBacklogMs: 0,
 		discordOutputAudioSendCount: 0,
 		discordOutputAudioDropCount: 0,
 		realtimeEventCount: 0,
@@ -506,8 +527,17 @@ function createVoiceBridgeStats(): VoiceBridgeStats {
 		streamPublishStopCount: 0,
 		streamPublishTransportEventCount: 0,
 		externalTtsRequestCount: 0,
+		externalTtsSegmentCount: 0,
+		externalTtsSegmentedReplyCount: 0,
 		externalTtsAudioBytes: 0,
 		externalTtsErrorCount: 0,
+		externalTtsBackpressureWaitCount: 0,
+		externalTtsBackpressureTimeoutCount: 0,
+		externalTtsAudioDropCount: 0,
+		externalTtsAudioDropMs: 0,
+		clankvoxTtsBufferMaxMs: 0,
+		clankvoxTtsBufferOverflowCount: 0,
+		clankvoxTtsBufferOverflowDropMs: 0,
 	};
 }
 
@@ -892,6 +922,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 	private musicLastError: string | undefined;
 	private musicGain = 1;
 	private mediaBufferDepth: { ttsSamples: number; musicSamples: number } = { ttsSamples: 0, musicSamples: 0 };
+	private mediaMaxBufferDepth: { ttsSamples: number; musicSamples: number } = { ttsSamples: 0, musicSamples: 0 };
 	private streamPublish: VoiceStreamPublishState = { active: false, paused: false };
 	private readonly activeSpeakingUserIds = new Set<string>();
 	private readonly seenInputSpeakerIds = new Set<string>();
@@ -1186,6 +1217,22 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 				},
 				streamPublish: { ...this.streamPublish },
 				bufferDepth: { ...this.mediaBufferDepth },
+				bufferDepthMs: {
+					tts: Math.round(this.clankvoxTtsBufferMs()),
+					music: Math.round(Math.max(0, this.mediaBufferDepth.musicSamples) / 48),
+				},
+				bufferDepthMax: { ...this.mediaMaxBufferDepth },
+				bufferDepthMaxMs: {
+					tts: Math.round(Math.max(0, this.mediaMaxBufferDepth.ttsSamples) / 48),
+					music: Math.round(Math.max(0, this.mediaMaxBufferDepth.musicSamples) / 48),
+				},
+				outputQueue: {
+					chunks: this.realtimeAudioOutputQueue.length,
+					queuedMs: Math.round(this.realtimeAudioOutputQueuedMs),
+					totalBacklogMs: Math.round(this.audioOutputBacklogMs()),
+					maxQueuedMs: Math.round(this.stats.audioOutputQueueMaxQueuedMs),
+					maxBacklogMs: Math.round(this.stats.audioOutputQueueMaxBacklogMs),
+				},
 			},
 			speakerTranscription: this.speakerTranscription?.status(),
 			stats: { ...this.stats },
@@ -1549,6 +1596,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			this.clearMusicUnduckTimer();
 		});
 		vox.on("musicError", (message) => {
+			this.logVoice("warn", "clankvox_music_error", { message });
 			this.stats.musicErrorCount += 1;
 			this.musicStatus = "error";
 			this.musicLastError = message;
@@ -1560,8 +1608,24 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		});
 		vox.on("bufferDepth", (ttsSamples, musicSamples) => {
 			this.mediaBufferDepth = { ttsSamples, musicSamples };
+			this.mediaMaxBufferDepth = {
+				ttsSamples: Math.max(this.mediaMaxBufferDepth.ttsSamples, ttsSamples),
+				musicSamples: Math.max(this.mediaMaxBufferDepth.musicSamples, musicSamples),
+			};
+			this.stats.clankvoxTtsBufferMaxMs = Math.max(this.stats.clankvoxTtsBufferMaxMs, Math.max(0, ttsSamples) / 48);
+			this.recordAudioOutputBacklogWatermark();
 			this.updateRealtimeIncomingBackpressure("clankvox_buffer_depth");
 			this.drainRealtimeAudioOutputQueue();
+		});
+		vox.on("ttsBufferOverflow", (event) => {
+			this.stats.clankvoxTtsBufferOverflowCount += 1;
+			this.stats.clankvoxTtsBufferOverflowDropMs += Math.max(0, event.droppedMs);
+			this.logVoice("warn", "clankvox_tts_buffer_overflow", {
+				droppedSamples: event.droppedSamples,
+				droppedMs: Math.round(event.droppedMs),
+				bufferSamples: event.bufferSamples,
+				bufferMs: Math.round(event.bufferMs),
+			});
 		});
 		vox.on("transportState", (state) => {
 			this.applyTransportState(state);
@@ -1678,11 +1742,33 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		const prompt = text.trim();
 		if (prompt.length === 0) return;
 		const generation = this.speechSynthesisGeneration;
-		const run = this.speechSynthesisQueue.then(() => this.synthesizeExternalSpeech(prompt, generation));
-		this.speechSynthesisQueue = run.catch(() => undefined);
+		const segments = splitExternalTtsText(prompt);
+		if (segments.length > 1) {
+			this.stats.externalTtsSegmentedReplyCount += 1;
+			this.logVoice("info", "external_tts_text_segmented", {
+				segments: segments.length,
+				chars: prompt.length,
+				targetChars: EXTERNAL_TTS_SEGMENT_TARGET_CHARS,
+				maxChars: EXTERNAL_TTS_SEGMENT_MAX_CHARS,
+			});
+		}
+		this.stats.externalTtsSegmentCount += segments.length;
+		for (const [index, segment] of segments.entries()) {
+			const run = this.speechSynthesisQueue.then(() =>
+				this.synthesizeExternalSpeech(segment, generation, {
+					segmentIndex: index,
+					segmentCount: segments.length,
+				}),
+			);
+			this.speechSynthesisQueue = run.catch(() => undefined);
+		}
 	}
 
-	private async synthesizeExternalSpeech(text: string, generation: number): Promise<void> {
+	private async synthesizeExternalSpeech(
+		text: string,
+		generation: number,
+		segment?: { segmentIndex: number; segmentCount: number },
+	): Promise<void> {
 		if (generation !== this.speechSynthesisGeneration) return;
 		const synthesizer = this.speechSynthesizer;
 		const vox = this.vox;
@@ -1697,7 +1783,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		try {
 			await synthesizer.synthesize(
 				text,
-				(chunk) => {
+				async (chunk) => {
 					if (generation !== this.speechSynthesisGeneration || abortController.signal.aborted) return;
 					this.stats.externalTtsAudioBytes += base64DecodedByteLength(chunk.pcmBase64);
 					const activeVox = this.vox;
@@ -1705,10 +1791,14 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 						this.stats.discordOutputAudioDropCount += 1;
 						return;
 					}
-					this.beginMusicDuckForAssistantSpeech("external_tts_audio");
-					activeVox.sendAudio(chunk.pcmBase64, chunk.sampleRate);
-					this.rememberAssistantSpeechOutput(chunk.pcmBase64, chunk.sampleRate);
-					this.stats.discordOutputAudioSendCount += 1;
+					const enqueued = await this.enqueueExternalTtsAudioOutput(chunk.pcmBase64, chunk.sampleRate, {
+						signal: abortController.signal,
+						segment,
+					});
+					if (!enqueued && !abortController.signal.aborted) {
+						this.speechSynthesisGeneration += 1;
+						abortController.abort();
+					}
 				},
 				{ signal: abortController.signal },
 			);
@@ -1778,6 +1868,104 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		this.drainRealtimeAudioOutputQueue();
 	}
 
+	private async enqueueExternalTtsAudioOutput(
+		pcmBase64: string,
+		sampleRate: number,
+		options: {
+			signal?: AbortSignal;
+			segment?: { segmentIndex: number; segmentCount: number } | undefined;
+		} = {},
+	): Promise<boolean> {
+		const normalizedPcm = pcmBase64.trim();
+		const bytes = base64DecodedByteLength(normalizedPcm);
+		if (normalizedPcm.length === 0 || bytes <= 0 || sampleRate <= 0) return true;
+		const chunks = splitPcm16Base64Chunks(normalizedPcm, sampleRate);
+		if (chunks.length === 0) return true;
+		for (const [index, chunk] of chunks.entries()) {
+			const hasCapacity = await this.waitForExternalTtsOutputCapacity(chunk.durationMs, options.signal);
+			if (!hasCapacity) {
+				if (isAbortSignalAborted(options.signal)) return false;
+				this.recordExternalTtsAudioDrop(
+					chunks.slice(index),
+					"external_tts_output_backpressure_timeout",
+					options.segment,
+				);
+				return false;
+			}
+			this.pushRealtimeAudioOutputChunk(chunk);
+			this.stats.audioOutputQueueMaxQueuedMs = Math.max(
+				this.stats.audioOutputQueueMaxQueuedMs,
+				this.realtimeAudioOutputQueuedMs,
+			);
+			this.recordAudioOutputBacklogWatermark();
+			this.rememberAssistantSpeechDuration(chunk.durationMs);
+			this.updateRealtimeIncomingBackpressure("external_tts_audio_enqueued");
+			this.drainRealtimeAudioOutputQueue();
+		}
+		return true;
+	}
+
+	private async waitForExternalTtsOutputCapacity(
+		durationMs: number,
+		signal: AbortSignal | undefined,
+	): Promise<boolean> {
+		const startedAt = Date.now();
+		let loggedWait = false;
+		for (;;) {
+			if (isAbortSignalAborted(signal)) return false;
+			const backlogMs = this.audioOutputBacklogMs();
+			const predictedBacklogMs = backlogMs + durationMs;
+			if (predictedBacklogMs <= EXTERNAL_TTS_OUTPUT_MAX_BACKLOG_MS) {
+				if (loggedWait) {
+					this.logVoice("info", "external_tts_output_backpressure_released", {
+						waitMs: Date.now() - startedAt,
+						backlogMs: Math.round(backlogMs),
+						queuedMs: Math.round(this.realtimeAudioOutputQueuedMs),
+						clankvoxTtsBufferMs: Math.round(this.clankvoxTtsBufferMs()),
+					});
+				}
+				return true;
+			}
+			if (!loggedWait) {
+				loggedWait = true;
+				this.stats.externalTtsBackpressureWaitCount += 1;
+				this.logVoice("info", "external_tts_output_backpressure_wait", {
+					backlogMs: Math.round(backlogMs),
+					incomingDurationMs: Math.round(durationMs),
+					highWatermarkMs: EXTERNAL_TTS_OUTPUT_MAX_BACKLOG_MS,
+					queuedMs: Math.round(this.realtimeAudioOutputQueuedMs),
+					clankvoxTtsBufferMs: Math.round(this.clankvoxTtsBufferMs()),
+				});
+			}
+			if (Date.now() - startedAt >= EXTERNAL_TTS_OUTPUT_BACKPRESSURE_TIMEOUT_MS) {
+				return false;
+			}
+			if (!(await sleepWithAbort(REALTIME_AUDIO_OUTPUT_BACKPRESSURE_RETRY_MS, signal))) return false;
+		}
+	}
+
+	private recordExternalTtsAudioDrop(
+		chunks: RealtimeAudioOutputChunk[],
+		reason: string,
+		segment: { segmentIndex: number; segmentCount: number } | undefined,
+	): void {
+		const droppedMs = chunks.reduce((total, chunk) => total + chunk.durationMs, 0);
+		this.stats.externalTtsBackpressureTimeoutCount += 1;
+		this.stats.externalTtsAudioDropCount += chunks.length;
+		this.stats.externalTtsAudioDropMs += droppedMs;
+		this.stats.discordOutputAudioDropCount += chunks.length;
+		this.logVoice("warn", reason, {
+			droppedChunks: chunks.length,
+			droppedMs: Math.round(droppedMs),
+			queuedMs: Math.round(this.realtimeAudioOutputQueuedMs),
+			clankvoxTtsBufferMs: Math.round(this.clankvoxTtsBufferMs()),
+			backlogMs: Math.round(this.audioOutputBacklogMs()),
+			timeoutMs: EXTERNAL_TTS_OUTPUT_BACKPRESSURE_TIMEOUT_MS,
+			segmentIndex: segment === undefined ? undefined : segment.segmentIndex + 1,
+			segmentCount: segment?.segmentCount,
+		});
+	}
+
 	private pushRealtimeAudioOutputChunk(chunk: RealtimeAudioOutputChunk): void {
 		const previous = this.realtimeAudioOutputQueue[this.realtimeAudioOutputQueue.length - 1];
 		if (
@@ -1794,10 +1982,20 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			previous.durationMs += chunk.durationMs;
 			this.realtimeAudioOutputQueuedMs += chunk.durationMs;
 			this.stats.realtimeAudioCoalescedChunkCount += 1;
+			this.stats.audioOutputQueueMaxQueuedMs = Math.max(
+				this.stats.audioOutputQueueMaxQueuedMs,
+				this.realtimeAudioOutputQueuedMs,
+			);
+			this.recordAudioOutputBacklogWatermark();
 			return;
 		}
 		this.realtimeAudioOutputQueue.push(chunk);
 		this.realtimeAudioOutputQueuedMs += chunk.durationMs;
+		this.stats.audioOutputQueueMaxQueuedMs = Math.max(
+			this.stats.audioOutputQueueMaxQueuedMs,
+			this.realtimeAudioOutputQueuedMs,
+		);
+		this.recordAudioOutputBacklogWatermark();
 	}
 
 	private drainRealtimeAudioOutputQueue(): void {
@@ -1910,22 +2108,26 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 
 	private estimatedAssistantOutputBacklogMs(): number {
 		const predictedSpeechMs = Math.max(0, this.assistantSpeechActiveUntilMs - Date.now());
-		return Math.max(predictedSpeechMs, this.queuedRealtimeAudioOutputMs() + this.clankvoxTtsBufferMs());
+		return Math.max(predictedSpeechMs, this.audioOutputBacklogMs());
 	}
 
 	private queuedRealtimeAudioOutputMs(): number {
 		return this.realtimeAudioOutputQueuedMs;
 	}
 
-	private clankvoxTtsBufferMs(): number {
-		return Math.max(0, this.mediaBufferDepth.ttsSamples) / 48;
+	private audioOutputBacklogMs(): number {
+		return this.queuedRealtimeAudioOutputMs() + this.clankvoxTtsBufferMs();
 	}
 
-	private rememberAssistantSpeechOutput(pcmBase64: string, sampleRate: number): void {
-		const bytes = base64DecodedByteLength(pcmBase64);
-		if (bytes <= 0 || sampleRate <= 0) return;
-		const durationMs = pcm16DurationMs(bytes, sampleRate);
-		this.rememberAssistantSpeechDuration(durationMs);
+	private recordAudioOutputBacklogWatermark(): void {
+		this.stats.audioOutputQueueMaxBacklogMs = Math.max(
+			this.stats.audioOutputQueueMaxBacklogMs,
+			this.audioOutputBacklogMs(),
+		);
+	}
+
+	private clankvoxTtsBufferMs(): number {
+		return Math.max(0, this.mediaBufferDepth.ttsSamples) / 48;
 	}
 
 	private rememberAssistantSpeechDuration(durationMs: number): void {
@@ -2274,53 +2476,86 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		};
 	}
 
-	private playMusicUrl(args: JsonRecord): JsonRecord {
+	private waitForMusicPlaybackOutcome(
+		vox: VoiceVoxClientLike,
+		timeoutMs: number,
+	): Promise<{ ok: true } | { ok: false; error: string }> {
+		return new Promise((resolve) => {
+			const onPlayerState = (status: string): void => {
+				if (status.trim().toLowerCase() !== "playing") return;
+				cleanup();
+				resolve({ ok: true });
+			};
+			const onMusicError = (message: string): void => {
+				cleanup();
+				resolve({ ok: false, error: message.length > 0 ? message : "music_play failed" });
+			};
+			const timer = setTimeout(() => {
+				cleanup();
+				resolve({ ok: false, error: `music_play did not start within ${timeoutMs}ms` });
+			}, timeoutMs);
+			const cleanup = (): void => {
+				vox.off("playerState", onPlayerState);
+				vox.off("musicError", onMusicError);
+				clearTimeout(timer);
+			};
+			vox.on("playerState", onPlayerState);
+			vox.on("musicError", onMusicError);
+		});
+	}
+
+	private async playMusicUrl(args: JsonRecord): Promise<JsonRecord> {
 		const url = parseMediaUrl(args.url, "play_music_url.url");
 		const resolvedDirectUrl = booleanValue(args.resolvedDirectUrl ?? args.resolved_direct_url, false);
 		this.stats.musicPlayRequestCount += 1;
 		const vox = this.requireVox();
+		const outcome = this.waitForMusicPlaybackOutcome(vox, 20_000);
 		vox.musicPlay(url, resolvedDirectUrl);
 		this.musicStatus = "loading";
 		this.musicUrl = url;
 		this.musicResolvedDirectUrl = resolvedDirectUrl;
 		this.musicLastError = undefined;
-		return {
-			ok: true,
-			status: this.musicStatus,
-			url,
-			resolvedDirectUrl,
-			note: "Music playback was queued for Discord voice audio.",
-		};
+		const result = await outcome;
+		if (result.ok) {
+			return { ok: true, status: this.musicStatus, url, resolvedDirectUrl };
+		}
+		return { ok: false, status: this.musicStatus, url, resolvedDirectUrl, error: result.error };
 	}
 
-	private playVideoUrl(args: JsonRecord): JsonRecord {
+	private async playVideoUrl(args: JsonRecord): Promise<JsonRecord> {
 		const url = parseMediaUrl(args.url, "play_video_url.url");
 		const resolvedDirectUrl = booleanValue(args.resolvedDirectUrl ?? args.resolved_direct_url, false);
 		const includeAudio = booleanValue(args.includeAudio ?? args.include_audio, true);
+		let audioOutcome: { ok: true } | { ok: false; error: string } | undefined;
 		if (includeAudio) {
 			this.stats.musicPlayRequestCount += 1;
 			const vox = this.requireVox();
+			const pending = this.waitForMusicPlaybackOutcome(vox, 20_000);
 			vox.musicPlay(url, resolvedDirectUrl);
 			this.musicStatus = "loading";
 			this.musicUrl = url;
 			this.musicResolvedDirectUrl = resolvedDirectUrl;
 			this.musicLastError = undefined;
+			audioOutcome = await pending;
 		}
 		const publish = this.startStreamPublish({
 			sourceKind: "video_url",
 			sourceUrl: url,
 			resolvedDirectUrl,
 		});
-		return {
-			ok: publish.ok === true,
-			url,
-			resolvedDirectUrl,
-			audioStarted: includeAudio,
-			streamPublish: publish,
-		};
+		const audioStarted = audioOutcome?.ok === true;
+		const audioMissing = audioOutcome !== undefined && !audioOutcome.ok && isNoAudioTrackError(audioOutcome.error);
+		const ok = (!includeAudio || audioStarted || audioMissing) && publish.ok === true;
+		const result: JsonRecord = { ok, url, resolvedDirectUrl, audioStarted, streamPublish: publish };
+		if (audioMissing) {
+			result.audioSkippedReason = "source_has_no_audio_track";
+		} else if (audioOutcome !== undefined && !audioOutcome.ok) {
+			result.error = audioOutcome.error;
+		}
+		return result;
 	}
 
-	private startMusicVisualizer(args: JsonRecord): JsonRecord {
+	private async startMusicVisualizer(args: JsonRecord): Promise<JsonRecord> {
 		const rawUrl = stringValue(args.url);
 		const url = rawUrl.length > 0 ? parseMediaUrl(rawUrl, "start_music_visualizer.url") : this.musicUrl;
 		if (url === undefined || url.length === 0) {
@@ -2331,14 +2566,17 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 				? booleanValue(args.resolvedDirectUrl ?? args.resolved_direct_url, false)
 				: this.musicResolvedDirectUrl;
 		const includeAudio = booleanValue(args.includeAudio ?? args.include_audio, rawUrl.length > 0);
+		let audioOutcome: { ok: true } | { ok: false; error: string } | undefined;
 		if (includeAudio) {
 			this.stats.musicPlayRequestCount += 1;
 			const vox = this.requireVox();
+			const pending = this.waitForMusicPlaybackOutcome(vox, 20_000);
 			vox.musicPlay(url, resolvedDirectUrl);
 			this.musicStatus = "loading";
 			this.musicUrl = url;
 			this.musicResolvedDirectUrl = resolvedDirectUrl;
 			this.musicLastError = undefined;
+			audioOutcome = await pending;
 		}
 		const visualizerMode = normalizeVisualizerMode(stringValue(args.visualizerMode ?? args.visualizer_mode));
 		const publish = this.startStreamPublish({
@@ -2347,14 +2585,18 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			resolvedDirectUrl,
 			visualizerMode,
 		});
-		return {
-			ok: publish.ok === true,
+		const audioStarted = audioOutcome?.ok === true;
+		const ok = (!includeAudio || audioStarted) && publish.ok === true;
+		const result: JsonRecord = {
+			ok,
 			url,
 			resolvedDirectUrl,
 			visualizerMode,
-			audioStarted: includeAudio,
+			audioStarted,
 			streamPublish: publish,
 		};
+		if (audioOutcome !== undefined && !audioOutcome.ok) result.error = audioOutcome.error;
+		return result;
 	}
 
 	private pauseMedia(): JsonRecord {
@@ -2723,6 +2965,9 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 	private applyTransportState(state: ClankvoxTransportState): void {
 		if (state.role !== "stream_publish") return;
 		this.stats.streamPublishTransportEventCount += 1;
+		if (state.status === "failed") {
+			this.logVoice("warn", "clankvox_stream_publish_failed", { reason: state.reason });
+		}
 		const next: VoiceStreamPublishState = {
 			...this.streamPublish,
 			status: state.status,
@@ -2954,7 +3199,7 @@ function buildVoiceTools(options: { supportsScreenShareSnapshots?: boolean } = {
 			type: "function",
 			name: "play_video_url",
 			description:
-				"Stream a resolved http(s) video URL through Discord Go Live and optionally play its audio in voice. Requires a user-token Discord credential for Go Live.",
+				"Stream a resolved http(s) video URL through Discord Go Live and optionally play its audio in voice. Requires a user-token Discord credential for Go Live. If the source has no audio track the result is still ok=true with audioStarted=false and audioSkippedReason='source_has_no_audio_track' — that is not a failure, the video is playing silently.",
 			parameters: {
 				type: "object",
 				properties: {
@@ -3310,6 +3555,13 @@ function parseMediaUrl(value: unknown, fieldName: string): string {
 	return parsed.toString();
 }
 
+// ffmpeg with `-f s16le ... pipe:1` exits with "Output file does not contain any stream"
+// when the input has no audio track to map to PCM output. Treat that as a missing audio
+// track rather than a pipeline error.
+function isNoAudioTrackError(error: string): boolean {
+	return /does not contain any stream/i.test(error);
+}
+
 function booleanValue(value: unknown, fallback: boolean): boolean {
 	if (typeof value === "boolean") return value;
 	if (typeof value === "string") {
@@ -3413,6 +3665,63 @@ function normalizeVisualizerMode(value: string): string {
 	return "cqt";
 }
 
+function splitExternalTtsText(text: string): string[] {
+	const normalized = text.replace(/\s+/g, " ").trim();
+	if (normalized.length === 0) return [];
+	if (normalized.length <= EXTERNAL_TTS_SEGMENT_MAX_CHARS) return [normalized];
+	const sentenceParts = normalized.match(/[^.!?]+[.!?]+["')\]]*|[^.!?]+$/g) ?? [normalized];
+	const segments: string[] = [];
+	let current = "";
+	for (const rawPart of sentenceParts) {
+		const part = rawPart.trim();
+		if (part.length === 0) continue;
+		if (part.length > EXTERNAL_TTS_SEGMENT_MAX_CHARS) {
+			if (current.length > 0) {
+				segments.push(current);
+				current = "";
+			}
+			segments.push(...splitLongExternalTtsTextPart(part));
+			continue;
+		}
+		const candidate = current.length === 0 ? part : `${current} ${part}`;
+		if (candidate.length <= EXTERNAL_TTS_SEGMENT_TARGET_CHARS || current.length === 0) {
+			current = candidate;
+			continue;
+		}
+		segments.push(current);
+		current = part;
+	}
+	if (current.length > 0) segments.push(current);
+	return segments;
+}
+
+function splitLongExternalTtsTextPart(text: string): string[] {
+	const words = text.split(/\s+/).filter((word) => word.length > 0);
+	const segments: string[] = [];
+	let current = "";
+	for (const word of words) {
+		if (word.length > EXTERNAL_TTS_SEGMENT_MAX_CHARS) {
+			if (current.length > 0) {
+				segments.push(current);
+				current = "";
+			}
+			for (let offset = 0; offset < word.length; offset += EXTERNAL_TTS_SEGMENT_MAX_CHARS) {
+				segments.push(word.slice(offset, offset + EXTERNAL_TTS_SEGMENT_MAX_CHARS));
+			}
+			continue;
+		}
+		const candidate = current.length === 0 ? word : `${current} ${word}`;
+		if (candidate.length <= EXTERNAL_TTS_SEGMENT_MAX_CHARS) {
+			current = candidate;
+			continue;
+		}
+		segments.push(current);
+		current = word;
+	}
+	if (current.length > 0) segments.push(current);
+	return segments;
+}
+
 function base64DecodedByteLength(value: string): number {
 	const normalized = value.trim();
 	if (normalized.length === 0) return 0;
@@ -3452,6 +3761,27 @@ function splitPcm16Base64Chunks(pcmBase64: string, sampleRate: number): Realtime
 function pcm16DurationMs(byteLength: number, sampleRate: number): number {
 	if (byteLength <= 0 || sampleRate <= 0) return 0;
 	return ((byteLength / 2) * 1_000) / sampleRate;
+}
+
+function isAbortSignalAborted(signal: AbortSignal | undefined): boolean {
+	return signal?.aborted === true;
+}
+
+function sleepWithAbort(ms: number, signal: AbortSignal | undefined): Promise<boolean> {
+	if (isAbortSignalAborted(signal)) return Promise.resolve(false);
+	return new Promise((resolve) => {
+		const timer = setTimeout(() => {
+			signal?.removeEventListener("abort", onAbort);
+			resolve(true);
+		}, ms);
+		const onAbort = (): void => {
+			signal?.removeEventListener("abort", onAbort);
+			clearTimeout(timer);
+			resolve(false);
+		};
+		signal?.addEventListener("abort", onAbort, { once: true });
+		if (isAbortSignalAborted(signal)) onAbort();
+	});
 }
 
 function getGatewayVoiceSessionId(client: DiscordVoiceClient, guildId: string): string | undefined {

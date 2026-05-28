@@ -78,6 +78,10 @@ async function main(): Promise<void> {
 	await assertFakeVoiceBridgeRealtimeTools();
 	await assertFakeVoiceBridgeXAiRealtimeAgent();
 	await assertFakeVoiceBridgeElevenLabsTts();
+	await assertFakeVoiceBridgeElevenLabsTtsPacing();
+	await assertFakeVoiceBridgeElevenLabsTtsStreamBackpressure();
+	await assertFakeVoiceBridgeElevenLabsTtsSegmentation();
+	await assertFakeVoiceBridgeClankvoxTtsOverflowMetrics();
 	await assertFakeVoiceBridgeBargeInPolicy();
 	await assertFakeVoiceBridgeMusicReservedListening();
 	await assertFakeVoiceBridgeMusicSpeechDucking();
@@ -1864,6 +1868,295 @@ async function assertFakeVoiceBridgeElevenLabsTts(): Promise<void> {
 	await handle.stop();
 }
 
+async function assertFakeVoiceBridgeElevenLabsTtsPacing(): Promise<void> {
+	const realtime = new FakeBridgeRealtime();
+	const vox = new FakeBridgeClankvox();
+	const speech = new FakeSpeechSynthesizer([
+		{
+			pcmBase64: Buffer.alloc(24_000 * 2 * 2, 7).toString("base64"),
+			sampleRate: 24_000,
+		},
+	]);
+	const handle = await startAgentDiscordVoiceBridge({
+		runtime: new FakeVoiceRuntime() as never,
+		client: new FakeVoiceDiscordClient() as never,
+		discordCredential: {
+			providerId: "clanky-discord",
+			token: "discord-token",
+			credentialKind: "bot-token",
+			source: "env",
+		},
+		config: {
+			enabled: true,
+			guildId: "guild-1",
+			channelId: "voice-1",
+			ttsProvider: "elevenlabs",
+			openAiApiKey: "openai-key",
+			openAiRealtimeModel: DEFAULT_REALTIME_MODEL,
+			openAiRealtimeVoice: "marin",
+			elevenLabsApiKey: "elevenlabs-key",
+			elevenLabsVoiceId: "eleven-voice",
+		},
+		joinRequested: true,
+		dependencies: {
+			createRealtime() {
+				return realtime;
+			},
+			createTranscriptionRealtime() {
+				return new FakeSpeakerTranscriptionRealtime("speaker transcript");
+			},
+			async spawnVox() {
+				return vox;
+			},
+			createStreamDiscovery() {
+				return new FakeVoiceStreamDiscovery({
+					streamKey: "guild:guild-1:voice-1:streamer-1",
+					guildId: "guild-1",
+					channelId: "voice-1",
+					userId: "streamer-1",
+					endpoint: "voice.example",
+					token: "stream-token",
+					rtcServerId: "9002",
+					updatedAt: Date.now(),
+				});
+			},
+			createSpeechSynthesizer() {
+				return speech;
+			},
+		},
+	});
+	if (handle === undefined) throw new Error("voice-smoke: ElevenLabs pacing bridge did not start");
+	vox.emit("bufferDepth", 240_000, 0);
+	realtime.emit("transcript", { eventType: "response.output_text.done", itemId: "item-1", text: "paced speech" });
+	await waitUntil(() => speech.texts.length === 1, "ElevenLabs pacing synthesis");
+	await sleep(30);
+	if (vox.audioSends.length !== 0) {
+		throw new Error("voice-smoke: ElevenLabs TTS was sent while native buffer was over the pacing threshold");
+	}
+	vox.emit("bufferDepth", 0, 0);
+	await waitUntil(() => vox.audioSends.length === 1, "ElevenLabs paced audio send");
+	const firstSendBytes = Buffer.from(vox.audioSends[0]?.pcmBase64 ?? "", "base64").length;
+	if (firstSendBytes > 3_840) {
+		throw new Error(`voice-smoke: ElevenLabs TTS was not split before native send (${firstSendBytes} bytes)`);
+	}
+	await handle.stop();
+}
+
+async function assertFakeVoiceBridgeElevenLabsTtsStreamBackpressure(): Promise<void> {
+	const realtime = new FakeBridgeRealtime();
+	const vox = new FakeBridgeClankvox();
+	const speech = new FakeSpeechSynthesizer([
+		{
+			pcmBase64: Buffer.alloc(24_000 * 2 * 2, 3).toString("base64"),
+			sampleRate: 24_000,
+		},
+		{
+			pcmBase64: Buffer.alloc(24_000 * 2 * 2, 4).toString("base64"),
+			sampleRate: 24_000,
+		},
+	]);
+	const handle = await startAgentDiscordVoiceBridge({
+		runtime: new FakeVoiceRuntime() as never,
+		client: new FakeVoiceDiscordClient() as never,
+		discordCredential: {
+			providerId: "clanky-discord",
+			token: "discord-token",
+			credentialKind: "bot-token",
+			source: "env",
+		},
+		config: {
+			enabled: true,
+			guildId: "guild-1",
+			channelId: "voice-1",
+			ttsProvider: "elevenlabs",
+			openAiApiKey: "openai-key",
+			openAiRealtimeModel: DEFAULT_REALTIME_MODEL,
+			openAiRealtimeVoice: "marin",
+			elevenLabsApiKey: "elevenlabs-key",
+			elevenLabsVoiceId: "eleven-voice",
+		},
+		joinRequested: true,
+		dependencies: {
+			createRealtime() {
+				return realtime;
+			},
+			createTranscriptionRealtime() {
+				return new FakeSpeakerTranscriptionRealtime("speaker transcript");
+			},
+			async spawnVox() {
+				return vox;
+			},
+			createStreamDiscovery() {
+				return new FakeVoiceStreamDiscovery({
+					streamKey: "guild:guild-1:voice-1:streamer-1",
+					guildId: "guild-1",
+					channelId: "voice-1",
+					userId: "streamer-1",
+					endpoint: "voice.example",
+					token: "stream-token",
+					rtcServerId: "9002",
+					updatedAt: Date.now(),
+				});
+			},
+			createSpeechSynthesizer() {
+				return speech;
+			},
+		},
+	});
+	if (handle === undefined) throw new Error("voice-smoke: ElevenLabs backpressure bridge did not start");
+	vox.emit("bufferDepth", 384_000, 0);
+	realtime.emit("transcript", { eventType: "response.output_text.done", itemId: "item-1", text: "blocked speech" });
+	await waitUntil(() => speech.startedChunks === 1, "ElevenLabs backpressure first chunk");
+	await sleep(60);
+	if (speech.completedChunks !== 0) {
+		throw new Error("voice-smoke: ElevenLabs stream callback was not held while audio output was backed up");
+	}
+	vox.emit("bufferDepth", 0, 0);
+	await waitUntil(() => speech.completedChunks >= 1, "ElevenLabs backpressure release");
+	await waitUntil(() => vox.audioSends.length >= 1, "ElevenLabs backpressure paced send");
+	const stats = expectRecord(handle.status().stats, "ElevenLabs backpressure stats");
+	if (stats.externalTtsBackpressureWaitCount !== 1) {
+		throw new Error("voice-smoke: ElevenLabs backpressure wait was not counted");
+	}
+	await handle.stop();
+}
+
+async function assertFakeVoiceBridgeElevenLabsTtsSegmentation(): Promise<void> {
+	const realtime = new FakeBridgeRealtime();
+	const vox = new FakeBridgeClankvox();
+	const speech = new FakeSpeechSynthesizer();
+	const handle = await startAgentDiscordVoiceBridge({
+		runtime: new FakeVoiceRuntime() as never,
+		client: new FakeVoiceDiscordClient() as never,
+		discordCredential: {
+			providerId: "clanky-discord",
+			token: "discord-token",
+			credentialKind: "bot-token",
+			source: "env",
+		},
+		config: {
+			enabled: true,
+			guildId: "guild-1",
+			channelId: "voice-1",
+			ttsProvider: "elevenlabs",
+			openAiApiKey: "openai-key",
+			openAiRealtimeModel: DEFAULT_REALTIME_MODEL,
+			openAiRealtimeVoice: "marin",
+			elevenLabsApiKey: "elevenlabs-key",
+			elevenLabsVoiceId: "eleven-voice",
+		},
+		joinRequested: true,
+		dependencies: {
+			createRealtime() {
+				return realtime;
+			},
+			createTranscriptionRealtime() {
+				return new FakeSpeakerTranscriptionRealtime("speaker transcript");
+			},
+			async spawnVox() {
+				return vox;
+			},
+			createStreamDiscovery() {
+				return new FakeVoiceStreamDiscovery({
+					streamKey: "guild:guild-1:voice-1:streamer-1",
+					guildId: "guild-1",
+					channelId: "voice-1",
+					userId: "streamer-1",
+					endpoint: "voice.example",
+					token: "stream-token",
+					rtcServerId: "9002",
+					updatedAt: Date.now(),
+				});
+			},
+			createSpeechSynthesizer() {
+				return speech;
+			},
+		},
+	});
+	if (handle === undefined) throw new Error("voice-smoke: ElevenLabs segmentation bridge did not start");
+	const longText = [
+		"First, this is a deliberately long spoken response with enough detail to force segmentation before it is sent to the external speech provider.",
+		"Second, the split should prefer sentence boundaries so each synthesized unit remains natural and cancellation can stop between chunks.",
+		"Third, queueing several shorter requests keeps the Discord audio path responsive instead of treating the whole answer as one giant audio stream.",
+		"Fourth, this final sentence pads the reply past the segmentation threshold while still preserving normal punctuation.",
+		"Fifth, one more sentence makes the smoke test stable even if the threshold changes slightly.",
+		"Sixth, the bridge should be able to cancel between these pieces without discarding an entire long provider response.",
+		"Seventh, the queue metrics should also show that this reply was split before synthesis began.",
+		"Eighth, this extra sentence pushes the input beyond the hard maximum segment size for the test.",
+		"Ninth, the exact wording does not matter as much as preserving sentence boundaries across the resulting TTS requests.",
+		"Tenth, the final sentence makes the segmentation assertion deterministic.",
+	].join(" ");
+	realtime.emit("transcript", { eventType: "response.output_text.done", itemId: "item-1", text: longText });
+	await waitUntil(() => speech.texts.length > 1, "ElevenLabs segmented synthesis");
+	if (speech.texts.some((text) => text.length > 900)) {
+		throw new Error("voice-smoke: ElevenLabs segmentation produced an oversized segment");
+	}
+	const stats = expectRecord(handle.status().stats, "ElevenLabs segmentation stats");
+	if (stats.externalTtsSegmentedReplyCount !== 1 || Number(stats.externalTtsSegmentCount) < 2) {
+		throw new Error("voice-smoke: ElevenLabs segmentation stats were not recorded");
+	}
+	await handle.stop();
+}
+
+async function assertFakeVoiceBridgeClankvoxTtsOverflowMetrics(): Promise<void> {
+	const realtime = new FakeBridgeRealtime();
+	const vox = new FakeBridgeClankvox();
+	const handle = await startAgentDiscordVoiceBridge({
+		runtime: new FakeVoiceRuntime() as never,
+		client: new FakeVoiceDiscordClient() as never,
+		discordCredential: {
+			providerId: "clanky-discord",
+			token: "discord-token",
+			credentialKind: "bot-token",
+			source: "env",
+		},
+		config: {
+			enabled: true,
+			guildId: "guild-1",
+			channelId: "voice-1",
+			openAiApiKey: "openai-key",
+			openAiRealtimeModel: DEFAULT_REALTIME_MODEL,
+			openAiRealtimeVoice: "marin",
+		},
+		joinRequested: true,
+		dependencies: {
+			createRealtime() {
+				return realtime;
+			},
+			createTranscriptionRealtime() {
+				return new FakeSpeakerTranscriptionRealtime("speaker transcript");
+			},
+			async spawnVox() {
+				return vox;
+			},
+			createStreamDiscovery() {
+				return new FakeVoiceStreamDiscovery({
+					streamKey: "guild:guild-1:voice-1:streamer-1",
+					guildId: "guild-1",
+					channelId: "voice-1",
+					userId: "streamer-1",
+					endpoint: "voice.example",
+					token: "stream-token",
+					rtcServerId: "9002",
+					updatedAt: Date.now(),
+				});
+			},
+		},
+	});
+	if (handle === undefined) throw new Error("voice-smoke: ClankVox overflow metrics bridge did not start");
+	vox.emit("ttsBufferOverflow", {
+		droppedSamples: 48_000,
+		droppedMs: 1_000,
+		bufferSamples: 768_000,
+		bufferMs: 16_000,
+	});
+	const stats = expectRecord(handle.status().stats, "ClankVox overflow stats");
+	if (stats.clankvoxTtsBufferOverflowCount !== 1 || stats.clankvoxTtsBufferOverflowDropMs !== 1_000) {
+		throw new Error("voice-smoke: ClankVox TTS overflow metrics were not recorded");
+	}
+	await handle.stop();
+}
+
 async function assertFakeVoiceBridgeBargeInPolicy(): Promise<void> {
 	const realtime = new FakeBridgeRealtime();
 	const vox = new FakeBridgeClankvox();
@@ -3543,10 +3836,28 @@ class FakeBridgeRealtime extends EventEmitter {
 
 class FakeSpeechSynthesizer {
 	readonly texts: string[] = [];
+	startedChunks = 0;
+	completedChunks = 0;
+	private readonly chunks: { pcmBase64: string; sampleRate: number }[];
 
-	async synthesize(text: string, onAudio: (chunk: { pcmBase64: string; sampleRate: number }) => void): Promise<void> {
+	constructor(
+		chunks: { pcmBase64: string; sampleRate: number }[] = [
+			{ pcmBase64: Buffer.from([1, 2, 3, 4]).toString("base64"), sampleRate: 24_000 },
+		],
+	) {
+		this.chunks = chunks;
+	}
+
+	async synthesize(
+		text: string,
+		onAudio: (chunk: { pcmBase64: string; sampleRate: number }) => Promise<void> | void,
+	): Promise<void> {
 		this.texts.push(text);
-		onAudio({ pcmBase64: Buffer.from([1, 2, 3, 4]).toString("base64"), sampleRate: 24_000 });
+		for (const chunk of this.chunks) {
+			this.startedChunks += 1;
+			await onAudio(chunk);
+			this.completedChunks += 1;
+		}
 	}
 }
 
