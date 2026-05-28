@@ -192,21 +192,23 @@ interface BrowserBridgeStateRecord {
 
 async function readBrowserBridgeState(env: NodeJS.ProcessEnv): Promise<Record<string, unknown>> {
 	const stateFile = browserBridgeStateFile(env);
+	const preferred = resolveBrowserBridgePreferred(env);
 	const bestFor = [
-		"opening a URL in the user's real Helium/Chrome/Brave",
-		"making the user the one looking at the result",
-		"reusing the user's logged-in profile",
+		"opening any URL the user should see in their own browser",
+		"loading pages with the user's logged-in profile and extensions",
+		"handing the user a live tab they can interact with directly",
 	];
 	try {
 		const raw = await readFile(stateFile, "utf8");
 		const parsed = JSON.parse(raw) as unknown;
 		if (!isRecord(parsed)) {
-			return { available: false, stateFile, bestFor, note: "browser-bridge state file is malformed." };
+			return { available: false, preferred, stateFile, bestFor, note: "browser-bridge state file is malformed." };
 		}
 		const state = parsed as BrowserBridgeStateRecord;
 		if (typeof state.port !== "number" || typeof state.pid !== "number") {
 			return {
 				available: false,
+				preferred,
 				stateFile,
 				bestFor,
 				note: "browser-bridge state file is missing port/pid. Restart the daemon with pnpm browser-bridge:serve.",
@@ -217,6 +219,7 @@ async function readBrowserBridgeState(env: NodeJS.ProcessEnv): Promise<Record<st
 		if (!browserConnected) {
 			return {
 				available: false,
+				preferred,
 				stateFile,
 				port: state.port,
 				browser,
@@ -227,6 +230,7 @@ async function readBrowserBridgeState(env: NodeJS.ProcessEnv): Promise<Record<st
 		}
 		return {
 			available: true,
+			preferred,
 			stateFile,
 			port: state.port,
 			browser,
@@ -237,11 +241,18 @@ async function readBrowserBridgeState(env: NodeJS.ProcessEnv): Promise<Record<st
 	} catch {
 		return {
 			available: false,
+			preferred,
 			stateFile,
 			bestFor,
 			note: 'browser-bridge daemon is not running. Run "pnpm browser-bridge:install" once, then "pnpm browser-bridge:serve" and load the unpacked extension in Helium/Chrome/Brave.',
 		};
 	}
+}
+
+function resolveBrowserBridgePreferred(env: NodeJS.ProcessEnv): boolean {
+	const raw = env.CLANKY_PREFER_BROWSER_BRIDGE?.trim().toLowerCase();
+	if (raw === undefined || raw.length === 0) return true;
+	return raw !== "0" && raw !== "false" && raw !== "no" && raw !== "off";
 }
 
 function browserBridgeStateFile(env: NodeJS.ProcessEnv): string {
