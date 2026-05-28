@@ -43,7 +43,7 @@ Useful Pi editor patterns still apply:
 ```
 
 Use `/setup status` when you want a compact view of profile paths, OpenAI,
-gateway ownership, current Discord adapter status, Discord voice, ElevenLabs,
+gateway ownership, Discord adapter status, Discord voice, ElevenLabs,
 xAI, and AgentRoom participation. Use `/setup agentroom` to inspect the
 detected room config, Clanky room defaults, chat ownership, and work tracker
 defaults. Edit room-level settings from the AgentRoom TUI with `/setup`.
@@ -80,7 +80,7 @@ memories before saving anything that lacks explicit confirmation.
 
 Clanky's built-in messaging is the local Pi session thread. External chat
 platforms are gateways that can deliver messages to that thread or to a
-profile-local subagent. The current built-in adapter is agent-owned Discord:
+profile-local subagent. The built-in adapter is agent-owned Discord:
 
 ```text
 /discord-whoami
@@ -114,7 +114,7 @@ foreground worker.
 Voice is a separate live media path. It is not just a normal Pi text turn, and
 it is not coupled to which chat gateway owns a text conversation.
 
-The current Discord voice adapter uses:
+The Discord voice adapter uses:
 
 - TypeScript for control, settings, Realtime, tools, and Pi delegation.
 - Rust `clankvox` for Discord voice transport, RTP, Opus, screen watch, and
@@ -210,7 +210,7 @@ servers.
 
 Clanky can auto-add AgentRoom tools when enrolled in an AgentRoom room or when
 `.agentroom/config.yaml` exists. It can also auto-add provider tools for the
-current gateway adapter when the profile has the right credential.
+configured gateway adapter when the profile has the right credential.
 
 Inspect configured servers:
 

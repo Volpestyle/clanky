@@ -23,11 +23,11 @@ Use Clanky as the agent that is always yours:
 - keep separate profiles for personal work, room leads, reviewers, voice tests,
   or temporary experiments
 - store and inspect source-grounded memories with explicit privacy controls
-- connect external communication gateways, with Discord as the current
+- connect external communication gateways, with Discord as the built-in
   agent-owned text adapter for DMs, mentions, replies, and channel bindings
 - let gateway side requests route to subagents while the main TUI session keeps
   working
-- join live voice through the current Discord/ClankVox media adapter,
+- join live voice through the Discord/ClankVox media adapter,
   transcribe speakers, speak through Realtime or ElevenLabs, and delegate
   durable work back to Pi
 - generate or inspect web/media artifacts through the bundled operator skills
@@ -69,8 +69,8 @@ flowchart TB
   clanky["Clanky runtime"]
   profile["Profile<br/>auth, memory, sessions, skills"]
   chat["Communication gateway adapters<br/>Discord today, others later"]
-  voice["Voice/media gateway adapters<br/>ClankVox Discord today"]
-  vox["ClankVox<br/>native media plane"]
+  voice["Voice/media gateway adapters<br/>ClankVox package"]
+  vox["ClankVox<br/>Discord today, other transports later"]
   room["AgentRoom<br/>optional room participation"]
 
   user --> tui
@@ -91,7 +91,8 @@ Read it as:
 - Clanky's built-in messaging is the Pi session thread. Discord, AgentRoom, and
   future Slack, Telegram, SMS, webhook, or huddle-style integrations are
   gateways into or out of that thread.
-- ClankVox is a subprocess below Clanky for the current Discord media transport.
+- ClankVox is Clanky's main voice/media transport package. It handles Discord
+  voice and Go Live, and future platform transports belong at that layer.
 - AgentRoom is optional room infrastructure around Clanky; it does not own
   Clanky's profile.
 
@@ -135,7 +136,7 @@ is only for a source checkout before the CLI is installed globally.
 ## Communication Gateways And Voice
 
 Agent-owned communication gateways are configured from inside the TUI. Discord
-is the current built-in chat adapter:
+is the built-in chat adapter:
 
 ```text
 /discord-login
@@ -143,8 +144,8 @@ is the current built-in chat adapter:
 /discord-status
 ```
 
-Voice/media gateways are separate from Clanky's native Pi thread. The current
-Discord voice adapter uses the same profile credential, Clanky's TypeScript
+Voice/media gateways are separate from Clanky's native Pi thread. The Discord
+voice adapter uses the same profile credential, Clanky's TypeScript
 control plane, OpenAI/xAI Realtime, optional ElevenLabs speech, Pi delegation
 through `ask_pi`, and the bundled ClankVox Rust media process:
 
@@ -174,7 +175,7 @@ agent-room read clanky --lines 40
 Room participation and gateway ownership are separate:
 
 - agent-owned chat: Clanky uses its own profile credential and owns the
-  conversation, currently through the Discord adapter
+  conversation through the Discord adapter
 - room-owned chat: AgentRoom owns the connector bot and routes the
   conversation through the room
 

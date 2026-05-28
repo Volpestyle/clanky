@@ -1,11 +1,11 @@
 # Discord Voice Architecture
 
-This is the end-to-end map for Clanky's current agent-owned Discord voice
-adapter. Clanky's native messaging is the Pi session thread; Discord voice is a
-separate media gateway that can feed that thread through `ask_pi`, not a
-replacement for it. The voice adapter is a TypeScript control plane, a Rust
-Discord media plane, and Pi delegation behind a live realtime voice agent
-session. The realtime agent provider can be OpenAI Realtime or xAI Grok Voice.
+This is the end-to-end map for Clanky's agent-owned Discord voice adapter.
+Clanky's native messaging is the Pi session thread; Discord voice is a separate
+media gateway that can feed that thread through `ask_pi`, not a replacement for
+it. The voice adapter is a TypeScript control plane, a Rust Discord media plane,
+and Pi delegation behind a live realtime voice agent session. The realtime
+agent provider can be OpenAI Realtime or xAI Grok Voice.
 The speech output provider is only the audio renderer; it is not the same
 setting as the realtime reasoning/tool agent. There is no ElevenLabs-only
 Discord voice mode: ElevenLabs can replace the final voice rendering step, but
@@ -66,7 +66,7 @@ avoids.
 | Main realtime voice agent | `realtime-provider`, plus OpenAI/xAI model settings | OpenAI Realtime or xAI Grok Voice | Required for every joined voice session. Owns instructions, participation policy, whether to speak, realtime tool calls, Pi delegation, interruption state, and response continuation after tools. |
 | Speaker transcription | OpenAI realtime transcription settings | OpenAI Realtime transcription | One STT session per active Discord speaker. Produces labeled final transcripts for the main realtime agent. |
 | Speech renderer | `tts-provider` | Internal realtime audio or ElevenLabs TTS | Converts the main realtime agent's response into PCM for `clankvox`. It does not own room state, tool calls, or Pi delegation. |
-| Discord media transport | native `clankvox` process | Discord voice/Go Live protocol code | Moves PCM/RTP/video/media frames between Discord and TypeScript. It does not decide what Clanky says. |
+| Voice/media transport package | native `clankvox` process | Discord voice/Go Live protocol code today | Moves PCM/RTP/video/media frames between Discord and TypeScript. Future platform-specific media transports should live at the same layer. It does not decide what Clanky says. |
 
 `tts-provider=openai` is the internal realtime-audio path. Despite the stored
 name, it means "use audio emitted by the selected realtime agent"; if
@@ -108,9 +108,9 @@ Pi is downstream of the realtime agent. The voice agent can call `ask_pi`,
 which either uses the voice worker subagent coordinator or serializes a prompt
 through the main Pi runtime.
 
-xAI Grok Voice supports the live audio/tool agent path but does not currently
-receive Discord screen-share image frames in this bridge. OpenAI Realtime
-remains the provider for screen-watch snapshot inspection.
+xAI Grok Voice supports the live audio/tool agent path but does not receive
+Discord screen-share image frames in this bridge. OpenAI Realtime remains the
+provider for screen-watch snapshot inspection.
 
 ## Startup
 

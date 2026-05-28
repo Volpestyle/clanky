@@ -56,7 +56,7 @@ async fn main() {
         .install_default()
         .expect("Failed to install rustls crypto provider");
 
-    // Build layered subscriber: stderr fmt for local dev + IPC forwarding to Bun/Loki.
+    // Build layered subscriber: stderr fmt for local dev + IPC forwarding to Clanky/Loki.
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::fmt::layer()

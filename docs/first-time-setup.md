@@ -14,8 +14,8 @@ Clanky, start with the [Pi quickstart](https://pi.dev/docs/latest/quickstart).
 - pnpm `10.33.4` through Corepack or a matching global pnpm install.
 - This repository checked out locally.
 - An OpenAI API key or another Pi-supported model auth path.
-- Optional: a Discord bot token for the current agent-owned chat gateway
-  adapter. Discord is today's adapter; the Clanky boundary is the
+- Optional: a Discord bot token for the built-in agent-owned chat gateway
+  adapter. Discord is the shipped adapter; the Clanky boundary is the
   communication gateway abstraction.
 - Optional: Rust/Cargo for the bundled Discord voice media helper.
 - Optional: Playwright Chromium for browser automation routes.
@@ -144,7 +144,7 @@ change that at runtime with:
 
 Clanky's built-in messaging is the local Pi session thread. External chat
 platforms are optional gateways into that thread or into profile-local
-subagents. The current built-in adapter is agent-owned Discord, where Clanky
+subagents. The built-in adapter is agent-owned Discord, where Clanky
 uses its own profile credential and owns the gateway. Future communication
 adapters should plug into the same ownership model.
 

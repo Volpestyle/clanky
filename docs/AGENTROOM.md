@@ -16,10 +16,10 @@ text and Discord voice are today's concrete adapters; future Telegram, Slack,
 SMS, webhook, huddle, or other messaging surfaces should plug in at the same
 ownership boundary.
 
-Voice and video are separate media gateways. The current production adapter is
-Discord voice through ClankVox; a future Slack huddle adapter should plug in at
-the same ownership boundary rather than making Slack or Discord part of
-Clanky's core session model.
+Voice and video are separate media gateways. Discord voice runs through
+ClankVox; a future Slack huddle adapter should plug in at the same ownership
+boundary rather than making Slack or Discord part of Clanky's core session
+model.
 
 ## Two Independent Axes
 
@@ -35,7 +35,7 @@ not mean "Clanky must surrender an agent-owned gateway identity."
 
 ### Agent-owned Chat Gateway
 
-For the current Discord adapter, Clanky imports `@agentroom/chat-discord` as a
+For the Discord adapter, Clanky imports `@agentroom/chat-discord` as a
 library and runs the gateway in-process under his own bot token. Traffic flows
 directly Discord <-> Clanky. This works both outside a room and while Clanky is
 participating in AgentRoom.

@@ -44,9 +44,9 @@ Clanky configures Pi for a personal agent:
 - Clanky memory, profile status, skills, work-tracker refs, and subagent stores.
 - Bundled Clanky skills plus profile-local Clanky skills.
 - Chat gateway ownership, profile-local gateway subagents, and Discord operator
-  tools for the current Discord adapter.
+  tools for the Discord adapter.
 - Voice/media gateway settings, voice logs, and realtime voice-agent handoff to
-  Pi, with Discord voice implemented by the current ClankVox adapter.
+  Pi, with Discord voice implemented by the ClankVox adapter.
 - OpenAI web search and OpenAI/xAI media generation tools.
 - External MCP status/list/call tools.
 - Setup, auth, effort, profile, memory, web, media, subagent, Discord, and voice
@@ -142,7 +142,7 @@ personal-agent capabilities:
   `media_backend_status`.
 - Discord adapter: guild/channel/message/media/send/reaction tools.
 - Voice gateway tools: `discord_voice_status`, `discord_voice_join`,
-  `discord_voice_leave` for the current Discord voice adapter.
+  `discord_voice_leave` for the Discord voice adapter.
 - Coordination: `main_session_context`, `delegate_to_main_worker`,
   `subagent_status`.
 - Work trackers and MCP: `work_tracker_link`, `mcp_list_tools`, `mcp_call`.

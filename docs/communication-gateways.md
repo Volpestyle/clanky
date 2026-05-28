@@ -1,9 +1,9 @@
 # Communication Gateways
 
 Clanky is not a Discord agent. Clanky is a personal Pi agent with a
-communication gateway layer. Discord text and Discord voice are the current
-concrete adapters, but the product model is meant to support other messaging
-and live communication surfaces.
+communication gateway layer. Discord text and Discord voice are shipped
+adapters, but the product model is meant to support other messaging and live
+communication surfaces.
 
 ## Core Model
 
@@ -13,7 +13,7 @@ flowchart TB
   thread["Canonical Pi session thread"]
   clanky["Clanky runtime<br/>persona, tools, memory, skills"]
   chat["Chat gateway adapters<br/>Discord today, Slack/Telegram/SMS/webhooks later"]
-  media["Voice/media gateway adapters<br/>ClankVox Discord today, other huddles later"]
+  media["Voice/media gateway adapters<br/>ClankVox package"]
   subagents["Profile-local subagents"]
   room["AgentRoom<br/>optional room"]
 
@@ -32,8 +32,8 @@ when side work should not interrupt the foreground session.
 ## Chat Gateways
 
 A chat gateway can deliver inbound messages, receive replies, and route accepted
-side requests to subagents. The current built-in chat adapter is agent-owned
-Discord, which handles DMs, mentions, replies, optional channel binding, and
+side requests to subagents. The built-in chat adapter is agent-owned Discord,
+which handles DMs, mentions, replies, optional channel binding, and
 model-mediated skip/reply decisions.
 
 Future chat adapters should follow the same shape:
@@ -46,10 +46,11 @@ Future chat adapters should follow the same shape:
 
 ## Voice And Media Gateways
 
-Voice/media gateways are separate from chat gateways. The current production
-adapter is Discord voice through ClankVox. It uses Clanky's TypeScript control
-plane, realtime model sessions, speech output providers, Pi delegation through
-`ask_pi`, and the native ClankVox media process.
+Voice/media gateways are separate from chat gateways. ClankVox is Clanky's main
+voice/media transport package. Discord voice and Go Live run through ClankVox.
+They use Clanky's TypeScript control plane, realtime model sessions, speech
+output providers, Pi delegation through `ask_pi`, and the native ClankVox media
+process.
 
 The same boundary should hold for future Slack huddles, WebRTC calls, or other
 live media surfaces: Clanky owns the control plane and profile settings, while a
@@ -85,5 +86,5 @@ shadows, durable handoffs, or multiple independent coding agents.
   room.
 - [Memory And Privacy](memory-and-privacy.md): profile-local credential and
   transcript boundaries.
-- [Discord Voice Architecture](discord-voice-architecture.md): current Discord
+- [Discord Voice Architecture](discord-voice-architecture.md): Discord
   voice/media implementation.

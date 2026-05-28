@@ -1,28 +1,36 @@
 # Audio Pipeline
 
-This document covers the audio path inside `clankvox`: inbound user capture, outbound TTS/music playback, and the telemetry Bun relies on for floor control.
+This document covers the audio path inside `clankvox`: inbound user capture,
+outbound TTS/music playback, and the telemetry Clanky relies on for floor
+control. The Discord-backed implementation follows the same boundary future
+platform transports should keep too: ClankVox owns low-level media mechanics;
+Clanky owns agent policy.
 
 ## Scope
 
 Audio in `clankvox` has two big jobs:
 
-- turn Discord voice packets into Bun-visible user audio events
-- turn Bun-visible TTS/music/media commands into Discord voice playback
+- turn platform voice packets into Clanky-visible user audio events
+- turn Clanky-visible TTS/music/media commands into platform voice playback
+
+For the Discord transport, those packets are Discord RTP/Opus/DAVE frames on
+the `voice` role.
 
 Go Live video send/receive is documented separately in [go-live.md](./go-live.md).
 
 ## Inbound Audio Receive
 
-The main `voice` transport receives RTP packets from Discord and processes them in this order:
+The Discord `voice` transport receives RTP packets from Discord and processes
+them in this order:
 
 1. transport decrypt using the negotiated RTP-size AEAD mode
 2. RTP parse and SSRC lookup
 3. DAVE decrypt for the speaking user
 4. Opus decode to PCM
-5. channel conversion / resampling into Bun-facing capture format
+5. channel conversion / resampling into Clanky-facing capture format
 6. speaking and user-audio IPC emission
 
-At the Bun boundary, capture is exposed through events like:
+At the Clanky boundary, capture is exposed through events like:
 
 - `speaking_start`
 - `speaking_end`
@@ -38,25 +46,27 @@ Outbound playback is paced on the 20ms tick from [../src/main.rs](../src/main.rs
 
 Sources:
 
-- live TTS audio pushed from Bun over IPC
+- live TTS audio pushed from Clanky over IPC
 - music PCM produced by the local ffmpeg/yt-dlp pipeline
 
 The normal send path is:
 
-1. Bun sends PCM to `clankvox`
-2. `clankvox` buffers and normalizes it for Discord send
+1. Clanky sends PCM to `clankvox`
+2. `clankvox` buffers and normalizes it for platform send
 3. on each 20ms tick, the next frame is encoded to Opus
 4. DAVE encrypt runs when the session is in encrypted mode
 5. transport AEAD encrypt wraps the RTP payload
 6. packet is sent over UDP
 
-This is why Bun does not send Opus frames directly. `clankvox` keeps the pacing and encryption truth local to the transport layer.
+This is why Clanky does not send Opus frames directly in the Discord transport.
+`clankvox` keeps pacing, codec, and encryption truth local to the transport
+layer.
 
 ## Music Playback
 
 Music is implemented as a local subprocess pipeline in [../src/music.rs](../src/music.rs).
 
-For the current repo shape, music playback typically:
+Music playback typically:
 
 - resolves media with `yt-dlp`
 - decodes to raw PCM with `ffmpeg`
@@ -68,13 +78,13 @@ Music also emits lifecycle events back into the main loop, including:
 - `music_error`
 - `music_gain_reached`
 
-Those events let Bun coordinate reply handoff, ducking, and the current Go Live sender lifecycle.
+Those events let Clanky coordinate reply handoff, ducking, and the Go Live sender lifecycle.
 
 ## TTS Buffering And Telemetry
 
-Bun intentionally does not assume audio is “done” as soon as it has sent all PCM to the subprocess.
+Clanky intentionally does not assume audio is “done” as soon as it has sent all PCM to the subprocess.
 
-`clankvox` emits playback telemetry so Bun can reason about actual floor occupancy:
+`clankvox` emits playback telemetry so Clanky can reason about actual floor occupancy:
 
 - `buffer_depth`
 - `tts_playback_state`
@@ -98,7 +108,7 @@ Examples:
 - it reports PCM bytes and end-of-capture boundaries
 - it reports that buffered TTS still exists
 
-Bun then decides:
+Clanky then decides:
 
 - whether the capture promotes into a turn
 - whether it interrupts current playback
@@ -117,7 +127,9 @@ That boundary is deliberate. The subprocess should not become a policy engine.
 
 ## Important Constraints
 
-- playback pacing is owned locally by `clankvox`, not Bun
-- audio transport truth is ultimately the subprocess state, not just Bun-side queued bytes
+- playback pacing is owned locally by `clankvox`, not Clanky
+- audio transport truth is ultimately the subprocess state, not just Clanky-side queued bytes
 - DAVE transitions can temporarily change whether frames are encrypted or passthrough
-- buffer telemetry is operational truth but not durable forever; Bun still ages stale positive samples on its side
+- buffer telemetry is operational truth but not durable forever; Clanky still ages stale positive samples on its side
+- future platform transports should expose the same capture/playback truth over
+  IPC instead of moving floor-control policy into `clankvox`

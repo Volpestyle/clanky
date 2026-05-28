@@ -3,11 +3,11 @@ name = "clankvox"
 version = "0.3.0"
 edition = "2024"
 rust-version = "1.85"
-description = "Rust media-plane subprocess for Discord voice, DAVE E2EE, and Go Live transport"
+description = "Clanky's native voice and media transport package"
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/Volpestyle/clankvox"
 homepage = "https://github.com/Volpestyle/clankvox"
-keywords = ["discord", "voice", "opus", "rtp", "dave"]
+keywords = ["clanky", "media", "voice", "rtp", "discord"]
 categories = ["multimedia::audio", "network-programming"]
 
 [lints.rust]

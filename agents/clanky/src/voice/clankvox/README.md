@@ -1,8 +1,13 @@
 # clankvox
 
-`clankvox` is the Rust media-plane subprocess for Clanky.
+`clankvox` is Clanky's main Rust package for voice and media transport. It is
+the native media plane Clanky delegates to when a platform needs realtime
+sockets, codec work, packet timing, encryption, or low-level media telemetry.
 
-It owns the Discord voice and Go Live transport work that the Clanky Node runtime should not do itself:
+ClankVox handles Discord voice and Go Live, and future platform-specific
+voice/media transports should live at the same layer.
+
+For Discord, it owns:
 
 - main voice transport for audio send/receive
 - Discord DAVE lifecycle and transport encryption
@@ -13,17 +18,22 @@ It owns the Discord voice and Go Live transport work that the Clanky Node runtim
 - native Go Live stream publish send
 - JSON-line IPC with the Clanky Node runtime
 
-Clanky still owns the selfbot gateway session, orchestration, tools, prompts, settings, and product behavior. `clankvox` is deliberately the transport/media layer, not a second application runtime.
+Clanky still owns gateway/session control, orchestration, tools, prompts,
+settings, and product behavior. `clankvox` is deliberately the transport/media
+layer, not a second application runtime.
 
-## Current Roles
+## Discord Roles
 
-`clankvox` currently runs three transport roles:
+`clankvox` runs three Discord transport roles:
 
 - `voice`: the normal Discord voice connection for audio capture and playback
 - `stream_watch`: a second stream-server connection for inbound Go Live video receive
 - `stream_publish`: a second stream-server connection for outbound Go Live video send
 
-The `voice` role is always the anchor session. The stream roles are optional and are started by Clanky when Discord stream discovery produces the needed credentials.
+The `voice` role is always the anchor session. The stream roles are optional and
+are started by Clanky when Discord stream discovery produces the needed
+credentials. Future platform transports can add their own roles while keeping
+product policy in Clanky and media mechanics in `clankvox`.
 
 ## Runtime Shape
 
@@ -49,7 +59,7 @@ Most behavior is split across supervisor-style modules:
 - [src/capture_supervisor.rs](./src/capture_supervisor.rs): inbound audio/video events and subscriptions
 - [src/playback_supervisor.rs](./src/playback_supervisor.rs): TTS/music playback and periodic send tick
 - [src/stream_publish.rs](./src/stream_publish.rs): outbound Go Live sender pipeline
-- [src/voice_conn.rs](./src/voice_conn.rs): Discord voice WebSocket, UDP, RTP, codec negotiation, DAVE, packetization
+- [src/voice_conn.rs](./src/voice_conn.rs): Discord voice/stream transport, WebSocket, UDP, RTP, codec negotiation, DAVE, packetization
 - [src/dave.rs](./src/dave.rs): `davey` wrapper and role-specific encryption/decryption helpers
 - [src/ipc.rs](./src/ipc.rs): Clanky <-> Rust message contracts
 
@@ -80,14 +90,17 @@ From the repo root, the package wrapper uses:
 pnpm voice:build
 ```
 
-## Current Product Boundaries
+## Discord Product Boundaries
+
+ClankVox is Clanky's main package for native voice/media transports; Discord
+voice and Go Live are the implemented transport family.
 
 The Go Live sender path is exposed through a narrow URL-first voice media
 surface:
 
 - normal music playback is voice audio only and works with bot-token voice
 - outbound publish is driven by TypeScript orchestration through `stream_publish_*` IPC and Discord gateway OP18/OP19/OP22
-- current Realtime-facing source gate is resolved http(s) URLs; search and disambiguation should go through Pi/skills before media playback
+- Realtime-facing source gate is resolved http(s) URLs; search and disambiguation should go through Pi/skills before media playback
 - video URL publish can optionally start a parallel music/audio pipeline so the voice channel hears the video while Go Live shows it
 - visualizer publish can show active music over Go Live
 - sender transport is H264-only
