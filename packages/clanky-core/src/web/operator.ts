@@ -4,6 +4,7 @@ import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AuthStorage } from "@earendil-works/pi-coding-agent";
 import { getOpenAiCredentialStatus, resolveOpenAiApiKey } from "../openai-credentials.ts";
+import { resolveClankyPaths } from "../paths.ts";
 
 export type SearchContextSize = "low" | "medium" | "high";
 export type ReturnTokenBudget = "default" | "unlimited";
@@ -129,6 +130,19 @@ export async function getWebBackendStatus(options: WebBackendStatusOptions = {})
 	const node = await resolveExecutable("node", env);
 	const agentBrowser = await resolveExecutable("agent-browser", env);
 	const openAiStatus = getOpenAiCredentialStatus(env, options.authStorage);
+	const bridge = await readBrowserBridgeState(env);
+
+	const agentBrowserAvailable = agentBrowser !== undefined;
+	const agentBrowserBackend: Record<string, unknown> = {
+		available: agentBrowserAvailable,
+		command: "agent-browser",
+		bestFor: ["persistent browser sessions", "headed browsing", "authenticated browser profiles"],
+	};
+	if (agentBrowser !== undefined) {
+		agentBrowserBackend.path = agentBrowser;
+	} else {
+		agentBrowserBackend.note = "agent-browser is optional and not installed. Skip it and use a different backend.";
+	}
 
 	return {
 		cwd,
@@ -141,17 +155,14 @@ export async function getWebBackendStatus(options: WebBackendStatusOptions = {})
 			access: openAiStatus.available ? "not_checked_until_tool_call" : "missing_credentials",
 		},
 		backends: {
-			agentBrowser: {
-				available: agentBrowser !== undefined,
-				command: "agent-browser",
-				path: agentBrowser,
-				bestFor: ["persistent browser sessions", "headed browsing", "authenticated browser profiles"],
-			},
+			browserBridge: bridge,
+			agentBrowser: agentBrowserBackend,
 			playwrightCli: {
 				available: pnpm !== undefined && hasScript(packageJson, "browser:playwright"),
 				command: "pnpm browser:playwright",
 				installCommand: hasScript(packageJson, "browser:install") ? "pnpm browser:install" : undefined,
 				bestFor: ["fresh browser contexts", "JavaScript-rendered pages", "screenshots", "repeatable automation"],
+				note: 'Never use waitUntil: "networkidle" on modern sites (Discord, X, GitHub, Linear). Use "domcontentloaded" and wait for a specific selector instead.',
 			},
 			chromeCdp: {
 				available: pnpm !== undefined && hasScript(packageJson, "browser:cdp"),
@@ -170,6 +181,74 @@ export async function getWebBackendStatus(options: WebBackendStatusOptions = {})
 			node: { available: node !== undefined, path: node },
 		},
 	};
+}
+
+interface BrowserBridgeStateRecord {
+	port?: number;
+	pid?: number;
+	browser?: string;
+	startedAt?: string;
+}
+
+async function readBrowserBridgeState(env: NodeJS.ProcessEnv): Promise<Record<string, unknown>> {
+	const stateFile = browserBridgeStateFile(env);
+	const bestFor = [
+		"opening a URL in the user's real Helium/Chrome/Brave",
+		"making the user the one looking at the result",
+		"reusing the user's logged-in profile",
+	];
+	try {
+		const raw = await readFile(stateFile, "utf8");
+		const parsed = JSON.parse(raw) as unknown;
+		if (!isRecord(parsed)) {
+			return { available: false, stateFile, bestFor, note: "browser-bridge state file is malformed." };
+		}
+		const state = parsed as BrowserBridgeStateRecord;
+		if (typeof state.port !== "number" || typeof state.pid !== "number") {
+			return {
+				available: false,
+				stateFile,
+				bestFor,
+				note: "browser-bridge state file is missing port/pid. Restart the daemon with pnpm browser-bridge:serve.",
+			};
+		}
+		const browser = state.browser ?? "unknown";
+		const browserConnected = browser !== "disconnected" && browser !== "unknown";
+		if (!browserConnected) {
+			return {
+				available: false,
+				stateFile,
+				port: state.port,
+				browser,
+				startedAt: state.startedAt,
+				bestFor,
+				note: "browser-bridge daemon is running but no browser extension is connected yet. Load the unpacked extension in Helium/Chrome/Brave.",
+			};
+		}
+		return {
+			available: true,
+			stateFile,
+			port: state.port,
+			browser,
+			startedAt: state.startedAt,
+			tool: "browser_open_tab",
+			bestFor,
+		};
+	} catch {
+		return {
+			available: false,
+			stateFile,
+			bestFor,
+			note: 'browser-bridge daemon is not running. Run "pnpm browser-bridge:install" once, then "pnpm browser-bridge:serve" and load the unpacked extension in Helium/Chrome/Brave.',
+		};
+	}
+}
+
+function browserBridgeStateFile(env: NodeJS.ProcessEnv): string {
+	const home = resolveClankyPaths({
+		...(env.CLANKY_HOME === undefined ? {} : { homeDir: env.CLANKY_HOME }),
+	}).homeDir;
+	return join(home, "browser-bridge", "state.json");
 }
 
 function buildOpenAiWebSearchRequest(
