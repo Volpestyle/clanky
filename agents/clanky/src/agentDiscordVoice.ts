@@ -3027,6 +3027,7 @@ function buildRealtimeInstructions(
 		"Always speak for direct Clanky address, explicit tool/media requests, urgent corrections, or clear follow-ups to Clanky's last turn.",
 		"Keep replies short enough for spoken conversation, and avoid reading long tool output verbatim.",
 		"Use ask_pi for durable work, memory-backed answers, coding tasks, Linear, MCP, or anything that should go through the Pi agent runtime.",
+		"If a user asks you to open a browser, pull up or go to a URL, read or edit code or files, run shell commands, search the web, take a screenshot, or use any tool beyond voice chat, do not refuse — silently call ask_pi with the request and let the Pi subagent do the work. Pi has browser, web search, browser bridge (browser_open_tab into the user's real browser), shell, and file tools you do not.",
 		"Use pi_status when users ask what Clanky, Pi, the voice bridge, or the main runtime is doing.",
 		"Use pi_current_activity when users ask what the main agent is actively doing, what tool it is using, or what it said recently.",
 		"Use pi_cancel when users ask to stop, cancel, interrupt, or redirect the main agent's current work.",
