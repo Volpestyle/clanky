@@ -96,6 +96,7 @@ const MIN_REALTIME_AUDIO_OUTPUT_DELAY_MS = 10;
 const REALTIME_AUDIO_OUTPUT_TARGET_CHUNK_MS = 80;
 const REALTIME_AUDIO_OUTPUT_MAX_COALESCED_CHUNK_MS = 140;
 const REALTIME_AUDIO_OUTPUT_MAX_BACKLOG_MS = 8_000;
+const REALTIME_AUDIO_OUTPUT_RESUME_BACKLOG_MS = 4_000;
 const REALTIME_AUDIO_OUTPUT_MAX_CLANKVOX_BUFFER_MS = 4_000;
 const REALTIME_AUDIO_OUTPUT_BACKPRESSURE_RETRY_MS = 40;
 const VOICE_MUSIC_DUCK_GAIN = 0.22;
@@ -202,6 +203,8 @@ interface VoiceBridgeStats {
 	realtimeAudioCoalescedChunkCount: number;
 	realtimeAudioBackpressureDelayCount: number;
 	realtimeAudioBackpressureDropCount: number;
+	realtimeAudioBackpressurePauseCount: number;
+	realtimeAudioBackpressureResumeCount: number;
 	discordOutputAudioSendCount: number;
 	discordOutputAudioDropCount: number;
 	realtimeEventCount: number;
@@ -279,6 +282,8 @@ interface VoiceRealtimeClientLike extends ClankvoxRealtimeBridgeRealtime {
 	requestTextUtterance(text: string): void;
 	sendFunctionCallOutput(input: { callId: string; output: unknown }): void;
 	cancelResponse(): void;
+	pauseIncoming?(): void;
+	resumeIncoming?(): void;
 	on(event: "audio_delta", listener: (pcmBase64: string) => void): unknown;
 	on(event: "socket_closed", listener: (event: JsonRecord) => void): unknown;
 	on(event: "socket_error", listener: (error: Error) => void): unknown;
@@ -450,6 +455,8 @@ function createVoiceBridgeStats(): VoiceBridgeStats {
 		realtimeAudioCoalescedChunkCount: 0,
 		realtimeAudioBackpressureDelayCount: 0,
 		realtimeAudioBackpressureDropCount: 0,
+		realtimeAudioBackpressurePauseCount: 0,
+		realtimeAudioBackpressureResumeCount: 0,
 		discordOutputAudioSendCount: 0,
 		discordOutputAudioDropCount: 0,
 		realtimeEventCount: 0,
@@ -900,6 +907,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 	private transcriptResponseTimer: TimerHandle | undefined;
 	private realtimeToolResponseTimer: TimerHandle | undefined;
 	private realtimeAudioOutputTimer: TimerHandle | undefined;
+	private realtimeIncomingPausedForAudioBackpressure = false;
 	private musicUnduckTimer: TimerHandle | undefined;
 	private speechSynthesisQueue: Promise<void> = Promise.resolve();
 	private speechSynthesisGeneration = 0;
@@ -1551,6 +1559,8 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		});
 		vox.on("bufferDepth", (ttsSamples, musicSamples) => {
 			this.mediaBufferDepth = { ttsSamples, musicSamples };
+			this.updateRealtimeIncomingBackpressure("clankvox_buffer_depth");
+			this.drainRealtimeAudioOutputQueue();
 		});
 		vox.on("transportState", (state) => {
 			this.applyTransportState(state);
@@ -1739,7 +1749,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		if (normalizedPcm.length === 0 || bytes <= 0 || sampleRate <= 0) return;
 		const durationMs = Math.max(MIN_REALTIME_AUDIO_OUTPUT_DELAY_MS, pcm16DurationMs(bytes, sampleRate));
 		const backlogMs = this.estimatedAssistantOutputBacklogMs();
-		if (backlogMs + durationMs > REALTIME_AUDIO_OUTPUT_MAX_BACKLOG_MS) {
+		if (!this.realtimeSupportsIncomingBackpressure() && backlogMs + durationMs > REALTIME_AUDIO_OUTPUT_MAX_BACKLOG_MS) {
 			this.stats.realtimeAudioBackpressureDropCount += 1;
 			this.stats.discordOutputAudioDropCount += 1;
 			if (
@@ -1760,6 +1770,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			durationMs,
 		});
 		this.rememberAssistantSpeechOutput(normalizedPcm, sampleRate);
+		this.updateRealtimeIncomingBackpressure("realtime_audio_enqueued");
 		this.drainRealtimeAudioOutputQueue();
 	}
 
@@ -1786,12 +1797,16 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 	private drainRealtimeAudioOutputQueue(): void {
 		if (this.realtimeAudioOutputTimer !== undefined) return;
 		const chunk = this.realtimeAudioOutputQueue[0];
-		if (chunk === undefined) return;
+		if (chunk === undefined) {
+			this.updateRealtimeIncomingBackpressure("realtime_audio_queue_drained");
+			return;
+		}
 		const clankvoxTtsBufferMs = this.clankvoxTtsBufferMs();
 		if (clankvoxTtsBufferMs > REALTIME_AUDIO_OUTPUT_MAX_CLANKVOX_BUFFER_MS) {
 			this.stats.realtimeAudioBackpressureDelayCount += 1;
 			this.realtimeAudioOutputTimer = setTimeout(() => {
 				this.realtimeAudioOutputTimer = undefined;
+				this.updateRealtimeIncomingBackpressure("realtime_audio_backpressure_retry");
 				this.drainRealtimeAudioOutputQueue();
 			}, REALTIME_AUDIO_OUTPUT_BACKPRESSURE_RETRY_MS);
 			return;
@@ -1809,6 +1824,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		this.realtimeAudioOutputTimer = setTimeout(
 			() => {
 				this.realtimeAudioOutputTimer = undefined;
+				this.updateRealtimeIncomingBackpressure("realtime_audio_pace_tick");
 				this.drainRealtimeAudioOutputQueue();
 			},
 			Math.max(MIN_REALTIME_AUDIO_OUTPUT_DELAY_MS, Math.round(chunk.durationMs)),
@@ -1820,6 +1836,56 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		this.realtimeAudioOutputTimer = undefined;
 		this.realtimeAudioOutputQueue.length = 0;
 		if (timer !== undefined) clearTimeout(timer);
+		this.resumeRealtimeIncomingAfterAudioBackpressure("realtime_audio_queue_cleared");
+	}
+
+	private realtimeSupportsIncomingBackpressure(): boolean {
+		const realtime = this.realtime;
+		return typeof realtime?.pauseIncoming === "function" && typeof realtime.resumeIncoming === "function";
+	}
+
+	private updateRealtimeIncomingBackpressure(reason: string): void {
+		const realtime = this.realtime;
+		if (typeof realtime?.pauseIncoming !== "function" || typeof realtime.resumeIncoming !== "function") {
+			this.realtimeIncomingPausedForAudioBackpressure = false;
+			return;
+		}
+
+		const backlogMs = this.estimatedAssistantOutputBacklogMs();
+		if (!this.realtimeIncomingPausedForAudioBackpressure && backlogMs >= REALTIME_AUDIO_OUTPUT_MAX_BACKLOG_MS) {
+			this.realtimeIncomingPausedForAudioBackpressure = true;
+			this.stats.realtimeAudioBackpressurePauseCount += 1;
+			realtime.pauseIncoming();
+			this.logVoice("info", "realtime_audio_input_paused_for_backpressure", {
+				backlogMs: Math.round(backlogMs),
+				highWatermarkMs: REALTIME_AUDIO_OUTPUT_MAX_BACKLOG_MS,
+				reason,
+			});
+			return;
+		}
+
+		if (this.realtimeIncomingPausedForAudioBackpressure && backlogMs <= REALTIME_AUDIO_OUTPUT_RESUME_BACKLOG_MS) {
+			this.realtimeIncomingPausedForAudioBackpressure = false;
+			this.stats.realtimeAudioBackpressureResumeCount += 1;
+			realtime.resumeIncoming();
+			this.logVoice("info", "realtime_audio_input_resumed_after_backpressure", {
+				backlogMs: Math.round(backlogMs),
+				lowWatermarkMs: REALTIME_AUDIO_OUTPUT_RESUME_BACKLOG_MS,
+				reason,
+			});
+		}
+	}
+
+	private resumeRealtimeIncomingAfterAudioBackpressure(reason: string): void {
+		if (!this.realtimeIncomingPausedForAudioBackpressure) return;
+		this.realtimeIncomingPausedForAudioBackpressure = false;
+		this.stats.realtimeAudioBackpressureResumeCount += 1;
+		this.realtime?.resumeIncoming?.();
+		this.logVoice("info", "realtime_audio_input_resumed_after_backpressure", {
+			backlogMs: Math.round(this.estimatedAssistantOutputBacklogMs()),
+			lowWatermarkMs: REALTIME_AUDIO_OUTPUT_RESUME_BACKLOG_MS,
+			reason,
+		});
 	}
 
 	private estimatedAssistantOutputBacklogMs(): number {
