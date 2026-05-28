@@ -1176,19 +1176,19 @@ class SubagentBrowserComponent {
 			void this.refresh({ forceTranscript: true });
 			return;
 		}
-		if (isUpKey(data)) {
+		if (isUpKey(data) || isCtrlPKey(data)) {
 			this.scrollDetailBy(-1);
 			return;
 		}
-		if (isDownKey(data)) {
+		if (isDownKey(data) || isCtrlNKey(data)) {
 			this.scrollDetailBy(1);
 			return;
 		}
-		if (isPageUpKey(data)) {
+		if (isPageUpKey(data) || isCtrlBKey(data)) {
 			this.scrollDetailBy(-this.detailPageSize());
 			return;
 		}
-		if (isPageDownKey(data)) {
+		if (isPageDownKey(data) || isCtrlFKey(data)) {
 			this.scrollDetailBy(this.detailPageSize());
 			return;
 		}
@@ -1379,7 +1379,7 @@ class SubagentBrowserComponent {
 		);
 		const headerLines: string[] = [
 			renderSubagentChatHeader(selected, this.theme),
-			this.theme.fg("dim", "↑↓ scroll  PgUp/PgDn page  Enter send  Ctrl+R refresh  Esc back"),
+			this.theme.fg("dim", "↑↓/Ctrl+P/N scroll  PgUp/PgDn/Ctrl+B/F page  Enter send  Esc back"),
 			"",
 		];
 		// One blank row separates transcript from composer.
@@ -2195,6 +2195,22 @@ function isCtrlDKey(data: string): boolean {
 	return matchesKey(data, "ctrl+d");
 }
 
+function isCtrlBKey(data: string): boolean {
+	return matchesKey(data, "ctrl+b");
+}
+
+function isCtrlFKey(data: string): boolean {
+	return matchesKey(data, "ctrl+f");
+}
+
+function isCtrlPKey(data: string): boolean {
+	return matchesKey(data, "ctrl+p");
+}
+
+function isCtrlNKey(data: string): boolean {
+	return matchesKey(data, "ctrl+n");
+}
+
 function isCtrlRKey(data: string): boolean {
 	return matchesKey(data, "ctrl+r");
 }
@@ -2858,6 +2874,7 @@ export function createClankyToolDefinitions(
 					"Use when an external request needs coding, deep research, multi-step operations, or other work likely to take more than 1-2 minutes.",
 					"Include enough context in prompt for the main worker to proceed without rereading the external conversation.",
 					"After delegating, tell the user that the existing main session has picked it up; do not call it a new subagent or imply a worker was spawned.",
+					"For tool-heavy or durable user requests — including phrasing like 'spawn an agent', 'spin up a worker', 'make a subagent', 'set up an agent that monitors X', AgentRoom collaboration, or anything else needing tools you do not have — dispatch this immediately with the user's verbatim request as the prompt and a short title you derive yourself. Do not interrogate the user to spec scope, name, tools, personality, or one-off-vs-reusable first. Remember this tool only hands off to the existing main session — main itself decides whether to do the work directly, spawn an AgentRoom agent, spawn a Pi worker, or route elsewhere. Your job is to delegate cleanly, not to pick the execution path.",
 				],
 				parameters: delegateToMainWorkerSchema,
 				async execute(_toolCallId, params) {

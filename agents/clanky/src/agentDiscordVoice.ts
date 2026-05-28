@@ -2252,6 +2252,11 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		this.pendingToolCalls.set(pending.callId, pending);
 		if (!envelope.done) return undefined;
 		this.pendingToolCalls.delete(pending.callId);
+		// Mark the callId as completed before awaiting dispatch so that follow-up envelopes
+		// for the same call (the realtime API emits `function_call_arguments.done`,
+		// `output_item.done`, and `response.done` for one logical call) short-circuit at the
+		// guard above instead of slipping through and triggering the signature-based join warning.
+		this.rememberCompletedToolCallId(pending.callId);
 		const continuation: RealtimeToolContinuation = pending.name === "voice_stay_silent" ? "stop" : "continue";
 		const coalescedDuplicate = this.isCoalescedDuplicateRealtimeToolCall(pending);
 		if (coalescedDuplicate) {
@@ -2272,7 +2277,6 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		}
 		this.realtime?.sendFunctionCallOutput({ callId: pending.callId, output: result });
 		if (!coalescedDuplicate) this.subagents?.recordToolResult(pending.name, result);
-		this.rememberCompletedToolCallId(pending.callId);
 		this.stats.realtimeFunctionCallOutputCount += 1;
 		return continuation;
 	}
@@ -3026,8 +3030,9 @@ function buildRealtimeInstructions(
 		"When music is playing, behave like a reserved music player: speak only for direct Clanky address or explicit media controls.",
 		"Always speak for direct Clanky address, explicit tool/media requests, urgent corrections, or clear follow-ups to Clanky's last turn.",
 		"Keep replies short enough for spoken conversation, and avoid reading long tool output verbatim.",
-		"Use ask_pi for durable work, memory-backed answers, coding tasks, Linear, MCP, or anything that should go through the Pi agent runtime.",
-		"If a user asks you to open a browser, pull up or go to a URL, read or edit code or files, run shell commands, search the web, take a screenshot, or use any tool beyond voice chat, do not refuse — silently call ask_pi with the request and let the Pi subagent do the work. Pi has browser, web search, browser bridge (browser_open_tab into the user's real browser), shell, and file tools you do not.",
+		"ask_pi is your hands. For ANY request that needs work beyond casual voice chat — coding, files, browser, web search, opening URLs, screenshots, memory lookups, scheduling, research, multi-step tasks, Linear, MCP, spawning workers, or anything you don't have a direct voice tool for — silently call ask_pi with the user's request as the prompt.",
+		"Do not refuse. Do not announce that you are delegating, asking Pi, calling a subagent, or 'handing off.' Do not ask the user to spec what kind of agent to use, what name to give it, or what tools it should have. Do not list capability options back at the user. Treat ask_pi as your own ability — call it, wait for the result, and report it conversationally as if you did it yourself.",
+		"Assume Pi can handle almost anything: it has browser, browser bridge into the user's real browser, web search, shell, files, memory, scheduling, MCP, and the ability to spawn its own subagents. If a request seems too big or vague, still call ask_pi — let Pi decide how to break it down. Only push back if Pi itself reports it can't be done.",
 		"Use pi_status when users ask what Clanky, Pi, the voice bridge, or the main runtime is doing.",
 		"Use pi_current_activity when users ask what the main agent is actively doing, what tool it is using, or what it said recently.",
 		"Use pi_cancel when users ask to stop, cancel, interrupt, or redirect the main agent's current work.",

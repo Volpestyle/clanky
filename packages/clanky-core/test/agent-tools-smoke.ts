@@ -757,6 +757,7 @@ async function assertSubagentPanelCommandWithSession(sessionFiles: {
 				await new Promise((resolve) => setTimeout(resolve, 10));
 				detailLines = component.render(100);
 				component.handleInput?.("\u001b[1;1A");
+				component.handleInput?.("\u0010");
 				scrolledDetailLines = component.render(100);
 				component.handleInput?.("G");
 				terminalRows = 24;
@@ -844,11 +845,11 @@ async function assertSubagentPanelCommandWithSession(sessionFiles: {
 	}
 	if (
 		scrolledDetailLines === undefined ||
-		!scrolledDetailLines.join("\n").includes("↑ 5 above") ||
-		!scrolledDetailLines.join("\n").includes("↓ 1 below") ||
+		!scrolledDetailLines.join("\n").includes("↑ 4 above") ||
+		!scrolledDetailLines.join("\n").includes("↓ 2 below") ||
 		!scrolledDetailLines.join("\n").includes("checking Smoke User subagent reasoning")
 	) {
-		throw new Error(`smoke: /subagents did not scroll with Kitty arrow input: ${JSON.stringify(scrolledDetailLines)}`);
+		throw new Error(`smoke: /subagents did not scroll with keyboard input: ${JSON.stringify(scrolledDetailLines)}`);
 	}
 	if (
 		sentSubagentMessages.length !== 1 ||
