@@ -11,21 +11,12 @@ Default home:
 ~/.clanky
 ```
 
-Important profile files:
-
-| Path | Purpose |
-| --- | --- |
-| `profiles/<profile>/auth.json` | Profile-local credentials stored by Clanky auth commands. |
-| `profiles/<profile>/models.json` | Model registry state for the profile. |
-| `profiles/<profile>/sessions/` | Pi JSONL sessions for this Clanky profile. |
-| `profiles/<profile>/memory/` | Source-grounded memory data. |
-| `profiles/<profile>/SELF.md` | Profile-local self memory. |
-| `profiles/<profile>/skills/` | Profile-local Clanky skills. |
-| `profiles/<profile>/subagents/` | Gateway and voice subagent state and sessions. |
-| `profiles/<profile>/work-trackers/` | Provider-neutral tracker refs. |
-| `profiles/<profile>/discord-voice.json` | Stored voice settings. |
-| `profiles/<profile>/discord-bridge.log` | Discord bridge log. |
-| `profiles/<profile>/discord-voice.log` | Discord voice log. |
+Important profile stores include credentials, model registry entries, sessions,
+memory, skills, subagent state, tracker refs, voice settings, and local
+gateway/voice logs. The file-level ownership and commit rules are maintained in
+[AgentRoom Configuration](docs://agent-room-docs/configuration); Clanky's own
+[Configuration Model](configuration.md) explains the profile resolver and active
+profile paths.
 
 Use separate profiles for separate identities, rooms, experiments, or live
 instances.
