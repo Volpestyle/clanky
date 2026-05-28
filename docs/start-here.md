@@ -17,13 +17,14 @@ Clanky gives you a local agent that can carry personal context across tools:
   slash commands
 - keep profile-local auth, memory, sessions, skills, and connector settings
 - ask Clanky to remember source-grounded facts, then inspect or forget them
-- connect external communication gateways, with Discord as the current
+- connect external communication gateways, with Discord as the built-in
   agent-owned text adapter for DMs, mentions, replies, and optional channel
   binding
 - let gateway requests run through subagents while the foreground session keeps
   working
-- join live voice through the current Discord/ClankVox media adapter, hear
-  speakers, speak back, and delegate durable work to Pi
+- join live voice through the Discord/ClankVox media adapter, transcribe
+  speakers, speak through Realtime or ElevenLabs, and delegate durable work back
+  to Pi
 - use web, browser, media generation, Linear, Discord, and other connected tool
   skills when configured
 - join an AgentRoom room as a normal Pi harness while keeping profile ownership
@@ -58,8 +59,8 @@ flowchart TB
   clanky["Clanky layer<br/>persona, memory, profile, skills, gateway adapters"]
   profile["Profile stores<br/>auth, sessions, memory, voice, subagents"]
   chat["Communication gateways<br/>Discord today, others later"]
-  voice["Voice/media gateways<br/>ClankVox Discord today"]
-  vox["ClankVox<br/>RTP, Opus, DAVE, Go Live"]
+  voice["Voice/media gateways<br/>ClankVox package"]
+  vox["ClankVox<br/>Discord today, other transports later"]
   room["AgentRoom<br/>optional coordination room"]
 
   pi --> thread
@@ -75,8 +76,9 @@ Pi is the generic agent harness. Clanky configures that harness with personal
 state, memory, skills, and gateway adapters. The local Pi session thread is
 Clanky's built-in messaging; Discord text, AgentRoom send/read, and future
 Slack, Telegram, SMS, webhook, or huddle-style integrations are gateways into
-or out of that thread. ClankVox sits under the current Discord voice adapter as
-deterministic transport code.
+or out of that thread. ClankVox is Clanky's main voice/media transport package;
+it handles the deterministic Discord voice and Go Live media layer, and future
+platform transports belong at that layer.
 AgentRoom sits around Clanky when you want multi-agent coordination.
 
 ## First Path To Try

@@ -22,7 +22,7 @@ Format:
 cargo fmt
 ```
 
-From the repo root, Bun uses:
+From the Clanky repo root, the TypeScript wrapper uses:
 
 ```sh
 bun run build:voice
@@ -43,7 +43,8 @@ Useful knobs:
 - `RUST_LOG=debug` when you need transport detail
 - `AUDIO_DEBUG=1` when you need more audio-path IPC logging
 
-The subprocess intentionally keeps the Bun IPC channel separate from logs. Stdout is for JSON-line IPC. Stderr is for operator logs.
+The subprocess intentionally keeps the Clanky IPC channel separate from logs.
+Stdout is for JSON-line IPC. Stderr is for operator logs.
 
 ## High-Value Edit Locations
 
@@ -67,12 +68,12 @@ If you are changing…
   - [../src/stream_publish.rs](../src/stream_publish.rs)
   - [../src/voice_conn.rs](../src/voice_conn.rs)
   - [../src/connection_supervisor.rs](../src/connection_supervisor.rs)
-- Bun IPC contracts:
+- Clanky IPC contracts:
   - [../src/ipc.rs](../src/ipc.rs)
   - [../src/ipc_protocol.rs](../src/ipc_protocol.rs)
   - [../../clankvoxClient.ts](../../clankvoxClient.ts)
 
-## Coordination With Bun
+## Coordination With Clanky
 
 `clankvox` almost never changes alone.
 
@@ -113,7 +114,7 @@ When you add a new transport event or command, update both sides in the same cha
 - DAVE transition handling is protocol-sensitive and easy to break with “small” changes
 - stream-server behavior is role-specific; a fix for `voice` is not automatically correct for `stream_watch` or `stream_publish`
 - sender and receiver video paths share protocol code, but not identical lifecycle expectations
-- Bun may look logically correct while `clankvox` still has buffered playback; trust subprocess telemetry for floor state
+- Clanky may look logically correct while `clankvox` still has buffered playback; trust subprocess telemetry for floor state
 
 ## Related Context
 

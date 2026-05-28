@@ -4,13 +4,13 @@ Use this after the non-live checks pass. The harness joins a real Discord voice
 channel, connects the selected realtime voice agent, and validates the counters
 that prove the voice bridge is working. OpenAI Realtime is the default realtime
 reasoning/tool agent, and xAI Grok Voice can be selected as an alternate
-realtime agent. OpenAI is still used for the current Discord speaker
-transcription path. Speech output can come from the selected realtime agent
-audio directly or from ElevenLabs TTS.
+realtime agent. OpenAI is still used for Discord speaker transcription. Speech
+output can come from the selected realtime agent audio directly or from
+ElevenLabs TTS.
 
 The xAI realtime path supports the live voice loop and tool calls, but it does
-not currently receive Discord screen-share image frames. Use OpenAI Realtime for
-the screen-watch snapshot workflow.
+not receive Discord screen-share image frames. Use OpenAI Realtime for the
+screen-watch snapshot workflow.
 
 ## Preflight
 

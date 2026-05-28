@@ -108,7 +108,7 @@ Export:
 
 Agent-owned gateways use Clanky's own profile credential. Room-owned gateways
 use AgentRoom's connector credential. For any gateway adapter, including the
-current Discord adapter, those credentials should not cross:
+Discord adapter, those credentials should not cross:
 
 - Clanky must not read AgentRoom room connector tokens.
 - AgentRoom must not read Clanky's profile token.

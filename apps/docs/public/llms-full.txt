@@ -29,13 +29,14 @@ Clanky gives you a local agent that can carry personal context across tools:
   slash commands
 - keep profile-local auth, memory, sessions, skills, and connector settings
 - ask Clanky to remember source-grounded facts, then inspect or forget them
-- connect external communication gateways, with Discord as the current
+- connect external communication gateways, with Discord as the built-in
   agent-owned text adapter for DMs, mentions, replies, and optional channel
   binding
 - let gateway requests run through subagents while the foreground session keeps
   working
-- join live voice through the current Discord/ClankVox media adapter, hear
-  speakers, speak back, and delegate durable work to Pi
+- join live voice through the Discord/ClankVox media adapter, transcribe
+  speakers, speak through Realtime or ElevenLabs, and delegate durable work back
+  to Pi
 - use web, browser, media generation, Linear, Discord, and other connected tool
   skills when configured
 - join an AgentRoom room as a normal Pi harness while keeping profile ownership
@@ -70,8 +71,8 @@ flowchart TB
   clanky["Clanky layer<br/>persona, memory, profile, skills, gateway adapters"]
   profile["Profile stores<br/>auth, sessions, memory, voice, subagents"]
   chat["Communication gateways<br/>Discord today, others later"]
-  voice["Voice/media gateways<br/>ClankVox Discord today"]
-  vox["ClankVox<br/>RTP, Opus, DAVE, Go Live"]
+  voice["Voice/media gateways<br/>ClankVox package"]
+  vox["ClankVox<br/>Discord today, other transports later"]
   room["AgentRoom<br/>optional coordination room"]
 
   pi --> thread
@@ -87,8 +88,9 @@ Pi is the generic agent harness. Clanky configures that harness with personal
 state, memory, skills, and gateway adapters. The local Pi session thread is
 Clanky's built-in messaging; Discord text, AgentRoom send/read, and future
 Slack, Telegram, SMS, webhook, or huddle-style integrations are gateways into
-or out of that thread. ClankVox sits under the current Discord voice adapter as
-deterministic transport code.
+or out of that thread. ClankVox is Clanky's main voice/media transport package;
+it handles the deterministic Discord voice and Go Live media layer, and future
+platform transports belong at that layer.
 AgentRoom sits around Clanky when you want multi-agent coordination.
 
 ## First Path To Try
@@ -200,11 +202,11 @@ Use Clanky as the agent that is always yours:
 - keep separate profiles for personal work, room leads, reviewers, voice tests,
   or temporary experiments
 - store and inspect source-grounded memories with explicit privacy controls
-- connect external communication gateways, with Discord as the current
+- connect external communication gateways, with Discord as the built-in
   agent-owned text adapter for DMs, mentions, replies, and channel bindings
 - let gateway side requests route to subagents while the main TUI session keeps
   working
-- join live voice through the current Discord/ClankVox media adapter,
+- join live voice through the Discord/ClankVox media adapter,
   transcribe speakers, speak through Realtime or ElevenLabs, and delegate
   durable work back to Pi
 - generate or inspect web/media artifacts through the bundled operator skills
@@ -246,8 +248,8 @@ flowchart TB
   clanky["Clanky runtime"]
   profile["Profile<br/>auth, memory, sessions, skills"]
   chat["Communication gateway adapters<br/>Discord today, others later"]
-  voice["Voice/media gateway adapters<br/>ClankVox Discord today"]
-  vox["ClankVox<br/>native media plane"]
+  voice["Voice/media gateway adapters<br/>ClankVox package"]
+  vox["ClankVox<br/>Discord today, other transports later"]
   room["AgentRoom<br/>optional room participation"]
 
   user --> tui
@@ -268,7 +270,8 @@ Read it as:
 - Clanky's built-in messaging is the Pi session thread. Discord, AgentRoom, and
   future Slack, Telegram, SMS, webhook, or huddle-style integrations are
   gateways into or out of that thread.
-- ClankVox is a subprocess below Clanky for the current Discord media transport.
+- ClankVox is Clanky's main voice/media transport package. It handles Discord
+  voice and Go Live, and future platform transports belong at that layer.
 - AgentRoom is optional room infrastructure around Clanky; it does not own
   Clanky's profile.
 
@@ -312,7 +315,7 @@ is only for a source checkout before the CLI is installed globally.
 ## Communication Gateways And Voice
 
 Agent-owned communication gateways are configured from inside the TUI. Discord
-is the current built-in chat adapter:
+is the built-in chat adapter:
 
 ```text
 /discord-login
@@ -320,8 +323,8 @@ is the current built-in chat adapter:
 /discord-status
 ```
 
-Voice/media gateways are separate from Clanky's native Pi thread. The current
-Discord voice adapter uses the same profile credential, Clanky's TypeScript
+Voice/media gateways are separate from Clanky's native Pi thread. The Discord
+voice adapter uses the same profile credential, Clanky's TypeScript
 control plane, OpenAI/xAI Realtime, optional ElevenLabs speech, Pi delegation
 through `ask_pi`, and the bundled ClankVox Rust media process:
 
@@ -351,7 +354,7 @@ agent-room read clanky --lines 40
 Room participation and gateway ownership are separate:
 
 - agent-owned chat: Clanky uses its own profile credential and owns the
-  conversation, currently through the Discord adapter
+  conversation through the Discord adapter
 - room-owned chat: AgentRoom owns the connector bot and routes the
   conversation through the room
 
@@ -446,9 +449,9 @@ Clanky configures Pi for a personal agent:
 - Clanky memory, profile status, skills, work-tracker refs, and subagent stores.
 - Bundled Clanky skills plus profile-local Clanky skills.
 - Chat gateway ownership, profile-local gateway subagents, and Discord operator
-  tools for the current Discord adapter.
+  tools for the Discord adapter.
 - Voice/media gateway settings, voice logs, and realtime voice-agent handoff to
-  Pi, with Discord voice implemented by the current ClankVox adapter.
+  Pi, with Discord voice implemented by the ClankVox adapter.
 - OpenAI web search and OpenAI/xAI media generation tools.
 - External MCP status/list/call tools.
 - Setup, auth, effort, profile, memory, web, media, subagent, Discord, and voice
@@ -544,7 +547,7 @@ personal-agent capabilities:
   `media_backend_status`.
 - Discord adapter: guild/channel/message/media/send/reaction tools.
 - Voice gateway tools: `discord_voice_status`, `discord_voice_join`,
-  `discord_voice_leave` for the current Discord voice adapter.
+  `discord_voice_leave` for the Discord voice adapter.
 - Coordination: `main_session_context`, `delegate_to_main_worker`,
   `subagent_status`.
 - Work trackers and MCP: `work_tracker_link`, `mcp_list_tools`, `mcp_call`.
@@ -577,8 +580,8 @@ Clanky, start with the [Pi quickstart](https://pi.dev/docs/latest/quickstart).
 - pnpm `10.33.4` through Corepack or a matching global pnpm install.
 - This repository checked out locally.
 - An OpenAI API key or another Pi-supported model auth path.
-- Optional: a Discord bot token for the current agent-owned chat gateway
-  adapter. Discord is today's adapter; the Clanky boundary is the
+- Optional: a Discord bot token for the built-in agent-owned chat gateway
+  adapter. Discord is the shipped adapter; the Clanky boundary is the
   communication gateway abstraction.
 - Optional: Rust/Cargo for the bundled Discord voice media helper.
 - Optional: Playwright Chromium for browser automation routes.
@@ -707,7 +710,7 @@ change that at runtime with:
 
 Clanky's built-in messaging is the local Pi session thread. External chat
 platforms are optional gateways into that thread or into profile-local
-subagents. The current built-in adapter is agent-owned Discord, where Clanky
+subagents. The built-in adapter is agent-owned Discord, where Clanky
 uses its own profile credential and owns the gateway. Future communication
 adapters should plug into the same ownership model.
 
@@ -1010,7 +1013,7 @@ Useful Pi editor patterns still apply:
 ```
 
 Use `/setup status` when you want a compact view of profile paths, OpenAI,
-gateway ownership, current Discord adapter status, Discord voice, ElevenLabs,
+gateway ownership, Discord adapter status, Discord voice, ElevenLabs,
 xAI, and AgentRoom participation. Use `/setup agentroom` to inspect the
 detected room config, Clanky room defaults, chat ownership, and work tracker
 defaults. Edit room-level settings from the AgentRoom TUI with `/setup`.
@@ -1047,7 +1050,7 @@ memories before saving anything that lacks explicit confirmation.
 
 Clanky's built-in messaging is the local Pi session thread. External chat
 platforms are gateways that can deliver messages to that thread or to a
-profile-local subagent. The current built-in adapter is agent-owned Discord:
+profile-local subagent. The built-in adapter is agent-owned Discord:
 
 ```text
 /discord-whoami
@@ -1081,7 +1084,7 @@ foreground worker.
 Voice is a separate live media path. It is not just a normal Pi text turn, and
 it is not coupled to which chat gateway owns a text conversation.
 
-The current Discord voice adapter uses:
+The Discord voice adapter uses:
 
 - TypeScript for control, settings, Realtime, tools, and Pi delegation.
 - Rust `clankvox` for Discord voice transport, RTP, Opus, screen watch, and
@@ -1177,7 +1180,7 @@ servers.
 
 Clanky can auto-add AgentRoom tools when enrolled in an AgentRoom room or when
 `.agentroom/config.yaml` exists. It can also auto-add provider tools for the
-current gateway adapter when the profile has the right credential.
+configured gateway adapter when the profile has the right credential.
 
 Inspect configured servers:
 
@@ -1202,9 +1205,9 @@ Source: `docs/communication-gateways.md` - https://volpestyle.github.io/docs/cla
 # Communication Gateways
 
 Clanky is not a Discord agent. Clanky is a personal Pi agent with a
-communication gateway layer. Discord text and Discord voice are the current
-concrete adapters, but the product model is meant to support other messaging
-and live communication surfaces.
+communication gateway layer. Discord text and Discord voice are shipped
+adapters, but the product model is meant to support other messaging and live
+communication surfaces.
 
 ## Core Model
 
@@ -1214,7 +1217,7 @@ flowchart TB
   thread["Canonical Pi session thread"]
   clanky["Clanky runtime<br/>persona, tools, memory, skills"]
   chat["Chat gateway adapters<br/>Discord today, Slack/Telegram/SMS/webhooks later"]
-  media["Voice/media gateway adapters<br/>ClankVox Discord today, other huddles later"]
+  media["Voice/media gateway adapters<br/>ClankVox package"]
   subagents["Profile-local subagents"]
   room["AgentRoom<br/>optional room"]
 
@@ -1233,8 +1236,8 @@ when side work should not interrupt the foreground session.
 ## Chat Gateways
 
 A chat gateway can deliver inbound messages, receive replies, and route accepted
-side requests to subagents. The current built-in chat adapter is agent-owned
-Discord, which handles DMs, mentions, replies, optional channel binding, and
+side requests to subagents. The built-in chat adapter is agent-owned Discord,
+which handles DMs, mentions, replies, optional channel binding, and
 model-mediated skip/reply decisions.
 
 Future chat adapters should follow the same shape:
@@ -1247,10 +1250,11 @@ Future chat adapters should follow the same shape:
 
 ## Voice And Media Gateways
 
-Voice/media gateways are separate from chat gateways. The current production
-adapter is Discord voice through ClankVox. It uses Clanky's TypeScript control
-plane, realtime model sessions, speech output providers, Pi delegation through
-`ask_pi`, and the native ClankVox media process.
+Voice/media gateways are separate from chat gateways. ClankVox is Clanky's main
+voice/media transport package. Discord voice and Go Live run through ClankVox.
+They use Clanky's TypeScript control plane, realtime model sessions, speech
+output providers, Pi delegation through `ask_pi`, and the native ClankVox media
+process.
 
 The same boundary should hold for future Slack huddles, WebRTC calls, or other
 live media surfaces: Clanky owns the control plane and profile settings, while a
@@ -1286,7 +1290,7 @@ shadows, durable handoffs, or multiple independent coding agents.
   room.
 - [Memory And Privacy](memory-and-privacy.md): profile-local credential and
   transcript boundaries.
-- [Discord Voice Architecture](discord-voice-architecture.md): current Discord
+- [Discord Voice Architecture](discord-voice-architecture.md): Discord
   voice/media implementation.
 
 ---
@@ -1313,10 +1317,10 @@ text and Discord voice are today's concrete adapters; future Telegram, Slack,
 SMS, webhook, huddle, or other messaging surfaces should plug in at the same
 ownership boundary.
 
-Voice and video are separate media gateways. The current production adapter is
-Discord voice through ClankVox; a future Slack huddle adapter should plug in at
-the same ownership boundary rather than making Slack or Discord part of
-Clanky's core session model.
+Voice and video are separate media gateways. Discord voice runs through
+ClankVox; a future Slack huddle adapter should plug in at the same ownership
+boundary rather than making Slack or Discord part of Clanky's core session
+model.
 
 ## Two Independent Axes
 
@@ -1332,7 +1336,7 @@ not mean "Clanky must surrender an agent-owned gateway identity."
 
 ### Agent-owned Chat Gateway
 
-For the current Discord adapter, Clanky imports `@agentroom/chat-discord` as a
+For the Discord adapter, Clanky imports `@agentroom/chat-discord` as a
 library and runs the gateway in-process under his own bot token. Traffic flows
 directly Discord <-> Clanky. This works both outside a room and while Clanky is
 participating in AgentRoom.
@@ -1855,7 +1859,7 @@ Export:
 
 Agent-owned gateways use Clanky's own profile credential. Room-owned gateways
 use AgentRoom's connector credential. For any gateway adapter, including the
-current Discord adapter, those credentials should not cross:
+Discord adapter, those credentials should not cross:
 
 - Clanky must not read AgentRoom room connector tokens.
 - AgentRoom must not read Clanky's profile token.
@@ -2249,13 +2253,13 @@ Use this after the non-live checks pass. The harness joins a real Discord voice
 channel, connects the selected realtime voice agent, and validates the counters
 that prove the voice bridge is working. OpenAI Realtime is the default realtime
 reasoning/tool agent, and xAI Grok Voice can be selected as an alternate
-realtime agent. OpenAI is still used for the current Discord speaker
-transcription path. Speech output can come from the selected realtime agent
-audio directly or from ElevenLabs TTS.
+realtime agent. OpenAI is still used for Discord speaker transcription. Speech
+output can come from the selected realtime agent audio directly or from
+ElevenLabs TTS.
 
 The xAI realtime path supports the live voice loop and tool calls, but it does
-not currently receive Discord screen-share image frames. Use OpenAI Realtime for
-the screen-watch snapshot workflow.
+not receive Discord screen-share image frames. Use OpenAI Realtime for the
+screen-watch snapshot workflow.
 
 ## Preflight
 
@@ -2571,12 +2575,12 @@ Source: `docs/discord-voice-architecture.md` - https://volpestyle.github.io/docs
 
 # Discord Voice Architecture
 
-This is the end-to-end map for Clanky's current agent-owned Discord voice
-adapter. Clanky's native messaging is the Pi session thread; Discord voice is a
-separate media gateway that can feed that thread through `ask_pi`, not a
-replacement for it. The voice adapter is a TypeScript control plane, a Rust
-Discord media plane, and Pi delegation behind a live realtime voice agent
-session. The realtime agent provider can be OpenAI Realtime or xAI Grok Voice.
+This is the end-to-end map for Clanky's agent-owned Discord voice adapter.
+Clanky's native messaging is the Pi session thread; Discord voice is a separate
+media gateway that can feed that thread through `ask_pi`, not a replacement for
+it. The voice adapter is a TypeScript control plane, a Rust Discord media plane,
+and Pi delegation behind a live realtime voice agent session. The realtime
+agent provider can be OpenAI Realtime or xAI Grok Voice.
 The speech output provider is only the audio renderer; it is not the same
 setting as the realtime reasoning/tool agent. There is no ElevenLabs-only
 Discord voice mode: ElevenLabs can replace the final voice rendering step, but
@@ -2637,7 +2641,7 @@ avoids.
 | Main realtime voice agent | `realtime-provider`, plus OpenAI/xAI model settings | OpenAI Realtime or xAI Grok Voice | Required for every joined voice session. Owns instructions, participation policy, whether to speak, realtime tool calls, Pi delegation, interruption state, and response continuation after tools. |
 | Speaker transcription | OpenAI realtime transcription settings | OpenAI Realtime transcription | One STT session per active Discord speaker. Produces labeled final transcripts for the main realtime agent. |
 | Speech renderer | `tts-provider` | Internal realtime audio or ElevenLabs TTS | Converts the main realtime agent's response into PCM for `clankvox`. It does not own room state, tool calls, or Pi delegation. |
-| Discord media transport | native `clankvox` process | Discord voice/Go Live protocol code | Moves PCM/RTP/video/media frames between Discord and TypeScript. It does not decide what Clanky says. |
+| Voice/media transport package | native `clankvox` process | Discord voice/Go Live protocol code today | Moves PCM/RTP/video/media frames between Discord and TypeScript. Future platform-specific media transports should live at the same layer. It does not decide what Clanky says. |
 
 `tts-provider=openai` is the internal realtime-audio path. Despite the stored
 name, it means "use audio emitted by the selected realtime agent"; if
@@ -2679,9 +2683,9 @@ Pi is downstream of the realtime agent. The voice agent can call `ask_pi`,
 which either uses the voice worker subagent coordinator or serializes a prompt
 through the main Pi runtime.
 
-xAI Grok Voice supports the live audio/tool agent path but does not currently
-receive Discord screen-share image frames in this bridge. OpenAI Realtime
-remains the provider for screen-watch snapshot inspection.
+xAI Grok Voice supports the live audio/tool agent path but does not receive
+Discord screen-share image frames in this bridge. OpenAI Realtime remains the
+provider for screen-watch snapshot inspection.
 
 ## Startup
 

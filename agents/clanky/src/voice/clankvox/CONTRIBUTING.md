@@ -82,7 +82,7 @@ A few things to be aware of:
 
 - DAVE transition handling is protocol-sensitive. Small changes can break encryption handoffs.
 - Stream-server behavior differs by role (`voice` vs `stream_watch` vs `stream_publish`). A fix for one role is not automatically correct for others.
-- The Bun IPC contract (`src/ipc.rs`) must stay in sync with the TypeScript side. If you change IPC messages, note that in your PR.
+- The Clanky IPC contract (`src/ipc.rs`) must stay in sync with the TypeScript side. If you change IPC messages, note that in your PR.
 
 ## License
 
