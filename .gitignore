@@ -4,6 +4,7 @@ dist/
 .env
 .DS_Store
 .clanky/
+.clanky-room/
 .clanky-tmp/
 .legacy-backup/
 tmp/

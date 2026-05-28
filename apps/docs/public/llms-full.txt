@@ -872,6 +872,10 @@ The active profile owns durable personal Clanky configuration and state:
   state. Scheduler state is optional and only present when that surface is
   wired.
 
+For the combined AgentRoom + Clanky file ownership map, including commit rules
+and room-owned gateway token boundaries, see
+[AgentRoom Configuration](docs://agent-room-docs/configuration).
+
 The TUI setup and status commands edit or report these stores:
 
 ```text
@@ -913,34 +917,13 @@ the active source in status output.
 
 ## AgentRoom Boundary
 
-Clanky profile config and AgentRoom room config are separate:
+Clanky profile config and AgentRoom room config are separate. `AGENTROOM=1`
+means room participation only; it does not move profile credentials into
+AgentRoom and it does not make Clanky read a room-owned connector token.
 
-- Clanky owns personal credentials, profile memory, persona state, sessions,
-  skills, Clanky's native Pi session thread, and agent-owned communication
-  gateway settings.
-- AgentRoom owns `.agentroom/config.yaml`, runtime topology, room-owned chat
-  gateways, room routes, and audited room coordination.
-
-When Clanky is launched in AgentRoom, `AGENTROOM=1` means room participation
-only. It does not move Clanky's profile credentials into AgentRoom and it does
-not make Clanky read a room-owned connector token.
-
-There is one portable non-secret overlap: when Clanky starts inside a project
-with `.agentroom/config.yaml`, it reads these optional blocks as defaults:
-
-```yaml
-workTracker:
-  default: linear
-  providers:
-    linear:
-      type: linear
-      teamId: team_123
-
-clanky:
-  home: .clanky-room
-  profile: lead
-  chatGatewayOwner: room
-```
+The only portable overlap is non-secret launch defaults. When Clanky starts
+inside a project with `.agentroom/config.yaml`, it may read `workTracker` and
+`clanky` blocks for default home, profile, tracker, and chat ownership values.
 
 Precedence remains explicit: `--home` / `--profile` and `CLANKY_HOME` /
 `CLANKY_PROFILE` win over the portable Clanky defaults. The AgentRoom block can
@@ -1386,25 +1369,14 @@ agent-owned gateway and a room-owned gateway at the same channel or DM.
 
 ## Ownership
 
-- Clanky owns persona, memory, profile state, work-tracker stores, skills, and Pi
-  `InteractiveMode` wiring.
-- AgentRoom owns rooms, runtime providers, task/event audit, send/read
-  coordination, and room-owned chat gateway lifecycle.
-- Clanky owns agent-owned chat and media gateway lifecycle for its own profile,
-  whether or not it is also in a room.
+Clanky owns profile state and agent-owned gateway lifecycle. AgentRoom owns
+rooms, runtime providers, task/event audit, send/read coordination, and
+room-owned gateway lifecycle.
 
-## Token Ownership
-
-The rule: **whoever runs the gateway owns the token.**
-
-- Agent-owned: Clanky's profile holds the gateway credential, persisted in
-  `<profileDir>/auth.json` (the same file Pi uses for model API keys, with
-  `0600` perms and the same file locking). For Discord,
-  `CLANKY_DISCORD_TOKEN` env still overrides the stored value.
-- Room-owned: AgentRoom holds the connector credential.
-
-Clanky must never read the room connector token. AgentRoom must never read
-Clanky's profile token.
+The complete file and token ownership map lives in
+[AgentRoom Configuration](docs://agent-room-docs/configuration). The practical
+rule is: whoever runs the gateway owns the token. Clanky must never read the
+room connector token, and AgentRoom must never read Clanky's profile token.
 
 ## Multi-Agent Topology
 
@@ -1762,21 +1734,12 @@ Default home:
 ~/.clanky
 ```
 
-Important profile files:
-
-| Path | Purpose |
-| --- | --- |
-| `profiles/<profile>/auth.json` | Profile-local credentials stored by Clanky auth commands. |
-| `profiles/<profile>/models.json` | Model registry state for the profile. |
-| `profiles/<profile>/sessions/` | Pi JSONL sessions for this Clanky profile. |
-| `profiles/<profile>/memory/` | Source-grounded memory data. |
-| `profiles/<profile>/SELF.md` | Profile-local self memory. |
-| `profiles/<profile>/skills/` | Profile-local Clanky skills. |
-| `profiles/<profile>/subagents/` | Gateway and voice subagent state and sessions. |
-| `profiles/<profile>/work-trackers/` | Provider-neutral tracker refs. |
-| `profiles/<profile>/discord-voice.json` | Stored voice settings. |
-| `profiles/<profile>/discord-bridge.log` | Discord bridge log. |
-| `profiles/<profile>/discord-voice.log` | Discord voice log. |
+Important profile stores include credentials, model registry entries, sessions,
+memory, skills, subagent state, tracker refs, voice settings, and local
+gateway/voice logs. The file-level ownership and commit rules are maintained in
+[AgentRoom Configuration](docs://agent-room-docs/configuration); Clanky's own
+[Configuration Model](configuration.md) explains the profile resolver and active
+profile paths.
 
 Use separate profiles for separate identities, rooms, experiments, or live
 instances.

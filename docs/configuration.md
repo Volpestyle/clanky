@@ -33,6 +33,10 @@ The active profile owns durable personal Clanky configuration and state:
   state. Scheduler state is optional and only present when that surface is
   wired.
 
+For the combined AgentRoom + Clanky file ownership map, including commit rules
+and room-owned gateway token boundaries, see
+[AgentRoom Configuration](docs://agent-room-docs/configuration).
+
 The TUI setup and status commands edit or report these stores:
 
 ```text
@@ -74,34 +78,13 @@ the active source in status output.
 
 ## AgentRoom Boundary
 
-Clanky profile config and AgentRoom room config are separate:
+Clanky profile config and AgentRoom room config are separate. `AGENTROOM=1`
+means room participation only; it does not move profile credentials into
+AgentRoom and it does not make Clanky read a room-owned connector token.
 
-- Clanky owns personal credentials, profile memory, persona state, sessions,
-  skills, Clanky's native Pi session thread, and agent-owned communication
-  gateway settings.
-- AgentRoom owns `.agentroom/config.yaml`, runtime topology, room-owned chat
-  gateways, room routes, and audited room coordination.
-
-When Clanky is launched in AgentRoom, `AGENTROOM=1` means room participation
-only. It does not move Clanky's profile credentials into AgentRoom and it does
-not make Clanky read a room-owned connector token.
-
-There is one portable non-secret overlap: when Clanky starts inside a project
-with `.agentroom/config.yaml`, it reads these optional blocks as defaults:
-
-```yaml
-workTracker:
-  default: linear
-  providers:
-    linear:
-      type: linear
-      teamId: team_123
-
-clanky:
-  home: .clanky-room
-  profile: lead
-  chatGatewayOwner: room
-```
+The only portable overlap is non-secret launch defaults. When Clanky starts
+inside a project with `.agentroom/config.yaml`, it may read `workTracker` and
+`clanky` blocks for default home, profile, tracker, and chat ownership values.
 
 Precedence remains explicit: `--home` / `--profile` and `CLANKY_HOME` /
 `CLANKY_PROFILE` win over the portable Clanky defaults. The AgentRoom block can

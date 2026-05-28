@@ -85,25 +85,14 @@ agent-owned gateway and a room-owned gateway at the same channel or DM.
 
 ## Ownership
 
-- Clanky owns persona, memory, profile state, work-tracker stores, skills, and Pi
-  `InteractiveMode` wiring.
-- AgentRoom owns rooms, runtime providers, task/event audit, send/read
-  coordination, and room-owned chat gateway lifecycle.
-- Clanky owns agent-owned chat and media gateway lifecycle for its own profile,
-  whether or not it is also in a room.
+Clanky owns profile state and agent-owned gateway lifecycle. AgentRoom owns
+rooms, runtime providers, task/event audit, send/read coordination, and
+room-owned gateway lifecycle.
 
-## Token Ownership
-
-The rule: **whoever runs the gateway owns the token.**
-
-- Agent-owned: Clanky's profile holds the gateway credential, persisted in
-  `<profileDir>/auth.json` (the same file Pi uses for model API keys, with
-  `0600` perms and the same file locking). For Discord,
-  `CLANKY_DISCORD_TOKEN` env still overrides the stored value.
-- Room-owned: AgentRoom holds the connector credential.
-
-Clanky must never read the room connector token. AgentRoom must never read
-Clanky's profile token.
+The complete file and token ownership map lives in
+[AgentRoom Configuration](docs://agent-room-docs/configuration). The practical
+rule is: whoever runs the gateway owns the token. Clanky must never read the
+room connector token, and AgentRoom must never read Clanky's profile token.
 
 ## Multi-Agent Topology
 
