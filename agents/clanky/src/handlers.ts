@@ -1,3 +1,4 @@
+import { browserOpenTab } from "@clanky/browser-bridge";
 import {
 	type ClankyAgentToolHandlers,
 	type ClankyPaths,
@@ -102,6 +103,10 @@ export function createClankyHandlers(
 			getWebBackendStatus({
 				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
 				cwd: process.cwd(),
+			}),
+		browserOpenTab: async (input) =>
+			browserOpenTab(input, {
+				homeDir: paths.homeDir,
 			}),
 		openAiImageGenerate: async (input, signal) =>
 			generateOpenAiImage(input, {

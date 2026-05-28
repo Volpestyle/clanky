@@ -222,6 +222,11 @@ const approximateUserLocationSchema = Type.Object({
 	country: Type.Optional(Type.String()),
 	timezone: Type.Optional(Type.String()),
 });
+const browserOpenTabSchema = Type.Object({
+	url: Type.String(),
+	active: Type.Optional(Type.Boolean()),
+});
+
 const webSearchSchema = Type.Object({
 	query: Type.String(),
 	instructions: Type.Optional(Type.String()),
@@ -422,6 +427,7 @@ export type MemoryRememberToolInput = Static<typeof memoryRememberSchema>;
 export type MemorySearchToolInput = Static<typeof memorySearchSchema>;
 export type MemoryForgetToolInput = Static<typeof memoryForgetSchema>;
 export type WebSearchToolInput = Static<typeof webSearchSchema>;
+export type BrowserOpenTabToolInput = Static<typeof browserOpenTabSchema>;
 export type OpenAiImageGenerateToolInput = Static<typeof openAiImageGenerateSchema>;
 export type XAiImageGenerateToolInput = Static<typeof xaiImageGenerateSchema>;
 export type XAiVideoGenerateToolInput = Static<typeof xaiVideoGenerateSchema>;
@@ -476,6 +482,7 @@ export interface ClankyAgentToolHandlers {
 	profileStatus?: () => Promise<unknown>;
 	webSearch?: (input: OpenAiWebSearchInput, signal?: AbortSignal) => Promise<unknown>;
 	webBackendStatus?: () => Promise<unknown>;
+	browserOpenTab?: (input: BrowserOpenTabToolInput) => Promise<unknown>;
 	openAiImageGenerate?: (input: OpenAiImageGenerateInput, signal?: AbortSignal) => Promise<unknown>;
 	xaiImageGenerate?: (input: XAiImageGenerateInput, signal?: AbortSignal) => Promise<unknown>;
 	xaiVideoGenerate?: (input: XAiVideoGenerateInput, signal?: AbortSignal) => Promise<unknown>;
@@ -2979,12 +2986,34 @@ export function createClankyToolDefinitions(
 				name: "web_backend_status",
 				label: "Web Backend Status",
 				description:
-					"Inspect which Clanky web operator backends are available: OpenAI web search, agent-browser, Playwright CLI, Chrome CDP, and Node fetch.",
+					"Inspect which Clanky web operator backends are available: OpenAI web search, browser bridge, agent-browser, Playwright CLI, Chrome CDP, and Node fetch.",
 				promptSnippet:
-					"web_backend_status: check available web operator backends before choosing agent-browser, Playwright, Chrome CDP, or OpenAI web search.",
+					"web_backend_status: check available web operator backends before choosing browser_open_tab, agent-browser, Playwright, Chrome CDP, or OpenAI web search.",
 				parameters: Type.Object({}),
 				async execute() {
 					return toolResult(await webBackendStatus());
+				},
+			}),
+		);
+	}
+	const browserOpenTab = handlers.browserOpenTab;
+	if (browserOpenTab !== undefined) {
+		tools.push(
+			defineTool({
+				name: "browser_open_tab",
+				label: "Browser Open Tab",
+				description:
+					"Open a URL in a new tab in the user's running Chromium-based browser (Helium, Chrome, or Brave) via the Clanky browser bridge extension.",
+				promptSnippet:
+					"browser_open_tab: open a URL in the user's real browser so they can see it themselves. Requires the Clanky browser bridge extension to be loaded.",
+				promptGuidelines: [
+					'Use this when the user says "open", "pull up", "go to", or "show me" a URL and they expect it to land in their own browser session.',
+					"Check web_backend_status first if you are not sure the bridge is available; if it reports unavailable, fall back to Playwright or web_search.",
+					"Do not use this for silent scraping. The user will see whatever you open.",
+				],
+				parameters: browserOpenTabSchema,
+				async execute(_toolCallId, params) {
+					return toolResult(await browserOpenTab(params));
 				},
 			}),
 		);

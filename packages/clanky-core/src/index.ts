@@ -1,4 +1,5 @@
 export {
+	type BrowserOpenTabToolInput,
 	type ClankyAgentToolHandlers,
 	type ClankyBeforeProviderRequestInput,
 	type CreateClankyExtensionFactoriesOptions,
