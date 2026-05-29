@@ -62,7 +62,6 @@ const scheduleCronSchema = Type.Object({
 });
 
 const workTrackerProviderKindSchema = Type.Union([
-	Type.Literal("native"),
 	Type.Literal("linear"),
 	Type.Literal("github-issues"),
 	Type.Literal("github"),
@@ -84,8 +83,6 @@ const workTrackerLinkSchema = Type.Object({
 	url: Type.Optional(Type.String()),
 	sessionId: Type.Optional(Type.String()),
 	session_id: Type.Optional(Type.String()),
-	taskId: Type.Optional(Type.String()),
-	task_id: Type.Optional(Type.String()),
 	note: Type.Optional(Type.String()),
 	metadata: Type.Optional(Type.Unknown()),
 });
@@ -127,27 +124,6 @@ const delegateToMainWorkerSchema = Type.Object({
 const subagentMessageSchema = Type.Object({
 	id: Type.String(),
 	text: Type.String(),
-});
-
-const taskCreateSchema = Type.Object({
-	title: Type.String(),
-	description: Type.Optional(Type.String()),
-	status: Type.Optional(
-		Type.Union([Type.Literal("open"), Type.Literal("in_progress"), Type.Literal("done"), Type.Literal("cancelled")]),
-	),
-	priority: Type.Optional(Type.Union([Type.Literal("low"), Type.Literal("normal"), Type.Literal("high")])),
-	sessionId: Type.Optional(Type.String()),
-	session_id: Type.Optional(Type.String()),
-	trackerProviderId: Type.Optional(Type.String()),
-	tracker_provider_id: Type.Optional(Type.String()),
-	trackerProviderKind: Type.Optional(workTrackerProviderKindSchema),
-	tracker_provider_kind: Type.Optional(workTrackerProviderKindSchema),
-	trackerIssueId: Type.Optional(Type.String()),
-	tracker_issue_id: Type.Optional(Type.String()),
-	trackerIdentifier: Type.Optional(Type.String()),
-	tracker_identifier: Type.Optional(Type.String()),
-	trackerUrl: Type.Optional(Type.String()),
-	tracker_url: Type.Optional(Type.String()),
 });
 
 const memoryScopeSchema = Type.Union([
@@ -484,7 +460,6 @@ export type MainAgentActivityToolInput = Static<typeof mainAgentActivitySchema>;
 export type MainAgentCancelToolInput = Static<typeof mainAgentCancelSchema>;
 export type DelegateToMainWorkerToolInput = Static<typeof delegateToMainWorkerSchema>;
 export type SubagentMessageToolInput = Static<typeof subagentMessageSchema>;
-export type TaskCreateToolInput = Static<typeof taskCreateSchema>;
 export type MemoryRememberToolInput = Static<typeof memoryRememberSchema>;
 export type MemorySearchToolInput = Static<typeof memorySearchSchema>;
 export type MemoryForgetToolInput = Static<typeof memoryForgetSchema>;
@@ -537,7 +512,6 @@ export interface ClankyAgentToolHandlers {
 	mainAgentActivity?: (input: MainAgentActivityToolInput) => Promise<unknown>;
 	mainAgentCancel?: (input: MainAgentCancelToolInput) => Promise<unknown>;
 	delegateToMainWorker?: (input: DelegateToMainWorkerToolInput) => Promise<unknown>;
-	taskCreate?: (input: TaskCreateToolInput) => Promise<unknown>;
 	beforeProviderRequest?: (input: ClankyBeforeProviderRequestInput) => Promise<unknown | undefined>;
 	indexMessage?: (input: SessionIndexMessageInput) => Promise<void>;
 	memoryPacket?: (input: MemoryPacketInput) => Promise<MemoryPacket>;
@@ -2868,34 +2842,17 @@ export function createClankyToolDefinitions(
 				name: "work_tracker_link",
 				label: "Work Tracker Link",
 				description:
-					"Persist a provider-neutral link between an external work tracker issue and a Clanky session or task.",
+					"Persist a provider-neutral link between an external work tracker issue and the current Clanky session.",
 				promptSnippet:
-					"work_tracker_link: after using MCP, CLI, or a skill to create or find tracker work, bind the external issue to the current Clanky session or task.",
+					"work_tracker_link: after using MCP, CLI, or a skill to create or find tracker work, bind the external issue to the current Clanky session.",
 				promptGuidelines: [
 					"Use the installed tracker MCP, CLI, or skill for provider-specific create, comment, and status operations.",
 					"Use provider_kind/provider_id to distinguish Linear, GitHub Issues, Jira, or custom trackers.",
-					"Use task_create without a tracker ref when the user only wants native Clanky tracking.",
 				],
 				parameters: workTrackerLinkSchema,
 				async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 					const input = normalizeWorkTrackerLinkToolInput(params, ctx.sessionManager.getSessionId());
 					return toolResult(await workTrackerLink(input));
-				},
-			}),
-		);
-	}
-	const taskCreate = handlers.taskCreate;
-	if (taskCreate !== undefined) {
-		tools.push(
-			defineTool({
-				name: "task_create",
-				label: "Task Create",
-				description: "Create a lightweight native Clanky task tied to the current session and optional tracker ref.",
-				promptSnippet: "task_create: record a local Clanky task for follow-up or lightweight work tracking.",
-				parameters: taskCreateSchema,
-				async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-					const input = normalizeTaskCreateToolInput(params, ctx.sessionManager.getSessionId());
-					return toolResult(await taskCreate(input));
 				},
 			}),
 		);
@@ -3694,7 +3651,7 @@ export function maybeInjectAgentRoomOperatorSkill(text: string, env: NodeJS.Proc
 export function maybeInjectWorkTrackerSkill(text: string, env: NodeJS.ProcessEnv = process.env): string {
 	if (env.CLANKY_WORK_TRACKER_AUTO_SKILL === "0" || env.CLANKY_WORK_TRACKER_AUTO_SKILL === "false") return text;
 	const tracker = env.CLANKY_WORK_TRACKER?.trim() || env.CLANKY_WORK_TRACKER_PROVIDER_KIND?.trim();
-	if (tracker === undefined || tracker.length === 0 || tracker === "native") return text;
+	if (tracker === undefined || tracker.length === 0) return text;
 	const trimmed = text.trimStart();
 	if (trimmed.length === 0) return text;
 	if (trimmed.startsWith("/")) return text;
@@ -4194,35 +4151,11 @@ function normalizeWorkTrackerLinkToolInput(
 	if (input.title !== undefined) output.title = input.title;
 	if (input.url !== undefined) output.url = input.url;
 	const sessionId = input.sessionId ?? input.session_id;
-	const taskId = input.taskId ?? input.task_id;
 	if (sessionId !== undefined) output.sessionId = sessionId;
-	if (taskId !== undefined) output.taskId = taskId;
-	if (output.sessionId === undefined && output.taskId === undefined) output.sessionId = defaultSessionId;
+	if (output.sessionId === undefined) output.sessionId = defaultSessionId;
 	if (input.note !== undefined) output.note = input.note;
 	const metadata = metadataRecord(input.metadata);
 	if (metadata !== undefined) output.metadata = metadata;
-	return output;
-}
-
-function normalizeTaskCreateToolInput(input: TaskCreateToolInput, defaultSessionId: string): TaskCreateToolInput {
-	const output: TaskCreateToolInput = { ...input };
-	if (output.sessionId === undefined) output.sessionId = input.session_id ?? defaultSessionId;
-	if (output.trackerProviderId === undefined && input.tracker_provider_id !== undefined) {
-		output.trackerProviderId = input.tracker_provider_id;
-	}
-	if (output.trackerIssueId === undefined && input.tracker_issue_id !== undefined) {
-		output.trackerIssueId = input.tracker_issue_id;
-	}
-	if (output.trackerIdentifier === undefined && input.tracker_identifier !== undefined) {
-		output.trackerIdentifier = input.tracker_identifier;
-	}
-	if (output.trackerUrl === undefined && input.tracker_url !== undefined) {
-		output.trackerUrl = input.tracker_url;
-	}
-	if (output.trackerProviderKind === undefined) {
-		const trackerProviderKind = normalizeWorkTrackerKind(input.tracker_provider_kind ?? input.trackerProviderKind);
-		if (trackerProviderKind !== undefined) output.trackerProviderKind = trackerProviderKind;
-	}
 	return output;
 }
 

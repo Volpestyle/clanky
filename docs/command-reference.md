@@ -201,9 +201,9 @@ are available and credentials/policy allow it:
 - Coordination: `main_session_context`, `delegate_to_main_worker`,
   `subagent_status`.
 - Work tracking: `work_tracker_link` for binding issues created or found through
-  MCP, CLI, or tracker-specific skills.
+  MCP, CLI, or tracker-specific skills to the current Clanky session.
 - MCP: `mcp_list_tools`, `mcp_call`.
 
-`task_create` and `schedule_cron` exist in the shared tool layer, but are only
-present in a runtime when their handlers are wired. They are not part of the
-default Pi foreground-thread path.
+`schedule_cron` exists in the shared tool layer, but is only present in a
+runtime when its handler is wired. It is not part of the default Pi
+foreground-thread path.

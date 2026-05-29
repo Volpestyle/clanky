@@ -206,7 +206,6 @@ For the room side, jump to [AgentRoom Ecosystem Tour](docs://agent-room-docs/eco
 pnpm check
 pnpm smoke
 clanky --help
-pnpm docs:dev
 ```
 
 Focused non-live checks:

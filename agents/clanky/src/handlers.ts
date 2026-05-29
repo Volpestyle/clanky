@@ -52,7 +52,6 @@ import type { ClankyStores } from "./stores.ts";
  *
  * - scheduleCron / listCron (deferred optional scheduler surface)
  * - externalMcpCall / externalMcpStatus (gateway-owned external MCP launcher)
- * - taskCreate / listTasks (coupled to SessionRegistry event log)
  * - indexMessage (depends on SessionIndexStore)
  */
 export function createClankyHandlers(

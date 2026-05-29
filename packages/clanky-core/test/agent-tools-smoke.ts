@@ -25,7 +25,6 @@ import {
 	type SubagentMessageToolInput,
 	saveStoredOpenAiApiKey,
 	shouldStartAgentChatGateway,
-	type TaskCreateToolInput,
 	type WebSearchToolInput,
 	type WorkTrackerLinkToolInput,
 	type XAiImageGenerateToolInput,
@@ -47,9 +46,7 @@ const handlers: ClankyAgentToolHandlers = {
 		return { scheduled: true, input };
 	},
 	workTrackerLink: async (input) => {
-		calls.push(
-			`tracker:${input.providerKind ?? "custom"}:${input.issueId}:${input.sessionId ?? input.taskId ?? "none"}`,
-		);
+		calls.push(`tracker:${input.providerKind ?? "custom"}:${input.issueId}:${input.sessionId ?? "none"}`);
 		return { ref: input };
 	},
 	externalMcpCall: async (input) => {
@@ -64,10 +61,6 @@ const handlers: ClankyAgentToolHandlers = {
 				tools: [{ name: "echo", description: "Echo smoke input", inputSchema: { type: "object" } }],
 			},
 		];
-	},
-	taskCreate: async (input) => {
-		calls.push(`task:${input.title}:${input.sessionId ?? "none"}`);
-		return { task: { id: "task-created", ...input } };
 	},
 	mainSessionContext: async (input) => {
 		calls.push(`main-session:${input.limit ?? "default"}`);
@@ -188,7 +181,6 @@ const expectedNames = [
 	"mcp_list_tools",
 	"mcp_call",
 	"work_tracker_link",
-	"task_create",
 	"main_session_context",
 	"main_agent_activity",
 	"main_agent_cancel",
@@ -238,13 +230,6 @@ await executeTool(tools, "mcp_call", {
 await executeTool(tools, "mcp_list_tools", {
 	server: "faux",
 } satisfies ExternalMcpListToolsInput);
-
-await executeTool(tools, "task_create", {
-	title: "Task smoke",
-	priority: "high",
-	tracker_provider_kind: "github-issues",
-	tracker_issue_id: "123",
-} satisfies TaskCreateToolInput);
 
 await executeTool(tools, "main_session_context", {
 	limit: 4,
@@ -341,7 +326,6 @@ const expectedCallPrefixes = [
 	"tracker:",
 	"mcp-call:",
 	"mcp-list:",
-	"task:",
 	"main-session:",
 	"delegate-main:",
 	"subagent-status",

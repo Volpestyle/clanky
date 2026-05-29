@@ -11,6 +11,6 @@ deps: []
 
 # Linear Bridge
 
-Keep Linear comments concise and technical. Include the action taken, verification performed, and any remaining risk. Use the installed Linear MCP, CLI, or connector tool for Linear-specific issue creation, comments, and status changes. Use Clanky's provider-neutral `work_tracker_link` tool only to bind the resulting Linear issue to the Clanky session or task, with `providerKind: "linear"`. When linking agent work, preserve the task id, originating session id, and relevant file scope.
+Keep Linear comments concise and technical. Include the action taken, verification performed, and any remaining risk. Use the installed Linear MCP, CLI, or connector tool for Linear-specific issue creation, comments, and status changes. Use Clanky's provider-neutral `work_tracker_link` tool only to bind the resulting Linear issue to the Clanky session, with `providerKind: "linear"`. When linking agent work, preserve the originating session id and relevant file scope.
 
 If Linear credentials or MCP tools are not available, report `tracker_update_skipped` with the reason.
