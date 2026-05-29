@@ -12,6 +12,7 @@ import {
 	loadStoredDiscordCredential,
 	resolveClankyPaths,
 	resolvePortableClankyDefaults,
+	truncateText,
 } from "@clanky/core";
 import {
 	AuthStorage,
@@ -732,12 +733,6 @@ function formatStartupVoiceProgress(progress: DiscordVoiceStartProgress): string
 function shortDiscordId(id: string): string {
 	if (id.length <= 10) return id;
 	return `${id.slice(0, 4)}...${id.slice(-4)}`;
-}
-
-function truncateText(text: string, maxLength: number): string {
-	if (text.length <= maxLength) return text;
-	if (maxLength <= 3) return text.slice(0, maxLength);
-	return `${text.slice(0, maxLength - 3)}...`;
 }
 
 function truncateStartupProgressLine(line: string, columns: number | undefined): string {

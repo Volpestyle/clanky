@@ -8,6 +8,7 @@
 import {
 	DEFAULT_ELEVENLABS_PROVIDER_ID,
 	getElevenLabsCredentialStatus,
+	isRecord,
 	removeStoredElevenLabsCredential,
 	saveStoredElevenLabsApiKey,
 } from "@clanky/core";
@@ -303,8 +304,4 @@ function extractElevenLabsErrorMessage(value: unknown): string | undefined {
 	}
 	const message = value.message ?? value.error;
 	return typeof message === "string" && message.length > 0 ? message : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return value !== null && typeof value === "object" && !Array.isArray(value);
 }

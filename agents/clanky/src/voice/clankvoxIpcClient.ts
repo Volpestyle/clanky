@@ -4,8 +4,7 @@ import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
-
-type JsonRecord = Record<string, unknown>;
+import { isRecord, type JsonRecord, stringValue } from "@clanky/core";
 
 export interface ClankvoxLaunchOptions {
 	bin?: string;
@@ -592,8 +591,12 @@ function resolveLaunch(options: ClankvoxLaunchOptions): { command: string; args:
 }
 
 function defaultClankvoxDir(): string {
+	// clankvox lives as a sibling repo in the workspace root, not vendored here.
+	// This file is at clanky-pi/agents/clanky/src/voice/, so five levels up is the
+	// workspace root that also contains the standalone clankvox crate.
+	// Override with CLANKY_CLANKVOX_DIR or CLANKY_CLANKVOX_BIN when deployed elsewhere.
 	const here = dirname(fileURLToPath(import.meta.url));
-	return join(here, "clankvox");
+	return join(here, "..", "..", "..", "..", "..", "clankvox");
 }
 
 function normalizeSampleRate(value: number): number {
@@ -651,14 +654,6 @@ function parseTransportState(value: JsonRecord): ClankvoxTransportState | undefi
 		status,
 		reason: nullableString(value.reason),
 	};
-}
-
-function isRecord(value: unknown): value is JsonRecord {
-	return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function stringValue(value: unknown): string {
-	return typeof value === "string" ? value : "";
 }
 
 function nullableString(value: unknown): string | null {

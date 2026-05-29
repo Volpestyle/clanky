@@ -1,4 +1,4 @@
-import type { MainSessionContextToolInput } from "@clanky/core";
+import { clampInteger, type MainSessionContextToolInput } from "@clanky/core";
 import type { AgentSessionRuntime, SessionEntry, SessionMessageEntry } from "@earendil-works/pi-coding-agent";
 
 const DEFAULT_ENTRY_LIMIT = 16;
@@ -175,11 +175,6 @@ function extractToolCalls(content: unknown): string[] | undefined {
 
 function readString(value: unknown): string | undefined {
 	return typeof value === "string" ? value : undefined;
-}
-
-function clampInteger(value: number | undefined, fallback: number, min: number, max: number): number {
-	if (value === undefined || !Number.isFinite(value)) return fallback;
-	return Math.min(max, Math.max(min, Math.floor(value)));
 }
 
 function truncateToBudget(text: string, remainingChars: number): string {

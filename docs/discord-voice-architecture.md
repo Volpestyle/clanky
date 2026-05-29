@@ -99,7 +99,8 @@ It resolves settings, starts the selected realtime agent client, starts the
 OpenAI speaker transcription client, starts `clankvox`, dispatches tools,
 handles interruption policy, and records voice subagent context.
 
-`agents/clanky/src/voice/clankvox/` is the Rust media process. It owns Discord
+The standalone `clankvox` repo (a sibling at the workspace root, `../clankvox/`)
+is the Rust media process. It owns Discord
 voice transport details: voice gateway connection, RTP/RTCP, DAVE encryption,
 Opus encode/decode, screen stream watch/publish, music/video playback, and PCM
 IPC to Node.
@@ -289,7 +290,6 @@ pnpm voice:build
 - Per-speaker STT: `agents/clanky/src/voice/discordVoiceSpeakerTranscription.ts`
 - ElevenLabs TTS adapter: `agents/clanky/src/voice/elevenLabsTtsClient.ts`
 - Rust IPC client: `agents/clanky/src/voice/clankvoxIpcClient.ts`
-- Rust media process: `agents/clanky/src/voice/clankvox/src/main.rs`
-- Rust voice/audio pipeline:
-  `agents/clanky/src/voice/clankvox/docs/audio-pipeline.md`
-- Rust Go Live details: `agents/clanky/src/voice/clankvox/docs/go-live.md`
+- Rust media process: `../clankvox/src/main.rs` (sibling repo)
+- Rust voice/audio pipeline: `../clankvox/docs/audio-pipeline.md`
+- Rust Go Live details: `../clankvox/docs/go-live.md`

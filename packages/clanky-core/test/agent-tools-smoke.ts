@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -9,6 +9,7 @@ import {
 	type DiscordVoiceJoinToolInput,
 	type ExternalMcpCallToolInput,
 	type ExternalMcpListToolsInput,
+	getWebBackendStatus,
 	type MainAgentActivityToolInput,
 	type MainAgentCancelToolInput,
 	type MainSessionContextToolInput,
@@ -205,6 +206,7 @@ if (mainRuntimeTools.some((tool) => tool.name === "delegate_to_main_worker")) {
 	throw new Error("agent-tools smoke: main runtime tools should not include delegate_to_main_worker");
 }
 await assertOpenAiWebSearchUsesStoredCredential();
+await assertWebBackendStatusDetectsStaleBridgeState();
 
 await executeTool(tools, "schedule_cron", {
 	schedule: "every 1h",
@@ -440,6 +442,42 @@ async function assertOpenAiWebSearchUsesStoredCredential(): Promise<void> {
 	}
 }
 
+async function assertWebBackendStatusDetectsStaleBridgeState(): Promise<void> {
+	const tmpRoot = await mkdtemp(join(tmpdir(), "clanky-web-status-"));
+	try {
+		const bridgeDir = join(tmpRoot, "browser-bridge");
+		await mkdir(bridgeDir, { recursive: true });
+		await writeFile(
+			join(bridgeDir, "state.json"),
+			`${JSON.stringify({
+				port: 65530,
+				pid: 12345,
+				browser: "chrome",
+				startedAt: "2026-01-01T00:00:00.000Z",
+			})}\n`,
+		);
+		const fetchImpl: typeof fetch = async () => {
+			throw new TypeError("fetch failed");
+		};
+		const status = expectRecord(
+			await getWebBackendStatus({
+				cwd: "/tmp/clanky-agent-tools-smoke",
+				env: { CLANKY_HOME: tmpRoot, PATH: process.env.PATH ?? "" },
+				fetchImpl,
+			}),
+			"web backend status",
+		);
+		const backends = expectRecord(status.backends, "web backend status backends");
+		const bridge = expectRecord(backends.browserBridge, "browser bridge status");
+		const note = String(bridge.note ?? "");
+		if (bridge.available !== false || !note.includes("state file exists") || !note.includes("not reachable")) {
+			throw new Error(`web backend status did not reject stale bridge state: ${JSON.stringify(bridge)}`);
+		}
+	} finally {
+		await rm(tmpRoot, { recursive: true, force: true });
+	}
+}
+
 async function assertRecentDiscordAttachmentsLoadsMediaSources(): Promise<void> {
 	const fetchImpl = async (input: string | URL | Request): Promise<Response> => {
 		const url = String(input);
@@ -457,9 +495,9 @@ async function assertRecentDiscordAttachmentsLoadsMediaSources(): Promise<void> 
 	};
 	const result = await recentDiscordAttachments(
 		{
-			channelId: "channel-media",
-			messageLimit: 3,
-			mediaLimit: 3,
+			channel_id: "channel-media",
+			message_limit: 3,
+			media_limit: 3,
 			load: true,
 		},
 		{
@@ -481,10 +519,10 @@ async function assertRecentDiscordAttachmentsLoadsMediaSources(): Promise<void> 
 	}
 	const exact = await recentDiscordAttachments(
 		{
-			channelId: "channel-media",
-			messageId: "1440000000000000001",
-			messageLimit: 3,
-			mediaLimit: 3,
+			channel_id: "channel-media",
+			message_id: "1440000000000000001",
+			message_limit: 3,
+			media_limit: 3,
 			load: false,
 		},
 		{
@@ -543,6 +581,13 @@ function discordMessagesFixture(): unknown[] {
 			embeds: [],
 		},
 	];
+}
+
+function expectRecord(value: unknown, name: string): Record<string, unknown> {
+	if (value === null || typeof value !== "object" || Array.isArray(value)) {
+		throw new Error(`${name} is not an object: ${JSON.stringify(value)}`);
+	}
+	return value as Record<string, unknown>;
 }
 
 async function assertSubagentPanelCommand(): Promise<void> {

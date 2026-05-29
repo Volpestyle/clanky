@@ -232,6 +232,14 @@ export {
 	type UpsertSubagentInput,
 } from "./subagents/store.ts";
 export {
+	clampInteger,
+	errorMessage,
+	isRecord,
+	type JsonRecord,
+	stringValue,
+	truncateText,
+} from "./util/values.ts";
+export {
 	getWebBackendStatus,
 	type OpenAiWebSearchInput,
 	type OpenAiWebSearchResult,

@@ -1,5 +1,12 @@
 # Clanky Browser Bridge — Extension
 
-This is the MV3 extension that pairs with the Clanky native messaging host. It is generated at install time into `~/.clanky/browser-bridge/extension/` by `pnpm browser-bridge:install`. Load that generated directory (not this source directory) via chrome://extensions → Load Unpacked.
+This is the source MV3 extension for the Clanky Browser Bridge. It is generated
+at install time into `~/.clanky/browser-bridge/extension/` by
+`pnpm browser-bridge:install`. Load that generated directory, not this source
+directory, from `chrome://extensions` with Load Unpacked.
 
-The extension keeps a Native Messaging connection open to `com.clanky.browser_bridge`. When the local Clanky agent calls `browser_open_tab`, the native host forwards the request over stdio and the service worker opens the tab.
+The generated extension config contains the bridge server URL and token. The
+service worker connects to the local bridge over WebSocket at
+`/agent?token=...`, then browser tool calls flow through the bridge HTTP API and
+WebSocket session. There is no native-messaging host or stdio transport in the
+current bridge.

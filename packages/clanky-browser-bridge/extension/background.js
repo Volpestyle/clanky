@@ -39,6 +39,52 @@ function cdpSend(tabId, method, params) {
 	});
 }
 
+function requireTabIdentity(tab, opName) {
+	if (typeof tab?.id !== "number" || typeof tab.windowId !== "number") {
+		throw new Error(`${opName} tab is missing id or windowId`);
+	}
+	return { tabId: tab.id, windowId: tab.windowId };
+}
+
+async function resolveScreenshotTarget(tabId) {
+	if (typeof tabId === "number") {
+		const tab = await chrome.tabs.get(tabId);
+		const identity = requireTabIdentity(tab, "screenshot");
+		await chrome.windows.update(identity.windowId, { focused: true });
+		const activeTab = await chrome.tabs.update(identity.tabId, { active: true });
+		return requireTabIdentity(activeTab, "screenshot");
+	}
+	const win = await chrome.windows.getLastFocused({ populate: true });
+	const tab = (win.tabs || []).find((t) => t.active);
+	if (!tab) throw new Error("no active tab in focused window");
+	return requireTabIdentity(tab, "screenshot");
+}
+
+function readPngUint32(binary, offset) {
+	return (
+		((binary.charCodeAt(offset) << 24) |
+			(binary.charCodeAt(offset + 1) << 16) |
+			(binary.charCodeAt(offset + 2) << 8) |
+			binary.charCodeAt(offset + 3)) >>>
+		0
+	);
+}
+
+function pngDimensionsFromDataUrl(dataUrl) {
+	const prefix = "data:image/png;base64,";
+	if (typeof dataUrl !== "string" || !dataUrl.startsWith(prefix)) {
+		throw new Error("screenshot did not return a PNG data URL");
+	}
+	const binary = atob(dataUrl.slice(prefix.length));
+	if (binary.length < 24 || binary.slice(0, 8) !== "\x89PNG\r\n\x1a\n" || binary.slice(12, 16) !== "IHDR") {
+		throw new Error("screenshot PNG is malformed");
+	}
+	return {
+		width: readPngUint32(binary, 16),
+		height: readPngUint32(binary, 20),
+	};
+}
+
 const MOD_BITS = { alt: 1, ctrl: 2, meta: 4, shift: 8 };
 
 function modifierBitmask(modifiers) {
@@ -69,7 +115,7 @@ const KEY_TABLE = {
 };
 
 function keyCodeFor(key) {
-	if (Object.prototype.hasOwnProperty.call(KEY_TABLE, key)) {
+	if (Object.hasOwn(KEY_TABLE, key)) {
 		return KEY_TABLE[key];
 	}
 	return null;
@@ -197,20 +243,14 @@ async function dispatch(message) {
 		};
 	}
 	if (message.op === "screenshot") {
-		let tab;
-		if (typeof message.tabId === "number") {
-			tab = await chrome.tabs.get(message.tabId);
-		} else {
-			const win = await chrome.windows.getLastFocused({ populate: true });
-			tab = (win.tabs || []).find((t) => t.active);
-			if (!tab) throw new Error("no active tab in focused window");
-		}
-		const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+		const target = await resolveScreenshotTarget(message.tabId);
+		const dataUrl = await chrome.tabs.captureVisibleTab(target.windowId, { format: "png" });
+		const dimensions = pngDimensionsFromDataUrl(dataUrl);
 		return {
-			tabId: tab.id,
+			tabId: target.tabId,
 			dataUrl,
-			width: tab.width ?? null,
-			height: tab.height ?? null,
+			width: dimensions.width,
+			height: dimensions.height,
 		};
 	}
 	if (message.op === "list_tabs") {
@@ -251,7 +291,8 @@ async function dispatch(message) {
 		}
 		const button = message.button || "left";
 		if (!CDP_BUTTONS.has(button)) throw new Error(`invalid button: ${button}`);
-		const clickCount = message.op === "double_click" ? 2 : (typeof message.clickCount === "number" ? message.clickCount : 1);
+		const clickCount =
+			message.op === "double_click" ? 2 : typeof message.clickCount === "number" ? message.clickCount : 1;
 		await ensureAttached(message.tabId);
 		const base = { x: message.x, y: message.y, button, clickCount };
 		await cdpSend(message.tabId, "Input.dispatchMouseEvent", { ...base, type: "mousePressed" });

@@ -39,6 +39,7 @@ import type {
 import type { CreateClankySkillInput } from "./skills/loader.ts";
 import { extractIndexableMessageText, type SessionIndexMessageInput } from "./state/index-db.ts";
 import type { ClankySubagentState, ClankySubagentSummary } from "./subagents/store.ts";
+import { isRecord } from "./util/values.ts";
 import type { OpenAiWebSearchInput } from "./web/operator.ts";
 import type { CreateWorkTrackerRefInput, WorkTrackerProviderKind } from "./work-tracker/refs.ts";
 import { normalizeWorkTrackerProviderKind } from "./work-tracker/refs.ts";
@@ -2320,10 +2321,6 @@ function isPrintableInput(data: string): boolean {
 	return true;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null;
-}
-
 function memoryToolAudit(
 	event: { toolName: string; toolCallId: string; input: Record<string, unknown>; details: unknown; isError: boolean },
 	sessionId: string,
@@ -3616,48 +3613,63 @@ export function createClankyToolDefinitions(
 	return tools;
 }
 
-export function maybeInjectWebOperatorSkill(text: string, env: NodeJS.ProcessEnv = process.env): string {
-	if (env.CLANKY_WEB_OPERATOR_AUTO_SKILL === "0" || env.CLANKY_WEB_OPERATOR_AUTO_SKILL === "false") return text;
+interface MaybeInjectSkillOptions {
+	autoEnvVar: string;
+	skillName: string;
+	predicate: (trimmed: string) => boolean;
+	/**
+	 * Optional extra precondition evaluated before any text inspection. When it
+	 * returns false the text is returned untouched.
+	 */
+	precondition?: (env: NodeJS.ProcessEnv) => boolean;
+}
+
+function maybeInjectSkill(text: string, env: NodeJS.ProcessEnv, options: MaybeInjectSkillOptions): string {
+	const auto = env[options.autoEnvVar];
+	if (auto === "0" || auto === "false") return text;
+	if (options.precondition !== undefined && !options.precondition(env)) return text;
 	const trimmed = text.trimStart();
 	if (trimmed.length === 0) return text;
 	if (trimmed.startsWith("/")) return text;
-	if (trimmed.includes(`<skill name="${WEB_OPERATOR_SKILL_NAME}"`)) return text;
-	if (!shouldUseWebOperatorSkill(trimmed)) return text;
-	return `/skill:${WEB_OPERATOR_SKILL_NAME} ${text}`;
+	if (trimmed.includes(`<skill name="${options.skillName}"`)) return text;
+	if (!options.predicate(trimmed)) return text;
+	return `/skill:${options.skillName} ${text}`;
+}
+
+export function maybeInjectWebOperatorSkill(text: string, env: NodeJS.ProcessEnv = process.env): string {
+	return maybeInjectSkill(text, env, {
+		autoEnvVar: "CLANKY_WEB_OPERATOR_AUTO_SKILL",
+		skillName: WEB_OPERATOR_SKILL_NAME,
+		predicate: shouldUseWebOperatorSkill,
+	});
 }
 
 export function maybeInjectMediaOperatorSkill(text: string, env: NodeJS.ProcessEnv = process.env): string {
-	if (env.CLANKY_MEDIA_OPERATOR_AUTO_SKILL === "0" || env.CLANKY_MEDIA_OPERATOR_AUTO_SKILL === "false") return text;
-	const trimmed = text.trimStart();
-	if (trimmed.length === 0) return text;
-	if (trimmed.startsWith("/")) return text;
-	if (trimmed.includes(`<skill name="${MEDIA_OPERATOR_SKILL_NAME}"`)) return text;
-	if (!shouldUseMediaOperatorSkill(trimmed)) return text;
-	return `/skill:${MEDIA_OPERATOR_SKILL_NAME} ${text}`;
+	return maybeInjectSkill(text, env, {
+		autoEnvVar: "CLANKY_MEDIA_OPERATOR_AUTO_SKILL",
+		skillName: MEDIA_OPERATOR_SKILL_NAME,
+		predicate: shouldUseMediaOperatorSkill,
+	});
 }
 
 export function maybeInjectAgentRoomOperatorSkill(text: string, env: NodeJS.ProcessEnv = process.env): string {
-	if (env.CLANKY_AGENTROOM_OPERATOR_AUTO_SKILL === "0" || env.CLANKY_AGENTROOM_OPERATOR_AUTO_SKILL === "false") {
-		return text;
-	}
-	const trimmed = text.trimStart();
-	if (trimmed.length === 0) return text;
-	if (trimmed.startsWith("/")) return text;
-	if (trimmed.includes(`<skill name="${AGENTROOM_OPERATOR_SKILL_NAME}"`)) return text;
-	if (!shouldUseAgentRoomOperatorSkill(trimmed)) return text;
-	return `/skill:${AGENTROOM_OPERATOR_SKILL_NAME} ${text}`;
+	return maybeInjectSkill(text, env, {
+		autoEnvVar: "CLANKY_AGENTROOM_OPERATOR_AUTO_SKILL",
+		skillName: AGENTROOM_OPERATOR_SKILL_NAME,
+		predicate: shouldUseAgentRoomOperatorSkill,
+	});
 }
 
 export function maybeInjectWorkTrackerSkill(text: string, env: NodeJS.ProcessEnv = process.env): string {
-	if (env.CLANKY_WORK_TRACKER_AUTO_SKILL === "0" || env.CLANKY_WORK_TRACKER_AUTO_SKILL === "false") return text;
-	const tracker = env.CLANKY_WORK_TRACKER?.trim() || env.CLANKY_WORK_TRACKER_PROVIDER_KIND?.trim();
-	if (tracker === undefined || tracker.length === 0) return text;
-	const trimmed = text.trimStart();
-	if (trimmed.length === 0) return text;
-	if (trimmed.startsWith("/")) return text;
-	if (trimmed.includes(`<skill name="${WORK_TRACKER_SKILL_NAME}"`)) return text;
-	if (!shouldUseWorkTrackerSkill(trimmed)) return text;
-	return `/skill:${WORK_TRACKER_SKILL_NAME} ${text}`;
+	return maybeInjectSkill(text, env, {
+		autoEnvVar: "CLANKY_WORK_TRACKER_AUTO_SKILL",
+		skillName: WORK_TRACKER_SKILL_NAME,
+		predicate: shouldUseWorkTrackerSkill,
+		precondition: (current) => {
+			const tracker = current.CLANKY_WORK_TRACKER?.trim() || current.CLANKY_WORK_TRACKER_PROVIDER_KIND?.trim();
+			return tracker !== undefined && tracker.length > 0;
+		},
+	});
 }
 
 export function shouldUseWebOperatorSkill(text: string): boolean {

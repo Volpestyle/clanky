@@ -19,7 +19,7 @@ All ops below are exposed to **both** the external HTTP client and the WebSocket
 
 | Op | Params | Result | Owner | Notes |
 |---|---|---|---|---|
-| `screenshot` | `{ tabId?: number }` | `{ tabId, dataUrl, width, height }` | Both | `dataUrl` = `data:image/png;base64,...`. If no `tabId`, captures the active tab in the focused window. Uses `chrome.tabs.captureVisibleTab`. No CDP attach needed. |
+| `screenshot` | `{ tabId?: number }` | `{ tabId, dataUrl, width, height }` | Both | `dataUrl` = `data:image/png;base64,...`. If `tabId` is provided, activates that tab before capture because `chrome.tabs.captureVisibleTab` captures the active tab in a window. If no `tabId`, captures the active tab in the focused window. Width/height are decoded from the PNG. No CDP attach needed. |
 | `list_tabs` | `{}` | `{ tabs: Array<{ tabId, url, title, active, windowId }> }` | Both | `chrome.tabs.query({})`. No CDP attach needed. |
 | `navigate` | `{ tabId?: number, url: string }` | `{ tabId, url }` | Both | If no `tabId`, opens a new tab. Validate URL like existing `open_tab` (`http(s)`, `about:`, `chrome://`). No CDP attach needed. |
 | `close_tab` | `{ tabId: number }` | `{ ok: true }` | Both | `chrome.tabs.remove(tabId)`. No CDP attach needed. |

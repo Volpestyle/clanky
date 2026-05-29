@@ -1,4 +1,4 @@
-type JsonRecord = Record<string, unknown>;
+import type { JsonRecord } from "@clanky/core";
 
 export type ElevenLabsPcmOutputFormat = "pcm_16000" | "pcm_22050" | "pcm_24000" | "pcm_44100";
 
@@ -66,7 +66,7 @@ export class ElevenLabsTtsClient {
 			body: JSON.stringify({
 				text: prompt,
 				model_id: this.modelId,
-				voice_settings: { speed: 1.2 },
+				voice_settings: { speed: 1.1 },
 			}),
 		};
 		if (options.signal !== undefined) requestInit.signal = options.signal;

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { AuthStorage } from "@earendil-works/pi-coding-agent";
 import { getOpenAiCredentialStatus, resolveOpenAiApiKey } from "../openai-credentials.ts";
 import { resolveClankyPaths } from "../paths.ts";
+import { isRecord } from "../util/values.ts";
 
 export type SearchContextSize = "low" | "medium" | "high";
 export type ReturnTokenBudget = "default" | "unlimited";
@@ -67,6 +68,7 @@ export interface WebBackendStatusOptions {
 	authStorage?: AuthStorage;
 	cwd?: string;
 	env?: NodeJS.ProcessEnv;
+	fetchImpl?: typeof fetch;
 }
 
 interface PackageJson {
@@ -130,7 +132,7 @@ export async function getWebBackendStatus(options: WebBackendStatusOptions = {})
 	const node = await resolveExecutable("node", env);
 	const agentBrowser = await resolveExecutable("agent-browser", env);
 	const openAiStatus = getOpenAiCredentialStatus(env, options.authStorage);
-	const bridge = await readBrowserBridgeState(env);
+	const bridge = await readBrowserBridgeState(env, options.fetchImpl ?? fetch);
 
 	const agentBrowserAvailable = agentBrowser !== undefined;
 	const agentBrowserBackend: Record<string, unknown> = {
@@ -190,17 +192,33 @@ interface BrowserBridgeStateRecord {
 	startedAt?: string;
 }
 
-async function readBrowserBridgeState(env: NodeJS.ProcessEnv): Promise<Record<string, unknown>> {
+interface BrowserBridgeHealthResult {
+	reachable: boolean;
+	connectionCount?: number;
+	connectedBrowsers?: string[];
+	error?: string;
+}
+
+async function readBrowserBridgeState(
+	env: NodeJS.ProcessEnv,
+	fetchImpl: typeof fetch,
+): Promise<Record<string, unknown>> {
 	const stateFile = browserBridgeStateFile(env);
 	const preferred = resolveBrowserBridgePreferred(env);
 	const bestFor = [
 		"opening any URL the user should see in their own browser",
+		"capturing screenshots and driving tabs via browser tools",
 		"loading pages with the user's logged-in profile and extensions",
 		"handing the user a live tab they can interact with directly",
 	];
 	try {
 		const raw = await readFile(stateFile, "utf8");
-		const parsed = JSON.parse(raw) as unknown;
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(raw) as unknown;
+		} catch {
+			return { available: false, preferred, stateFile, bestFor, note: "browser-bridge state file is malformed." };
+		}
 		if (!isRecord(parsed)) {
 			return { available: false, preferred, stateFile, bestFor, note: "browser-bridge state file is malformed." };
 		}
@@ -215,8 +233,8 @@ async function readBrowserBridgeState(env: NodeJS.ProcessEnv): Promise<Record<st
 			};
 		}
 		const browser = state.browser ?? "unknown";
-		const browserConnected = browser !== "disconnected" && browser !== "unknown";
-		if (!browserConnected) {
+		const health = await readBrowserBridgeHealth(state.port, fetchImpl);
+		if (!health.reachable) {
 			return {
 				available: false,
 				preferred,
@@ -224,6 +242,23 @@ async function readBrowserBridgeState(env: NodeJS.ProcessEnv): Promise<Record<st
 				port: state.port,
 				browser,
 				startedAt: state.startedAt,
+				bestFor,
+				note: `browser-bridge state file exists, but the daemon is not reachable on 127.0.0.1:${state.port}${
+					health.error === undefined ? "" : ` (${health.error})`
+				}. Restart it with pnpm browser-bridge:serve.`,
+			};
+		}
+		const browserConnected = browser !== "disconnected" && browser !== "unknown";
+		if (!browserConnected || (health.connectionCount ?? 0) <= 0) {
+			return {
+				available: false,
+				preferred,
+				stateFile,
+				port: state.port,
+				browser,
+				startedAt: state.startedAt,
+				connectionCount: health.connectionCount ?? 0,
+				connectedBrowsers: health.connectedBrowsers ?? [],
 				bestFor,
 				note: "browser-bridge daemon is running but no browser extension is connected yet. Load the unpacked extension in Helium/Chrome/Brave.",
 			};
@@ -235,7 +270,10 @@ async function readBrowserBridgeState(env: NodeJS.ProcessEnv): Promise<Record<st
 			port: state.port,
 			browser,
 			startedAt: state.startedAt,
+			connectionCount: health.connectionCount ?? 0,
+			connectedBrowsers: health.connectedBrowsers ?? [],
 			tool: "browser_open_tab",
+			tools: ["browser_open_tab", "browser_screenshot", "browser_list_tabs", "browser_click", "browser_type"],
 			bestFor,
 		};
 	} catch {
@@ -246,6 +284,34 @@ async function readBrowserBridgeState(env: NodeJS.ProcessEnv): Promise<Record<st
 			bestFor,
 			note: 'browser-bridge daemon is not running. Run "pnpm browser-bridge:install" once, then "pnpm browser-bridge:serve" and load the unpacked extension in Helium/Chrome/Brave.',
 		};
+	}
+}
+
+async function readBrowserBridgeHealth(port: number, fetchImpl: typeof fetch): Promise<BrowserBridgeHealthResult> {
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), 750);
+	try {
+		const response = await fetchImpl(`http://127.0.0.1:${port}/healthz`, { signal: controller.signal });
+		if (!response.ok) {
+			return { reachable: false, error: `health endpoint returned HTTP ${response.status}` };
+		}
+		const payload = (await response.json().catch(() => undefined)) as unknown;
+		if (!isRecord(payload) || payload.ok !== true) {
+			return { reachable: false, error: "health endpoint returned malformed status" };
+		}
+		const connectedBrowsers = Array.isArray(payload.connectedBrowsers)
+			? payload.connectedBrowsers.filter((entry): entry is string => typeof entry === "string")
+			: [];
+		const connectionCount =
+			typeof payload.connectionCount === "number" && Number.isFinite(payload.connectionCount)
+				? payload.connectionCount
+				: connectedBrowsers.length;
+		return { reachable: true, connectionCount, connectedBrowsers };
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		return { reachable: false, error: message.length === 0 ? "fetch failed" : message };
+	} finally {
+		clearTimeout(timeout);
 	}
 }
 
@@ -441,8 +507,4 @@ function dropUndefined<T extends Record<string, unknown>>(value: T): Partial<T> 
 		if (entry !== undefined && entry !== "") output[key as keyof T] = entry as T[keyof T];
 	}
 	return output;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
