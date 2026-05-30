@@ -1,7 +1,7 @@
 {
 	"$schema": "https://biomejs.dev/schemas/2.3.5/schema.json",
 	"files": {
-		"includes": ["**", "!agents/clanky/src/voice/clankvox/target", "!apps/docs/dist"]
+		"includes": ["**", "!apps/docs/dist"]
 	},
 	"formatter": {
 		"enabled": true,

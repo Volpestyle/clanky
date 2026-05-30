@@ -83,7 +83,7 @@ async function runDiscordCli(rawArgs: string[]): Promise<void> {
 			JSON.stringify(
 				await listDiscordChannels(
 					{
-						guildId: guild.id,
+						guild_id: guild.id,
 						...(parsed.since === undefined ? {} : { since: parsed.since }),
 					},
 					options,
@@ -100,7 +100,7 @@ async function runDiscordCli(rawArgs: string[]): Promise<void> {
 			JSON.stringify(
 				await readDiscordMessages(
 					{
-						channelId,
+						channel_id: channelId,
 						...(parsed.limit === undefined ? {} : { limit: parsed.limit }),
 						...(parsed.since === undefined ? {} : { since: parsed.since }),
 						...(parsed.until === undefined ? {} : { until: parsed.until }),
@@ -119,11 +119,11 @@ async function runDiscordCli(rawArgs: string[]): Promise<void> {
 			JSON.stringify(
 				await recentDiscordActivity(
 					{
-						guildId: guild.id,
+						guild_id: guild.id,
 						...(parsed.since === undefined ? {} : { since: parsed.since }),
-						...(parsed.channelsLimit === undefined ? {} : { limitChannels: parsed.channelsLimit }),
-						...(parsed.messagesLimit === undefined ? {} : { messageLimit: parsed.messagesLimit }),
-						...(parsed.channelQuery === undefined ? {} : { channelNameQuery: parsed.channelQuery }),
+						...(parsed.channelsLimit === undefined ? {} : { limit_channels: parsed.channelsLimit }),
+						...(parsed.messagesLimit === undefined ? {} : { message_limit: parsed.messagesLimit }),
+						...(parsed.channelQuery === undefined ? {} : { channel_name_query: parsed.channelQuery }),
 					},
 					options,
 				),
@@ -137,20 +137,20 @@ async function runDiscordCli(rawArgs: string[]): Promise<void> {
 		const channelId = requiredArg(parsed.positionals[0], "channel id");
 		const content = parsed.positionals.slice(1).join(" ");
 		console.log(
-			JSON.stringify(await sendDiscordMessage({ channelId, content, filePaths: parsed.files }, options), null, "\t"),
+			JSON.stringify(await sendDiscordMessage({ channel_id: channelId, content, file_paths: parsed.files }, options), null, "\t"),
 		);
 		return;
 	}
 	if (parsed.command === "emojis") {
 		const guild = await resolveGuildArg(parsed.positionals[0], options);
-		console.log(JSON.stringify(await listDiscordEmojis({ guildId: guild.id }, options), null, "\t"));
+		console.log(JSON.stringify(await listDiscordEmojis({ guild_id: guild.id }, options), null, "\t"));
 		return;
 	}
 	if (parsed.command === "react") {
 		const channelId = requiredArg(parsed.positionals[0], "channel id");
 		const messageId = requiredArg(parsed.positionals[1], "message id");
 		const emoji = requiredArg(parsed.positionals[2], "emoji");
-		console.log(JSON.stringify(await addDiscordReaction({ channelId, messageId, emoji }, options), null, "\t"));
+		console.log(JSON.stringify(await addDiscordReaction({ channel_id: channelId, message_id: messageId, emoji }, options), null, "\t"));
 		return;
 	}
 	throw new Error(`Unknown discord command: ${parsed.command}`);

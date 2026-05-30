@@ -1,8 +1,15 @@
-import type { MainAgentActivityToolInput, MainAgentCancelToolInput } from "@clanky/core";
+import {
+	clampInteger,
+	isRecord,
+	type JsonRecord,
+	type MainAgentActivityToolInput,
+	type MainAgentCancelToolInput,
+	stringValue,
+	truncateText,
+} from "@clanky/core";
 import type { AgentSession, AgentSessionEvent, AgentSessionRuntime } from "@earendil-works/pi-coding-agent";
 import type { RuntimeTurnQueue } from "./runtimeTurnQueue.ts";
 
-type JsonRecord = Record<string, unknown>;
 type MainRuntimeToolStatus = "running" | "done" | "error";
 
 interface MainRuntimeToolActivity {
@@ -310,25 +317,6 @@ function readRecordNumber(record: unknown, key: string): number | undefined {
 	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function clampInteger(value: number | undefined, fallback: number, min: number, max: number): number {
-	if (value === undefined || !Number.isFinite(value)) return fallback;
-	return Math.min(max, Math.max(min, Math.floor(value)));
-}
-
-function truncateText(text: string, maxChars: number): string {
-	if (text.length <= maxChars) return text;
-	if (maxChars <= 3) return text.slice(0, maxChars);
-	return `${text.slice(0, maxChars - 3)}...`;
-}
-
 function errorMessage(error: unknown): string {
 	return error instanceof Error ? (error.stack ?? error.message) : String(error);
-}
-
-function isRecord(value: unknown): value is JsonRecord {
-	return typeof value === "object" && value !== null;
-}
-
-function stringValue(value: unknown): string {
-	return typeof value === "string" ? value : "";
 }

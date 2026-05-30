@@ -29,9 +29,9 @@ The active profile owns durable personal Clanky configuration and state:
 - `<profileDir>/models.json` stores custom model registry entries used by Pi's
   model selector.
 - `<profileDir>/SELF.md`, `memory/`, `sessions/`, `subagents/`, and
-  `work-trackers/` store profile-local memory, session, multitasking, and work
-  state. Scheduler state is optional and only present when that surface is
-  wired.
+  `work-trackers/` store profile-local memory, sessions, subagent state, and
+  external tracker issue refs. Scheduler state is optional and only present
+  when that surface is wired.
 
 For the combined AgentRoom + Clanky file ownership map, including commit rules
 and room-owned gateway token boundaries, see

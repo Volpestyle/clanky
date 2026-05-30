@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -10,7 +10,6 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { ClankyPaths } from "../paths.ts";
 import { loadDatabaseSync } from "../sqlite.ts";
-import type { WorkTrackerProviderKind } from "../work-tracker/refs.ts";
 
 export type SessionIndexRole = "user" | "assistant" | "toolResult";
 
@@ -44,65 +43,6 @@ export interface CronIdempotencyRunRecord {
 	key: string;
 	jobId: string;
 	recordedAt: string;
-}
-
-export type ClankyTaskStatus = "open" | "in_progress" | "done" | "cancelled";
-export type ClankyTaskPriority = "low" | "normal" | "high";
-
-export interface CreateClankyTaskInput {
-	title: string;
-	description?: string;
-	status?: ClankyTaskStatus;
-	priority?: ClankyTaskPriority;
-	sessionId?: string;
-	trackerProviderId?: string;
-	trackerProviderKind?: WorkTrackerProviderKind;
-	trackerIssueId?: string;
-	trackerIdentifier?: string;
-	trackerUrl?: string;
-	source?: string;
-}
-
-export interface UpdateClankyTaskInput {
-	id: string;
-	title?: string;
-	description?: string;
-	status?: ClankyTaskStatus;
-	priority?: ClankyTaskPriority;
-	sessionId?: string;
-	trackerProviderId?: string;
-	trackerProviderKind?: WorkTrackerProviderKind;
-	trackerIssueId?: string;
-	trackerIdentifier?: string;
-	trackerUrl?: string;
-	source?: string;
-}
-
-export interface ClankyTask {
-	id: string;
-	title: string;
-	status: ClankyTaskStatus;
-	priority: ClankyTaskPriority;
-	createdAt: string;
-	updatedAt: string;
-	description?: string;
-	sessionId?: string;
-	trackerProviderId?: string;
-	trackerProviderKind?: WorkTrackerProviderKind;
-	trackerIssueId?: string;
-	trackerIdentifier?: string;
-	trackerUrl?: string;
-	source?: string;
-}
-
-export interface ListClankyTasksOptions {
-	sessionId?: string;
-	trackerProviderId?: string;
-	trackerProviderKind?: WorkTrackerProviderKind;
-	trackerIssueId?: string;
-	status?: ClankyTaskStatus;
-	priority?: ClankyTaskPriority;
-	limit?: number;
 }
 
 const DEFAULT_SEARCH_LIMIT = 20;
@@ -230,239 +170,6 @@ export class SessionIndexStore {
 		}
 	}
 
-	async createTask(input: CreateClankyTaskInput): Promise<ClankyTask> {
-		await this.ensure();
-		const title = input.title.trim();
-		if (title.length === 0) throw new Error("Task title is required");
-		const now = new Date().toISOString();
-		const id = randomUUID();
-		const description = optionalTrimmedString(input.description);
-		const sessionId = optionalTrimmedString(input.sessionId);
-		const trackerIssueId = optionalTrimmedString(input.trackerIssueId);
-		const trackerProviderKind = input.trackerProviderKind;
-		const trackerProviderId =
-			optionalTrimmedString(input.trackerProviderId) ??
-			(trackerProviderKind === undefined ? undefined : trackerProviderKind);
-		const trackerIdentifier = optionalTrimmedString(input.trackerIdentifier);
-		const trackerUrl = optionalTrimmedString(input.trackerUrl);
-		const source = optionalTrimmedString(input.source);
-		const status = input.status ?? "open";
-		const priority = input.priority ?? "normal";
-		this.database()
-			.prepare(`
-				INSERT INTO tasks (
-					id,
-					title,
-					description,
-					status,
-					priority,
-					session_id,
-					tracker_provider_id,
-					tracker_provider_kind,
-					tracker_issue_id,
-					tracker_identifier,
-					tracker_url,
-					source,
-					created_at,
-					updated_at
-				)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			`)
-			.run(
-				id,
-				title,
-				description ?? null,
-				status,
-				priority,
-				sessionId ?? null,
-				trackerProviderId ?? null,
-				trackerProviderKind ?? null,
-				trackerIssueId ?? null,
-				trackerIdentifier ?? null,
-				trackerUrl ?? null,
-				source ?? null,
-				now,
-				now,
-			);
-		return {
-			id,
-			title,
-			status,
-			priority,
-			createdAt: now,
-			updatedAt: now,
-			...(description === undefined ? {} : { description }),
-			...(sessionId === undefined ? {} : { sessionId }),
-			...(trackerProviderId === undefined ? {} : { trackerProviderId }),
-			...(trackerProviderKind === undefined ? {} : { trackerProviderKind }),
-			...(trackerIssueId === undefined ? {} : { trackerIssueId }),
-			...(trackerIdentifier === undefined ? {} : { trackerIdentifier }),
-			...(trackerUrl === undefined ? {} : { trackerUrl }),
-			...(source === undefined ? {} : { source }),
-		};
-	}
-
-	async listTasks(options: ListClankyTasksOptions = {}): Promise<ClankyTask[]> {
-		await this.ensure();
-		const conditions: string[] = [];
-		const params: Array<number | string> = [];
-		const sessionId = optionalTrimmedString(options.sessionId);
-		const trackerProviderId = optionalTrimmedString(options.trackerProviderId);
-		const trackerIssueId = optionalTrimmedString(options.trackerIssueId);
-		if (sessionId !== undefined) {
-			conditions.push("session_id = ?");
-			params.push(sessionId);
-		}
-		if (trackerProviderId !== undefined) {
-			conditions.push("tracker_provider_id = ?");
-			params.push(trackerProviderId);
-		}
-		if (options.trackerProviderKind !== undefined) {
-			conditions.push("tracker_provider_kind = ?");
-			params.push(options.trackerProviderKind);
-		}
-		if (trackerIssueId !== undefined) {
-			conditions.push("tracker_issue_id = ?");
-			params.push(trackerIssueId);
-		}
-		if (options.status !== undefined) {
-			conditions.push("status = ?");
-			params.push(options.status);
-		}
-		if (options.priority !== undefined) {
-			conditions.push("priority = ?");
-			params.push(options.priority);
-		}
-		params.push(normalizedLimit(options.limit));
-		const where = conditions.length === 0 ? "" : `WHERE ${conditions.join(" AND ")}`;
-		const rows = this.database()
-			.prepare(`
-				SELECT
-					id,
-					title,
-					description,
-					status,
-					priority,
-					session_id,
-					tracker_provider_id,
-					tracker_provider_kind,
-					tracker_issue_id,
-					tracker_identifier,
-					tracker_url,
-					source,
-					created_at,
-					updated_at
-				FROM tasks
-				${where}
-				ORDER BY updated_at DESC
-				LIMIT ?
-			`)
-			.all(...params);
-		return rows.map(readTaskRow).filter((row): row is ClankyTask => row !== undefined);
-	}
-
-	async updateTask(input: UpdateClankyTaskInput): Promise<ClankyTask | undefined> {
-		await this.ensure();
-		const id = input.id.trim();
-		if (id.length === 0) throw new Error("Task id is required");
-		const assignments: string[] = [];
-		const params: string[] = [];
-		if (input.title !== undefined) {
-			const title = input.title.trim();
-			if (title.length === 0) throw new Error("Task title must be a non-empty string");
-			assignments.push("title = ?");
-			params.push(title);
-		}
-		if (input.description !== undefined) {
-			const description = input.description.trim();
-			if (description.length === 0) throw new Error("Task description must be a non-empty string");
-			assignments.push("description = ?");
-			params.push(description);
-		}
-		if (input.status !== undefined) {
-			assignments.push("status = ?");
-			params.push(input.status);
-		}
-		if (input.priority !== undefined) {
-			assignments.push("priority = ?");
-			params.push(input.priority);
-		}
-		if (input.sessionId !== undefined) {
-			const sessionId = input.sessionId.trim();
-			if (sessionId.length === 0) throw new Error("Task sessionId must be a non-empty string");
-			assignments.push("session_id = ?");
-			params.push(sessionId);
-		}
-		if (input.trackerProviderId !== undefined) {
-			const trackerProviderId = input.trackerProviderId.trim();
-			if (trackerProviderId.length === 0) throw new Error("Task trackerProviderId must be a non-empty string");
-			assignments.push("tracker_provider_id = ?");
-			params.push(trackerProviderId);
-		}
-		if (input.trackerProviderKind !== undefined) {
-			assignments.push("tracker_provider_kind = ?");
-			params.push(input.trackerProviderKind);
-		}
-		if (input.trackerIssueId !== undefined) {
-			const trackerIssueId = input.trackerIssueId.trim();
-			if (trackerIssueId.length === 0) throw new Error("Task trackerIssueId must be a non-empty string");
-			assignments.push("tracker_issue_id = ?");
-			params.push(trackerIssueId);
-		}
-		if (input.trackerIdentifier !== undefined) {
-			const trackerIdentifier = input.trackerIdentifier.trim();
-			if (trackerIdentifier.length === 0) throw new Error("Task trackerIdentifier must be a non-empty string");
-			assignments.push("tracker_identifier = ?");
-			params.push(trackerIdentifier);
-		}
-		if (input.trackerUrl !== undefined) {
-			const trackerUrl = input.trackerUrl.trim();
-			if (trackerUrl.length === 0) throw new Error("Task trackerUrl must be a non-empty string");
-			assignments.push("tracker_url = ?");
-			params.push(trackerUrl);
-		}
-		if (input.source !== undefined) {
-			const source = input.source.trim();
-			if (source.length === 0) throw new Error("Task source must be a non-empty string");
-			assignments.push("source = ?");
-			params.push(source);
-		}
-		if (assignments.length === 0) throw new Error("Task update requires at least one field");
-		const updatedAt = new Date().toISOString();
-		assignments.push("updated_at = ?");
-		params.push(updatedAt, id);
-		this.database()
-			.prepare(`
-				UPDATE tasks
-				SET ${assignments.join(", ")}
-				WHERE id = ?
-			`)
-			.run(...params);
-		const row = this.database()
-			.prepare(`
-				SELECT
-					id,
-					title,
-					description,
-					status,
-					priority,
-					session_id,
-					tracker_provider_id,
-					tracker_provider_kind,
-					tracker_issue_id,
-					tracker_identifier,
-					tracker_url,
-					source,
-					created_at,
-					updated_at
-				FROM tasks
-				WHERE id = ?
-				LIMIT 1
-			`)
-			.get(id);
-		return row === undefined ? undefined : readTaskRow(row);
-	}
-
 	async ensure(): Promise<void> {
 		await mkdir(dirname(this.paths.indexDbFile), { recursive: true, mode: 0o700 });
 		const db = this.database();
@@ -489,24 +196,6 @@ export class SessionIndexStore {
 				ON session_messages (session_id);
 			CREATE INDEX IF NOT EXISTS idx_session_messages_created_at
 				ON session_messages (created_at);
-			CREATE TABLE IF NOT EXISTS tasks (
-				id TEXT PRIMARY KEY,
-				title TEXT NOT NULL,
-				description TEXT,
-				status TEXT NOT NULL,
-				priority TEXT NOT NULL,
-				session_id TEXT,
-				tracker_provider_id TEXT,
-				tracker_provider_kind TEXT,
-				tracker_issue_id TEXT,
-				tracker_identifier TEXT,
-				tracker_url TEXT,
-				source TEXT,
-				created_at TEXT NOT NULL,
-				updated_at TEXT NOT NULL
-			);
-			CREATE INDEX IF NOT EXISTS idx_tasks_session_id
-				ON tasks (session_id);
 			CREATE VIRTUAL TABLE IF NOT EXISTS session_messages_fts USING fts5(
 				session_id UNINDEXED,
 				role UNINDEXED,
@@ -539,15 +228,6 @@ export class SessionIndexStore {
 					new.message_key
 				);
 			END;
-		`);
-		ensureColumn(db, "tasks", "tracker_provider_id", "TEXT");
-		ensureColumn(db, "tasks", "tracker_provider_kind", "TEXT");
-		ensureColumn(db, "tasks", "tracker_issue_id", "TEXT");
-		ensureColumn(db, "tasks", "tracker_identifier", "TEXT");
-		ensureColumn(db, "tasks", "tracker_url", "TEXT");
-		db.exec(`
-			CREATE INDEX IF NOT EXISTS idx_tasks_tracker_issue
-				ON tasks (tracker_provider_id, tracker_issue_id);
 		`);
 	}
 
@@ -729,56 +409,6 @@ function readCronRunRow(row: Record<string, unknown>): CronIdempotencyRunRecord 
 	return { key, jobId, recordedAt };
 }
 
-function ensureColumn(db: DatabaseSync, table: string, column: string, definition: string): void {
-	const rows = db.prepare(`PRAGMA table_info(${table})`).all();
-	if (rows.some((row) => readString(row as Record<string, unknown>, "name") === column)) return;
-	db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
-}
-
-function readTaskRow(row: Record<string, unknown>): ClankyTask | undefined {
-	const id = readString(row, "id");
-	const title = readString(row, "title");
-	const status = readTaskStatus(row.status);
-	const priority = readTaskPriority(row.priority);
-	const createdAt = readString(row, "created_at");
-	const updatedAt = readString(row, "updated_at");
-	if (
-		id === undefined ||
-		title === undefined ||
-		status === undefined ||
-		priority === undefined ||
-		createdAt === undefined ||
-		updatedAt === undefined
-	) {
-		return undefined;
-	}
-	const task: ClankyTask = {
-		id,
-		title,
-		status,
-		priority,
-		createdAt,
-		updatedAt,
-	};
-	const description = readString(row, "description");
-	if (description !== undefined) task.description = description;
-	const sessionId = readString(row, "session_id");
-	if (sessionId !== undefined) task.sessionId = sessionId;
-	const trackerProviderId = readString(row, "tracker_provider_id");
-	if (trackerProviderId !== undefined) task.trackerProviderId = trackerProviderId;
-	const trackerProviderKind = readWorkTrackerProviderKind(row.tracker_provider_kind);
-	if (trackerProviderKind !== undefined) task.trackerProviderKind = trackerProviderKind;
-	const trackerIssueId = readString(row, "tracker_issue_id");
-	if (trackerIssueId !== undefined) task.trackerIssueId = trackerIssueId;
-	const trackerIdentifier = readString(row, "tracker_identifier");
-	if (trackerIdentifier !== undefined) task.trackerIdentifier = trackerIdentifier;
-	const trackerUrl = readString(row, "tracker_url");
-	if (trackerUrl !== undefined) task.trackerUrl = trackerUrl;
-	const source = readString(row, "source");
-	if (source !== undefined) task.source = source;
-	return task;
-}
-
 function readString(row: Record<string, unknown>, key: string): string | undefined {
 	const value = row[key];
 	return typeof value === "string" ? value : undefined;
@@ -787,29 +417,6 @@ function readString(row: Record<string, unknown>, key: string): string | undefin
 function readRole(value: unknown): SessionIndexRole | undefined {
 	if (value === "user" || value === "assistant" || value === "toolResult") return value;
 	return undefined;
-}
-
-function readTaskStatus(value: unknown): ClankyTaskStatus | undefined {
-	if (value === "open" || value === "in_progress" || value === "done" || value === "cancelled") return value;
-	return undefined;
-}
-
-function readTaskPriority(value: unknown): ClankyTaskPriority | undefined {
-	if (value === "low" || value === "normal" || value === "high") return value;
-	return undefined;
-}
-
-function readWorkTrackerProviderKind(value: unknown): WorkTrackerProviderKind | undefined {
-	if (value === "native" || value === "linear" || value === "github-issues" || value === "jira" || value === "custom") {
-		return value;
-	}
-	return undefined;
-}
-
-function optionalTrimmedString(value: string | undefined): string | undefined {
-	if (value === undefined) return undefined;
-	const trimmed = value.trim();
-	return trimmed.length === 0 ? undefined : trimmed;
 }
 
 function isSessionHeader(entry: FileEntry): entry is SessionHeader {

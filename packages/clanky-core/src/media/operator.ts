@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { AuthStorage } from "@earendil-works/pi-coding-agent";
 import { getOpenAiCredentialStatus, resolveOpenAiApiKey } from "../openai-credentials.ts";
+import { isRecord } from "../util/values.ts";
 import { getXAiCredentialStatus, resolveXAiApiKey } from "../xai-credentials.ts";
 
 export type ImageQuality = "low" | "medium" | "high" | "auto";
@@ -517,8 +518,4 @@ function summarizeApiError(value: unknown): string {
 	} catch {
 		return String(value);
 	}
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return value !== null && typeof value === "object" && !Array.isArray(value);
 }

@@ -16,7 +16,7 @@ Treat the configured work tracker as part of the working context. Do not wait fo
 ## Operating Model
 
 - Use provider-specific MCP servers, CLIs, or skills for tracker actions such as creating issues, reading inboxes or notifications, commenting, assigning, and changing status.
-- Use `work_tracker_link` only after an external tracker issue exists, so Clanky can remember which session or task maps to that provider issue.
+- Use `work_tracker_link` only after an external tracker issue exists, so Clanky can remember which session maps to that provider issue.
 - Prefer the same tracker provider and workspace/team that AgentRoom configured for this project when that context is available.
 - If no tracker MCP/tool/skill is available, say `tracker_update_skipped` with the concrete reason. Do not pretend a tracker update happened.
 
@@ -25,7 +25,7 @@ Treat the configured work tracker as part of the working context. Do not wait fo
 - At the start of substantial implementation, debugging, review, or planning work, look for a relevant existing tracker issue before creating a new one.
 - If the configured provider exposes inbox, notification, assigned-issue, or update-feed tools, check them at natural boundaries: when beginning work, before claiming status, and before finalizing. Do not busy-poll.
 - Keep tracker comments short and useful: what changed, what was verified, and what risk remains.
-- Preserve `providerKind`, `providerId`, external issue id, identifier, URL, session id, task id, and relevant file scope when linking.
+- Preserve `providerKind`, `providerId`, external issue id, identifier, URL, session id, and relevant file scope when linking.
 
 ## MCP Pattern
 

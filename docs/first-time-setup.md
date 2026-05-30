@@ -36,12 +36,6 @@ clanky --help
 The released CLI is intended to be used directly as `clanky`. The `PATH` line
 is only for a source checkout before the CLI is installed globally.
 
-The docs site and CI use the same workspace scripts. For hosted docs only:
-
-```bash
-pnpm docs:build
-```
-
 ## Fresh-User Test
 
 Run the onboarding flow against a temporary home first:
@@ -259,7 +253,6 @@ pnpm smoke:clanky
 pnpm smoke:voice
 pnpm smoke:agent-tools
 pnpm smoke:subagents
-pnpm docs:build
 ```
 
 `pnpm check` is the broader repo gate. It may surface unrelated worktree issues

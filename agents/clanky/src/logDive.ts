@@ -2,7 +2,7 @@ import { access, open, readdir, readFile, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
 import type { DatabaseSync, DatabaseSyncOptions } from "node:sqlite";
-import { type ClankyPaths, resolveClankyPaths } from "@clanky/core";
+import { type ClankyPaths, errorMessage, isRecord, resolveClankyPaths } from "@clanky/core";
 
 type SessionGroup = "main" | "subagent";
 type SessionKind = "main" | "discord-voice" | "voice-worker" | "discord-guild" | "discord-dm" | "subagent";
@@ -901,10 +901,6 @@ function formatUnknown(value: unknown): string {
 	}
 }
 
-function errorMessage(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
-}
-
 function formatTimestamp(timestamp: string | undefined): string {
 	if (timestamp === undefined) return "unknown";
 	const parsed = Date.parse(timestamp);
@@ -965,8 +961,4 @@ function assignOptionalString<T extends object, K extends keyof T>(target: T, ke
 	if (typeof value === "string" && value.length > 0) {
 		(target as Record<string, unknown>)[String(key)] = value;
 	}
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
 }

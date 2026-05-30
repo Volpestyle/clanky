@@ -1,4 +1,4 @@
-type JsonRecord = Record<string, unknown>;
+import { isRecord, stringValue } from "@clanky/core";
 
 export interface VoiceLiveValidationRequirements {
 	inputAudio: boolean;
@@ -221,16 +221,8 @@ function parseEnabled(value: string | undefined): boolean {
 	return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 
-function isRecord(value: unknown): value is JsonRecord {
-	return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
 function numberValue(value: unknown): number {
 	return typeof value === "number" && Number.isFinite(value) ? value : 0;
-}
-
-function stringValue(value: unknown): string {
-	return typeof value === "string" ? value : "";
 }
 
 function minimumCheck(id: string, observed: number, minimum: number, failure: string): VoiceLiveValidationCheck {

@@ -13,6 +13,8 @@ import {
 	type ClankyPaths,
 	ClankySubagentStore,
 	type DelegateToMainWorkerToolInput,
+	isRecord,
+	type JsonRecord,
 	type MainAgentActivityToolInput,
 	type MainAgentCancelToolInput,
 	type MainSessionContextToolInput,
@@ -44,7 +46,6 @@ import { delegateToMainWorker } from "./mainWorkerDelegation.ts";
 import { type RuntimeTurnQueue, SerialRuntimeTurnQueue } from "./runtimeTurnQueue.ts";
 import type { VoiceSupervisorDelegateHandle } from "./voiceSupervisorExtension.ts";
 
-type JsonRecord = Record<string, unknown>;
 const DISCORD_CLIENT_READY_TIMEOUT_MS = 30_000;
 const DISCORD_CLIENT_READY_POLL_MS = 50;
 
@@ -518,10 +519,6 @@ function isDiscordVoiceExplicitlyEnabledByEnv(env: NodeJS.ProcessEnv): boolean {
 	const value = env.CLANKY_DISCORD_VOICE_ENABLED ?? env.CLANKY_DISCORD_VOICE;
 	const normalized = value?.trim().toLowerCase();
 	return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function shouldStartResolvedVoiceConfig(

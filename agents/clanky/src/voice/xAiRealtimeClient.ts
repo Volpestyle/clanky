@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { type JsonRecord, stringValue } from "@clanky/core";
 import WebSocket from "ws";
 import type {
 	OpenAiRealtimeClientOptions,
@@ -6,8 +7,6 @@ import type {
 	OpenAiRealtimeTranscript,
 } from "./openAiRealtimeClient.ts";
 import { splitRealtimeInputAudioChunk, stringifyRealtimeFunctionOutput } from "./openAiRealtimeClient.ts";
-
-type JsonRecord = Record<string, unknown>;
 
 const DEFAULT_XAI_BASE_URL = "https://api.x.ai/v1";
 const AUDIO_DELTA_EVENTS = new Set(["response.output_audio.delta", "response.audio.delta"]);
@@ -288,10 +287,6 @@ function parseJsonRecord(data: WebSocket.RawData): JsonRecord | undefined {
 	} catch {
 		return undefined;
 	}
-}
-
-function stringValue(value: unknown): string {
-	return typeof value === "string" ? value : "";
 }
 
 export const __xaiRealtimeTestHooks = {

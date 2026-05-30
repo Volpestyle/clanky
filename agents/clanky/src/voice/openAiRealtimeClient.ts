@@ -1,7 +1,6 @@
 import { EventEmitter } from "node:events";
+import { type JsonRecord, stringValue } from "@clanky/core";
 import WebSocket from "ws";
-
-type JsonRecord = Record<string, unknown>;
 
 export interface OpenAiRealtimeTool {
 	type: "function";
@@ -440,10 +439,6 @@ function parseJsonRecord(data: WebSocket.RawData): JsonRecord | undefined {
 	} catch {
 		return undefined;
 	}
-}
-
-function stringValue(value: unknown): string {
-	return typeof value === "string" ? value : "";
 }
 
 export function buildRealtimeSessionUpdateEvent(session: OpenAiRealtimeConnectOptions): JsonRecord {
