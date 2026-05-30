@@ -1,6 +1,6 @@
 # Clanky
 
-![Clanky](/branding/clanky-logo-512.png)
+![Clanky](branding/clanky-logo-512.png)
 
 Clanky is a personal Pi agent with profile state, memory, a canonical Pi
 session thread, communication gateway adapters, subagents, media tools,
@@ -206,7 +206,6 @@ For the room side, jump to [AgentRoom Ecosystem Tour](docs://agent-room-docs/eco
 pnpm check
 pnpm smoke
 clanky --help
-pnpm docs:dev
 ```
 
 Focused non-live checks:

@@ -206,21 +206,8 @@ Use `CLANKY_CHAT_GATEWAY_OWNER=room` when AgentRoom owns the Discord connector.
 Use agent-owned Discord only when this Clanky profile owns the Discord
 conversation.
 
-## Docs Site Does Not Build
+## Docs Checks
 
-Run:
-
-```bash
-pnpm docs:build
-```
-
-The GitHub Pages workflow builds only on docs-relevant path changes:
-
-- `.github/workflows/docs-pages.yml`
-- `apps/docs/**`
-- `docs/**`
-- `README.md`
-- workspace dependency/config files
-
-The broader `pnpm check` command can fail on unrelated active code changes. Use
-`pnpm docs:build` to validate docs-only changes.
+Clanky keeps source docs as markdown in this repo. The deployed docs site is
+owned by the shared docs layer, not a local Clanky app. Run `pnpm check` to
+validate repository docs and TypeScript references together.

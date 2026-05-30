@@ -22,6 +22,7 @@ import {
 	DEFAULT_CLANKY_DISCORD_PROVIDER_ID,
 	DEFAULT_ELEVENLABS_PROVIDER_ID,
 	getElevenLabsCredentialStatus,
+	isRecord,
 	loadStoredDiscordCredential,
 	removeStoredDiscordCredential,
 	saveStoredDiscordCredential,
@@ -2205,8 +2206,4 @@ export function createDiscordAuthExtensionFactory(deps: DiscordAuthCommandDeps):
 
 export function resolveDefaultDiscordProviderId(env: NodeJS.ProcessEnv = process.env): string {
 	return env.CLANKY_DISCORD_PROVIDER_ID?.trim() || DEFAULT_CLANKY_DISCORD_PROVIDER_ID;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return value !== null && typeof value === "object" && !Array.isArray(value);
 }

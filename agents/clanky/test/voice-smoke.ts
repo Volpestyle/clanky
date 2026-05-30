@@ -1239,6 +1239,9 @@ async function assertFakeVoiceBridgeRealtimeTools(): Promise<void> {
 	if (!realtime.connectOptions?.instructions?.includes("Participation eagerness: 50/100")) {
 		throw new Error("voice-smoke: realtime instructions did not include voice participation eagerness");
 	}
+	if (!realtime.connectOptions?.instructions?.includes("For browser tabs or pages Clanky opened, use ask_pi")) {
+		throw new Error("voice-smoke: realtime instructions did not route browser inspection through ask_pi");
+	}
 	const realtimeAudioChunk = Buffer.alloc(960, 1).toString("base64");
 	realtime.emit("audio_delta", realtimeAudioChunk);
 	realtime.emit("audio_delta", realtimeAudioChunk);

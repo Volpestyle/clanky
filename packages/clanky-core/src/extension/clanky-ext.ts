@@ -8,6 +8,5 @@ export {
 	type MemoryRememberToolInput,
 	type MemorySearchToolInput,
 	type ScheduleCronToolInput,
-	type TaskCreateToolInput,
 	type WorkTrackerLinkToolInput,
 } from "../agent-tools.ts";

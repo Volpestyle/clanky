@@ -1,8 +1,7 @@
+import type { JsonRecord } from "@clanky/core";
 import type { ClankvoxDecodedVideoFrame } from "./clankvoxIpcClient.ts";
 import { DiscordVoiceTurnBuffer, type DiscordVoiceTurnBufferOptions } from "./discordVoiceTurnBuffer.ts";
 import type { OpenAiRealtimeClient } from "./openAiRealtimeClient.ts";
-
-type JsonRecord = Record<string, unknown>;
 
 export interface ClankvoxRealtimeBridgeVox {
 	on(event: "speakingStart" | "speakingEnd" | "userAudioEnd", listener: (userId: string) => void): unknown;

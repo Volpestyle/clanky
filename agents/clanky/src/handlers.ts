@@ -15,6 +15,7 @@ import {
 	type ClankyAgentToolHandlers,
 	type ClankyPaths,
 	callExternalMcpTool,
+	createProfileSkill,
 	type DelegateToMainWorkerToolInput,
 	generateOpenAiImage,
 	generateXAiImage,
@@ -52,7 +53,6 @@ import type { ClankyStores } from "./stores.ts";
  *
  * - scheduleCron / listCron (deferred optional scheduler surface)
  * - externalMcpCall / externalMcpStatus (gateway-owned external MCP launcher)
- * - taskCreate / listTasks (coupled to SessionRegistry event log)
  * - indexMessage (depends on SessionIndexStore)
  */
 export function createClankyHandlers(
@@ -81,10 +81,7 @@ export function createClankyHandlers(
 		selfMemory: () => stores.memory.readSelfMemory(),
 
 		listSkills: async () => loadClankySkills({ paths }),
-		createSkill: async (input) => {
-			const { createProfileSkill } = await import("@clanky/core");
-			return await createProfileSkill(paths, input);
-		},
+		createSkill: async (input) => await createProfileSkill(paths, input),
 
 		profileStatus: async () => ({
 			profile: paths.profile,

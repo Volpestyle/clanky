@@ -3,9 +3,11 @@ import { access, appendFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
 	type ClankySubagentStore,
+	type JsonRecord,
 	maybeInjectWorkTrackerSkill,
 	type SendSubagentMessageInput,
 	type SendSubagentMessageResult,
+	truncateText,
 } from "@clanky/core";
 import {
 	type AgentSessionEvent,
@@ -22,8 +24,6 @@ import type {
 	VoiceSupervisorDelegateInput,
 	VoiceSupervisorDelegateResult,
 } from "./voiceSupervisorExtension.ts";
-
-type JsonRecord = Record<string, unknown>;
 
 export interface DiscordVoiceSubagentCoordinatorOptions {
 	store: ClankySubagentStore;
@@ -805,12 +805,6 @@ function formatToolResult(result: unknown): string {
 
 function truncateOneLine(text: string, maxLength: number): string {
 	return truncateText(text.replace(/\s+/g, " ").trim(), maxLength);
-}
-
-function truncateText(text: string, maxLength: number): string {
-	if (text.length <= maxLength) return text;
-	if (maxLength <= 3) return text.slice(0, maxLength);
-	return `${text.slice(0, maxLength - 3)}...`;
 }
 
 function errorMessage(error: unknown): string {

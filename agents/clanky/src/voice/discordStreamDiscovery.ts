@@ -1,4 +1,4 @@
-type JsonRecord = Record<string, unknown>;
+import { isRecord, type JsonRecord } from "@clanky/core";
 
 export interface DiscordRawGatewayClient {
 	on(event: "raw", listener: (packet: DiscordRawPacket) => void): unknown;
@@ -297,10 +297,6 @@ function parseStreamKey(streamKey: string): { guildId: string; channelId: string
 
 function hasCredentials(stream: DiscoveredDiscordStream): boolean {
 	return stream.endpoint !== null && stream.token !== null && stream.rtcServerId !== null;
-}
-
-function isRecord(value: unknown): value is JsonRecord {
-	return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function stringValue(value: unknown): string {

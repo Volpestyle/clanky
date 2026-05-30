@@ -1,10 +1,10 @@
+import type { JsonRecord } from "@clanky/core";
 import type {
 	OpenAiRealtimeClientOptions,
 	OpenAiRealtimeTranscript,
 	OpenAiRealtimeTranscriptionConnectOptions,
 } from "./openAiRealtimeClient.ts";
 
-type JsonRecord = Record<string, unknown>;
 type TimerHandle = ReturnType<typeof setTimeout>;
 
 export interface DiscordVoiceSpeakerTranscript extends OpenAiRealtimeTranscript {

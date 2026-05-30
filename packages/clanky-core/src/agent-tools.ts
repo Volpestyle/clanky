@@ -10,7 +10,7 @@ import {
 	type SessionMessageEntry,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { CURSOR_MARKER, decodeKittyPrintable, matchesKey, Text } from "@earendil-works/pi-tui";
+import { Container, CURSOR_MARKER, decodeKittyPrintable, matchesKey, Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import { type ClankyCommandCompletionSpec, completeClankyCommandArgument } from "./command-completions.ts";
 import type {
@@ -39,6 +39,7 @@ import type {
 import type { CreateClankySkillInput } from "./skills/loader.ts";
 import { extractIndexableMessageText, type SessionIndexMessageInput } from "./state/index-db.ts";
 import type { ClankySubagentState, ClankySubagentSummary } from "./subagents/store.ts";
+import { isRecord } from "./util/values.ts";
 import type { OpenAiWebSearchInput } from "./web/operator.ts";
 import type { CreateWorkTrackerRefInput, WorkTrackerProviderKind } from "./work-tracker/refs.ts";
 import { normalizeWorkTrackerProviderKind } from "./work-tracker/refs.ts";
@@ -62,7 +63,6 @@ const scheduleCronSchema = Type.Object({
 });
 
 const workTrackerProviderKindSchema = Type.Union([
-	Type.Literal("native"),
 	Type.Literal("linear"),
 	Type.Literal("github-issues"),
 	Type.Literal("github"),
@@ -84,8 +84,6 @@ const workTrackerLinkSchema = Type.Object({
 	url: Type.Optional(Type.String()),
 	sessionId: Type.Optional(Type.String()),
 	session_id: Type.Optional(Type.String()),
-	taskId: Type.Optional(Type.String()),
-	task_id: Type.Optional(Type.String()),
 	note: Type.Optional(Type.String()),
 	metadata: Type.Optional(Type.Unknown()),
 });
@@ -127,27 +125,6 @@ const delegateToMainWorkerSchema = Type.Object({
 const subagentMessageSchema = Type.Object({
 	id: Type.String(),
 	text: Type.String(),
-});
-
-const taskCreateSchema = Type.Object({
-	title: Type.String(),
-	description: Type.Optional(Type.String()),
-	status: Type.Optional(
-		Type.Union([Type.Literal("open"), Type.Literal("in_progress"), Type.Literal("done"), Type.Literal("cancelled")]),
-	),
-	priority: Type.Optional(Type.Union([Type.Literal("low"), Type.Literal("normal"), Type.Literal("high")])),
-	sessionId: Type.Optional(Type.String()),
-	session_id: Type.Optional(Type.String()),
-	trackerProviderId: Type.Optional(Type.String()),
-	tracker_provider_id: Type.Optional(Type.String()),
-	trackerProviderKind: Type.Optional(workTrackerProviderKindSchema),
-	tracker_provider_kind: Type.Optional(workTrackerProviderKindSchema),
-	trackerIssueId: Type.Optional(Type.String()),
-	tracker_issue_id: Type.Optional(Type.String()),
-	trackerIdentifier: Type.Optional(Type.String()),
-	tracker_identifier: Type.Optional(Type.String()),
-	trackerUrl: Type.Optional(Type.String()),
-	tracker_url: Type.Optional(Type.String()),
 });
 
 const memoryScopeSchema = Type.Union([
@@ -382,89 +359,55 @@ const xaiVideoGenerateSchema = Type.Object({
 	timeout_ms: Type.Optional(Type.Number()),
 });
 const discordListChannelsSchema = Type.Object({
-	guildId: Type.Optional(Type.String()),
 	guild_id: Type.Optional(Type.String()),
 	since: Type.Optional(Type.String()),
-	sinceTimestamp: Type.Optional(Type.String()),
-	since_timestamp: Type.Optional(Type.String()),
 });
 const discordReadMessagesSchema = Type.Object({
-	channelId: Type.Optional(Type.String()),
 	channel_id: Type.Optional(Type.String()),
 	limit: Type.Optional(Type.Number()),
 	before: Type.Optional(Type.String()),
 	after: Type.Optional(Type.String()),
 	around: Type.Optional(Type.String()),
 	since: Type.Optional(Type.String()),
-	sinceTimestamp: Type.Optional(Type.String()),
-	since_timestamp: Type.Optional(Type.String()),
 	until: Type.Optional(Type.String()),
-	untilTimestamp: Type.Optional(Type.String()),
-	until_timestamp: Type.Optional(Type.String()),
 });
 const discordRecentActivitySchema = Type.Object({
-	guildId: Type.Optional(Type.String()),
 	guild_id: Type.Optional(Type.String()),
 	since: Type.Optional(Type.String()),
-	sinceTimestamp: Type.Optional(Type.String()),
-	since_timestamp: Type.Optional(Type.String()),
-	channelIds: Type.Optional(Type.Array(Type.String())),
 	channel_ids: Type.Optional(Type.Array(Type.String())),
-	channelNameQuery: Type.Optional(Type.String()),
 	channel_name_query: Type.Optional(Type.String()),
-	limitChannels: Type.Optional(Type.Number()),
 	limit_channels: Type.Optional(Type.Number()),
-	messageLimit: Type.Optional(Type.Number()),
 	message_limit: Type.Optional(Type.Number()),
-	includeMessages: Type.Optional(Type.Boolean()),
 	include_messages: Type.Optional(Type.Boolean()),
 });
 const discordRecentAttachmentsSchema = Type.Object({
-	channelId: Type.Optional(Type.String()),
 	channel_id: Type.Optional(Type.String()),
-	messageId: Type.Optional(Type.String()),
 	message_id: Type.Optional(Type.String()),
 	limit: Type.Optional(Type.Number()),
-	messageLimit: Type.Optional(Type.Number()),
 	message_limit: Type.Optional(Type.Number()),
-	mediaLimit: Type.Optional(Type.Number()),
 	media_limit: Type.Optional(Type.Number()),
 	before: Type.Optional(Type.String()),
 	after: Type.Optional(Type.String()),
 	around: Type.Optional(Type.String()),
 	since: Type.Optional(Type.String()),
-	sinceTimestamp: Type.Optional(Type.String()),
-	since_timestamp: Type.Optional(Type.String()),
 	until: Type.Optional(Type.String()),
-	untilTimestamp: Type.Optional(Type.String()),
-	until_timestamp: Type.Optional(Type.String()),
 	load: Type.Optional(Type.Boolean()),
-	loadImages: Type.Optional(Type.Boolean()),
 	load_images: Type.Optional(Type.Boolean()),
-	includeVideoKeyframes: Type.Optional(Type.Boolean()),
 	include_video_keyframes: Type.Optional(Type.Boolean()),
-	maxBytes: Type.Optional(Type.Number()),
 	max_bytes: Type.Optional(Type.Number()),
-	maxVideoBytes: Type.Optional(Type.Number()),
 	max_video_bytes: Type.Optional(Type.Number()),
 });
 const discordSendMessageSchema = Type.Object({
-	channelId: Type.Optional(Type.String()),
 	channel_id: Type.Optional(Type.String()),
 	content: Type.Optional(Type.String()),
-	replyToMessageId: Type.Optional(Type.String()),
 	reply_to_message_id: Type.Optional(Type.String()),
-	filePaths: Type.Optional(Type.Array(Type.String())),
 	file_paths: Type.Optional(Type.Array(Type.String())),
 });
 const discordListEmojisSchema = Type.Object({
-	guildId: Type.Optional(Type.String()),
 	guild_id: Type.Optional(Type.String()),
 });
 const discordAddReactionSchema = Type.Object({
-	channelId: Type.Optional(Type.String()),
 	channel_id: Type.Optional(Type.String()),
-	messageId: Type.Optional(Type.String()),
 	message_id: Type.Optional(Type.String()),
 	emoji: Type.String(),
 });
@@ -484,7 +427,6 @@ export type MainAgentActivityToolInput = Static<typeof mainAgentActivitySchema>;
 export type MainAgentCancelToolInput = Static<typeof mainAgentCancelSchema>;
 export type DelegateToMainWorkerToolInput = Static<typeof delegateToMainWorkerSchema>;
 export type SubagentMessageToolInput = Static<typeof subagentMessageSchema>;
-export type TaskCreateToolInput = Static<typeof taskCreateSchema>;
 export type MemoryRememberToolInput = Static<typeof memoryRememberSchema>;
 export type MemorySearchToolInput = Static<typeof memorySearchSchema>;
 export type MemoryForgetToolInput = Static<typeof memoryForgetSchema>;
@@ -537,7 +479,6 @@ export interface ClankyAgentToolHandlers {
 	mainAgentActivity?: (input: MainAgentActivityToolInput) => Promise<unknown>;
 	mainAgentCancel?: (input: MainAgentCancelToolInput) => Promise<unknown>;
 	delegateToMainWorker?: (input: DelegateToMainWorkerToolInput) => Promise<unknown>;
-	taskCreate?: (input: TaskCreateToolInput) => Promise<unknown>;
 	beforeProviderRequest?: (input: ClankyBeforeProviderRequestInput) => Promise<unknown | undefined>;
 	indexMessage?: (input: SessionIndexMessageInput) => Promise<void>;
 	memoryPacket?: (input: MemoryPacketInput) => Promise<MemoryPacket>;
@@ -614,8 +555,10 @@ const AGENTROOM_OPERATOR_SKILL_NAME = "clanky-agentroom-operator";
 const WORK_TRACKER_SKILL_NAME = "clanky-work-tracker";
 const SUBAGENT_PANEL_WIDGET_KEY = "clanky-subagents";
 const SUBAGENT_PANEL_STATUS_KEY = "clanky-subagents";
+const SUBAGENT_TRANSCRIPT_WIDGET_KEY = "clanky-subagent-transcript";
 const SUBAGENT_PANEL_REFRESH_MS = 2000;
 const SUBAGENT_PANEL_MAX_ROWS = 7;
+const SUBAGENT_TRANSCRIPT_TAIL_ROWS = 18;
 const SUBAGENT_BROWSER_REFRESH_MS = 2000;
 const SUBAGENT_MODAL_WIDTH = "100%";
 const SUBAGENT_MODAL_MAX_HEIGHT = "100%";
@@ -685,7 +628,24 @@ export function createClankyExtensionFactories(
 					: new SubagentPanelController(handlers.listSubagents, handlers.sendSubagentMessage);
 			registerClankyCommands(pi, handlers, subagentPanel);
 			subagentPanel?.registerLifecycle(pi);
-			pi.on("input", async (event) => {
+			pi.on("input", async (event, ctx) => {
+				if (event.source === "interactive") {
+					const target = subagentPanel?.getActiveTarget();
+					if (target !== undefined) {
+						const text = event.text.trim();
+						if (text.length > 0 && !text.startsWith("/")) {
+							const result = await subagentPanel?.dispatchInput({ id: target.id, text: event.text });
+							if (ctx.hasUI) {
+								if (result?.accepted === true) {
+									ctx.ui.notify(`→ ${target.summary.scopeName ?? target.summary.scopeId}`, "info");
+								} else {
+									ctx.ui.notify(`Subagent send failed: ${result?.message ?? "unknown error"}`, "error");
+								}
+							}
+							return { action: "handled" };
+						}
+					}
+				}
 				const transformed = maybeInjectWorkTrackerSkill(
 					maybeInjectAgentRoomOperatorSkill(
 						maybeInjectWebOperatorSkill(maybeInjectMediaOperatorSkill(event.text, env), env),
@@ -764,6 +724,7 @@ class SubagentPanelController {
 	private summaries: ClankySubagentSummary[] = [];
 	private selectedIndex = 0;
 	private listScroll = 0;
+	private activeTargetId: string | undefined;
 	private timer: ReturnType<typeof setInterval> | undefined;
 	private unsubscribeInput: (() => void) | undefined;
 	private refreshRunning = false;
@@ -778,6 +739,18 @@ class SubagentPanelController {
 	) {
 		this.listSubagents = listSubagents;
 		this.sendSubagentMessage = sendSubagentMessage;
+	}
+
+	getActiveTarget(): { id: string; summary: ClankySubagentSummary } | undefined {
+		if (this.activeTargetId === undefined) return undefined;
+		const summary = this.summaries.find((s) => s.id === this.activeTargetId);
+		if (summary === undefined) return undefined;
+		return { id: this.activeTargetId, summary };
+	}
+
+	async dispatchInput(input: SendSubagentMessageInput): Promise<SendSubagentMessageResult | undefined> {
+		if (this.sendSubagentMessage === undefined) return undefined;
+		return this.sendSubagentMessage(input);
 	}
 
 	registerLifecycle(pi: Parameters<ExtensionFactory>[0]): void {
@@ -886,7 +859,7 @@ class SubagentPanelController {
 	}
 
 	private async openSelectedTranscript(ctx: ExtensionContext): Promise<void> {
-		const selected = this.selectedSummary();
+		const selected = this.selectedIndex > 0 ? this.summaries[this.selectedIndex - 1] : undefined;
 		if (selected === undefined) return;
 		await this.openTranscript(ctx, selected.id);
 	}
@@ -936,6 +909,7 @@ class SubagentPanelController {
 		this.unsubscribeInput?.();
 		this.unsubscribeInput = undefined;
 		ctx.ui.setWidget(SUBAGENT_PANEL_WIDGET_KEY, undefined);
+		ctx.ui.setWidget(SUBAGENT_TRANSCRIPT_WIDGET_KEY, undefined);
 		ctx.ui.setStatus(SUBAGENT_PANEL_STATUS_KEY, undefined);
 	}
 
@@ -947,7 +921,7 @@ class SubagentPanelController {
 			return { consume: true };
 		}
 		const editorEmpty = ctx.ui.getEditorText().trim().length === 0;
-		const hasSummaries = this.summaries.length > 0;
+		const maxIndex = this.summaries.length; // 0 = main, 1..N = subagents
 		if (isUpKey(data)) {
 			if (this.selectionActive) {
 				if (this.selectedIndex <= 0) {
@@ -964,12 +938,12 @@ class SubagentPanelController {
 		}
 		if (isDownKey(data)) {
 			if (this.selectionActive) {
-				this.selectedIndex = Math.min(this.summaries.length - 1, this.selectedIndex + 1);
+				this.selectedIndex = Math.min(maxIndex, this.selectedIndex + 1);
 				this.ensureSelectedVisible(SUBAGENT_PANEL_MAX_ROWS);
 				this.renderPanel(ctx);
 				return { consume: true };
 			}
-			if (editorEmpty && hasSummaries) {
+			if (editorEmpty) {
 				this.selectionActive = true;
 				this.selectedIndex = 0;
 				this.ensureSelectedVisible(SUBAGENT_PANEL_MAX_ROWS);
@@ -979,8 +953,15 @@ class SubagentPanelController {
 			return undefined;
 		}
 		if (isEnterKey(data) && this.selectionActive) {
-			const selected = this.selectedSummary();
-			if (selected !== undefined) void this.openTranscript(ctx, selected.id);
+			if (this.selectedIndex === 0) {
+				this.activeTargetId = undefined;
+			} else {
+				const summary = this.summaries[this.selectedIndex - 1];
+				if (summary !== undefined) this.activeTargetId = summary.id;
+			}
+			this.selectionActive = false;
+			this.renderPanel(ctx);
+			void this.refreshTranscript(ctx);
 			return { consume: true };
 		}
 		if (data === "r" && this.selectionActive) {
@@ -998,12 +979,16 @@ class SubagentPanelController {
 		if (this.refreshRunning) return;
 		this.refreshRunning = true;
 		try {
-			const selectedId = this.selectedSummary()?.id;
+			const previousSubagent = this.selectedIndex > 0 ? this.summaries[this.selectedIndex - 1] : undefined;
 			this.summaries = [...(await this.listSubagents())].sort(compareSubagentsForPanel);
-			this.selectedIndex = resolveSelectedIndex(this.summaries, selectedId, this.selectedIndex);
+			if (previousSubagent !== undefined) {
+				const newIdx = this.summaries.findIndex((s) => s.id === previousSubagent.id);
+				this.selectedIndex = newIdx >= 0 ? newIdx + 1 : 0;
+			}
 			this.ensureSelectedVisible(SUBAGENT_PANEL_MAX_ROWS);
 			ctx.ui.setStatus(SUBAGENT_PANEL_STATUS_KEY, formatSubagentFooterStatus(this.summaries, ctx));
 			this.renderPanel(ctx);
+			await this.refreshTranscript(ctx);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			ctx.ui.setStatus(SUBAGENT_PANEL_STATUS_KEY, ctx.ui.theme.fg("error", "subagents error"));
@@ -1029,30 +1014,57 @@ class SubagentPanelController {
 			selectionActive: this.selectionActive,
 			selectedIndex: this.selectedIndex,
 			scroll: this.listScroll,
+			activeTargetId: this.activeTargetId,
 		});
 		ctx.ui.setWidget(SUBAGENT_PANEL_WIDGET_KEY, lines.length === 0 ? undefined : lines, {
 			placement: "belowEditor",
 		});
 	}
 
-	private selectedSummary(): ClankySubagentSummary | undefined {
-		return this.summaries[this.selectedIndex];
-	}
-
 	private ensureSelectedVisible(maxRows: number): void {
-		if (this.summaries.length === 0) {
-			this.selectedIndex = 0;
-			this.listScroll = 0;
-			return;
-		}
-		this.selectedIndex = Math.min(Math.max(0, this.selectedIndex), this.summaries.length - 1);
-		const maxScroll = Math.max(0, this.summaries.length - maxRows);
+		const total = this.summaries.length + 1; // +1 for "main" pseudo-row
+		this.selectedIndex = Math.min(Math.max(0, this.selectedIndex), total - 1);
+		const maxScroll = Math.max(0, total - maxRows);
 		if (this.selectedIndex < this.listScroll) {
 			this.listScroll = this.selectedIndex;
 		} else if (this.selectedIndex >= this.listScroll + maxRows) {
 			this.listScroll = this.selectedIndex - maxRows + 1;
 		}
 		this.listScroll = Math.min(Math.max(0, this.listScroll), maxScroll);
+	}
+
+	private async refreshTranscript(ctx: ExtensionContext): Promise<void> {
+		const target = this.getActiveTarget();
+		if (target === undefined || target.summary.sessionFile === undefined) {
+			ctx.ui.setWidget(SUBAGENT_TRANSCRIPT_WIDGET_KEY, undefined);
+			return;
+		}
+		const theme = ctx.ui.theme;
+		const width = process.stdout.columns ?? 80;
+		let transcriptLines: string[] = [];
+		try {
+			const transcript = await loadSubagentTranscript(target.summary.sessionFile);
+			if (transcript.length === 0) {
+				transcriptLines = [theme.fg("dim", "  (no transcript yet)")];
+			} else {
+				const rendered = renderTranscriptRows(transcript, width, theme);
+				transcriptLines = rendered.slice(Math.max(0, rendered.length - SUBAGENT_TRANSCRIPT_TAIL_ROWS));
+			}
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			transcriptLines = [theme.fg("error", `  transcript load failed: ${message}`)];
+		}
+		const header = renderSubagentChatHeader(target.summary, theme, width);
+		const lines = [header, ...transcriptLines];
+		ctx.ui.setWidget(
+			SUBAGENT_TRANSCRIPT_WIDGET_KEY,
+			() => {
+				const container = new Container();
+				for (const line of lines) container.addChild(new Text(line, 1, 0));
+				return container;
+			},
+			{ placement: "aboveEditor" },
+		);
 	}
 }
 
@@ -1649,26 +1661,49 @@ function formatSubagentFooterStatus(
 function formatSubagentPanelLines(
 	summaries: readonly ClankySubagentSummary[],
 	ctx: ExtensionContext,
-	options: { includeEmpty?: boolean; selectionActive?: boolean; selectedIndex?: number; scroll?: number } = {},
+	options: {
+		includeEmpty?: boolean;
+		selectionActive?: boolean;
+		selectedIndex?: number;
+		scroll?: number;
+		activeTargetId?: string | undefined;
+	} = {},
 ): string[] {
-	if (summaries.length === 0) {
-		return options.includeEmpty === true ? [ctx.ui.theme.fg("dim", "No Clanky subagents yet.")] : [];
-	}
 	const ordered = [...summaries].sort(compareSubagentsForPanel);
-	const scroll = Math.min(Math.max(0, options.scroll ?? 0), Math.max(0, ordered.length - SUBAGENT_PANEL_MAX_ROWS));
+	const total = ordered.length + 1; // +1 for main pseudo-row
+	const scroll = Math.min(Math.max(0, options.scroll ?? 0), Math.max(0, total - SUBAGENT_PANEL_MAX_ROWS));
 	const selectedIndex = options.selectedIndex ?? -1;
-	const visible = ordered.slice(scroll, scroll + SUBAGENT_PANEL_MAX_ROWS);
-	const lines: string[] = [];
-	for (const [visibleIndex, subagent] of visible.entries()) {
-		lines.push(
-			formatSubagentPanelRow(subagent, ctx, scroll + visibleIndex === selectedIndex, options.selectionActive === true),
-		);
+	const focused = options.selectionActive === true;
+	const activeTargetId = options.activeTargetId;
+	const rows: string[] = [];
+	rows.push(formatSubagentMainRow(ctx, selectedIndex === 0 && focused, activeTargetId === undefined));
+	for (const subagent of ordered) {
+		rows.push(formatSubagentPanelRow(subagent, ctx, false, false, activeTargetId === subagent.id));
 	}
-	if (ordered.length > SUBAGENT_PANEL_MAX_ROWS) {
-		const end = Math.min(ordered.length, scroll + SUBAGENT_PANEL_MAX_ROWS);
-		lines.push(ctx.ui.theme.fg("dim", `  ${scroll + 1}–${end} of ${ordered.length}`));
+	// Overwrite the selected row with focused styling
+	if (focused && selectedIndex > 0 && selectedIndex <= ordered.length) {
+		const summary = ordered[selectedIndex - 1];
+		if (summary !== undefined) {
+			rows[selectedIndex] = formatSubagentPanelRow(summary, ctx, true, true, activeTargetId === summary.id);
+		}
+	}
+	const visible = rows.slice(scroll, scroll + SUBAGENT_PANEL_MAX_ROWS);
+	const lines = [...visible];
+	if (total > SUBAGENT_PANEL_MAX_ROWS) {
+		const end = Math.min(total, scroll + SUBAGENT_PANEL_MAX_ROWS);
+		lines.push(ctx.ui.theme.fg("dim", `  ${scroll + 1}–${end} of ${total}`));
 	}
 	return lines;
+}
+
+function formatSubagentMainRow(ctx: ExtensionContext, selected: boolean, active: boolean): string {
+	const theme = ctx.ui.theme;
+	const cursor = selected ? theme.fg("accent", "▸") : " ";
+	const dot = active ? theme.fg("accent", "●") : theme.fg("dim", "○");
+	const label = "main";
+	const scopeStyled = active || selected ? theme.bold(theme.fg("accent", label)) : theme.fg("dim", label);
+	const note = theme.fg("dim", "clanky main session");
+	return `${cursor} ${dot} ${scopeStyled}  ${theme.fg("dim", "·")}  ${note}`;
 }
 
 function formatSubagentPanelRow(
@@ -1676,13 +1711,14 @@ function formatSubagentPanelRow(
 	ctx: ExtensionContext,
 	selected = false,
 	focused = false,
+	active = false,
 ): string {
 	const theme = ctx.ui.theme;
 	const tone = subagentTone(subagent);
 	const cursor = selected && focused ? theme.fg(tone.fg, "▸") : " ";
-	const dot = theme.fg(tone.fg, tone.dot);
+	const dot = active ? theme.fg(tone.fg, "●") : theme.fg("dim", "○");
 	const scope = truncatePlain(subagent.scopeName ?? subagent.scopeId, 24);
-	const scopeStyled = selected && focused ? theme.bold(theme.fg(tone.fg, scope)) : theme.fg(tone.fg, scope);
+	const scopeStyled = (selected && focused) || active ? theme.bold(theme.fg(tone.fg, scope)) : theme.fg(tone.fg, scope);
 	const summary = theme.fg("dim", truncatePlain(subagent.activeSummary ?? "idle", 48));
 	const queue = subagent.queueDepth > 0 ? `  ${theme.fg("warning", `↑${subagent.queueDepth}`)}` : "";
 	const age = theme.fg("dim", formatRelativeAge(subagent.updatedAt));
@@ -2251,10 +2287,6 @@ function isPrintableInput(data: string): boolean {
 	return true;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null;
-}
-
 function memoryToolAudit(
 	event: { toolName: string; toolCallId: string; input: Record<string, unknown>; details: unknown; isError: boolean },
 	sessionId: string,
@@ -2773,34 +2805,17 @@ export function createClankyToolDefinitions(
 				name: "work_tracker_link",
 				label: "Work Tracker Link",
 				description:
-					"Persist a provider-neutral link between an external work tracker issue and a Clanky session or task.",
+					"Persist a provider-neutral link between an external work tracker issue and the current Clanky session.",
 				promptSnippet:
-					"work_tracker_link: after using MCP, CLI, or a skill to create or find tracker work, bind the external issue to the current Clanky session or task.",
+					"work_tracker_link: after using MCP, CLI, or a skill to create or find tracker work, bind the external issue to the current Clanky session.",
 				promptGuidelines: [
 					"Use the installed tracker MCP, CLI, or skill for provider-specific create, comment, and status operations.",
 					"Use provider_kind/provider_id to distinguish Linear, GitHub Issues, Jira, or custom trackers.",
-					"Use task_create without a tracker ref when the user only wants native Clanky tracking.",
 				],
 				parameters: workTrackerLinkSchema,
 				async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 					const input = normalizeWorkTrackerLinkToolInput(params, ctx.sessionManager.getSessionId());
 					return toolResult(await workTrackerLink(input));
-				},
-			}),
-		);
-	}
-	const taskCreate = handlers.taskCreate;
-	if (taskCreate !== undefined) {
-		tools.push(
-			defineTool({
-				name: "task_create",
-				label: "Task Create",
-				description: "Create a lightweight native Clanky task tied to the current session and optional tracker ref.",
-				promptSnippet: "task_create: record a local Clanky task for follow-up or lightweight work tracking.",
-				parameters: taskCreateSchema,
-				async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-					const input = normalizeTaskCreateToolInput(params, ctx.sessionManager.getSessionId());
-					return toolResult(await taskCreate(input));
 				},
 			}),
 		);
@@ -3425,9 +3440,9 @@ export function createClankyToolDefinitions(
 					"discord_recent_attachments: find and visually load recent Discord images, GIF previews, image links, embeds, and video keyframes from a channel.",
 				promptGuidelines: [
 					"Use when the conversation context calls for inspecting Discord media that is not already attached to the current model request.",
-					"Pass channelOrThreadId from the Discord prompt as channelId; pass messageId when you need one specific Discord message.",
+					"Pass channelOrThreadId from the Discord prompt as channel_id; pass message_id when you need one specific Discord message.",
 					"Only claim visual inspection for entries listed in loadedImages or returned as image blocks; otherwise say you found media metadata only.",
-					"Prefer a small mediaLimit and bounded messageLimit unless the user asks for a broader search.",
+					"Prefer a small media_limit and bounded message_limit unless the user asks for a broader search.",
 				],
 				parameters: discordRecentAttachmentsSchema,
 				async execute(_toolCallId, params, signal) {
@@ -3564,48 +3579,63 @@ export function createClankyToolDefinitions(
 	return tools;
 }
 
-export function maybeInjectWebOperatorSkill(text: string, env: NodeJS.ProcessEnv = process.env): string {
-	if (env.CLANKY_WEB_OPERATOR_AUTO_SKILL === "0" || env.CLANKY_WEB_OPERATOR_AUTO_SKILL === "false") return text;
+interface MaybeInjectSkillOptions {
+	autoEnvVar: string;
+	skillName: string;
+	predicate: (trimmed: string) => boolean;
+	/**
+	 * Optional extra precondition evaluated before any text inspection. When it
+	 * returns false the text is returned untouched.
+	 */
+	precondition?: (env: NodeJS.ProcessEnv) => boolean;
+}
+
+function maybeInjectSkill(text: string, env: NodeJS.ProcessEnv, options: MaybeInjectSkillOptions): string {
+	const auto = env[options.autoEnvVar];
+	if (auto === "0" || auto === "false") return text;
+	if (options.precondition !== undefined && !options.precondition(env)) return text;
 	const trimmed = text.trimStart();
 	if (trimmed.length === 0) return text;
 	if (trimmed.startsWith("/")) return text;
-	if (trimmed.includes(`<skill name="${WEB_OPERATOR_SKILL_NAME}"`)) return text;
-	if (!shouldUseWebOperatorSkill(trimmed)) return text;
-	return `/skill:${WEB_OPERATOR_SKILL_NAME} ${text}`;
+	if (trimmed.includes(`<skill name="${options.skillName}"`)) return text;
+	if (!options.predicate(trimmed)) return text;
+	return `/skill:${options.skillName} ${text}`;
+}
+
+export function maybeInjectWebOperatorSkill(text: string, env: NodeJS.ProcessEnv = process.env): string {
+	return maybeInjectSkill(text, env, {
+		autoEnvVar: "CLANKY_WEB_OPERATOR_AUTO_SKILL",
+		skillName: WEB_OPERATOR_SKILL_NAME,
+		predicate: shouldUseWebOperatorSkill,
+	});
 }
 
 export function maybeInjectMediaOperatorSkill(text: string, env: NodeJS.ProcessEnv = process.env): string {
-	if (env.CLANKY_MEDIA_OPERATOR_AUTO_SKILL === "0" || env.CLANKY_MEDIA_OPERATOR_AUTO_SKILL === "false") return text;
-	const trimmed = text.trimStart();
-	if (trimmed.length === 0) return text;
-	if (trimmed.startsWith("/")) return text;
-	if (trimmed.includes(`<skill name="${MEDIA_OPERATOR_SKILL_NAME}"`)) return text;
-	if (!shouldUseMediaOperatorSkill(trimmed)) return text;
-	return `/skill:${MEDIA_OPERATOR_SKILL_NAME} ${text}`;
+	return maybeInjectSkill(text, env, {
+		autoEnvVar: "CLANKY_MEDIA_OPERATOR_AUTO_SKILL",
+		skillName: MEDIA_OPERATOR_SKILL_NAME,
+		predicate: shouldUseMediaOperatorSkill,
+	});
 }
 
 export function maybeInjectAgentRoomOperatorSkill(text: string, env: NodeJS.ProcessEnv = process.env): string {
-	if (env.CLANKY_AGENTROOM_OPERATOR_AUTO_SKILL === "0" || env.CLANKY_AGENTROOM_OPERATOR_AUTO_SKILL === "false") {
-		return text;
-	}
-	const trimmed = text.trimStart();
-	if (trimmed.length === 0) return text;
-	if (trimmed.startsWith("/")) return text;
-	if (trimmed.includes(`<skill name="${AGENTROOM_OPERATOR_SKILL_NAME}"`)) return text;
-	if (!shouldUseAgentRoomOperatorSkill(trimmed)) return text;
-	return `/skill:${AGENTROOM_OPERATOR_SKILL_NAME} ${text}`;
+	return maybeInjectSkill(text, env, {
+		autoEnvVar: "CLANKY_AGENTROOM_OPERATOR_AUTO_SKILL",
+		skillName: AGENTROOM_OPERATOR_SKILL_NAME,
+		predicate: shouldUseAgentRoomOperatorSkill,
+	});
 }
 
 export function maybeInjectWorkTrackerSkill(text: string, env: NodeJS.ProcessEnv = process.env): string {
-	if (env.CLANKY_WORK_TRACKER_AUTO_SKILL === "0" || env.CLANKY_WORK_TRACKER_AUTO_SKILL === "false") return text;
-	const tracker = env.CLANKY_WORK_TRACKER?.trim() || env.CLANKY_WORK_TRACKER_PROVIDER_KIND?.trim();
-	if (tracker === undefined || tracker.length === 0 || tracker === "native") return text;
-	const trimmed = text.trimStart();
-	if (trimmed.length === 0) return text;
-	if (trimmed.startsWith("/")) return text;
-	if (trimmed.includes(`<skill name="${WORK_TRACKER_SKILL_NAME}"`)) return text;
-	if (!shouldUseWorkTrackerSkill(trimmed)) return text;
-	return `/skill:${WORK_TRACKER_SKILL_NAME} ${text}`;
+	return maybeInjectSkill(text, env, {
+		autoEnvVar: "CLANKY_WORK_TRACKER_AUTO_SKILL",
+		skillName: WORK_TRACKER_SKILL_NAME,
+		predicate: shouldUseWorkTrackerSkill,
+		precondition: (current) => {
+			const tracker = current.CLANKY_WORK_TRACKER?.trim() || current.CLANKY_WORK_TRACKER_PROVIDER_KIND?.trim();
+			return tracker !== undefined && tracker.length > 0;
+		},
+	});
 }
 
 export function shouldUseWebOperatorSkill(text: string): boolean {
@@ -4099,35 +4129,11 @@ function normalizeWorkTrackerLinkToolInput(
 	if (input.title !== undefined) output.title = input.title;
 	if (input.url !== undefined) output.url = input.url;
 	const sessionId = input.sessionId ?? input.session_id;
-	const taskId = input.taskId ?? input.task_id;
 	if (sessionId !== undefined) output.sessionId = sessionId;
-	if (taskId !== undefined) output.taskId = taskId;
-	if (output.sessionId === undefined && output.taskId === undefined) output.sessionId = defaultSessionId;
+	if (output.sessionId === undefined) output.sessionId = defaultSessionId;
 	if (input.note !== undefined) output.note = input.note;
 	const metadata = metadataRecord(input.metadata);
 	if (metadata !== undefined) output.metadata = metadata;
-	return output;
-}
-
-function normalizeTaskCreateToolInput(input: TaskCreateToolInput, defaultSessionId: string): TaskCreateToolInput {
-	const output: TaskCreateToolInput = { ...input };
-	if (output.sessionId === undefined) output.sessionId = input.session_id ?? defaultSessionId;
-	if (output.trackerProviderId === undefined && input.tracker_provider_id !== undefined) {
-		output.trackerProviderId = input.tracker_provider_id;
-	}
-	if (output.trackerIssueId === undefined && input.tracker_issue_id !== undefined) {
-		output.trackerIssueId = input.tracker_issue_id;
-	}
-	if (output.trackerIdentifier === undefined && input.tracker_identifier !== undefined) {
-		output.trackerIdentifier = input.tracker_identifier;
-	}
-	if (output.trackerUrl === undefined && input.tracker_url !== undefined) {
-		output.trackerUrl = input.tracker_url;
-	}
-	if (output.trackerProviderKind === undefined) {
-		const trackerProviderKind = normalizeWorkTrackerKind(input.tracker_provider_kind ?? input.trackerProviderKind);
-		if (trackerProviderKind !== undefined) output.trackerProviderKind = trackerProviderKind;
-	}
 	return output;
 }
 

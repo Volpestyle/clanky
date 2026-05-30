@@ -4,6 +4,9 @@ import {
 	type ClankySubagentState,
 	type ClankySubagentStore,
 	type ClankySubagentSummary,
+	errorMessage,
+	isRecord,
+	type JsonRecord,
 	type MainAgentActivityToolInput,
 	type MainAgentCancelToolInput,
 	maybeInjectWorkTrackerSkill,
@@ -79,7 +82,6 @@ import {
 import { XAiRealtimeClient } from "./voice/xAiRealtimeClient.ts";
 import type { VoiceSupervisorDelegateHandle } from "./voiceSupervisorExtension.ts";
 
-type JsonRecord = Record<string, unknown>;
 type TimerHandle = ReturnType<typeof setTimeout>;
 type VoicePiDelegationTarget = "main-runtime" | "voice-worker";
 type RealtimeAudioOutputChunk = {
@@ -3027,6 +3029,8 @@ function buildRealtimeInstructions(
 		"When music is playing, behave like a reserved music player: speak only for direct Clanky address or explicit media controls.",
 		"Keep replies brief and conversational; do not read long tool output verbatim.",
 		"Delegate durable, tool-heavy, or ambiguous non-chat work with ask_pi, then answer as Clanky without exposing internal worker names.",
+		"For browser tabs or pages Clanky opened, use ask_pi to inspect, screenshot, navigate, click, type, or scroll with browser tools; do not ask for Discord Go Live or screen share unless the user explicitly wants to share their screen or Pi reports browser inspection is unavailable.",
+		"If the user says 'look at it', 'what do you see', 'use browser tools', or 'delegate that' after a browser request, call ask_pi with the browser context and ask Pi to use browser_list_tabs, browser_screenshot, or browser input tools.",
 		"Use the provided tools for runtime status, cancellation, subagents, screen share, and voice media control.",
 		"Use media playback tools only for resolved http(s) URLs; if a music or video request is search-like or ambiguous, ask_pi should resolve a playable URL first.",
 		`Discord credential kind: ${config.credentialKind}.`,
@@ -3072,7 +3076,8 @@ function buildVoiceTools(options: { supportsScreenShareSnapshots?: boolean } = {
 		{
 			type: "function",
 			name: "ask_pi",
-			description: "Delegate a durable or tool-heavy request to the Clanky Pi runtime and return its concise answer.",
+			description:
+				"Delegate a durable or tool-heavy request to the Clanky Pi runtime and return its concise answer, including browser tab inspection/control via browser tools.",
 			parameters: {
 				type: "object",
 				properties: {
@@ -3260,7 +3265,8 @@ function buildVoiceTools(options: { supportsScreenShareSnapshots?: boolean } = {
 			{
 				type: "function",
 				name: "start_screen_watch",
-				description: "Start watching the most relevant active Discord Go Live screen share.",
+				description:
+					"Start watching the most relevant active Discord Go Live screen share. Do not use this for browser tabs Clanky opened; use ask_pi for browser tools.",
 				parameters: {
 					type: "object",
 					properties: {
@@ -3282,7 +3288,7 @@ function buildVoiceTools(options: { supportsScreenShareSnapshots?: boolean } = {
 			{
 				type: "function",
 				name: "see_screenshare_snapshot",
-				description: "Attach the latest decoded Discord screen-share frame to the realtime conversation.",
+				description: "Attach the latest decoded Discord Go Live screen-share frame to the realtime conversation.",
 				parameters: {
 					type: "object",
 					properties: {},
@@ -4240,10 +4246,6 @@ function isAbortError(error: unknown): boolean {
 	return stringValue(error.name) === "AbortError";
 }
 
-function errorMessage(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
-}
-
 function formatVoiceLogDetails(details: JsonRecord | undefined): string {
 	if (details === undefined) return "";
 	try {
@@ -4263,10 +4265,6 @@ function hasCredentials(stream: DiscoveredDiscordStream): stream is DiscoveredDi
 	rtcServerId: string;
 } {
 	return stream.endpoint !== null && stream.token !== null && stream.rtcServerId !== null;
-}
-
-function isRecord(value: unknown): value is JsonRecord {
-	return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function isIterable(value: unknown): value is Iterable<unknown> {

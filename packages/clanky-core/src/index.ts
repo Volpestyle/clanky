@@ -35,7 +35,6 @@ export {
 	shouldUseAgentRoomOperatorSkill,
 	shouldUseMediaOperatorSkill,
 	shouldUseWorkTrackerSkill,
-	type TaskCreateToolInput,
 	type WebSearchToolInput,
 	type WorkTrackerLinkToolInput,
 	type XAiImageGenerateToolInput,
@@ -212,20 +211,14 @@ export {
 	removeProfileSkill,
 } from "./skills/loader.ts";
 export {
-	type ClankyTask,
-	type ClankyTaskPriority,
-	type ClankyTaskStatus,
-	type CreateClankyTaskInput,
 	type CronIdempotencyRunRecord,
 	CronRunLedger,
 	extractIndexableMessageText,
-	type ListClankyTasksOptions,
 	type SessionIndexMessageInput,
 	type SessionIndexRole,
 	SessionIndexStore,
 	type SessionSearchOptions,
 	type SessionSearchResult,
-	type UpdateClankyTaskInput,
 } from "./state/index-db.ts";
 export {
 	type ChatInboxAttachment,
@@ -238,6 +231,14 @@ export {
 	type EnqueueChatInboxMessageInput,
 	type UpsertSubagentInput,
 } from "./subagents/store.ts";
+export {
+	clampInteger,
+	errorMessage,
+	isRecord,
+	type JsonRecord,
+	stringValue,
+	truncateText,
+} from "./util/values.ts";
 export {
 	getWebBackendStatus,
 	type OpenAiWebSearchInput,

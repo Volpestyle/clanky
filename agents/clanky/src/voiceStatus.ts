@@ -1,3 +1,5 @@
+import { isRecord } from "@clanky/core";
+
 export type VoiceStatusState =
 	| { kind: "unavailable" }
 	| { kind: "error"; message: string }
@@ -31,10 +33,6 @@ export function interpretVoiceStatus(status: unknown): VoiceStatusState {
 		return { kind: "ready" };
 	}
 	return { kind: "inactive" };
-}
-
-export function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function readStatusRecord(record: unknown, key: string): Record<string, unknown> | undefined {

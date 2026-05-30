@@ -6,6 +6,7 @@ import {
 	type ClankySubagentStore,
 	DEFAULT_CLANKY_DISCORD_PROVIDER_ID,
 	type DiscordMessageSummary,
+	errorMessage,
 	loadStoredDiscordCredential,
 	readDiscordMessages,
 	type SendSubagentMessageInput,
@@ -715,7 +716,7 @@ class AgentDiscordBridge implements ClankyAgentDiscordGatewayHandle {
 		try {
 			const messages = await readDiscordMessages(
 				{
-					channelId,
+					channel_id: channelId,
 					limit: MAX_CONVERSATION_HISTORY_MESSAGES,
 					before: message.externalMessageId,
 				},
@@ -1317,10 +1318,6 @@ function hasVocativeWakeToken(transcript = "", wakeToken = ""): boolean {
 
 function escapeRegex(value = ""): string {
 	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function errorMessage(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
 }
 
 export function extractAssistantText(event: AgentSessionEvent): string | undefined {

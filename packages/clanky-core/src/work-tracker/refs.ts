@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import type { ClankyPaths } from "../paths.ts";
 
-export type WorkTrackerProviderKind = "native" | "linear" | "github-issues" | "jira" | "custom";
+export type WorkTrackerProviderKind = "linear" | "github-issues" | "jira" | "custom";
 
 export interface WorkTrackerIssueRef {
 	providerId: string;
@@ -22,7 +22,6 @@ export interface CreateWorkTrackerRefInput {
 	title?: string;
 	url?: string;
 	sessionId?: string;
-	taskId?: string;
 	note?: string;
 	metadata?: Record<string, unknown>;
 }
@@ -31,8 +30,7 @@ export interface WorkTrackerRef extends WorkTrackerIssueRef {
 	id: string;
 	createdAt: string;
 	updatedAt: string;
-	sessionId?: string;
-	taskId?: string;
+	sessionId: string;
 	note?: string;
 }
 
@@ -60,8 +58,7 @@ export class WorkTrackerRefStore {
 				ref.providerId === normalized.providerId &&
 				ref.providerKind === normalized.providerKind &&
 				ref.issueId === normalized.issueId &&
-				ref.sessionId === normalized.sessionId &&
-				ref.taskId === normalized.taskId,
+				ref.sessionId === normalized.sessionId,
 		);
 		const timestamp = now.toISOString();
 		if (existing !== undefined) {
@@ -82,12 +79,11 @@ export class WorkTrackerRefStore {
 			issueId: normalized.issueId,
 			createdAt: timestamp,
 			updatedAt: timestamp,
+			sessionId: normalized.sessionId,
 		};
 		if (normalized.identifier !== undefined) ref.identifier = normalized.identifier;
 		if (normalized.title !== undefined) ref.title = normalized.title;
 		if (normalized.url !== undefined) ref.url = normalized.url;
-		if (normalized.sessionId !== undefined) ref.sessionId = normalized.sessionId;
-		if (normalized.taskId !== undefined) ref.taskId = normalized.taskId;
 		if (normalized.note !== undefined) ref.note = normalized.note;
 		if (normalized.metadata !== undefined) ref.metadata = normalized.metadata;
 		file.refs.push(ref);
@@ -119,7 +115,7 @@ export class WorkTrackerRefStore {
 
 export function normalizeWorkTrackerProviderKind(value: string | undefined): WorkTrackerProviderKind | undefined {
 	const normalized = value?.trim().toLowerCase();
-	if (normalized === "native" || normalized === "linear" || normalized === "github-issues" || normalized === "jira") {
+	if (normalized === "linear" || normalized === "github-issues" || normalized === "jira") {
 		return normalized;
 	}
 	if (normalized === "github" || normalized === "github_issues") return "github-issues";
@@ -127,33 +123,26 @@ export function normalizeWorkTrackerProviderKind(value: string | undefined): Wor
 	return undefined;
 }
 
-export function normalizeWorkTrackerRefInput(
-	input: CreateWorkTrackerRefInput,
-): RequiredProvider<CreateWorkTrackerRefInput> {
+export function normalizeWorkTrackerRefInput(input: CreateWorkTrackerRefInput): NormalizedWorkTrackerRefInput {
 	const issueId = input.issueId.trim();
 	if (issueId.length === 0) throw new Error("Work tracker issue id must be a non-empty string");
 	const providerKind = input.providerKind ?? "custom";
 	const providerId = input.providerId?.trim() || providerKind;
 	const sessionId = input.sessionId?.trim();
-	const taskId = input.taskId?.trim();
-	if (!sessionId && !taskId) throw new Error("Work tracker link requires a sessionId or taskId");
-	const normalized: RequiredProvider<CreateWorkTrackerRefInput> = { issueId, providerId, providerKind };
+	if (!sessionId) throw new Error("Work tracker link requires a sessionId");
+	const normalized: NormalizedWorkTrackerRefInput = { issueId, providerId, providerKind, sessionId };
 	addTrimmed(normalized, "identifier", input.identifier);
 	addTrimmed(normalized, "title", input.title);
 	addTrimmed(normalized, "url", input.url);
-	if (sessionId) normalized.sessionId = sessionId;
-	if (taskId) normalized.taskId = taskId;
 	addTrimmed(normalized, "note", input.note);
 	if (input.metadata !== undefined) normalized.metadata = input.metadata;
 	return normalized;
 }
 
-type RequiredProvider<T extends { providerId?: string; providerKind?: WorkTrackerProviderKind }> = Omit<
-	T,
-	"providerId" | "providerKind"
-> & {
+type NormalizedWorkTrackerRefInput = Omit<CreateWorkTrackerRefInput, "providerId" | "providerKind" | "sessionId"> & {
 	providerId: string;
 	providerKind: WorkTrackerProviderKind;
+	sessionId: string;
 };
 
 function addTrimmed<T extends Record<string, unknown>>(target: T, key: keyof T, value: string | undefined): void {
@@ -176,7 +165,8 @@ function isWorkTrackerRef(value: unknown): value is WorkTrackerRef {
 		typeof candidate.providerKind === "string" &&
 		typeof candidate.issueId === "string" &&
 		typeof candidate.createdAt === "string" &&
-		typeof candidate.updatedAt === "string"
+		typeof candidate.updatedAt === "string" &&
+		typeof candidate.sessionId === "string"
 	);
 }
 
