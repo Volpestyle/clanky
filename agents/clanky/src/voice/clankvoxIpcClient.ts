@@ -366,28 +366,54 @@ export class ClankvoxIpcClient extends EventEmitter {
 			this.flushStderrBuffer(options.log);
 			if (!this.destroyed) this.emit("crashed", { code, signal });
 		});
-		this.setupAdapterProxy();
 
+		await this.waitForLifecycleEvent(
+			"processReady",
+			options.timeoutMs ?? 15_000,
+			`clankvox process ready timeout after ${options.timeoutMs ?? 15_000}ms`,
+		);
+		this.setupAdapterProxy();
+		const ready = this.waitForLifecycleEvent(
+			"ready",
+			options.timeoutMs ?? 15_000,
+			`clankvox ready timeout after ${options.timeoutMs ?? 15_000}ms`,
+		);
+		this.send({
+			type: "join",
+			guildId: this.guildId,
+			channelId: this.channelId,
+			selfDeaf: options.selfDeaf ?? false,
+			selfMute: options.selfMute ?? false,
+		});
+		await ready;
+	}
+
+	private async waitForLifecycleEvent(
+		eventName: "processReady" | "ready",
+		timeoutMs: number,
+		timeoutMessage: string,
+	): Promise<void> {
 		await new Promise<void>((resolveReady, reject) => {
 			const timer = setTimeout(() => {
+				cleanup();
 				void this.destroy();
-				reject(new Error(`clankvox ready timeout after ${options.timeoutMs ?? 15_000}ms`));
-			}, options.timeoutMs ?? 15_000);
-			this.once("ready", () => {
-				clearTimeout(timer);
+				reject(new Error(timeoutMessage));
+			}, timeoutMs);
+			const onReady = (): void => {
+				cleanup();
 				resolveReady();
-			});
-			this.once("crashed", (event) => {
+			};
+			const onCrashed = (event: unknown): void => {
+				cleanup();
+				reject(new Error(`clankvox crashed before ${eventName}: ${JSON.stringify(event)}`));
+			};
+			const cleanup = (): void => {
 				clearTimeout(timer);
-				reject(new Error(`clankvox crashed before ready: ${JSON.stringify(event)}`));
-			});
-			this.send({
-				type: "join",
-				guildId: this.guildId,
-				channelId: this.channelId,
-				selfDeaf: options.selfDeaf ?? false,
-				selfMute: options.selfMute ?? false,
-			});
+				this.off(eventName, onReady);
+				this.off("crashed", onCrashed);
+			};
+			this.once(eventName, onReady);
+			this.once("crashed", onCrashed);
 		});
 	}
 
@@ -443,6 +469,10 @@ export class ClankvoxIpcClient extends EventEmitter {
 		const msg = parseJsonRecord(payload);
 		if (msg === undefined) return;
 		const type = stringValue(msg.type);
+		if (type === "process_ready") {
+			this.emit("processReady");
+			return;
+		}
 		if (type === "ready") {
 			this.emit("ready");
 			return;

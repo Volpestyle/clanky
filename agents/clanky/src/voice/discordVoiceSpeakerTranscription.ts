@@ -112,6 +112,26 @@ export class DiscordVoiceSpeakerTranscriptionManager {
 		this.clearIdleTimer(session);
 	}
 
+	prewarmUser(userId: string): void {
+		const normalizedUserId = normalizeUserId(userId);
+		if (this.disposed || normalizedUserId.length === 0) return;
+		this.subscribeUser(normalizedUserId, this.silenceDurationMs, this.sampleRate);
+		const session = this.ensureSession(normalizedUserId);
+		if (session.active) return;
+		this.clearIdleTimer(session);
+		void session.connecting
+			.then(() => {
+				if (!this.disposed && !session.closed && !session.active) this.scheduleIdleClose(session);
+			})
+			.catch((error: unknown) => this.closeFailedSession(session, error));
+	}
+
+	prewarmUsers(userIds: Iterable<string>): void {
+		for (const userId of userIds) {
+			this.prewarmUser(userId);
+		}
+	}
+
 	speakingEnd(userId: string): void {
 		const session = this.sessions.get(normalizeUserId(userId));
 		if (session === undefined || this.disposed) return;
@@ -176,7 +196,10 @@ export class DiscordVoiceSpeakerTranscriptionManager {
 		if (existing !== undefined) return existing;
 
 		const realtime = this.createRealtime(this.realtimeOptions);
-		const connecting = realtime.connect(this.connectOptions);
+		let sessionRef: SpeakerSession | undefined;
+		const connecting = realtime.connect(this.connectOptions).then(() => {
+			if (sessionRef !== undefined) sessionRef.connected = true;
+		});
 		const session: SpeakerSession = {
 			userId,
 			realtime,
@@ -191,6 +214,7 @@ export class DiscordVoiceSpeakerTranscriptionManager {
 			idleTimer: undefined,
 		};
 		this.bindSession(session);
+		sessionRef = session;
 		this.sessions.set(userId, session);
 		return session;
 	}
@@ -245,11 +269,17 @@ export class DiscordVoiceSpeakerTranscriptionManager {
 				if (!session.active) this.scheduleIdleClose(session);
 			}
 		} catch (error) {
-			this.onError?.(session.userId, error);
-			this.sessions.delete(session.userId);
-			session.closed = true;
-			await session.realtime.close().catch(() => undefined);
+			await this.closeFailedSession(session, error);
 		}
+	}
+
+	private async closeFailedSession(session: SpeakerSession, error: unknown): Promise<void> {
+		if (session.closed) return;
+		this.onError?.(session.userId, error);
+		if (this.sessions.get(session.userId) === session) this.sessions.delete(session.userId);
+		session.closed = true;
+		this.clearIdleTimer(session);
+		await session.realtime.close().catch(() => undefined);
 	}
 
 	private scheduleIdleClose(session: SpeakerSession): void {

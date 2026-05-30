@@ -8,6 +8,7 @@ export interface ElevenLabsTtsClientOptions {
 	modelId: string;
 	baseUrl?: string;
 	outputFormat?: ElevenLabsPcmOutputFormat;
+	speed?: number;
 	logger?: (level: "info" | "warn" | "error", event: string, details?: JsonRecord) => void;
 }
 
@@ -22,8 +23,11 @@ export interface ElevenLabsTtsSynthesizeOptions {
 
 export const DEFAULT_ELEVENLABS_TTS_MODEL = "eleven_flash_v2_5";
 export const DEFAULT_ELEVENLABS_OUTPUT_FORMAT: ElevenLabsPcmOutputFormat = "pcm_24000";
+export const DEFAULT_ELEVENLABS_SPEED = 1.1;
 
 const DEFAULT_ELEVENLABS_BASE_URL = "https://api.elevenlabs.io";
+const MIN_STREAM_FLUSH_MS = 80;
+const MAX_STREAM_FLUSH_MS = 160;
 
 export class ElevenLabsTtsClient {
 	private readonly apiKey: string;
@@ -31,6 +35,7 @@ export class ElevenLabsTtsClient {
 	private readonly modelId: string;
 	private readonly baseUrl: string;
 	private readonly outputFormat: ElevenLabsPcmOutputFormat;
+	private readonly speed: number;
 	private readonly logger: ElevenLabsTtsClientOptions["logger"];
 
 	constructor(options: ElevenLabsTtsClientOptions) {
@@ -39,6 +44,7 @@ export class ElevenLabsTtsClient {
 		this.modelId = options.modelId.trim();
 		this.baseUrl = (options.baseUrl ?? DEFAULT_ELEVENLABS_BASE_URL).replace(/\/+$/, "");
 		this.outputFormat = options.outputFormat ?? DEFAULT_ELEVENLABS_OUTPUT_FORMAT;
+		this.speed = normalizeSpeed(options.speed);
 		this.logger = options.logger;
 	}
 
@@ -66,7 +72,7 @@ export class ElevenLabsTtsClient {
 			body: JSON.stringify({
 				text: prompt,
 				model_id: this.modelId,
-				voice_settings: { speed: 1.1 },
+				voice_settings: { speed: this.speed },
 			}),
 		};
 		if (options.signal !== undefined) requestInit.signal = options.signal;
@@ -78,8 +84,21 @@ export class ElevenLabsTtsClient {
 		const body = response.body;
 		if (body === null) throw new Error("ElevenLabs TTS response did not include an audio stream.");
 		const sampleRate = parseElevenLabsPcmSampleRate(this.outputFormat);
+		const minFlushBytes = pcm16BytesForDuration(sampleRate, MIN_STREAM_FLUSH_MS);
+		const maxFlushBytes = pcm16BytesForDuration(sampleRate, MAX_STREAM_FLUSH_MS);
 		const reader = body.getReader();
 		let remainder = Buffer.alloc(0);
+		let pending = Buffer.alloc(0);
+		const flushPending = async (force: boolean): Promise<void> => {
+			while (pending.length >= minFlushBytes || (force && pending.length > 0)) {
+				const targetBytes = force ? pending.length : Math.min(pending.length, maxFlushBytes);
+				const usableBytes = targetBytes - (targetBytes % 2);
+				if (usableBytes <= 0) return;
+				const output = pending.subarray(0, usableBytes);
+				pending = pending.subarray(usableBytes);
+				await onAudio({ pcmBase64: output.toString("base64"), sampleRate });
+			}
+		};
 		try {
 			for (;;) {
 				if (isAbortSignalAborted(options.signal)) break;
@@ -96,8 +115,10 @@ export class ElevenLabsTtsClient {
 					chunk = chunk.subarray(0, chunk.length - 1);
 				}
 				if (chunk.length === 0) continue;
-				await onAudio({ pcmBase64: chunk.toString("base64"), sampleRate });
+				pending = pending.length === 0 ? chunk : Buffer.concat([pending, chunk]);
+				await flushPending(false);
 			}
+			await flushPending(true);
 			if (remainder.length > 0) {
 				this.logger?.("warn", "elevenlabs_tts_odd_pcm_byte_discarded", { outputFormat: this.outputFormat });
 			}
@@ -127,4 +148,15 @@ export function parseElevenLabsPcmOutputFormat(value: string | undefined): Eleve
 
 export function parseElevenLabsPcmSampleRate(format: ElevenLabsPcmOutputFormat): number {
 	return Number.parseInt(format.slice("pcm_".length), 10);
+}
+
+function normalizeSpeed(value: number | undefined): number {
+	if (value === undefined) return DEFAULT_ELEVENLABS_SPEED;
+	if (!Number.isFinite(value) || value <= 0) return DEFAULT_ELEVENLABS_SPEED;
+	return value;
+}
+
+function pcm16BytesForDuration(sampleRate: number, durationMs: number): number {
+	const bytes = Math.max(2, Math.floor((sampleRate * 2 * durationMs) / 1_000));
+	return bytes - (bytes % 2);
 }
