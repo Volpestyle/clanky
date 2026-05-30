@@ -32,6 +32,7 @@ import {
 } from "../src/voice/discordStreamDiscovery.ts";
 import { DiscordVoiceSpeakerTranscriptionManager } from "../src/voice/discordVoiceSpeakerTranscription.ts";
 import { DiscordVoiceTurnBuffer, mixPcm16MonoFrames } from "../src/voice/discordVoiceTurnBuffer.ts";
+import { ElevenLabsTtsClient } from "../src/voice/elevenLabsTtsClient.ts";
 import {
 	describeVoiceLiveValidationRequirements,
 	evaluateVoiceLiveStatus,
@@ -65,6 +66,7 @@ async function main(): Promise<void> {
 	assertRealtimeTranscriptionUrlShape();
 	assertRealtimeTranscriptionSessionUpdateShape();
 	assertRealtimeAudioAppendShape();
+	await assertElevenLabsTtsClientStreamingCoalescesSmallReads();
 	assertRealtimeFunctionOutputSerialization();
 	assertRealtimeFunctionCallParsing();
 	assertDiscordVoiceTurnBuffer();
@@ -609,6 +611,50 @@ function assertRealtimeAudioAppendShape(): void {
 		secondSplit.remainder.toString("hex") !== "0708"
 	) {
 		throw new Error("voice-smoke: realtime audio split should emit aligned chunks and keep the next tail");
+	}
+}
+
+async function assertElevenLabsTtsClientStreamingCoalescesSmallReads(): Promise<void> {
+	const originalFetch = globalThis.fetch;
+	let requestBody = "";
+	try {
+		globalThis.fetch = (async (_input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+			requestBody = String(init?.body ?? "");
+			const reads = Array.from({ length: 10 }, (_value, index) => Buffer.alloc(480, index + 1));
+			return new Response(
+				new ReadableStream<Uint8Array>({
+					start(controller) {
+						for (const read of reads) controller.enqueue(read);
+						controller.close();
+					},
+				}),
+				{ status: 200 },
+			);
+		}) as typeof fetch;
+
+		const client = new ElevenLabsTtsClient({
+			apiKey: "elevenlabs-key",
+			voiceId: "voice-1",
+			modelId: "eleven_flash_v2_5",
+			speed: 1.1,
+		});
+		const chunks: { bytes: number; sampleRate: number }[] = [];
+		await client.synthesize("hello", (chunk) => {
+			chunks.push({ bytes: Buffer.from(chunk.pcmBase64, "base64").length, sampleRate: chunk.sampleRate });
+		});
+
+		const body = JSON.parse(requestBody) as { voice_settings?: { speed?: unknown } };
+		if (body.voice_settings?.speed !== 1.1) {
+			throw new Error("voice-smoke: ElevenLabs speed setting was not forwarded");
+		}
+		if (chunks.length !== 2 || chunks[0]?.bytes !== 3_840 || chunks[1]?.bytes !== 960) {
+			throw new Error(`voice-smoke: ElevenLabs stream chunks were not coalesced: ${JSON.stringify(chunks)}`);
+		}
+		if (chunks.some((chunk) => chunk.sampleRate !== 24_000)) {
+			throw new Error("voice-smoke: ElevenLabs stream sample rate was not preserved");
+		}
+	} finally {
+		globalThis.fetch = originalFetch;
 	}
 }
 

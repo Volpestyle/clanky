@@ -62,6 +62,7 @@ import {
 } from "./voice/discordVoiceSpeakerTranscription.ts";
 import {
 	DEFAULT_ELEVENLABS_OUTPUT_FORMAT,
+	DEFAULT_ELEVENLABS_SPEED,
 	DEFAULT_ELEVENLABS_TTS_MODEL,
 	type ElevenLabsPcmOutputFormat,
 	type ElevenLabsTtsAudioChunk,
@@ -110,6 +111,7 @@ const VOICE_MUSIC_DUCK_GAIN = 0.22;
 const VOICE_MUSIC_DUCK_FADE_MS = 180;
 const VOICE_MUSIC_UNDUCK_FADE_MS = 650;
 const VOICE_MUSIC_UNDUCK_DELAY_MS = 250;
+const VOICE_MUSIC_PLAYBACK_START_TIMEOUT_MS = 25_000;
 
 export interface ClankyAgentDiscordVoiceConfig extends AgentRealtimeVoiceConfig {
 	enabled: boolean;
@@ -135,6 +137,7 @@ export interface ClankyAgentDiscordVoiceConfig extends AgentRealtimeVoiceConfig 
 	elevenLabsVoiceId?: string;
 	elevenLabsModel?: string;
 	elevenLabsOutputFormat?: ElevenLabsPcmOutputFormat;
+	elevenLabsSpeed?: number;
 	openAiRealtimeTranscriptionModel?: string;
 	openAiRealtimeTranscriptionDelay?: OpenAiRealtimeTranscriptionDelay;
 	openAiRealtimeTranscriptionLanguage?: string;
@@ -573,6 +576,7 @@ function createDefaultSpeechSynthesizer(
 		voiceId: config.elevenLabsVoiceId,
 		modelId: config.elevenLabsModel ?? DEFAULT_ELEVENLABS_TTS_MODEL,
 		outputFormat: config.elevenLabsOutputFormat ?? DEFAULT_ELEVENLABS_OUTPUT_FORMAT,
+		speed: config.elevenLabsSpeed ?? DEFAULT_ELEVENLABS_SPEED,
 	};
 	if (config.elevenLabsBaseUrl !== undefined) options.baseUrl = config.elevenLabsBaseUrl;
 	return new ElevenLabsTtsClient(options);
@@ -704,6 +708,7 @@ export function resolveAgentDiscordVoiceConfig(
 			parseElevenLabsPcmOutputFormat(env.CLANKY_ELEVENLABS_OUTPUT_FORMAT) ??
 			storedSettings?.elevenLabsOutputFormat ??
 			DEFAULT_ELEVENLABS_OUTPUT_FORMAT;
+		voiceConfig.elevenLabsSpeed = parseOptionalPositiveNumber(env.CLANKY_ELEVENLABS_SPEED) ?? DEFAULT_ELEVENLABS_SPEED;
 		const elevenLabsBaseUrl =
 			cleanOptionalString(env.CLANKY_ELEVENLABS_BASE_URL) ??
 			cleanOptionalString(env.ELEVENLABS_BASE_URL) ??
@@ -881,6 +886,7 @@ class AgentDiscordVoiceDynamicHandle implements ClankyAgentDiscordVoiceHandle {
 			elevenLabsVoiceId: this.config.elevenLabsVoiceId,
 			elevenLabsModel: this.config.elevenLabsModel,
 			elevenLabsOutputFormat: this.config.elevenLabsOutputFormat,
+			elevenLabsSpeed: this.config.elevenLabsSpeed ?? DEFAULT_ELEVENLABS_SPEED,
 			elevenLabsBaseUrl: this.config.elevenLabsBaseUrl,
 			reasoningEffort: this.config.openAiRealtimeReasoningEffort,
 			participationEagerness: this.config.participationEagerness ?? DEFAULT_PARTICIPATION_EAGERNESS,
@@ -1020,20 +1026,9 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 				(this.config.realtimeAgentProvider ?? "openai") === "xai"
 					? this.dependencies.createXAiRealtime(realtimeOptions)
 					: this.dependencies.createRealtime(realtimeOptions);
-			const voxOptions: ClankvoxSpawnOptions = {
-				selfDeaf: false,
-				selfMute: false,
-			};
-			if (this.config.clankvoxBin !== undefined) voxOptions.bin = this.config.clankvoxBin;
-			if (this.config.clankvoxDir !== undefined) voxOptions.cwd = this.config.clankvoxDir;
-			voxOptions.log = (line) => this.logVoiceLine(`[clankvox] ${line}`);
-			vox = await this.dependencies.spawnVox(this.config.guildId, this.config.channelId, guild, voxOptions);
 			speechSynthesizer = this.dependencies.createSpeechSynthesizer(this.config);
 			this.realtime = realtime;
-			this.vox = vox;
 			this.speechSynthesizer = speechSynthesizer;
-			this.speakerTranscription = this.createSpeakerTranscription(vox, openAiRealtimeOptions);
-			this.bindVox(vox);
 			this.bindRealtime(realtime);
 			const connectOptions: OpenAiRealtimeConnectOptions = {
 				model: this.realtimeAgentModel(),
@@ -1055,6 +1050,18 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 				connectOptions.reasoningEffort = this.config.openAiRealtimeReasoningEffort;
 			}
 			await realtime.connect(connectOptions);
+			const voxOptions: ClankvoxSpawnOptions = {
+				selfDeaf: false,
+				selfMute: false,
+			};
+			if (this.config.clankvoxBin !== undefined) voxOptions.bin = this.config.clankvoxBin;
+			if (this.config.clankvoxDir !== undefined) voxOptions.cwd = this.config.clankvoxDir;
+			voxOptions.log = (line) => this.logVoiceLine(`[clankvox] ${line}`);
+			vox = await this.dependencies.spawnVox(this.config.guildId, this.config.channelId, guild, voxOptions);
+			this.vox = vox;
+			this.speakerTranscription = this.createSpeakerTranscription(vox, openAiRealtimeOptions);
+			this.bindVox(vox);
+			this.prewarmSpeakerTranscriptionForCurrentParticipants();
 			await this.subagents?.updateStatus("listening in Discord voice");
 			this.subagents?.prewarmWorker();
 		} catch (error) {
@@ -1435,6 +1442,20 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 				this.logVoice("warn", "speaker_transcription_socket_closed", { userId, ...event });
 			},
 			idleCloseMs: this.config.speakerTranscriptionIdleCloseMs ?? DEFAULT_SPEAKER_TRANSCRIPTION_IDLE_CLOSE_MS,
+		});
+	}
+
+	private prewarmSpeakerTranscriptionForCurrentParticipants(): void {
+		const speakerTranscription = this.speakerTranscription;
+		if (speakerTranscription === undefined) return;
+		const participants = readDiscordVoiceChannelParticipants(this.guild, this.client, this.config.channelId).filter(
+			(participant) => !participant.isBot,
+		);
+		if (participants.length === 0) return;
+		speakerTranscription.prewarmUsers(participants.map((participant) => participant.userId));
+		this.logVoice("info", "speaker_transcription_prewarm_started", {
+			participantCount: participants.length,
+			userIds: participants.map((participant) => participant.userId),
 		});
 	}
 
@@ -2513,7 +2534,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		const resolvedDirectUrl = booleanValue(args.resolvedDirectUrl ?? args.resolved_direct_url, false);
 		this.stats.musicPlayRequestCount += 1;
 		const vox = this.requireVox();
-		const outcome = this.waitForMusicPlaybackOutcome(vox, 20_000);
+		const outcome = this.waitForMusicPlaybackOutcome(vox, VOICE_MUSIC_PLAYBACK_START_TIMEOUT_MS);
 		vox.musicPlay(url, resolvedDirectUrl);
 		this.musicStatus = "loading";
 		this.musicUrl = url;
@@ -2534,7 +2555,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		if (includeAudio) {
 			this.stats.musicPlayRequestCount += 1;
 			const vox = this.requireVox();
-			const pending = this.waitForMusicPlaybackOutcome(vox, 20_000);
+			const pending = this.waitForMusicPlaybackOutcome(vox, VOICE_MUSIC_PLAYBACK_START_TIMEOUT_MS);
 			vox.musicPlay(url, resolvedDirectUrl);
 			this.musicStatus = "loading";
 			this.musicUrl = url;
@@ -2957,7 +2978,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 
 	private applyMusicPlayerState(status: string): void {
 		const normalized = status.trim().toLowerCase();
-		if (normalized === "playing" || normalized === "paused" || normalized === "idle") {
+		if (normalized === "loading" || normalized === "playing" || normalized === "paused" || normalized === "idle") {
 			this.musicStatus = normalized;
 			if (normalized !== "playing") {
 				this.musicDuckedForSpeech = false;
@@ -3171,7 +3192,7 @@ function buildVoiceTools(options: { supportsScreenShareSnapshots?: boolean } = {
 			type: "function",
 			name: "play_music_url",
 			description:
-				"Play a resolved http(s) music/media URL as audio in Discord voice. If the user gave a search query instead of a URL, call ask_pi first to resolve it.",
+				"Play a resolved http(s) music/media URL as audio in Discord voice, including YouTube watch/live URLs. If the user gave a search query instead of a URL, call ask_pi first to resolve it.",
 			parameters: {
 				type: "object",
 				properties: {
@@ -3189,7 +3210,7 @@ function buildVoiceTools(options: { supportsScreenShareSnapshots?: boolean } = {
 			type: "function",
 			name: "play_video_url",
 			description:
-				"Stream a resolved http(s) video URL through Discord Go Live and optionally play its audio in voice. Requires a user-token Discord credential for Go Live. If the source has no audio track the result is still ok=true with audioStarted=false and audioSkippedReason='source_has_no_audio_track' — that is not a failure, the video is playing silently.",
+				"Stream a resolved http(s) video URL, including YouTube watch/live URLs, through Discord Go Live and optionally play its audio in voice. Requires a user-token Discord credential for Go Live. If the source has no audio track the result is still ok=true with audioStarted=false and audioSkippedReason='source_has_no_audio_track' — that is not a failure, the video is playing silently.",
 			parameters: {
 				type: "object",
 				properties: {
@@ -3464,6 +3485,13 @@ function parseOptionalPositiveInteger(value: string | undefined): number | undef
 	const normalized = value?.trim();
 	if (normalized === undefined || normalized.length === 0) return undefined;
 	const parsed = Number.parseInt(normalized, 10);
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function parseOptionalPositiveNumber(value: string | undefined): number | undefined {
+	const normalized = value?.trim();
+	if (normalized === undefined || normalized.length === 0) return undefined;
+	const parsed = Number.parseFloat(normalized);
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
