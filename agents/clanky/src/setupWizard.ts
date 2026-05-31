@@ -1,5 +1,6 @@
 import {
 	type ClankyCommandCompletionSpec,
+	type ClankyMcpServerConfig,
 	type ClankyPaths,
 	completeClankyCommandArgument,
 	DEFAULT_ELEVENLABS_PROVIDER_ID,
@@ -11,8 +12,11 @@ import {
 	isAgentRoomEnrolled,
 	loadStoredDiscordCredential,
 	maybeLoadAgentRoomPortableConfig,
+	readProfileMcpServers,
+	removeProfileMcpServer,
 	resolveClankyChatGatewayOwner,
 	resolveClankyChatMode,
+	upsertProfileMcpServer,
 } from "@clanky/core";
 import type { AuthStorage, ExtensionCommandContext, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { type DiscordAuthCommandDeps, runDiscordLogin, runDiscordVoiceCommand } from "./discordAuth.ts";
@@ -33,10 +37,11 @@ interface ClankySetupWizardDeps {
 	env?: NodeJS.ProcessEnv;
 }
 
-type SetupChoice = "status" | "openai" | "discord" | "voice" | "elevenlabs" | "xai" | "agentroom" | "done";
+type SetupChoice = "status" | "openai" | "discord" | "voice" | "elevenlabs" | "xai" | "mcp" | "agentroom" | "done";
 
 const SETUP_COMMAND_COMPLETIONS = [
 	{ value: "status", description: "Show connector and profile setup status." },
+	{ value: "mcp", description: "Show or configure profile-local MCP servers." },
 	{ value: "agentroom", description: "Show AgentRoom room config defaults." },
 	{ value: "fresh", description: "Show the fresh-profile setup smoke command." },
 ] satisfies readonly ClankyCommandCompletionSpec[];
@@ -81,6 +86,14 @@ async function runClankySetupCommand(
 	}
 	if (command === "agentroom" || command === "room") {
 		ctx.ui.notify(formatAgentRoomParticipation(deps));
+		return;
+	}
+	if (command === "mcp") {
+		ctx.ui.notify(formatMcpSetupStatus(deps));
+		return;
+	}
+	if (command.startsWith("mcp ")) {
+		ctx.ui.notify(configureMcpFromArgs(deps, args.trim().slice(4)));
 		return;
 	}
 	if (command === "fresh" || command === "new-user") {
@@ -142,6 +155,9 @@ async function runClankySetupWizard(deps: ClankySetupWizardDeps, ctx: ExtensionC
 				);
 				done = true;
 				break;
+			case "mcp":
+				ctx.ui.notify(formatMcpSetupStatus(deps));
+				break;
 			case "agentroom":
 				ctx.ui.notify(formatAgentRoomParticipation(deps));
 				break;
@@ -180,6 +196,7 @@ function setupOptions(deps: ClankySetupWizardDeps): string[] {
 		`Voice / Discord voice [${voiceSettings?.enabled === true ? "enabled" : "disabled"}]`,
 		`Voice / ElevenLabs [${elevenLabsStatus.available ? "set" : "missing"}]`,
 		`Media / xAI [${xaiStatus.available ? "set" : "missing"}]`,
+		`MCP servers [${Object.keys(readProfileMcpServers(deps.paths).servers).length} profile]`,
 		`AgentRoom [${agentRoomSetupLabel(env, roomConfig !== undefined)}]`,
 		"Done",
 	];
@@ -193,6 +210,7 @@ function parseSetupChoice(choice: string | undefined): SetupChoice {
 	if (choice.startsWith("Voice / Discord voice")) return "voice";
 	if (choice.startsWith("Voice / ElevenLabs")) return "elevenlabs";
 	if (choice.startsWith("Media / xAI")) return "xai";
+	if (choice.startsWith("MCP servers")) return "mcp";
 	if (choice.startsWith("AgentRoom")) return "agentroom";
 	return "done";
 }
@@ -206,6 +224,7 @@ function formatClankySetupStatus(deps: ClankySetupWizardDeps): string {
 	const envDiscord = env.CLANKY_DISCORD_TOKEN?.trim();
 	const voiceSettings = deps.voiceSettings.read();
 	const roomConfig = maybeLoadAgentRoomPortableConfig(deps.cwd, env);
+	const profileMcp = readProfileMcpServers(deps.paths);
 	const lines = [
 		"Clanky setup",
 		`Profile: ${deps.paths.profile}`,
@@ -218,6 +237,7 @@ function formatClankySetupStatus(deps: ClankySetupWizardDeps): string {
 		`Discord voice: ${voiceSettings?.enabled === true ? "enabled" : "disabled"}`,
 		`ElevenLabs: ${elevenLabsStatus.available ? (elevenLabsStatus.activeSource ?? "configured") : "missing"}`,
 		`xAI media: ${xaiStatus.available ? (xaiStatus.activeSource ?? "configured") : "missing"}`,
+		`MCP servers: ${Object.keys(profileMcp.servers).length} profile-local (${profileMcp.path})`,
 		`AgentRoom: ${agentRoomSetupLabel(env, roomConfig !== undefined)}`,
 		`Room config: ${roomConfig?.configPath ?? "not detected"}`,
 		`Work tracker: ${env.CLANKY_WORK_TRACKER ?? "profile/default"} (${env.CLANKY_WORK_TRACKER_PROVIDER_KIND ?? "unknown"})`,
@@ -242,6 +262,7 @@ function formatClankyStatusDashboard(deps: ClankySetupWizardDeps): string {
 	const voiceSettings = deps.voiceSettings.read();
 	const bridge = deps.gatewayController.status();
 	const roomConfig = maybeLoadAgentRoomPortableConfig(deps.cwd, env);
+	const profileMcp = readProfileMcpServers(deps.paths);
 	const lines = [
 		"Clanky status",
 		`Profile: ${deps.paths.profile}`,
@@ -261,6 +282,7 @@ function formatClankyStatusDashboard(deps: ClankySetupWizardDeps): string {
 		"Runtime",
 		`Chat mode: ${resolveClankyChatMode(env)}`,
 		`Gateway owner: ${resolveClankyChatGatewayOwner(env)}`,
+		`MCP servers: ${Object.keys(profileMcp.servers).length} profile-local`,
 		`AgentRoom: ${agentRoomSetupLabel(env, roomConfig !== undefined)}`,
 		`Room config: ${roomConfig?.configPath ?? "not detected"}`,
 		`Work tracker: ${env.CLANKY_WORK_TRACKER ?? "profile/default"} (${env.CLANKY_WORK_TRACKER_PROVIDER_KIND ?? "unknown"})`,
@@ -322,6 +344,83 @@ function formatVoiceDashboardStatus(status: unknown): string {
 function formatStatusActive(active: boolean | undefined): string {
 	if (active === undefined) return "unknown";
 	return active ? "active" : "inactive";
+}
+
+function formatMcpSetupStatus(deps: ClankySetupWizardDeps): string {
+	const profile = readProfileMcpServers(deps.paths);
+	const entries = Object.entries(profile.servers);
+	const lines = [
+		"Clanky MCP setup",
+		`Profile config: ${profile.path}`,
+		`Profile-local servers: ${entries.length}`,
+		"",
+		"Commands:",
+		"  /setup mcp <id> <url>",
+		"  /setup mcp <id> stdio <command> [args...]",
+		"  /setup mcp remove <id>",
+		"",
+		"Configured servers",
+	];
+	if (entries.length === 0) {
+		lines.push("- none");
+	} else {
+		for (const [id, server] of entries) {
+			const target = server.url ?? [server.command, ...(server.args ?? [])].filter(Boolean).join(" ");
+			lines.push(
+				`- ${id}: ${server.type ?? "stdio"}${server.disabled === true ? " (disabled)" : ""}${target ? ` - ${target}` : ""}`,
+			);
+		}
+	}
+	return lines.join("\n");
+}
+
+function configureMcpFromArgs(deps: ClankySetupWizardDeps, args: string): string {
+	const patch = parseMcpSetupArgs(args);
+	if (typeof patch === "string") return patch;
+	if ("remove" in patch) {
+		const result = removeProfileMcpServer(deps.paths, patch.remove);
+		return [`Clanky MCP setup`, `Removed ${patch.remove} from ${result.path}.`].join("\n");
+	}
+	const result = upsertProfileMcpServer(deps.paths, patch.id, patch.config);
+	return [`Clanky MCP setup`, `Saved ${patch.id} to ${result.path}.`].join("\n");
+}
+
+function parseMcpSetupArgs(args: string): { id: string; config: ClankyMcpServerConfig } | { remove: string } | string {
+	const parts = args.split(/\s+/).filter((part) => part.length > 0);
+	const first = parts.shift();
+	if (first === undefined) return "Usage: /setup mcp <id> <url> | /setup mcp <id> stdio <command> [args...]";
+	if (first === "remove" || first === "delete") {
+		const id = parts.shift();
+		return id === undefined ? "Usage: /setup mcp remove <id>" : { remove: id };
+	}
+	const transport = parseMcpTransportArg(parts[0]);
+	if (transport !== undefined) parts.shift();
+	const target = parts.shift();
+	if (target === undefined) return "MCP server target is required.";
+	const type = transport ?? (isMcpUrl(target) ? "streamable-http" : "stdio");
+	if (type === "stdio") {
+		return {
+			id: first,
+			config: {
+				type,
+				command: target,
+				...(parts.length > 0 ? { args: parts } : {}),
+			},
+		};
+	}
+	if (!isMcpUrl(target)) return "HTTP/SSE MCP servers require an http(s) URL.";
+	return { id: first, config: { type, url: target } };
+}
+
+function parseMcpTransportArg(value: string | undefined): "stdio" | "streamable-http" | "sse" | undefined {
+	if (value === "stdio") return "stdio";
+	if (value === "http" || value === "streamable-http") return "streamable-http";
+	if (value === "sse") return "sse";
+	return undefined;
+}
+
+function isMcpUrl(value: string): boolean {
+	return value.startsWith("http://") || value.startsWith("https://");
 }
 
 function formatAgentRoomParticipation(deps: ClankySetupWizardDeps): string {
@@ -387,5 +486,14 @@ function formatFreshUserHelp(deps: ClankySetupWizardDeps): string {
 }
 
 function formatSetupUsage(): string {
-	return ["Usage: /setup", "", "Shortcuts:", "  /setup status", "  /setup agentroom", "  /setup fresh"].join("\n");
+	return [
+		"Usage: /setup",
+		"",
+		"Shortcuts:",
+		"  /setup status",
+		"  /setup mcp",
+		"  /setup mcp linear https://mcp.linear.app/mcp",
+		"  /setup agentroom",
+		"  /setup fresh",
+	].join("\n");
 }

@@ -20,6 +20,7 @@ export interface ClankyPaths {
 	selfMemoryFile: string;
 	workTrackersDir: string;
 	workTrackerRefsFile: string;
+	mcpServersFile: string;
 	subagentsDir: string;
 	subagentsDbFile: string;
 	subagentSessionsDir: string;
@@ -56,6 +57,7 @@ export function resolveClankyPaths(options: ResolveClankyPathsOptions = {}): Cla
 		selfMemoryFile: join(profileDir, "SELF.md"),
 		workTrackersDir: join(profileDir, "work-trackers"),
 		workTrackerRefsFile: join(profileDir, "work-trackers", "refs.json"),
+		mcpServersFile: join(profileDir, "mcp-servers.json"),
 		subagentsDir: join(profileDir, "subagents"),
 		subagentsDbFile: join(profileDir, "subagents", "subagents.db"),
 		subagentSessionsDir: join(profileDir, "subagents", "sessions"),
