@@ -1,7 +1,7 @@
 ---
 name: daily-digest
-description: Produces concise operational digests for cron jobs. Use when summarizing sessions, commits, tasks, or swarm activity on a schedule.
-when_to_use: Produces concise operational digests for cron jobs. Use when summarizing sessions, commits, tasks, or swarm activity on a schedule.
+description: Produces concise operational digests for cron jobs. Use when summarizing sessions, commits, tasks, or AgentRoom activity on a schedule.
+when_to_use: Produces concise operational digests for cron jobs. Use when summarizing sessions, commits, tasks, or AgentRoom activity on a schedule.
 allowed_tools: []
 deps: []
 ---
