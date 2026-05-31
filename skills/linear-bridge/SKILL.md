@@ -1,7 +1,7 @@
 ---
 name: linear-bridge
-description: Rules for mirroring Clanky or swarm task state into Linear. Use when creating, updating, or commenting on Linear issues from agent work.
-when_to_use: Rules for mirroring Clanky or swarm task state into Linear. Use when creating, updating, or commenting on Linear issues from agent work.
+description: Rules for mirroring Clanky or AgentRoom task state into Linear. Use when creating, updating, or commenting on Linear issues from agent work.
+when_to_use: Rules for mirroring Clanky or AgentRoom task state into Linear. Use when creating, updating, or commenting on Linear issues from agent work.
 allowed_tools:
   - mcp_list_tools
   - mcp_call
