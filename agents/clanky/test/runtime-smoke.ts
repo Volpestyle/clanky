@@ -17,6 +17,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import type { DiscordGatewayClient, DiscordMessageLike } from "@agentroom/chat-discord";
 import {
 	DEFAULT_CLANKY_DISCORD_PROVIDER_ID,
 	DEFAULT_ELEVENLABS_PROVIDER_ID,
@@ -31,6 +32,7 @@ import {
 	saveStoredXAiApiKey,
 } from "@clanky/core";
 import {
+	type AgentSessionRuntime,
 	AuthStorage,
 	type ExtensionCommandContext,
 	type ExtensionFactory,
@@ -46,6 +48,7 @@ import {
 	resolveAgentDiscordGatewayConfig,
 	resolveDiscordPromptImages,
 	shouldRouteDiscordMessageToSubagent,
+	startAgentDiscordGateway,
 } from "../src/agentDiscordGateway.ts";
 import { DEFAULT_REALTIME_MODEL, resolveAgentDiscordVoiceConfig } from "../src/agentDiscordVoice.ts";
 import { createClankyAuthExtensionFactory } from "../src/authCommands.ts";
@@ -63,7 +66,7 @@ import {
 	DEFAULT_CLANKY_MODEL_PROVIDER,
 	DEFAULT_CLANKY_SUBAGENT_THINKING_LEVEL,
 } from "../src/runClanky.ts";
-import { SerialRuntimeTurnQueue } from "../src/runtimeTurnQueue.ts";
+import { type RuntimeTurnQueue, SerialRuntimeTurnQueue } from "../src/runtimeTurnQueue.ts";
 import { createClankySetupExtensionFactory } from "../src/setupWizard.ts";
 import { createClankyVoiceLogsExtensionFactory, readVoiceLogTail } from "../src/voiceLogs.ts";
 import { createXAiAuthExtensionFactory } from "../src/xAiAuth.ts";
@@ -71,6 +74,7 @@ import { createXAiAuthExtensionFactory } from "../src/xAiAuth.ts";
 async function main(): Promise<void> {
 	assertAgentDiscordGatewayConfig();
 	assertAgentDiscordGatewayAcceptance();
+	await assertAgentDiscordGatewayReceivesBotMessages();
 	assertDiscordSubagentRouting();
 	await assertAgentDiscordPromptImages();
 	assertDiscordBridgeCommands();
@@ -626,6 +630,76 @@ function assertAgentDiscordGatewayAcceptance(): void {
 		!prompt.includes("use discord_read_messages with channelOrThreadId")
 	) {
 		throw new Error("smoke: Discord prompt should frame replies as conversation-level decisions");
+	}
+}
+
+async function assertAgentDiscordGatewayReceivesBotMessages(): Promise<void> {
+	const client = new FakeGatewayDiscordClient();
+	const prompts: string[] = [];
+	const runtimeTurnQueue: RuntimeTurnQueue = {
+		isBusy: () => false,
+		async enqueue<T>(task: () => Promise<T>): Promise<T> {
+			return await task();
+		},
+		cancelPending(reason = "smoke cancel") {
+			return { active: 0, queued: 0, cancelled: 0, reason };
+		},
+		async enqueuePrompt(_runtime, prompt): Promise<{ mode: "start"; sessionId: string }> {
+			prompts.push(prompt);
+			return { mode: "start", sessionId: "discord-bot-message-smoke" };
+		},
+	};
+	const handle = await startAgentDiscordGateway({
+		runtime: createFakeGatewayRuntime(),
+		client,
+		runtimeTurnQueue,
+		config: {
+			providerId: "discord-smoke",
+			token: "discord-token",
+			credentialKind: "bot-token",
+			source: "env",
+			conversationId: "channel-1",
+		},
+	});
+	if (handle === undefined) {
+		throw new Error("smoke: Discord gateway should start with explicit config");
+	}
+
+	const restoreEnv = withoutDiscordOperatorEnv();
+	try {
+		client.emitMessage({
+			id: "agentroom-hi-1",
+			content: "Hi Clanky",
+			channelId: "channel-1",
+			guildId: "guild-1",
+			createdTimestamp: Date.parse("2026-05-31T22:05:37.697Z"),
+			author: {
+				id: "agentroom-bot",
+				username: "AgentRoom",
+				globalName: "Agent Room",
+				bot: true,
+			},
+			member: { displayName: "Agent Room" },
+			channel: {
+				id: "channel-1",
+				name: "announcements",
+				guildId: "guild-1",
+				isDMBased: () => false,
+				isThread: () => false,
+			},
+			attachments: [],
+		});
+		await waitFor(() => prompts.length === 1, "bot-authored Discord message to reach Clanky");
+		const prompt = prompts[0] ?? "";
+		if (!prompt.includes("Bridge context: This profile is bound to the current Discord conversation.")) {
+			throw new Error(`smoke: bot-authored Discord prompt had wrong acceptance context: ${prompt}`);
+		}
+		if (!prompt.includes("From: Agent Room") || !prompt.includes("Text: Hi Clanky")) {
+			throw new Error(`smoke: bot-authored Discord message was not forwarded intact: ${prompt}`);
+		}
+	} finally {
+		restoreEnv();
+		await handle.stop();
 	}
 }
 
@@ -1696,6 +1770,134 @@ async function assertClankyVoiceLogsExtensionCommand(): Promise<void> {
 	} finally {
 		await rm(tmpRoot, { recursive: true, force: true });
 	}
+}
+
+function createFakeGatewayRuntime(): AgentSessionRuntime {
+	return {
+		cwd: tmpdir(),
+		services: { agentDir: tmpdir() },
+		session: {
+			isStreaming: false,
+			sessionId: "discord-bot-message-smoke",
+			subscribe() {
+				return () => undefined;
+			},
+		},
+	} as unknown as AgentSessionRuntime;
+}
+
+type GatewayDiscordMessage = Parameters<Parameters<DiscordGatewayClient["on"]>[1]>[0];
+
+class FakeGatewayDiscordClient implements DiscordGatewayClient {
+	readonly rest = {
+		async resolveRequest() {
+			return { fetchOptions: { headers: { Authorization: "Bot token" } } };
+		},
+	};
+	readonly ws = {
+		_ws: null as unknown,
+		shards: {
+			first() {
+				return { id: 0 };
+			},
+		},
+	};
+	readonly user = { id: "clanky-bot", username: "Clanky", tag: "Clanky#0001" };
+	readonly sent: Array<{ channelId: string; content: string }> = [];
+	readonly typingChannelIds: string[] = [];
+	loggedInToken: string | undefined;
+	destroyCalls = 0;
+	private messageListener: ((message: GatewayDiscordMessage) => void) | undefined;
+
+	readonly channels = {
+		fetch: async (id: string): Promise<unknown> => this.channelFor(id),
+		cache: {
+			get: (id: string): unknown => this.channelFor(id),
+		},
+	};
+
+	private channelFor(id: string): unknown {
+		return {
+			id,
+			name: "announcements",
+			guildId: "guild-1",
+			send: async (payload: { content: string }) => {
+				this.sent.push({ channelId: id, content: payload.content });
+				return { id: `sent-${this.sent.length}` };
+			},
+			sendTyping: async () => {
+				this.typingChannelIds.push(id);
+			},
+		};
+	}
+
+	on(_event: Parameters<DiscordGatewayClient["on"]>[0], listener: Parameters<DiscordGatewayClient["on"]>[1]): unknown {
+		this.messageListener = listener;
+		return this;
+	}
+
+	off(
+		_event: Parameters<DiscordGatewayClient["off"]>[0],
+		listener: Parameters<DiscordGatewayClient["off"]>[1],
+	): unknown {
+		if (this.messageListener === listener) this.messageListener = undefined;
+		return this;
+	}
+
+	async login(token: string): Promise<string> {
+		this.loggedInToken = token;
+		return token;
+	}
+
+	destroy(): void {
+		this.destroyCalls += 1;
+	}
+
+	isReady(): boolean {
+		return this.loggedInToken !== undefined;
+	}
+
+	emitMessage(message: DiscordMessageLike): void {
+		this.messageListener?.(message as GatewayDiscordMessage);
+	}
+}
+
+function withoutDiscordOperatorEnv(): () => void {
+	const keys = [
+		"CLANKY_DISCORD_TOKEN",
+		"CLANKY_DISCORD_CREDENTIAL_KIND",
+		"CLANKY_DISCORD_PROVIDER_ID",
+		"DISCORD_MCP_TOKEN",
+		"DISCORD_MCP_CREDENTIAL_KIND",
+		"DISCORD_MCP_PROVIDER_ID",
+		"DISCORD_TOKEN",
+		"DISCORD_CREDENTIAL_KIND",
+		"DISCORD_PROVIDER_ID",
+	];
+	const previous = new Map<string, string | undefined>();
+	for (const key of keys) {
+		previous.set(key, process.env[key]);
+		delete process.env[key];
+	}
+	return () => {
+		for (const [key, value] of previous) {
+			if (value === undefined) {
+				delete process.env[key];
+			} else {
+				process.env[key] = value;
+			}
+		}
+	};
+}
+
+async function waitFor(condition: () => boolean | Promise<boolean>, label: string, timeoutMs = 1000): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		if (await condition()) return;
+		await delay(10);
+	}
+	if (await condition()) return;
+	throw new Error(`smoke: timed out waiting for ${label}`);
 }
 
 function assertStringEquals(actual: string | undefined, expected: string, message: string): void {
