@@ -290,7 +290,7 @@ export async function startAgentDiscordGateway(
 		id: config.providerId,
 		token: config.token,
 		credentialKind: config.credentialKind,
-		ignoreBotMessages: true,
+		ignoreBotMessages: false,
 		client,
 	});
 	const subagents =

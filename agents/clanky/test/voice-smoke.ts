@@ -1288,6 +1288,9 @@ async function assertFakeVoiceBridgeRealtimeTools(): Promise<void> {
 	if (!realtime.connectOptions?.instructions?.includes("For browser tabs or pages Clanky opened, use ask_pi")) {
 		throw new Error("voice-smoke: realtime instructions did not route browser inspection through ask_pi");
 	}
+	if (!realtime.connectOptions?.instructions?.includes("chooses the appropriate Discord text channel")) {
+		throw new Error("voice-smoke: realtime instructions did not route chat posts to chosen text channels");
+	}
 	const realtimeAudioChunk = Buffer.alloc(960, 1).toString("base64");
 	realtime.emit("audio_delta", realtimeAudioChunk);
 	realtime.emit("audio_delta", realtimeAudioChunk);
@@ -2768,6 +2771,15 @@ async function assertFakeVoiceBridgeSubagents(): Promise<void> {
 		}
 		if (workerRuntimeCreateCount !== 1 || !workerPrompts[0]?.includes("check durable project state")) {
 			throw new Error(`voice-smoke: worker runtime was not prompted ${JSON.stringify(workerPrompts)}`);
+		}
+		if (
+			!workerPrompts[0]?.includes("treat chat as a Discord text channel") ||
+			!workerPrompts[0]?.includes("discord_recent_activity or discord_list_channels") ||
+			workerPrompts[0]?.includes("omit channel_id to use the active channel")
+		) {
+			throw new Error(
+				`voice-smoke: worker prompt did not instruct text-channel selection ${JSON.stringify(workerPrompts)}`,
+			);
 		}
 		summaries = await store.listSubagents();
 		const workerSubagent = summaries.find((summary) => summary.id === "voice-worker:guild-1:voice-1");

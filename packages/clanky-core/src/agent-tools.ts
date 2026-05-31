@@ -645,6 +645,15 @@ const SUBAGENT_BROWSER_REFRESH_MS = 2000;
 const SUBAGENT_MODAL_WIDTH = "100%";
 const SUBAGENT_MODAL_MAX_HEIGHT = "100%";
 const SUBAGENT_MODAL_MIN_WIDTH = 72;
+const SUBAGENT_MODAL_OPTIONS = {
+	width: SUBAGENT_MODAL_WIDTH,
+	minWidth: SUBAGENT_MODAL_MIN_WIDTH,
+	maxHeight: SUBAGENT_MODAL_MAX_HEIGHT,
+	anchor: "top-left",
+	row: 0,
+	col: 0,
+	margin: 0,
+} as const;
 const ANSI_STYLE_SEQUENCE_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
 const ANSI_RESET = `${String.fromCharCode(27)}[0m`;
 
@@ -929,21 +938,30 @@ class SubagentPanelController {
 				}),
 			{
 				overlay: true,
-				overlayOptions: {
-					width: SUBAGENT_MODAL_WIDTH,
-					minWidth: SUBAGENT_MODAL_MIN_WIDTH,
-					maxHeight: SUBAGENT_MODAL_MAX_HEIGHT,
-					anchor: "center",
-					margin: 0,
-				},
+				overlayOptions: SUBAGENT_MODAL_OPTIONS,
 			},
 		);
 	}
 
 	private async openSelectedTranscript(ctx: ExtensionContext): Promise<void> {
-		const selected = this.selectedIndex > 0 ? this.summaries[this.selectedIndex - 1] : undefined;
-		if (selected === undefined) return;
+		const selected = this.resolveTranscriptTarget();
+		if (selected === undefined) {
+			ctx.ui.notify("Subagents\nNo subagent transcript is available yet.", "warning");
+			return;
+		}
 		await this.openTranscript(ctx, selected.id);
+	}
+
+	private resolveTranscriptTarget(): ClankySubagentSummary | undefined {
+		if (this.activeTargetId !== undefined) {
+			const active = this.summaries.find((summary) => summary.id === this.activeTargetId);
+			if (active !== undefined) return active;
+		}
+		if (this.selectedIndex > 0) {
+			const selected = this.summaries[this.selectedIndex - 1];
+			if (selected !== undefined) return selected;
+		}
+		return this.summaries[0];
 	}
 
 	private async openTranscript(ctx: ExtensionContext, selectedId: string): Promise<void> {
@@ -963,13 +981,7 @@ class SubagentPanelController {
 				}),
 			{
 				overlay: true,
-				overlayOptions: {
-					width: SUBAGENT_MODAL_WIDTH,
-					minWidth: SUBAGENT_MODAL_MIN_WIDTH,
-					maxHeight: SUBAGENT_MODAL_MAX_HEIGHT,
-					anchor: "center",
-					margin: 0,
-				},
+				overlayOptions: SUBAGENT_MODAL_OPTIONS,
 			},
 		);
 	}
@@ -1522,7 +1534,7 @@ class SubagentBrowserComponent {
 		);
 		const headerLines: string[] = [
 			renderSubagentChatHeader(selected, this.theme, contentWidth),
-			this.theme.fg("dim", "↑↓ scroll  Enter send  Esc back"),
+			this.theme.fg("dim", "↑↓ scroll  PgUp/PgDn page  Home/End jump  Enter send  Esc back"),
 			"",
 		];
 		// One blank row separates transcript from composer.
@@ -2164,7 +2176,7 @@ function extractDiscordMessageFromPrompt(text: string): { speaker?: string; text
 	const markerIndex = normalized.lastIndexOf(marker);
 	const candidate = markerIndex >= 0 ? normalized.slice(markerIndex + 1) : normalized;
 	const match = /^Message from ([^:\n]+):\n([\s\S]*)$/u.exec(candidate.trim());
-	if (match === null) return { text: truncatePlain(normalized, 1000) };
+	if (match === null) return { text: normalized };
 	const sender = match[1]?.trim() ?? "unknown";
 	const message = match[2]?.trim() || "(no text)";
 	return { speaker: sender, text: message };

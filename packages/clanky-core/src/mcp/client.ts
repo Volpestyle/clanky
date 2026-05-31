@@ -88,7 +88,6 @@ const AGENTROOM_DEFAULT_TOOLS = [
 	"agentroom_events",
 	"agentroom_post",
 	"agentroom_dm",
-	"agentroom_task",
 	"agentroom_wait",
 ];
 const DISCORD_DEFAULT_TOOLS = [
@@ -222,7 +221,7 @@ export function resolveMcpServerConfigs(
 				command: env.CLANKY_AGENTROOM_MCP_COMMAND ?? "agent-room",
 				args: splitArgs(env.CLANKY_AGENTROOM_MCP_ARGS) ?? ["mcp"],
 				cwd: env.AGENTROOM_CWD ?? cwd,
-				description: "AgentRoom room coordination, messages, task shadows, waits, and audit context.",
+				description: "AgentRoom room coordination, messages, DMs, waits, and audit context.",
 				allowedTools: AGENTROOM_DEFAULT_TOOLS,
 			},
 			cwd,

@@ -760,13 +760,18 @@ async function assertSubagentPanelCommandWithSession(sessionFiles: {
 	const notifications: string[] = [];
 	let detailLines: string[] | undefined;
 	let scrolledDetailLines: string[] | undefined;
+	let initialDetailLineCount = 0;
+	let resizedDetailLineCount = 0;
+	const customOverlayOptions: unknown[] = [];
 	let terminalInput: TerminalInputHandler | undefined;
 	const ctx = {
 		hasUI: true,
 		ui: {
 			async custom(
 				factory: (tui: unknown, theme: unknown, keybindings: unknown, done: (result: undefined) => void) => unknown,
+				options?: { overlayOptions?: unknown },
 			) {
+				customOverlayOptions.push(options?.overlayOptions);
 				let terminalRows = 12;
 				const component = factory(
 					{
@@ -792,6 +797,7 @@ async function assertSubagentPanelCommandWithSession(sessionFiles: {
 				};
 				await new Promise((resolve) => setTimeout(resolve, 10));
 				detailLines = component.render(100);
+				initialDetailLineCount = detailLines.length;
 				component.handleInput?.("\u001b[1;1A");
 				component.handleInput?.("\u0010");
 				scrolledDetailLines = component.render(100);
@@ -801,6 +807,7 @@ async function assertSubagentPanelCommandWithSession(sessionFiles: {
 				component.handleInput?.("\r");
 				await new Promise((resolve) => setTimeout(resolve, 10));
 				detailLines = component.render(100);
+				resizedDetailLineCount = detailLines.length;
 				component.dispose?.();
 			},
 			onTerminalInput(handler: TerminalInputHandler) {
@@ -901,6 +908,26 @@ async function assertSubagentPanelCommandWithSession(sessionFiles: {
 	}
 	await subagents.handler("chat", ctx);
 	await new Promise((resolve) => setTimeout(resolve, 20));
+	if (initialDetailLineCount !== 12 || resizedDetailLineCount !== 24) {
+		throw new Error(
+			`smoke: /subagents chat did not fill the viewport: initial=${initialDetailLineCount} resized=${resizedDetailLineCount}`,
+		);
+	}
+	const detailOverlayOptions = customOverlayOptions[0] as
+		| { width?: unknown; maxHeight?: unknown; anchor?: unknown; row?: unknown; col?: unknown; margin?: unknown }
+		| undefined;
+	if (
+		detailOverlayOptions?.width !== "100%" ||
+		detailOverlayOptions.maxHeight !== "100%" ||
+		detailOverlayOptions.anchor !== "top-left" ||
+		detailOverlayOptions.row !== 0 ||
+		detailOverlayOptions.col !== 0 ||
+		detailOverlayOptions.margin !== 0
+	) {
+		throw new Error(
+			`smoke: /subagents chat did not request full-screen overlay: ${JSON.stringify(detailOverlayOptions)}`,
+		);
+	}
 	if (detailLines?.join("\n").includes("first discord")) {
 		throw new Error(`smoke: /subagents chat opened the wrong transcript: ${JSON.stringify(detailLines)}`);
 	}
