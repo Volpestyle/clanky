@@ -1,15 +1,24 @@
 import {
+	browserBack,
 	browserClick,
 	browserCloseTab,
 	browserDoubleClick,
+	browserEval,
+	browserFill,
+	browserForward,
+	browserHover,
 	browserKey,
 	browserListTabs,
 	browserNavigate,
 	browserOpenTab,
+	browserQuery,
+	browserReadText,
+	browserReload,
 	browserScreenshot,
 	browserScroll,
 	browserType,
 	browserWait,
+	browserWaitFor,
 } from "@clanky/browser-bridge";
 import {
 	type ClankyAgentToolHandlers,
@@ -153,8 +162,44 @@ export function createClankyHandlers(
 			browserScroll(input, {
 				homeDir: paths.homeDir,
 			}),
+		browserHover: async (input) =>
+			browserHover(input, {
+				homeDir: paths.homeDir,
+			}),
 		browserWait: async (input) =>
 			browserWait(input, {
+				homeDir: paths.homeDir,
+			}),
+		browserReadText: async (input) =>
+			browserReadText(input, {
+				homeDir: paths.homeDir,
+			}),
+		browserEval: async (input) =>
+			browserEval(input, {
+				homeDir: paths.homeDir,
+			}),
+		browserQuery: async (input) =>
+			browserQuery(input, {
+				homeDir: paths.homeDir,
+			}),
+		browserFill: async (input) =>
+			browserFill(input, {
+				homeDir: paths.homeDir,
+			}),
+		browserWaitFor: async (input) =>
+			browserWaitFor(input, {
+				homeDir: paths.homeDir,
+			}),
+		browserBack: async (input) =>
+			browserBack(input, {
+				homeDir: paths.homeDir,
+			}),
+		browserForward: async (input) =>
+			browserForward(input, {
+				homeDir: paths.homeDir,
+			}),
+		browserReload: async (input) =>
+			browserReload(input, {
 				homeDir: paths.homeDir,
 			}),
 		openAiImageGenerate: async (input, signal) =>

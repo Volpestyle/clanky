@@ -7,6 +7,10 @@ const ALARM_NAME = "clanky-bridge-tick";
 let configPromise = null;
 let ws = null;
 let reconnectTimer = null;
+// Synchronous guard so that overlapping connect() triggers (onStartup, onInstalled,
+// the alarm watchdog, and the initial call) cannot each open a socket while the
+// first is still awaiting loadConfig() — that produced duplicate connections.
+let connecting = false;
 
 const attachedTabs = new Set();
 
@@ -60,6 +64,28 @@ async function resolveScreenshotTarget(tabId) {
 	return requireTabIdentity(tab, "screenshot");
 }
 
+// Runs a function in the page's isolated world via chrome.scripting (no debugger
+// attach, so no "extension is debugging this tab" bar). Throws if the tab cannot
+// be scripted (restricted URL such as chrome:// or the Web Store).
+async function runInPage(tabId, func) {
+	const results = await chrome.scripting.executeScript({ target: { tabId }, func });
+	const injection = Array.isArray(results) ? results[0] : undefined;
+	if (injection === undefined) {
+		throw new Error("page script returned no result (restricted URL?)");
+	}
+	return injection.result;
+}
+
+function readPageMetricsFn() {
+	return {
+		devicePixelRatio: window.devicePixelRatio,
+		cssWidth: window.innerWidth,
+		cssHeight: window.innerHeight,
+		url: location.href,
+		title: document.title,
+	};
+}
+
 function readPngUint32(binary, offset) {
 	return (
 		((binary.charCodeAt(offset) << 24) |
@@ -85,6 +111,24 @@ function pngDimensionsFromDataUrl(dataUrl) {
 	};
 }
 
+async function downscalePngDataUrl(dataUrl, targetWidth, targetHeight) {
+	const blob = await (await fetch(dataUrl)).blob();
+	const bitmap = await createImageBitmap(blob);
+	try {
+		const canvas = new OffscreenCanvas(targetWidth, targetHeight);
+		const ctx = canvas.getContext("2d");
+		if (ctx === null) throw new Error("OffscreenCanvas 2d context unavailable");
+		ctx.drawImage(bitmap, 0, 0, targetWidth, targetHeight);
+		const outBlob = await canvas.convertToBlob({ type: "image/png" });
+		const bytes = new Uint8Array(await outBlob.arrayBuffer());
+		let binary = "";
+		for (let i = 0; i < bytes.length; i += 1) binary += String.fromCharCode(bytes[i]);
+		return `data:image/png;base64,${btoa(binary)}`;
+	} finally {
+		bitmap.close();
+	}
+}
+
 const MOD_BITS = { alt: 1, ctrl: 2, meta: 4, shift: 8 };
 
 function modifierBitmask(modifiers) {
@@ -98,7 +142,9 @@ function modifierBitmask(modifiers) {
 }
 
 const KEY_TABLE = {
-	Enter: { code: "Enter", windowsVirtualKeyCode: 13 },
+	// `text: "\r"` makes CDP emit a DOM keypress on keyDown, which is what triggers
+	// implicit form submission (and newline insertion in textareas) on Enter.
+	Enter: { code: "Enter", windowsVirtualKeyCode: 13, text: "\r" },
 	Tab: { code: "Tab", windowsVirtualKeyCode: 9 },
 	Escape: { code: "Escape", windowsVirtualKeyCode: 27 },
 	Backspace: { code: "Backspace", windowsVirtualKeyCode: 8 },
@@ -121,7 +167,116 @@ function keyCodeFor(key) {
 	return null;
 }
 
+// Derive the DOM `code` and virtual key code for a single printable character so
+// keyboard shortcuts (Cmd/Ctrl+A, Cmd+C, …) are recognized as accelerators. The
+// browser only maps a key event to an edit command when the virtual key code is
+// present — a bare `text` field makes it plain text input instead.
+function singleCharKeyInfo(ch) {
+	if (ch.length !== 1) return null;
+	const upper = ch.toUpperCase();
+	if (upper >= "A" && upper <= "Z") {
+		return { code: `Key${upper}`, windowsVirtualKeyCode: upper.charCodeAt(0) };
+	}
+	if (ch >= "0" && ch <= "9") {
+		return { code: `Digit${ch}`, windowsVirtualKeyCode: ch.charCodeAt(0) };
+	}
+	return null;
+}
+
 const CDP_BUTTONS = new Set(["left", "right", "middle"]);
+const MOUSE_BUTTON_MASK = { left: 1, right: 2, middle: 4 };
+
+function sleep(ms) {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Evaluate an arbitrary JS expression in the page's main world via the CDP
+// Runtime domain. Runs with full page access and is not blocked by the page's
+// CSP (unlike chrome.scripting + eval). Returns a JSON-serializable value.
+async function evalInPage(tabId, expression, awaitPromise) {
+	await ensureAttached(tabId);
+	const wrapped = `(function(){ return (${expression}); })()`;
+	const res = await cdpSend(tabId, "Runtime.evaluate", {
+		expression: wrapped,
+		returnByValue: true,
+		awaitPromise: awaitPromise !== false,
+		userGesture: true,
+		timeout: 15000,
+	});
+	if (res?.exceptionDetails) {
+		const ex = res.exceptionDetails;
+		const msg = ex.exception?.description || ex.exception?.value || ex.text || "page eval threw";
+		throw new Error(String(msg).split("\n")[0]);
+	}
+	return res?.result ? res.result.value : undefined;
+}
+
+// Locate elements by CSS selector via chrome.scripting (isolated world, DOM
+// access, no debugger bar). Coordinates are in CSS pixels — the same space the
+// screenshot is downscaled to and the click/scroll input ops consume.
+function querySelectorInfoFn(selector, returnAll, scrollIntoView) {
+	const describe = (el) => {
+		if (scrollIntoView) el.scrollIntoView({ block: "center", inline: "center" });
+		const r = el.getBoundingClientRect();
+		const style = window.getComputedStyle(el);
+		const visible =
+			r.width > 0 &&
+			r.height > 0 &&
+			style.visibility !== "hidden" &&
+			style.display !== "none" &&
+			Number(style.opacity || "1") > 0;
+		const inViewport = r.bottom > 0 && r.right > 0 && r.top < window.innerHeight && r.left < window.innerWidth;
+		return {
+			tag: el.tagName.toLowerCase(),
+			rect: {
+				x: r.x,
+				y: r.y,
+				width: r.width,
+				height: r.height,
+				centerX: r.x + r.width / 2,
+				centerY: r.y + r.height / 2,
+			},
+			text: (el.innerText || el.textContent || "").trim().slice(0, 400),
+			value: typeof el.value === "string" ? el.value : null,
+			href: typeof el.href === "string" ? el.href : el.getAttribute?.("href") || null,
+			visible,
+			inViewport,
+		};
+	};
+	const nodes = Array.from(document.querySelectorAll(selector));
+	if (returnAll) {
+		return { found: nodes.length > 0, count: nodes.length, elements: nodes.slice(0, 50).map(describe) };
+	}
+	return { found: nodes.length > 0, count: nodes.length, element: nodes.length > 0 ? describe(nodes[0]) : null };
+}
+
+// Reliably set an input/textarea/contenteditable value, the way Playwright's
+// fill() does: focus, set through the native value setter (so React's value
+// tracker sees the change), then fire input + change. Avoids the CDP key-event
+// limitation where browser accelerators like Cmd+A are not delivered to the page.
+function fillSelectorFn(selector, value) {
+	const el = document.querySelector(selector);
+	if (!el) return { ok: false, error: "selector matched no element" };
+	if (typeof el.focus === "function") el.focus();
+	if (el.isContentEditable) {
+		el.textContent = value;
+		el.dispatchEvent(new InputEvent("input", { bubbles: true }));
+		return { ok: true, value: el.textContent };
+	}
+	if (!("value" in el)) return { ok: false, error: "element is not fillable (no value)" };
+	const proto =
+		el instanceof HTMLTextAreaElement
+			? HTMLTextAreaElement.prototype
+			: el instanceof HTMLSelectElement
+				? HTMLSelectElement.prototype
+				: HTMLInputElement.prototype;
+	const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+	if (setter) setter.call(el, value);
+	else el.value = value;
+	el.dispatchEvent(new Event("input", { bubbles: true }));
+	el.dispatchEvent(new Event("change", { bubbles: true }));
+	return { ok: true, value: el.value };
+}
 
 function loadConfig() {
 	if (configPromise === null) {
@@ -145,11 +300,14 @@ function detectBrowser() {
 }
 
 async function connect() {
+	if (connecting) return;
 	if (ws !== null && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+	connecting = true;
 	let config;
 	try {
 		config = await loadConfig();
 	} catch (error) {
+		connecting = false;
 		console.warn("[clanky-bridge] failed to load config.json:", error);
 		scheduleReconnect();
 		return;
@@ -157,6 +315,7 @@ async function connect() {
 	const port = Number(config?.port);
 	const token = String(config?.token ?? "");
 	if (!Number.isInteger(port) || port <= 0 || token.length === 0) {
+		connecting = false;
 		console.warn("[clanky-bridge] config.json missing port or token");
 		scheduleReconnect();
 		return;
@@ -165,14 +324,23 @@ async function connect() {
 	try {
 		socket = new WebSocket(`ws://127.0.0.1:${port}/agent?token=${encodeURIComponent(token)}`);
 	} catch (error) {
+		connecting = false;
 		console.warn("[clanky-bridge] WebSocket constructor threw:", error);
 		scheduleReconnect();
 		return;
 	}
 	ws = socket;
+	// ws is now CONNECTING, so the readyState guard above holds for later calls.
+	connecting = false;
 	socket.addEventListener("open", () => {
 		try {
-			socket.send(JSON.stringify({ type: "hello", browser: detectBrowser() }));
+			socket.send(
+				JSON.stringify({
+					type: "hello",
+					browser: detectBrowser(),
+					version: chrome.runtime.getManifest().version,
+				}),
+			);
 		} catch (error) {
 			console.warn("[clanky-bridge] hello send failed:", error);
 		}
@@ -244,13 +412,67 @@ async function dispatch(message) {
 	}
 	if (message.op === "screenshot") {
 		const target = await resolveScreenshotTarget(message.tabId);
-		const dataUrl = await chrome.tabs.captureVisibleTab(target.windowId, { format: "png" });
-		const dimensions = pngDimensionsFromDataUrl(dataUrl);
+		const rawDataUrl = await chrome.tabs.captureVisibleTab(target.windowId, { format: "png" });
+		const captured = pngDimensionsFromDataUrl(rawDataUrl);
+		let metrics = null;
+		try {
+			metrics = await runInPage(target.tabId, readPageMetricsFn);
+		} catch {
+			// Restricted URL (chrome://, store, etc.) — cannot read CSS dimensions.
+		}
+		// captureVisibleTab returns the tab at the display's physical backing-store
+		// resolution, which can differ from both the CSS viewport and the page's
+		// reported devicePixelRatio (e.g. a Retina display reports DPR 1 under an
+		// emulated viewport yet still captures at 2x). To keep input-op coordinates
+		// identical to screenshot pixels, downscale to the CSS viewport so callers
+		// never have to apply a scale factor.
+		const cssWidth = metrics && typeof metrics.cssWidth === "number" && metrics.cssWidth > 0 ? metrics.cssWidth : null;
+		const cssHeight =
+			metrics && typeof metrics.cssHeight === "number" && metrics.cssHeight > 0 ? metrics.cssHeight : null;
+		let dataUrl = rawDataUrl;
+		let width = captured.width;
+		let height = captured.height;
+		if (cssWidth !== null && cssHeight !== null && (cssWidth !== captured.width || cssHeight !== captured.height)) {
+			dataUrl = await downscalePngDataUrl(rawDataUrl, cssWidth, cssHeight);
+			width = cssWidth;
+			height = cssHeight;
+		}
 		return {
 			tabId: target.tabId,
 			dataUrl,
-			width: dimensions.width,
-			height: dimensions.height,
+			width,
+			height,
+			capturedWidth: captured.width,
+			capturedHeight: captured.height,
+			devicePixelRatio:
+				metrics && typeof metrics.devicePixelRatio === "number" && metrics.devicePixelRatio > 0
+					? metrics.devicePixelRatio
+					: 1,
+			url: metrics && typeof metrics.url === "string" ? metrics.url : "",
+			title: metrics && typeof metrics.title === "string" ? metrics.title : "",
+		};
+	}
+	if (message.op === "read_text") {
+		if (typeof message.tabId !== "number") throw new Error("tabId required");
+		const maxChars =
+			typeof message.maxChars === "number" && message.maxChars > 0 ? Math.floor(message.maxChars) : 20000;
+		const data = await runInPage(message.tabId, () => ({
+			url: location.href,
+			title: document.title,
+			text: document.body ? document.body.innerText : "",
+		}));
+		if (!data || typeof data !== "object") {
+			throw new Error("read_text could not access page contents (restricted URL?)");
+		}
+		const fullText = typeof data.text === "string" ? data.text : "";
+		const truncated = fullText.length > maxChars;
+		return {
+			tabId: message.tabId,
+			url: typeof data.url === "string" ? data.url : "",
+			title: typeof data.title === "string" ? data.title : "",
+			text: truncated ? fullText.slice(0, maxChars) : fullText,
+			length: fullText.length,
+			truncated,
 		};
 	}
 	if (message.op === "list_tabs") {
@@ -291,12 +513,23 @@ async function dispatch(message) {
 		}
 		const button = message.button || "left";
 		if (!CDP_BUTTONS.has(button)) throw new Error(`invalid button: ${button}`);
-		const clickCount =
-			message.op === "double_click" ? 2 : typeof message.clickCount === "number" ? message.clickCount : 1;
 		await ensureAttached(message.tabId);
-		const base = { x: message.x, y: message.y, button, clickCount };
-		await cdpSend(message.tabId, "Input.dispatchMouseEvent", { ...base, type: "mousePressed" });
-		await cdpSend(message.tabId, "Input.dispatchMouseEvent", { ...base, type: "mouseReleased" });
+		const buttons = MOUSE_BUTTON_MASK[button] || 1;
+		// One press+release pair at the given clickCount. clickCount drives the
+		// DOM `detail` and lets the renderer synthesize dblclick on the 2nd pair.
+		const dispatchPair = async (clickCount) => {
+			const base = { x: message.x, y: message.y, button, clickCount };
+			await cdpSend(message.tabId, "Input.dispatchMouseEvent", { ...base, type: "mousePressed", buttons });
+			await cdpSend(message.tabId, "Input.dispatchMouseEvent", { ...base, type: "mouseReleased", buttons: 0 });
+		};
+		if (message.op === "double_click") {
+			// A faithful double click is two full click sequences; the second pair
+			// with clickCount=2 is what makes the page fire a `dblclick` event.
+			await dispatchPair(1);
+			await dispatchPair(2);
+		} else {
+			await dispatchPair(typeof message.clickCount === "number" ? message.clickCount : 1);
+		}
 		return { ok: true };
 	}
 	if (message.op === "type") {
@@ -312,6 +545,9 @@ async function dispatch(message) {
 			throw new Error("key required");
 		}
 		const modifiers = modifierBitmask(message.modifiers);
+		// A command modifier (Ctrl/Cmd/Alt) means this is a shortcut, not text entry.
+		const m = message.modifiers || {};
+		const hasCommandModifier = Boolean(m.ctrl || m.meta || m.alt);
 		const known = keyCodeFor(message.key);
 		await ensureAttached(message.tabId);
 		const baseDown = { type: "keyDown", key: message.key, modifiers };
@@ -319,12 +555,38 @@ async function dispatch(message) {
 		if (known) {
 			Object.assign(baseDown, known);
 			Object.assign(baseUp, known);
+			// `text` drives the keypress and belongs only on the keyDown event.
+			delete baseUp.text;
+			if (hasCommandModifier) delete baseDown.text;
 		} else if (message.key.length === 1) {
-			// Printable single char — give CDP a `text` so the page sees input.
-			baseDown.text = message.key;
+			const charInfo = singleCharKeyInfo(message.key);
+			if (charInfo) {
+				baseDown.code = charInfo.code;
+				baseDown.windowsVirtualKeyCode = charInfo.windowsVirtualKeyCode;
+				baseUp.code = charInfo.code;
+				baseUp.windowsVirtualKeyCode = charInfo.windowsVirtualKeyCode;
+			}
+			// Only emit `text` for plain typing — a shortcut (Cmd+A) must not insert text.
+			if (!hasCommandModifier) baseDown.text = message.key;
 		}
 		await cdpSend(message.tabId, "Input.dispatchKeyEvent", baseDown);
 		await cdpSend(message.tabId, "Input.dispatchKeyEvent", baseUp);
+		return { ok: true };
+	}
+	if (message.op === "hover") {
+		if (typeof message.tabId !== "number") throw new Error("tabId required");
+		if (typeof message.x !== "number" || typeof message.y !== "number") {
+			throw new Error("x and y required");
+		}
+		await ensureAttached(message.tabId);
+		// A synthesized mouse move updates Blink's hover state, so CSS :hover rules
+		// and mouseover/mouseenter listeners fire (reveals hover menus/tooltips).
+		await cdpSend(message.tabId, "Input.dispatchMouseEvent", {
+			type: "mouseMoved",
+			x: message.x,
+			y: message.y,
+			buttons: 0,
+		});
 		return { ok: true };
 	}
 	if (message.op === "scroll") {
@@ -344,6 +606,113 @@ async function dispatch(message) {
 			deltaY: message.deltaY,
 		});
 		return { ok: true };
+	}
+	if (message.op === "eval") {
+		if (typeof message.tabId !== "number") throw new Error("tabId required");
+		if (typeof message.expression !== "string" || message.expression.length === 0) {
+			throw new Error("expression required");
+		}
+		const value = await evalInPage(message.tabId, message.expression, message.awaitPromise);
+		return { tabId: message.tabId, value: value === undefined ? null : value };
+	}
+	if (message.op === "fill") {
+		if (typeof message.tabId !== "number") throw new Error("tabId required");
+		if (typeof message.selector !== "string" || message.selector.length === 0) {
+			throw new Error("selector required");
+		}
+		if (typeof message.value !== "string") throw new Error("value required");
+		const result = await chrome.scripting.executeScript({
+			target: { tabId: message.tabId },
+			func: fillSelectorFn,
+			args: [message.selector, message.value],
+		});
+		const data = Array.isArray(result) ? result[0]?.result : undefined;
+		if (!data) throw new Error("fill could not access page contents (restricted URL?)");
+		if (data.ok !== true) throw new Error(data.error || "fill failed");
+		return { tabId: message.tabId, selector: message.selector, value: data.value };
+	}
+	if (message.op === "query") {
+		if (typeof message.tabId !== "number") throw new Error("tabId required");
+		if (typeof message.selector !== "string" || message.selector.length === 0) {
+			throw new Error("selector required");
+		}
+		const all = message.all === true;
+		const scrollIntoView = message.scrollIntoView === true;
+		const result = await chrome.scripting.executeScript({
+			target: { tabId: message.tabId },
+			func: querySelectorInfoFn,
+			args: [message.selector, all, scrollIntoView],
+		});
+		const data = Array.isArray(result) ? result[0]?.result : undefined;
+		if (!data) throw new Error("query could not access page contents (restricted URL?)");
+		return { tabId: message.tabId, selector: message.selector, ...data };
+	}
+	if (message.op === "wait_for") {
+		if (typeof message.tabId !== "number") throw new Error("tabId required");
+		const selector = typeof message.selector === "string" && message.selector.length > 0 ? message.selector : null;
+		const jsCondition =
+			typeof message.jsCondition === "string" && message.jsCondition.length > 0 ? message.jsCondition : null;
+		const readyState =
+			typeof message.readyState === "string" && message.readyState.length > 0 ? message.readyState : null;
+		if (!selector && !jsCondition && !readyState) {
+			throw new Error("wait_for requires one of: selector, jsCondition, readyState");
+		}
+		const visible = message.visible === true;
+		const timeoutMs =
+			typeof message.timeoutMs === "number" && message.timeoutMs > 0 ? Math.min(message.timeoutMs, 30000) : 10000;
+		const pollMs = typeof message.pollMs === "number" && message.pollMs >= 50 ? Math.min(message.pollMs, 5000) : 150;
+		const start = Date.now();
+		// Probe runs in the isolated world (no debugger bar) for selector/readyState;
+		// jsCondition needs page-main-world eval, handled separately below.
+		const probeSelector = (sel, wantVisible, wantReady) => {
+			if (
+				wantReady &&
+				document.readyState !== wantReady &&
+				!(wantReady === "complete" && document.readyState === "complete")
+			) {
+				// readyState ordering: loading < interactive < complete
+				const order = { loading: 0, interactive: 1, complete: 2 };
+				if ((order[document.readyState] ?? -1) < (order[wantReady] ?? 99)) return false;
+			}
+			if (!sel) return true;
+			const el = document.querySelector(sel);
+			if (!el) return false;
+			if (!wantVisible) return true;
+			const r = el.getBoundingClientRect();
+			const st = window.getComputedStyle(el);
+			return r.width > 0 && r.height > 0 && st.visibility !== "hidden" && st.display !== "none";
+		};
+		for (;;) {
+			let ok = false;
+			try {
+				if (jsCondition) {
+					ok = Boolean(await evalInPage(message.tabId, jsCondition, true));
+				} else {
+					const probe = await chrome.scripting.executeScript({
+						target: { tabId: message.tabId },
+						func: probeSelector,
+						args: [selector, visible, readyState],
+					});
+					ok = Array.isArray(probe) ? probe[0]?.result === true : false;
+				}
+			} catch {
+				// Page mid-navigation can transiently fail to script; keep polling.
+				ok = false;
+			}
+			if (ok) return { tabId: message.tabId, ok: true, waitedMs: Date.now() - start, timedOut: false };
+			if (Date.now() - start >= timeoutMs) {
+				return { tabId: message.tabId, ok: false, waitedMs: Date.now() - start, timedOut: true };
+			}
+			await sleep(pollMs);
+		}
+	}
+	if (message.op === "back" || message.op === "forward" || message.op === "reload") {
+		if (typeof message.tabId !== "number") throw new Error("tabId required");
+		if (message.op === "back") await chrome.tabs.goBack(message.tabId);
+		else if (message.op === "forward") await chrome.tabs.goForward(message.tabId);
+		else await chrome.tabs.reload(message.tabId, { bypassCache: message.bypassCache === true });
+		const tab = await chrome.tabs.get(message.tabId);
+		return { tabId: message.tabId, url: tab.url || tab.pendingUrl || "", title: tab.title || "" };
 	}
 	throw new Error(`unknown op: ${message.op}`);
 }

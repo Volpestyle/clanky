@@ -1,6 +1,7 @@
 import { appendFile, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { fileURLToPath } from "node:url";
 import { type WebSocket, WebSocketServer } from "ws";
 import { resolveBrowserBridgePaths } from "./paths.ts";
 
@@ -19,6 +20,7 @@ interface PersistedConfig {
 interface AgentClient {
 	socket: WebSocket;
 	browser: string;
+	version: string;
 	connectedAt: string;
 	pingTimer: ReturnType<typeof setInterval>;
 }
@@ -37,6 +39,9 @@ interface OpenTabRequest {
 const SHORT_OP_TIMEOUT_MS = 5_000;
 const NAVIGATE_OP_TIMEOUT_MS = 15_000;
 const WAIT_OP_MAX_MS = 30_000;
+const EVAL_OP_TIMEOUT_MS = 20_000;
+// wait_for caps its own poll loop at 30s; allow daemon-side headroom on top.
+const WAIT_FOR_OP_TIMEOUT_MS = 35_000;
 
 export async function startBrowserBridgeServer(options: BrowserBridgeServerOptions = {}): Promise<() => Promise<void>> {
 	const env = options.env ?? process.env;
@@ -45,6 +50,10 @@ export async function startBrowserBridgeServer(options: BrowserBridgeServerOptio
 		env,
 	});
 	const config = await loadPersistedConfig(paths.configFile);
+	// Re-read on demand so that upgrading the package (which bumps the packaged
+	// manifest version) is reflected without a daemon restart — otherwise a newer
+	// reloaded extension would be falsely flagged stale against a boot-time value.
+	let expectedExtensionVersion = await readPackagedExtensionVersion();
 	const port = options.port ?? config.port;
 	const host = options.host ?? "127.0.0.1";
 	const token = config.token;
@@ -94,12 +103,20 @@ export async function startBrowserBridgeServer(options: BrowserBridgeServerOptio
 	async function handleHttp(req: IncomingMessage, res: ServerResponse): Promise<void> {
 		const url = new URL(req.url ?? "/", "http://127.0.0.1");
 		if (url.pathname === "/healthz") {
+			// Refresh the packaged version so stale detection tracks package upgrades live.
+			expectedExtensionVersion = await readPackagedExtensionVersion();
 			res.writeHead(200, { "content-type": "application/json" });
 			res.end(
 				JSON.stringify({
 					ok: true,
 					connectedBrowsers: [...clients].map((entry) => entry.browser),
 					connectionCount: clients.size,
+					expectedExtensionVersion,
+					extensions: [...clients].map((entry) => ({
+						browser: entry.browser,
+						version: entry.version,
+						stale: entry.version !== "unknown" && entry.version !== expectedExtensionVersion,
+					})),
 				}),
 			);
 			return;
@@ -131,6 +148,16 @@ export async function startBrowserBridgeServer(options: BrowserBridgeServerOptio
 		}
 		if (url.pathname === "/tabs/list") {
 			const result = await dispatch("list_tabs", {}, SHORT_OP_TIMEOUT_MS);
+			respondJson(res, 200, result);
+			return;
+		}
+		if (url.pathname === "/read-text") {
+			const params = requireRecord(parsed, "read_text");
+			const tabId = requireNumber(params, "tabId", "read_text");
+			const payload: Record<string, unknown> = { tabId };
+			const maxChars = optionalNumber(params, "maxChars", "read_text");
+			if (maxChars !== undefined) payload.maxChars = maxChars;
+			const result = await dispatch("read_text", payload, SHORT_OP_TIMEOUT_MS);
 			respondJson(res, 200, result);
 			return;
 		}
@@ -196,6 +223,15 @@ export async function startBrowserBridgeServer(options: BrowserBridgeServerOptio
 			respondJson(res, 200, result);
 			return;
 		}
+		if (url.pathname === "/input/hover") {
+			const params = requireRecord(parsed, "hover");
+			const tabId = requireNumber(params, "tabId", "hover");
+			const x = requireNumber(params, "x", "hover");
+			const y = requireNumber(params, "y", "hover");
+			const result = await dispatch("hover", { tabId, x, y }, SHORT_OP_TIMEOUT_MS);
+			respondJson(res, 200, result);
+			return;
+		}
 		if (url.pathname === "/input/scroll") {
 			const params = requireRecord(parsed, "scroll");
 			const tabId = requireNumber(params, "tabId", "scroll");
@@ -222,6 +258,68 @@ export async function startBrowserBridgeServer(options: BrowserBridgeServerOptio
 			respondJson(res, 200, { ok: true, waitedMs: ms });
 			return;
 		}
+		if (url.pathname === "/eval") {
+			const params = requireRecord(parsed, "eval");
+			const tabId = requireNumber(params, "tabId", "eval");
+			const expression = requireString(params, "expression", "eval");
+			const payload: Record<string, unknown> = { tabId, expression };
+			if (params.awaitPromise !== undefined) payload.awaitPromise = params.awaitPromise === true;
+			const result = await dispatch("eval", payload, EVAL_OP_TIMEOUT_MS);
+			respondJson(res, 200, result);
+			return;
+		}
+		if (url.pathname === "/fill") {
+			const params = requireRecord(parsed, "fill");
+			const tabId = requireNumber(params, "tabId", "fill");
+			const selector = requireString(params, "selector", "fill");
+			const value = params.value;
+			if (typeof value !== "string") {
+				throw new Error('fill requires a string "value".');
+			}
+			const result = await dispatch("fill", { tabId, selector, value }, SHORT_OP_TIMEOUT_MS);
+			respondJson(res, 200, result);
+			return;
+		}
+		if (url.pathname === "/query") {
+			const params = requireRecord(parsed, "query");
+			const tabId = requireNumber(params, "tabId", "query");
+			const selector = requireString(params, "selector", "query");
+			const payload: Record<string, unknown> = { tabId, selector };
+			if (params.all !== undefined) payload.all = params.all === true;
+			if (params.scrollIntoView !== undefined) payload.scrollIntoView = params.scrollIntoView === true;
+			const result = await dispatch("query", payload, SHORT_OP_TIMEOUT_MS);
+			respondJson(res, 200, result);
+			return;
+		}
+		if (url.pathname === "/wait-for") {
+			const params = requireRecord(parsed, "wait_for");
+			const tabId = requireNumber(params, "tabId", "wait_for");
+			const payload: Record<string, unknown> = { tabId };
+			const selector = optionalString(params, "selector", "wait_for");
+			if (selector !== undefined) payload.selector = selector;
+			const jsCondition = optionalString(params, "jsCondition", "wait_for");
+			if (jsCondition !== undefined) payload.jsCondition = jsCondition;
+			const readyState = optionalString(params, "readyState", "wait_for");
+			if (readyState !== undefined) payload.readyState = readyState;
+			if (params.visible !== undefined) payload.visible = params.visible === true;
+			const timeoutMs = optionalNumber(params, "timeoutMs", "wait_for");
+			if (timeoutMs !== undefined) payload.timeoutMs = timeoutMs;
+			const pollMs = optionalNumber(params, "pollMs", "wait_for");
+			if (pollMs !== undefined) payload.pollMs = pollMs;
+			const result = await dispatch("wait_for", payload, WAIT_FOR_OP_TIMEOUT_MS);
+			respondJson(res, 200, result);
+			return;
+		}
+		if (url.pathname === "/tabs/back" || url.pathname === "/tabs/forward" || url.pathname === "/tabs/reload") {
+			const opName = url.pathname === "/tabs/back" ? "back" : url.pathname === "/tabs/forward" ? "forward" : "reload";
+			const params = requireRecord(parsed, opName);
+			const tabId = requireNumber(params, "tabId", opName);
+			const payload: Record<string, unknown> = { tabId };
+			if (opName === "reload" && params.bypassCache !== undefined) payload.bypassCache = params.bypassCache === true;
+			const result = await dispatch(opName, payload, NAVIGATE_OP_TIMEOUT_MS);
+			respondJson(res, 200, result);
+			return;
+		}
 		res.writeHead(404, { "content-type": "application/json" });
 		res.end(JSON.stringify({ error: "not_found" }));
 	}
@@ -230,6 +328,7 @@ export async function startBrowserBridgeServer(options: BrowserBridgeServerOptio
 		const agent: AgentClient = {
 			socket,
 			browser: "unknown",
+			version: "unknown",
 			connectedAt: new Date().toISOString(),
 			pingTimer: setInterval(() => {
 				try {
@@ -252,6 +351,7 @@ export async function startBrowserBridgeServer(options: BrowserBridgeServerOptio
 			if (!isRecord(msg)) return;
 			if (msg.type === "hello" && typeof msg.browser === "string") {
 				agent.browser = msg.browser;
+				if (typeof msg.version === "string") agent.version = msg.version;
 				void updateStateFile();
 				return;
 			}
@@ -308,13 +408,19 @@ export async function startBrowserBridgeServer(options: BrowserBridgeServerOptio
 	}
 
 	async function updateStateFile(): Promise<void> {
-		const connectedBrowsers = [...clients].map((agent) => ({ browser: agent.browser, connectedAt: agent.connectedAt }));
+		const connectedBrowsers = [...clients].map((agent) => ({
+			browser: agent.browser,
+			version: agent.version,
+			stale: agent.version !== "unknown" && agent.version !== expectedExtensionVersion,
+			connectedAt: agent.connectedAt,
+		}));
 		const browser = connectedBrowsers[0]?.browser ?? (clients.size === 0 ? "disconnected" : "unknown");
 		const state = {
 			port,
 			pid: process.pid,
 			secret: token,
 			browser,
+			expectedExtensionVersion,
 			startedAt,
 			connectedBrowsers,
 		};
@@ -391,6 +497,18 @@ export async function startBrowserBridgeServer(options: BrowserBridgeServerOptio
 	process.once("SIGINT", onSignal);
 
 	return shutdown;
+}
+
+async function readPackagedExtensionVersion(): Promise<string> {
+	try {
+		const manifestPath = fileURLToPath(new URL("../extension/manifest.template.json", import.meta.url));
+		const raw = await readFile(manifestPath, "utf8");
+		const parsed: unknown = JSON.parse(raw);
+		if (isRecord(parsed) && typeof parsed.version === "string") return parsed.version;
+	} catch {
+		// fall through to unknown
+	}
+	return "unknown";
 }
 
 async function loadPersistedConfig(configFile: string): Promise<PersistedConfig> {
@@ -477,6 +595,15 @@ function requireString(record: Record<string, unknown>, field: string, opName: s
 	const value = record[field];
 	if (typeof value !== "string" || value.length === 0) {
 		throw new Error(`${opName} requires a non-empty string "${field}".`);
+	}
+	return value;
+}
+
+function optionalString(record: Record<string, unknown>, field: string, opName: string): string | undefined {
+	const value = record[field];
+	if (value === undefined) return undefined;
+	if (typeof value !== "string" || value.length === 0) {
+		throw new Error(`${opName} field "${field}" must be a non-empty string when provided.`);
 	}
 	return value;
 }
