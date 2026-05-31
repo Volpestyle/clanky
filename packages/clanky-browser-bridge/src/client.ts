@@ -37,8 +37,32 @@ export interface ScreenshotInput {
 export interface ScreenshotResult {
 	tabId: number;
 	dataUrl: string;
+	/** Image width in CSS pixels — identical to the coordinate space used by click/scroll input ops. */
 	width: number;
+	/** Image height in CSS pixels — identical to the coordinate space used by click/scroll input ops. */
 	height: number;
+	/** Raw capture width before downscaling to CSS pixels (device/backing-store pixels). */
+	capturedWidth?: number;
+	/** Raw capture height before downscaling to CSS pixels (device/backing-store pixels). */
+	capturedHeight?: number;
+	devicePixelRatio?: number;
+	url?: string;
+	title?: string;
+}
+
+export interface ReadTextInput {
+	tabId: number;
+	maxChars?: number;
+}
+
+export interface ReadTextResult {
+	tabId: number;
+	url: string;
+	title: string;
+	text: string;
+	/** Full innerText length before truncation. */
+	length: number;
+	truncated: boolean;
 }
 
 // biome-ignore lint/complexity/noBannedTypes: list_tabs takes no parameters; this is intentionally an empty object type.
@@ -275,7 +299,49 @@ export async function browserScreenshot(
 	) {
 		throw malformed("screenshot", JSON.stringify(record).slice(0, 200));
 	}
-	return { tabId, dataUrl, width, height };
+	const result: ScreenshotResult = { tabId, dataUrl, width, height };
+	if (typeof record.capturedWidth === "number") result.capturedWidth = record.capturedWidth;
+	if (typeof record.capturedHeight === "number") result.capturedHeight = record.capturedHeight;
+	if (typeof record.devicePixelRatio === "number") result.devicePixelRatio = record.devicePixelRatio;
+	if (typeof record.url === "string") result.url = record.url;
+	if (typeof record.title === "string") result.title = record.title;
+	return result;
+}
+
+export async function browserReadText(
+	input: ReadTextInput,
+	options: BrowserBridgeClientOptions = {},
+): Promise<ReadTextResult> {
+	if (typeof input.tabId !== "number" || !Number.isFinite(input.tabId)) {
+		throw new Error("browser_read_text requires a finite tabId.");
+	}
+	if (
+		input.maxChars !== undefined &&
+		(typeof input.maxChars !== "number" || !Number.isFinite(input.maxChars) || input.maxChars <= 0)
+	) {
+		throw new Error("browser_read_text maxChars must be a positive finite number when provided.");
+	}
+	const ctx = await prepareBridge(options);
+	const body: Record<string, unknown> = { tabId: input.tabId };
+	if (input.maxChars !== undefined) body.maxChars = input.maxChars;
+	const record = await postBridge(ctx, "/read-text", body, "read_text");
+	const tabId = record.tabId;
+	const url = record.url;
+	const title = record.title;
+	const text = record.text;
+	const length = record.length;
+	const truncated = record.truncated;
+	if (
+		typeof tabId !== "number" ||
+		typeof url !== "string" ||
+		typeof title !== "string" ||
+		typeof text !== "string" ||
+		typeof length !== "number" ||
+		typeof truncated !== "boolean"
+	) {
+		throw malformed("read_text", JSON.stringify(record).slice(0, 200));
+	}
+	return { tabId, url, title, text, length, truncated };
 }
 
 export async function browserListTabs(
@@ -449,6 +515,22 @@ export async function browserKey(input: KeyInput, options: BrowserBridgeClientOp
 	return { ok: true };
 }
 
+export interface HoverInput {
+	tabId: number;
+	x: number;
+	y: number;
+}
+
+export async function browserHover(input: HoverInput, options: BrowserBridgeClientOptions = {}): Promise<OkResult> {
+	validatePoint(input, "browser_hover");
+	const ctx = await prepareBridge(options);
+	const record = await postBridge(ctx, "/input/hover", { tabId: input.tabId, x: input.x, y: input.y }, "hover");
+	if (record.ok !== true) {
+		throw malformed("hover", JSON.stringify(record).slice(0, 200));
+	}
+	return { ok: true };
+}
+
 export async function browserScroll(input: ScrollInput, options: BrowserBridgeClientOptions = {}): Promise<OkResult> {
 	validatePoint(input, "browser_scroll");
 	if (typeof input.deltaX !== "number" || !Number.isFinite(input.deltaX)) {
@@ -484,4 +566,251 @@ export async function browserWait(input: WaitInput, options: BrowserBridgeClient
 		throw malformed("wait", JSON.stringify(record).slice(0, 200));
 	}
 	return { ok: true, waitedMs };
+}
+
+export interface EvalInput {
+	tabId: number;
+	/** A JS expression evaluated in the page's main world. Use an IIFE for multi-statement logic. */
+	expression: string;
+	/** Await the expression if it returns a Promise (default true). */
+	awaitPromise?: boolean;
+}
+
+export interface EvalResult {
+	tabId: number;
+	/** The JSON-serialized return value of the expression (null if undefined). */
+	value: unknown;
+}
+
+export async function browserEval(input: EvalInput, options: BrowserBridgeClientOptions = {}): Promise<EvalResult> {
+	if (typeof input.tabId !== "number" || !Number.isFinite(input.tabId)) {
+		throw new Error("browser_eval requires a finite tabId.");
+	}
+	if (typeof input.expression !== "string" || input.expression.trim().length === 0) {
+		throw new Error("browser_eval requires a non-empty expression.");
+	}
+	const ctx = await prepareBridge(options);
+	const body: Record<string, unknown> = { tabId: input.tabId, expression: input.expression };
+	if (input.awaitPromise !== undefined) body.awaitPromise = input.awaitPromise;
+	const record = await postBridge(ctx, "/eval", body, "eval");
+	const tabId = record.tabId;
+	if (typeof tabId !== "number") throw malformed("eval", JSON.stringify(record).slice(0, 200));
+	return { tabId, value: "value" in record ? record.value : null };
+}
+
+export interface ElementRect {
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+	/** Center in CSS pixels — pass straight to browser_click / browser_scroll. */
+	centerX: number;
+	centerY: number;
+}
+
+export interface ElementInfo {
+	tag: string;
+	rect: ElementRect;
+	text: string;
+	value: string | null;
+	href: string | null;
+	visible: boolean;
+	inViewport: boolean;
+}
+
+export interface FillInput {
+	tabId: number;
+	selector: string;
+	/** The value to set. Pass "" to clear the field. */
+	value: string;
+}
+
+export interface FillResult {
+	tabId: number;
+	selector: string;
+	/** The element's value after filling. */
+	value: string;
+}
+
+export async function browserFill(input: FillInput, options: BrowserBridgeClientOptions = {}): Promise<FillResult> {
+	if (typeof input.tabId !== "number" || !Number.isFinite(input.tabId)) {
+		throw new Error("browser_fill requires a finite tabId.");
+	}
+	if (typeof input.selector !== "string" || input.selector.trim().length === 0) {
+		throw new Error("browser_fill requires a non-empty selector.");
+	}
+	if (typeof input.value !== "string") {
+		throw new Error('browser_fill requires a string value (use "" to clear).');
+	}
+	const ctx = await prepareBridge(options);
+	const record = await postBridge(
+		ctx,
+		"/fill",
+		{ tabId: input.tabId, selector: input.selector, value: input.value },
+		"fill",
+	);
+	const tabId = record.tabId;
+	const value = record.value;
+	if (typeof tabId !== "number" || typeof value !== "string") {
+		throw malformed("fill", JSON.stringify(record).slice(0, 200));
+	}
+	return { tabId, selector: input.selector, value };
+}
+
+export interface QueryInput {
+	tabId: number;
+	selector: string;
+	/** Return up to 50 matches in `elements` instead of the single first match in `element`. */
+	all?: boolean;
+	/** Scroll the first match into view (block/inline center) before measuring its rect. */
+	scrollIntoView?: boolean;
+}
+
+export interface QueryResult {
+	tabId: number;
+	selector: string;
+	found: boolean;
+	count: number;
+	element?: ElementInfo | null;
+	elements?: ElementInfo[];
+}
+
+export async function browserQuery(input: QueryInput, options: BrowserBridgeClientOptions = {}): Promise<QueryResult> {
+	if (typeof input.tabId !== "number" || !Number.isFinite(input.tabId)) {
+		throw new Error("browser_query requires a finite tabId.");
+	}
+	if (typeof input.selector !== "string" || input.selector.trim().length === 0) {
+		throw new Error("browser_query requires a non-empty selector.");
+	}
+	const ctx = await prepareBridge(options);
+	const body: Record<string, unknown> = { tabId: input.tabId, selector: input.selector };
+	if (input.all !== undefined) body.all = input.all;
+	if (input.scrollIntoView !== undefined) body.scrollIntoView = input.scrollIntoView;
+	const record = await postBridge(ctx, "/query", body, "query");
+	const tabId = record.tabId;
+	const found = record.found;
+	const count = record.count;
+	if (typeof tabId !== "number" || typeof found !== "boolean" || typeof count !== "number") {
+		throw malformed("query", JSON.stringify(record).slice(0, 200));
+	}
+	const result: QueryResult = { tabId, selector: input.selector, found, count };
+	if ("element" in record) result.element = record.element as ElementInfo | null;
+	if (Array.isArray(record.elements)) result.elements = record.elements as ElementInfo[];
+	return result;
+}
+
+export interface WaitForInput {
+	tabId: number;
+	/** Wait until this CSS selector matches an element. */
+	selector?: string;
+	/** Wait until this JS expression (page main world) evaluates truthy. */
+	jsCondition?: string;
+	/** Wait until document.readyState reaches this ("interactive" | "complete"). */
+	readyState?: string;
+	/** Combined with selector: also require the element to be visible. */
+	visible?: boolean;
+	/** Max time to poll in ms (default 10000, capped at 30000). */
+	timeoutMs?: number;
+	/** Poll interval in ms (default 150, min 50). */
+	pollMs?: number;
+}
+
+export interface WaitForResult {
+	tabId: number;
+	ok: boolean;
+	waitedMs: number;
+	timedOut: boolean;
+}
+
+export async function browserWaitFor(
+	input: WaitForInput,
+	options: BrowserBridgeClientOptions = {},
+): Promise<WaitForResult> {
+	if (typeof input.tabId !== "number" || !Number.isFinite(input.tabId)) {
+		throw new Error("browser_wait_for requires a finite tabId.");
+	}
+	if (
+		(input.selector === undefined || input.selector.length === 0) &&
+		(input.jsCondition === undefined || input.jsCondition.length === 0) &&
+		(input.readyState === undefined || input.readyState.length === 0)
+	) {
+		throw new Error("browser_wait_for requires one of: selector, jsCondition, readyState.");
+	}
+	const ctx = await prepareBridge(options);
+	const body: Record<string, unknown> = { tabId: input.tabId };
+	if (input.selector !== undefined) body.selector = input.selector;
+	if (input.jsCondition !== undefined) body.jsCondition = input.jsCondition;
+	if (input.readyState !== undefined) body.readyState = input.readyState;
+	if (input.visible !== undefined) body.visible = input.visible;
+	if (input.timeoutMs !== undefined) body.timeoutMs = input.timeoutMs;
+	if (input.pollMs !== undefined) body.pollMs = input.pollMs;
+	const record = await postBridge(ctx, "/wait-for", body, "wait_for");
+	const tabId = record.tabId;
+	const ok = record.ok;
+	const waitedMs = record.waitedMs;
+	const timedOut = record.timedOut;
+	if (
+		typeof tabId !== "number" ||
+		typeof ok !== "boolean" ||
+		typeof waitedMs !== "number" ||
+		typeof timedOut !== "boolean"
+	) {
+		throw malformed("wait_for", JSON.stringify(record).slice(0, 200));
+	}
+	return { tabId, ok, waitedMs, timedOut };
+}
+
+export interface HistoryNavInput {
+	tabId: number;
+	/** reload only: bypass the HTTP cache. */
+	bypassCache?: boolean;
+}
+
+export interface HistoryNavResult {
+	tabId: number;
+	url: string;
+	title: string;
+}
+
+async function historyNav(
+	path: string,
+	op: string,
+	input: HistoryNavInput,
+	options: BrowserBridgeClientOptions,
+): Promise<HistoryNavResult> {
+	if (typeof input.tabId !== "number" || !Number.isFinite(input.tabId)) {
+		throw new Error(`browser_${op} requires a finite tabId.`);
+	}
+	const ctx = await prepareBridge(options);
+	const body: Record<string, unknown> = { tabId: input.tabId };
+	if (op === "reload" && input.bypassCache !== undefined) body.bypassCache = input.bypassCache;
+	const record = await postBridge(ctx, path, body, op);
+	const tabId = record.tabId;
+	const url = record.url;
+	const title = record.title;
+	if (typeof tabId !== "number" || typeof url !== "string" || typeof title !== "string") {
+		throw malformed(op, JSON.stringify(record).slice(0, 200));
+	}
+	return { tabId, url, title };
+}
+
+export function browserBack(
+	input: HistoryNavInput,
+	options: BrowserBridgeClientOptions = {},
+): Promise<HistoryNavResult> {
+	return historyNav("/tabs/back", "back", input, options);
+}
+
+export function browserForward(
+	input: HistoryNavInput,
+	options: BrowserBridgeClientOptions = {},
+): Promise<HistoryNavResult> {
+	return historyNav("/tabs/forward", "forward", input, options);
+}
+
+export function browserReload(
+	input: HistoryNavInput,
+	options: BrowserBridgeClientOptions = {},
+): Promise<HistoryNavResult> {
+	return historyNav("/tabs/reload", "reload", input, options);
 }

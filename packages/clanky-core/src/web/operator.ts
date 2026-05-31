@@ -192,10 +192,18 @@ interface BrowserBridgeStateRecord {
 	startedAt?: string;
 }
 
+interface BrowserBridgeExtensionInfo {
+	browser: string;
+	version: string;
+	stale: boolean;
+}
+
 interface BrowserBridgeHealthResult {
 	reachable: boolean;
 	connectionCount?: number;
 	connectedBrowsers?: string[];
+	expectedExtensionVersion?: string;
+	extensions?: BrowserBridgeExtensionInfo[];
 	error?: string;
 }
 
@@ -263,6 +271,15 @@ async function readBrowserBridgeState(
 				note: "browser-bridge daemon is running but no browser extension is connected yet. Load the unpacked extension in Helium/Chrome/Brave.",
 			};
 		}
+		const staleExtensions = (health.extensions ?? []).filter((entry) => entry.stale);
+		const staleNote =
+			staleExtensions.length > 0
+				? `A connected extension is stale (version ${staleExtensions
+						.map((entry) => entry.version)
+						.join(
+							", ",
+						)} < packaged ${health.expectedExtensionVersion ?? "unknown"}). Some browser_* ops may fail with "unknown op" until you reload the unpacked extension at chrome://extensions.`
+				: undefined;
 		return {
 			available: true,
 			preferred,
@@ -272,8 +289,34 @@ async function readBrowserBridgeState(
 			startedAt: state.startedAt,
 			connectionCount: health.connectionCount ?? 0,
 			connectedBrowsers: health.connectedBrowsers ?? [],
+			...(health.expectedExtensionVersion === undefined
+				? {}
+				: { expectedExtensionVersion: health.expectedExtensionVersion }),
+			...(health.extensions === undefined ? {} : { extensions: health.extensions }),
+			...(staleNote === undefined ? {} : { staleExtension: true, note: staleNote }),
 			tool: "browser_open_tab",
-			tools: ["browser_open_tab", "browser_screenshot", "browser_list_tabs", "browser_click", "browser_type"],
+			tools: [
+				"browser_open_tab",
+				"browser_navigate",
+				"browser_list_tabs",
+				"browser_close_tab",
+				"browser_back",
+				"browser_forward",
+				"browser_reload",
+				"browser_read_text",
+				"browser_query",
+				"browser_eval",
+				"browser_fill",
+				"browser_wait_for",
+				"browser_screenshot",
+				"browser_click",
+				"browser_double_click",
+				"browser_type",
+				"browser_key",
+				"browser_scroll",
+				"browser_hover",
+				"browser_wait",
+			],
 			bestFor,
 		};
 	} catch {
@@ -306,7 +349,17 @@ async function readBrowserBridgeHealth(port: number, fetchImpl: typeof fetch): P
 			typeof payload.connectionCount === "number" && Number.isFinite(payload.connectionCount)
 				? payload.connectionCount
 				: connectedBrowsers.length;
-		return { reachable: true, connectionCount, connectedBrowsers };
+		const extensions: BrowserBridgeExtensionInfo[] = Array.isArray(payload.extensions)
+			? payload.extensions.flatMap((entry): BrowserBridgeExtensionInfo[] => {
+					if (!isRecord(entry) || typeof entry.browser !== "string" || typeof entry.version !== "string") return [];
+					return [{ browser: entry.browser, version: entry.version, stale: entry.stale === true }];
+				})
+			: [];
+		const result: BrowserBridgeHealthResult = { reachable: true, connectionCount, connectedBrowsers, extensions };
+		if (typeof payload.expectedExtensionVersion === "string") {
+			result.expectedExtensionVersion = payload.expectedExtensionVersion;
+		}
+		return result;
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		return { reachable: false, error: message.length === 0 ? "fetch failed" : message };
