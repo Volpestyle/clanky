@@ -4117,6 +4117,7 @@ function formatMcpCommandResult(details: unknown): string {
 		const status = disabled ? "disabled" : error !== undefined ? "error" : "ready";
 		lines.push(`- ${name}: ${status}${tools.length > 0 ? ` (${tools.length} tools)` : ""}`);
 		appendIndentedField(lines, "Command", commandLineLabel(server));
+		appendIndentedField(lines, "URL", readString(server, "url"));
 		appendIndentedField(lines, "Allowed tools", readStringArray(server, "allowedTools").join(", ") || undefined);
 		appendIndentedField(lines, "Error", error);
 		if (tools.length > 0) {

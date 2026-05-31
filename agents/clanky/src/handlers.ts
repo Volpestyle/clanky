@@ -41,9 +41,9 @@ import {
 	resolveClankyChatGatewayOwner,
 	resolveClankyChatMode,
 	runOpenAiWebSearch,
-	sendDiscordMessage,
 	type SendSubagentMessageInput,
 	type SendSubagentMessageResult,
+	sendDiscordMessage,
 	shouldStartAgentChatGateway,
 } from "@clanky/core";
 import type { AuthStorage } from "@earendil-works/pi-coding-agent";
@@ -236,16 +236,19 @@ export function createClankyHandlers(
 		externalMcpStatus: async () =>
 			getExternalMcpStatus({
 				cwd: process.cwd(),
+				paths,
 				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
 			}),
 		externalMcpListTools: async (input) =>
 			listExternalMcpTools(input, {
 				cwd: process.cwd(),
+				paths,
 				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
 			}),
 		externalMcpCall: async (input) =>
 			callExternalMcpTool(input, {
 				cwd: process.cwd(),
+				paths,
 				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
 			}),
 	};

@@ -75,7 +75,7 @@ async function main(): Promise<void> {
 	await assertAgentDiscordPromptImages();
 	assertDiscordBridgeCommands();
 	assertAgentDiscordVoiceConfig();
-	assertStoredDiscordCredentialPath();
+	await assertStoredDiscordCredentialPath();
 	await assertRuntimeTurnQueue();
 	await assertMainWorkerDelegation();
 	await assertDiscordAuthExtensionCommands();
@@ -733,7 +733,7 @@ function assertDiscordBridgeCommands(): void {
 	}
 }
 
-function assertStoredDiscordCredentialPath(): void {
+async function assertStoredDiscordCredentialPath(): Promise<void> {
 	const stored = AuthStorage.inMemory();
 	saveStoredDiscordCredential(stored, {
 		token: "stored-token",
@@ -784,6 +784,34 @@ function assertStoredDiscordCredentialPath(): void {
 	}
 	if (envDiscordMcpConfig?.env.CLANKY_DISCORD_TOKEN !== "env-token") {
 		throw new Error("smoke: Discord MCP env should preserve the explicit env token");
+	}
+
+	const mcpHome = await mkdtemp(join(tmpdir(), "clanky-mcp-profile-smoke-"));
+	try {
+		const mcpPaths = resolveClankyPaths({ homeDir: mcpHome });
+		await mkdir(mcpPaths.profileDir, { recursive: true });
+		await writeFile(
+			mcpPaths.mcpServersFile,
+			`${JSON.stringify(
+				{
+					mcpServers: {
+						linear: { type: "http", url: "https://mcp.linear.app/mcp" },
+					},
+				},
+				null,
+				2,
+			)}\n`,
+		);
+		const profileMcpConfig = resolveMcpServerConfigs({
+			cwd: "/tmp/clanky-mcp-smoke",
+			env: { CLANKY_DISCORD_MCP: "0" },
+			paths: mcpPaths,
+		}).linear;
+		if (profileMcpConfig?.type !== "streamable-http" || profileMcpConfig.url !== "https://mcp.linear.app/mcp") {
+			throw new Error("smoke: profile-local HTTP MCP config should load");
+		}
+	} finally {
+		await rm(mcpHome, { recursive: true, force: true });
 	}
 
 	const envOverridesStored = resolveAgentDiscordGatewayConfig({ CLANKY_DISCORD_TOKEN: "env-token" }, stored);
@@ -1613,6 +1641,15 @@ async function assertClankySetupExtensionCommand(): Promise<void> {
 		!status.includes("xAI media:")
 	) {
 		throw new Error(`smoke: /setup status summary was incomplete: ${status}`);
+	}
+
+	await setup.handler("mcp linear https://mcp.linear.app/mcp", ctx);
+	if (!notifications.at(-1)?.includes("Saved linear")) {
+		throw new Error("smoke: /setup mcp did not save the profile MCP server");
+	}
+	await setup.handler("mcp", ctx);
+	if (!notifications.at(-1)?.includes("linear")) {
+		throw new Error("smoke: /setup mcp did not list the profile MCP server");
 	}
 
 	await setup.handler("fresh", ctx);
