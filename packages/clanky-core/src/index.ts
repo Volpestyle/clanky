@@ -232,6 +232,21 @@ export {
 	type UpsertSubagentInput,
 } from "./subagents/store.ts";
 export {
+	buildCatalog,
+	type CatalogEntry,
+	computeDeferrableNames,
+	createToolSearchExtensionFactory,
+	DEFAULT_ALWAYS_ACTIVE_TOOLS,
+	resolveToolSearchConfig,
+	searchCatalog,
+	TOOL_SEARCH_TOOL_NAME,
+	type ToolSearchConfig,
+	type ToolSearchConfigOverrides,
+	type ToolSearchFactoryOptions,
+	type ToolSearchMode,
+	type ToolSearchToolInput,
+} from "./tool-search.ts";
+export {
 	clampInteger,
 	errorMessage,
 	isRecord,

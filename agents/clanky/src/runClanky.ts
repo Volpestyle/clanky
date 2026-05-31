@@ -5,6 +5,7 @@ import {
 	completeClankyCommandArgument,
 	createClankyExtensionFactories,
 	createClankyToolDefinitions,
+	createToolSearchExtensionFactory,
 	type DiscordVoiceJoinToolInput,
 	type DiscordVoiceOperationOptions,
 	getOpenAiCredentialStatus,
@@ -297,6 +298,7 @@ function buildRuntimeFactory(opts: {
 			resourceLoaderOptions: {
 				extensionFactories: [
 					...createClankyExtensionFactories(handlers, { env }),
+					createToolSearchExtensionFactory({ env }),
 					...additionalExtensionFactories,
 					discordAuthFactory,
 					openAiAuthFactory,
