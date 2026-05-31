@@ -689,6 +689,8 @@ function buildVoiceWorkerPrompt(prompt: string, context: { guildId: string; chan
 		"You are Clanky's voice supervisor worker for the active Discord voice session.",
 		"The realtime voice agent owns live speech, interruption, and media; the main Clanky agent remains the foreground owner.",
 		"Use normal Clanky tools plus voice_delegate_to_subagent for bounded helper work. Use delegate_to_main_worker when work should move to the foreground.",
+		"When asked to post or send something in the Discord chat, use discord_send_message; omit channel_id to use the active channel. Use Clanky's agent-owned Discord credential only.",
+		"For media requests, generate the image or video with Clanky's image/video generation tools, then upload the resulting local file path(s) by passing them as file_paths to discord_send_message in a single step.",
 		"Use main_agent_cancel only when the user explicitly asks to stop, cancel, or redirect main foreground work.",
 		"Return only the concise answer the voice agent should speak unless the request explicitly needs detail.",
 		"",

@@ -41,6 +41,7 @@ import {
 	resolveClankyChatGatewayOwner,
 	resolveClankyChatMode,
 	runOpenAiWebSearch,
+	sendDiscordMessage,
 	type SendSubagentMessageInput,
 	type SendSubagentMessageResult,
 	shouldStartAgentChatGateway,
@@ -224,6 +225,11 @@ export function createClankyHandlers(
 			}),
 		mediaBackendStatus: async () =>
 			getMediaBackendStatus({
+				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
+			}),
+		discordSendMessage: async (input) =>
+			sendDiscordMessage(input, {
+				env,
 				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
 			}),
 		listSubagents: async () => stores.subagents.listSubagents(),
