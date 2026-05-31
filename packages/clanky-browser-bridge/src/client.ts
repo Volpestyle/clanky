@@ -552,6 +552,53 @@ export async function browserScroll(input: ScrollInput, options: BrowserBridgeCl
 	return { ok: true };
 }
 
+export interface DragInput {
+	tabId: number;
+	/** Start point (CSS px) — same space as browser_query rects. */
+	x: number;
+	y: number;
+	/** End point (CSS px). */
+	toX: number;
+	toY: number;
+	/** Mouse button to hold (default "left"). */
+	button?: MouseButton;
+	/** Number of interpolated move events between start and end (default 12, max 100). */
+	steps?: number;
+	/** Pause after pressing before moving, in ms (default 0, max 2000) — for libs with a drag-start delay. */
+	holdMs?: number;
+}
+
+export async function browserDrag(input: DragInput, options: BrowserBridgeClientOptions = {}): Promise<OkResult> {
+	for (const field of ["tabId", "x", "y", "toX", "toY"] as const) {
+		if (typeof input[field] !== "number" || !Number.isFinite(input[field])) {
+			throw new Error(`browser_drag requires a finite ${field}.`);
+		}
+	}
+	validateMouseButton(input.button, "browser_drag");
+	if (
+		input.steps !== undefined &&
+		(typeof input.steps !== "number" || !Number.isFinite(input.steps) || input.steps < 1)
+	) {
+		throw new Error("browser_drag steps must be a finite number >= 1 when provided.");
+	}
+	if (
+		input.holdMs !== undefined &&
+		(typeof input.holdMs !== "number" || !Number.isFinite(input.holdMs) || input.holdMs < 0)
+	) {
+		throw new Error("browser_drag holdMs must be a non-negative finite number when provided.");
+	}
+	const ctx = await prepareBridge(options);
+	const body: Record<string, unknown> = { tabId: input.tabId, x: input.x, y: input.y, toX: input.toX, toY: input.toY };
+	if (input.button !== undefined) body.button = input.button;
+	if (input.steps !== undefined) body.steps = input.steps;
+	if (input.holdMs !== undefined) body.holdMs = input.holdMs;
+	const record = await postBridge(ctx, "/input/drag", body, "drag");
+	if (record.ok !== true) {
+		throw malformed("drag", JSON.stringify(record).slice(0, 200));
+	}
+	return { ok: true };
+}
+
 export async function browserWait(input: WaitInput, options: BrowserBridgeClientOptions = {}): Promise<WaitResult> {
 	if (typeof input.ms !== "number" || !Number.isFinite(input.ms) || input.ms < 0) {
 		throw new Error("browser_wait requires a non-negative finite ms value.");
@@ -621,8 +668,15 @@ export interface ElementInfo {
 export interface FillInput {
 	tabId: number;
 	selector: string;
-	/** The value to set. Pass "" to clear the field. */
+	/**
+	 * The value to set. Pass "" to clear a text field.
+	 * - text/textarea/contenteditable/range/number/date: set literally.
+	 * - <select>: match an option by its value OR visible label.
+	 * - checkbox/radio: boolean-ish ("true"/"false"/"on"/"off"/"1"/"0") sets `.checked`.
+	 */
 	value: string;
+	/** Also search inside open shadow roots if the selector misses the light DOM. */
+	pierce?: boolean;
 }
 
 export interface FillResult {
@@ -643,12 +697,9 @@ export async function browserFill(input: FillInput, options: BrowserBridgeClient
 		throw new Error('browser_fill requires a string value (use "" to clear).');
 	}
 	const ctx = await prepareBridge(options);
-	const record = await postBridge(
-		ctx,
-		"/fill",
-		{ tabId: input.tabId, selector: input.selector, value: input.value },
-		"fill",
-	);
+	const fillBody: Record<string, unknown> = { tabId: input.tabId, selector: input.selector, value: input.value };
+	if (input.pierce !== undefined) fillBody.pierce = input.pierce;
+	const record = await postBridge(ctx, "/fill", fillBody, "fill");
 	const tabId = record.tabId;
 	const value = record.value;
 	if (typeof tabId !== "number" || typeof value !== "string") {
@@ -664,6 +715,8 @@ export interface QueryInput {
 	all?: boolean;
 	/** Scroll the first match into view (block/inline center) before measuring its rect. */
 	scrollIntoView?: boolean;
+	/** Also search inside open shadow roots (per-scope), so web-component content is reachable. */
+	pierce?: boolean;
 }
 
 export interface QueryResult {
@@ -686,6 +739,7 @@ export async function browserQuery(input: QueryInput, options: BrowserBridgeClie
 	const body: Record<string, unknown> = { tabId: input.tabId, selector: input.selector };
 	if (input.all !== undefined) body.all = input.all;
 	if (input.scrollIntoView !== undefined) body.scrollIntoView = input.scrollIntoView;
+	if (input.pierce !== undefined) body.pierce = input.pierce;
 	const record = await postBridge(ctx, "/query", body, "query");
 	const tabId = record.tabId;
 	const found = record.found;
@@ -709,6 +763,8 @@ export interface WaitForInput {
 	readyState?: string;
 	/** Combined with selector: also require the element to be visible. */
 	visible?: boolean;
+	/** Combined with selector: also search inside open shadow roots. */
+	pierce?: boolean;
 	/** Max time to poll in ms (default 10000, capped at 30000). */
 	timeoutMs?: number;
 	/** Poll interval in ms (default 150, min 50). */
@@ -742,6 +798,7 @@ export async function browserWaitFor(
 	if (input.jsCondition !== undefined) body.jsCondition = input.jsCondition;
 	if (input.readyState !== undefined) body.readyState = input.readyState;
 	if (input.visible !== undefined) body.visible = input.visible;
+	if (input.pierce !== undefined) body.pierce = input.pierce;
 	if (input.timeoutMs !== undefined) body.timeoutMs = input.timeoutMs;
 	if (input.pollMs !== undefined) body.pollMs = input.pollMs;
 	const record = await postBridge(ctx, "/wait-for", body, "wait_for");

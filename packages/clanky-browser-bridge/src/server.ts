@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
@@ -60,6 +60,8 @@ export async function startBrowserBridgeServer(options: BrowserBridgeServerOptio
 	const clients = new Set<AgentClient>();
 	const pending = new Map<number, PendingCall>();
 	let nextId = 1;
+	// Serializes state-file writes so concurrent fire-and-forget updates can't tear the file.
+	let stateWriteChain: Promise<void> = Promise.resolve();
 
 	await mkdir(paths.bridgeDir, { recursive: true });
 	const startedAt = new Date().toISOString();
@@ -232,6 +234,24 @@ export async function startBrowserBridgeServer(options: BrowserBridgeServerOptio
 			respondJson(res, 200, result);
 			return;
 		}
+		if (url.pathname === "/input/drag") {
+			const params = requireRecord(parsed, "drag");
+			const tabId = requireNumber(params, "tabId", "drag");
+			const x = requireNumber(params, "x", "drag");
+			const y = requireNumber(params, "y", "drag");
+			const toX = requireNumber(params, "toX", "drag");
+			const toY = requireNumber(params, "toY", "drag");
+			const payload: Record<string, unknown> = { tabId, x, y, toX, toY };
+			const button = optionalMouseButton(params, "drag");
+			if (button !== undefined) payload.button = button;
+			const steps = optionalNumber(params, "steps", "drag");
+			if (steps !== undefined) payload.steps = steps;
+			const holdMs = optionalNumber(params, "holdMs", "drag");
+			if (holdMs !== undefined) payload.holdMs = holdMs;
+			const result = await dispatch("drag", payload, NAVIGATE_OP_TIMEOUT_MS);
+			respondJson(res, 200, result);
+			return;
+		}
 		if (url.pathname === "/input/scroll") {
 			const params = requireRecord(parsed, "scroll");
 			const tabId = requireNumber(params, "tabId", "scroll");
@@ -276,7 +296,9 @@ export async function startBrowserBridgeServer(options: BrowserBridgeServerOptio
 			if (typeof value !== "string") {
 				throw new Error('fill requires a string "value".');
 			}
-			const result = await dispatch("fill", { tabId, selector, value }, SHORT_OP_TIMEOUT_MS);
+			const fillPayload: Record<string, unknown> = { tabId, selector, value };
+			if (params.pierce !== undefined) fillPayload.pierce = params.pierce === true;
+			const result = await dispatch("fill", fillPayload, SHORT_OP_TIMEOUT_MS);
 			respondJson(res, 200, result);
 			return;
 		}
@@ -287,6 +309,7 @@ export async function startBrowserBridgeServer(options: BrowserBridgeServerOptio
 			const payload: Record<string, unknown> = { tabId, selector };
 			if (params.all !== undefined) payload.all = params.all === true;
 			if (params.scrollIntoView !== undefined) payload.scrollIntoView = params.scrollIntoView === true;
+			if (params.pierce !== undefined) payload.pierce = params.pierce === true;
 			const result = await dispatch("query", payload, SHORT_OP_TIMEOUT_MS);
 			respondJson(res, 200, result);
 			return;
@@ -302,6 +325,7 @@ export async function startBrowserBridgeServer(options: BrowserBridgeServerOptio
 			const readyState = optionalString(params, "readyState", "wait_for");
 			if (readyState !== undefined) payload.readyState = readyState;
 			if (params.visible !== undefined) payload.visible = params.visible === true;
+			if (params.pierce !== undefined) payload.pierce = params.pierce === true;
 			const timeoutMs = optionalNumber(params, "timeoutMs", "wait_for");
 			if (timeoutMs !== undefined) payload.timeoutMs = timeoutMs;
 			const pollMs = optionalNumber(params, "pollMs", "wait_for");
@@ -407,7 +431,13 @@ export async function startBrowserBridgeServer(options: BrowserBridgeServerOptio
 		return undefined;
 	}
 
-	async function updateStateFile(): Promise<void> {
+	function updateStateFile(): Promise<void> {
+		// Snapshot synchronously at call time, then serialize the actual write through
+		// a chain and write atomically (temp + rename). Without this, the fire-and-forget
+		// `void updateStateFile()` calls fired on connect → hello in quick succession race
+		// two non-atomic writeFile()s and tear state.json (leaving trailing bytes), which
+		// makes the client fail to parse port/token. Atomic rename guarantees readers see
+		// either the old or the new complete file, never a torn one.
 		const connectedBrowsers = [...clients].map((agent) => ({
 			browser: agent.browser,
 			version: agent.version,
@@ -424,12 +454,18 @@ export async function startBrowserBridgeServer(options: BrowserBridgeServerOptio
 			startedAt,
 			connectedBrowsers,
 		};
-		try {
-			await writeFile(paths.stateFile, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			await log(`state write failed: ${message}`);
-		}
+		const serialized = `${JSON.stringify(state, null, 2)}\n`;
+		stateWriteChain = stateWriteChain.then(async () => {
+			const tmpFile = `${paths.stateFile}.${process.pid}.tmp`;
+			try {
+				await writeFile(tmpFile, serialized, { mode: 0o600 });
+				await rename(tmpFile, paths.stateFile);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				await log(`state write failed: ${message}`);
+			}
+		});
+		return stateWriteChain;
 	}
 
 	await new Promise<void>((resolve, reject) => {

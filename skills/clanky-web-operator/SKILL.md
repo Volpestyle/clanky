@@ -22,7 +22,7 @@ Check `web_backend_status` when you are unsure which backends are wired up. It r
   - Tabs & history: `browser_open_tab`, `browser_navigate`, `browser_list_tabs`, `browser_close_tab`, `browser_back`, `browser_forward`, `browser_reload`.
   - Read & extract (no debugger bar): `browser_read_text` returns rendered `innerText` + title + url (post-JS) — prefer it for plain page *text*. `browser_query` finds elements by CSS selector and returns their **exact click coordinates**, value, text, href, and visibility. `browser_eval` runs a JS expression in the page and returns the JSON result — the power tool for structured extraction (links/tables/attributes) and reading page state. Both beat `node fetch` for JS-rendered pages and read the user's logged-in view.
   - Sync: `browser_wait_for` blocks until a selector appears / `readyState` is reached / a JS condition is truthy — use it after navigation instead of guessing with `browser_wait` (a dumb sleep).
-  - Input: `browser_fill` reliably sets/clears a field by selector (fires input+change, React-safe). `browser_click` / `browser_double_click` / `browser_type` / `browser_key` / `browser_scroll` / `browser_hover` drive coordinate/keystroke input. `browser_screenshot` captures the viewport for visual/layout questions.
+  - Input: `browser_fill` reliably sets any native control by selector (fires input+change, React-safe) — text, a `<select>` option by value or label, or a checkbox/radio by boolean. `browser_click` / `browser_double_click` / `browser_type` / `browser_key` / `browser_scroll` / `browser_drag` / `browser_hover` drive coordinate/keystroke input (`browser_drag` presses, moves, and releases for sliders/reorder/canvas). `browser_query` / `browser_fill` / `browser_wait_for` take `pierce:true` to reach inside open shadow roots (web components). `browser_screenshot` captures the viewport for visual/layout questions.
   - `web_backend_status.backends.browserBridge.tools` lists the exact ops the connected daemon supports. If a `browser_*` op fails with `unknown op: …`, the loaded extension is older than that op — see the stale-extension note below.
 - Use `web_search` for pure information retrieval that does not need a rendered page: current public facts, pricing, release status, documentation lookup, source-backed answers, and broad discovery. This tool uses OpenAI hosted web search and returns citations/sources.
 - Use direct HTTP through `bash` with Node `fetch`, `curl`, or `python3` only when you already have a simple public URL and just need raw text/JSON/HTML without rendering.
@@ -69,15 +69,56 @@ Use `browser_screenshot` for what it's actually for: visual/layout questions, "w
 
 ### Typing, filling, and form submission
 
-- **Setting a field's value:** prefer `browser_fill({ tabId, selector, value })`. It focuses, **replaces** any existing value (pass `value:""` to clear), and fires `input` + `change` — works with React-controlled inputs. This is the reliable way to clear/replace text.
+- **Setting a field's value:** prefer `browser_fill({ tabId, selector, value })`. It focuses, **replaces** any existing value (pass `value:""` to clear), and fires `input` + `change` — works with React-controlled inputs. This is the reliable way to clear/replace text (also works for `range`/`number`/`date`/`color` inputs and `contenteditable`).
 - **Clearing via keyboard is unreliable:** browser accelerators like ⌘A / Ctrl+A are not delivered to the page through CDP, so "select-all then retype" does *not* clear a field. Use `browser_fill` instead.
 - **Realistic keystrokes:** when a field reacts to real typing (search-as-you-type, autocomplete), `browser_click` into it, then `browser_type` (inserts literal text, fires `input`) and `browser_key` for individual keys.
 - **Submitting:** `browser_key({ tabId, key: "Enter" })` now fires a real `keypress` and triggers implicit form submission (and newline insertion in textareas). After it, `browser_wait_for` the result. If a form has no implicit submit, `browser_query` the submit button and `browser_click` its center instead.
 - `browser_screenshot` activates the target tab/window (it must be foreground to capture), so it can steal focus mid-flow; batch captures and prefer `read_text`/`eval`/`query` when you only need data.
 
+### Form controls: selects, checkboxes, radios
+
+`browser_fill` is **polymorphic by element type** — one op covers every native control:
+
+- **`<select>`:** pass the option's `value` **or** its visible **label** — fill matches either (`fill(selector, "Blue")` works whether `Blue` is the value or the option text; value is tried first, then exact label, then case-insensitive label). If nothing matches it **throws** and lists the available options — it does **not** silently clear the select. For a multi-select, fill selects one option; to toggle several, click each or set them via `browser_eval`.
+- **Checkbox / radio:** the meaningful state is `.checked`, not `.value`. Pass a **boolean-ish** value — `"true"`/`"false"`/`"on"`/`"off"`/`"1"`/`"0"` — and fill sets the checked state and fires `change`; the result `value` is the resulting checked state (`"true"`/`"false"`). A non-boolean string **throws** (so you never get a silent no-op). To toggle a box purely by position, `browser_query` it and `browser_click` its center instead.
+- Read control state back with `browser_eval` (`el.checked`, `select.value`, `select.selectedOptions[0].text`, `[...sel.selectedOptions].map(o=>o.value)` for multi).
+
+### Dragging, sliders, and scroll targeting
+
+- **`browser_drag({ tabId, x, y, toX, toY, steps?, holdMs? })`** presses at the start point, moves through `steps` interpolated points with the button held, and releases at the end — the way to operate things a single click can't: **slider/handle drags, canvas/map panning, and drag-to-reorder/kanban lists** (anything driven by pointer/mouse events). Get the coordinates from `browser_query` rects (e.g. a slider thumb's center as start, a point along the track as end). Use `holdMs` (e.g. 150) for libraries that only start a drag after a short press, and raise `steps` for handlers that sample the path. It does **not** drive native HTML5 drag-and-drop (`draggable=true` + `dragstart`/`drop`).
+- **`browser_scroll` targets the element under (x, y)** — a wheel event there scrolls the innermost scrollable container at that point, not necessarily the window. To scroll a specific pane (chat log, inner list, modal body), `browser_query` it and scroll at its center; to scroll the page, scroll over empty page area.
+- **Keyboard-driven widgets** (autocomplete/comboboxes, listbox menus): `browser_click` into the field, `browser_type` the query, then `browser_key` `ArrowDown`/`ArrowUp` to move the highlight and `Enter` to commit — the per-key events fire the widget's handlers. `browser_key` `Tab` advances focus between fields.
+
 ### Hover menus and tooltips
 
 Elements that only appear on `:hover` (dropdown menus, tooltips) report `visible:false`/zero-size from `browser_query` until revealed. Use `browser_hover({ tabId, x, y })` on the trigger (find its center with `browser_query`) to fire the hover state, then `browser_query` the now-visible item and `browser_click` its center. Hover again right before clicking if the menu collapses when the pointer leaves the trigger.
+
+### Shadow DOM / web components
+
+`browser_query`, `browser_fill`, and `browser_wait_for` use `document.querySelector`, which **cannot cross shadow-DOM boundaries** — so on web-component-heavy sites (Lit, Polymer/YouTube, Salesforce, many design systems) a selector for content inside a custom element returns `found:false` even though it's visible. When that happens, **retry with `pierce:true`**: the op also walks every *open* shadow root (running your selector independently per shadow tree) and returns the same rects/coordinates, so `browser_click` on the returned `centerX/centerY` and `browser_fill` work normally on shadow content.
+
+```
+query(selector)                       # found:false on a web-component app
+query(selector, { pierce:true })      # now finds it + returns click coords
+click(centerX, centerY)               # interacts with the shadow element
+fill(selector, value, { pierce:true })# fills a shadow input
+```
+
+Caveats: `pierce` only reaches **open** shadow roots (`mode:"open"`); **closed** roots are unreachable from any page script. A *descendant* selector (`.a .b`) only matches when both parts live in the same shadow tree — prefer a single specific selector (an `id`/`class` within the component). `browser_eval` can also reach open roots manually: `document.querySelector('host').shadowRoot.querySelector('#x')`.
+
+### Infinite scroll / lazy-loaded lists
+
+To load content that appears only as you scroll (IntersectionObserver feeds, virtualized lists), loop **scroll → wait_for-count-grows** instead of a blind sleep:
+
+```
+n = eval("document.querySelectorAll('.item').length")
+loop:
+  scroll(x, y, 0, 4000)                                  # wheel down near the list
+  wait_for(jsCondition: "document.querySelectorAll('.item').length > " + n)
+  n = eval("document.querySelectorAll('.item').length")  # stop when it stops growing
+```
+
+Stop when the count stops increasing across an iteration (end of feed) or once you have enough items.
 
 ### Iframes
 
