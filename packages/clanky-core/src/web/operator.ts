@@ -314,6 +314,7 @@ async function readBrowserBridgeState(
 				"browser_type",
 				"browser_key",
 				"browser_scroll",
+				"browser_drag",
 				"browser_hover",
 				"browser_wait",
 			],

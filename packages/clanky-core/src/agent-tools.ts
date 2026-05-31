@@ -262,6 +262,17 @@ const browserScrollSchema = Type.Object({
 	deltaY: Type.Number(),
 });
 
+const browserDragSchema = Type.Object({
+	tabId: Type.Number(),
+	x: Type.Number(),
+	y: Type.Number(),
+	toX: Type.Number(),
+	toY: Type.Number(),
+	button: Type.Optional(browserMouseButtonSchema),
+	steps: Type.Optional(Type.Number()),
+	holdMs: Type.Optional(Type.Number()),
+});
+
 const browserHoverSchema = Type.Object({
 	tabId: Type.Number(),
 	x: Type.Number(),
@@ -288,12 +299,14 @@ const browserQuerySchema = Type.Object({
 	selector: Type.String(),
 	all: Type.Optional(Type.Boolean()),
 	scrollIntoView: Type.Optional(Type.Boolean()),
+	pierce: Type.Optional(Type.Boolean()),
 });
 
 const browserFillSchema = Type.Object({
 	tabId: Type.Number(),
 	selector: Type.String(),
 	value: Type.String(),
+	pierce: Type.Optional(Type.Boolean()),
 });
 
 const browserWaitForSchema = Type.Object({
@@ -302,6 +315,7 @@ const browserWaitForSchema = Type.Object({
 	jsCondition: Type.Optional(Type.String()),
 	readyState: Type.Optional(Type.String()),
 	visible: Type.Optional(Type.Boolean()),
+	pierce: Type.Optional(Type.Boolean()),
 	timeoutMs: Type.Optional(Type.Number()),
 	pollMs: Type.Optional(Type.Number()),
 });
@@ -490,6 +504,7 @@ export type BrowserDoubleClickToolInput = Static<typeof browserDoubleClickSchema
 export type BrowserTypeToolInput = Static<typeof browserTypeSchema>;
 export type BrowserKeyToolInput = Static<typeof browserKeySchema>;
 export type BrowserScrollToolInput = Static<typeof browserScrollSchema>;
+export type BrowserDragToolInput = Static<typeof browserDragSchema>;
 export type BrowserHoverToolInput = Static<typeof browserHoverSchema>;
 export type BrowserWaitToolInput = Static<typeof browserWaitSchema>;
 export type BrowserReadTextToolInput = Static<typeof browserReadTextSchema>;
@@ -562,6 +577,7 @@ export interface ClankyAgentToolHandlers {
 	browserType?: (input: BrowserTypeToolInput) => Promise<unknown>;
 	browserKey?: (input: BrowserKeyToolInput) => Promise<unknown>;
 	browserScroll?: (input: BrowserScrollToolInput) => Promise<unknown>;
+	browserDrag?: (input: BrowserDragToolInput) => Promise<unknown>;
 	browserHover?: (input: BrowserHoverToolInput) => Promise<unknown>;
 	browserWait?: (input: BrowserWaitToolInput) => Promise<unknown>;
 	browserReadText?: (input: BrowserReadTextToolInput) => Promise<unknown>;
@@ -3321,6 +3337,29 @@ export function createClankyToolDefinitions(
 			}),
 		);
 	}
+	const browserDrag = handlers.browserDrag;
+	if (browserDrag !== undefined) {
+		tools.push(
+			defineTool({
+				name: "browser_drag",
+				label: "Browser Drag",
+				description:
+					"Press the mouse at (x, y), move through interpolated steps to (toX, toY) with the button held, then release — a pointer drag in the user's real browser via CDP. Drives sliders, canvas panning, and pointer/mouse-event reorder/kanban UIs.",
+				promptSnippet:
+					"browser_drag: press at (x,y), drag to (toX,toY), release — for sliders, canvas pans, and drag-to-reorder lists. Get coordinates from browser_query rects.",
+				promptGuidelines: [
+					"Coordinates are CSS pixels of the visible viewport — get them from browser_query rects (e.g. a slider thumb's center as start, the track position as end) or a recent browser_screenshot.",
+					"steps (default 12) controls how many move events are sent along the path; increase it for handlers that sample the drag, decrease for speed.",
+					"holdMs pauses after pressing before moving — set it (e.g. 150) for libraries that only begin a drag after a short press delay.",
+					"This synthesizes pointer/mouse events, which covers most draggables; it does NOT drive native HTML5 drag-and-drop (draggable=true + dragstart/drop).",
+				],
+				parameters: browserDragSchema,
+				async execute(_toolCallId, params) {
+					return toolResult(await browserDrag(params));
+				},
+			}),
+		);
+	}
 	const browserHover = handlers.browserHover;
 	if (browserHover !== undefined) {
 		tools.push(
@@ -3401,6 +3440,7 @@ export function createClankyToolDefinitions(
 					"Prefer this over browser_screenshot for interaction: query the selector, then pass element.rect.centerX/centerY straight to browser_click. Coordinates are exact, not eyeballed.",
 					"Pass all:true to return up to 50 matches in `elements`; otherwise the first match is in `element`.",
 					"Pass scrollIntoView:true to scroll the first match into view before measuring, so its center is clickable.",
+					"If a selector returns found:false on a modern web-component app, retry with pierce:true — it also searches inside open shadow roots (per shadow tree) so content in custom elements is reachable.",
 					"`value` is the live input/textarea value; `href` is the resolved link target; `inViewport` says whether it is currently on screen.",
 				],
 				parameters: browserQuerySchema,
@@ -3440,11 +3480,14 @@ export function createClankyToolDefinitions(
 				name: "browser_fill",
 				label: "Browser Fill",
 				description:
-					"Set the value of an input, textarea, select, or contenteditable matched by CSS selector in the user's real browser, firing input + change events. Reliably clears and replaces existing text (works with React-controlled inputs).",
+					"Set the state of a form control matched by CSS selector in the user's real browser, firing input + change events. Handles text/textarea/contenteditable (replaces text, React-safe), <select> (match an option by value OR visible label), and checkbox/radio (boolean-ish value sets .checked).",
 				promptSnippet:
-					"browser_fill: reliably set or clear a field's value by selector (replaces existing text, fires input/change). Use instead of click+type when you just need the field to hold a value.",
+					"browser_fill: reliably set a field by selector — text, a <select> option (by value or label), or a checkbox/radio (true/false). Replaces existing text and fires input/change.",
 				promptGuidelines: [
-					'Use this for filling forms: it replaces any existing value (pass value:"" to clear) and fires input + change, unlike browser_type which only inserts at the cursor.',
+					'Text/textarea: replaces any existing value (pass value:"" to clear) and fires input + change, unlike browser_type which only inserts at the cursor.',
+					'<select>: pass the option\'s value OR its visible label (e.g. value:"Blue") — it matches either. It throws (no silent miss) if no option matches, listing the available options.',
+					'Checkbox/radio: pass a boolean-ish value ("true"/"false"/"on"/"off"/"1"/"0") to set the checked state; the result `value` is the resulting checked state. To toggle a box by position instead, browser_click its center.',
+					"Pass pierce:true to also target controls inside open shadow roots (web components).",
 					"Clearing via keyboard shortcuts (Cmd/Ctrl+A) is unreliable through CDP — use browser_fill to clear or replace a field instead.",
 					"For inputs that react to real keystrokes (search-as-you-type, autocomplete), use browser_click then browser_type/browser_key instead so per-key events fire.",
 				],
@@ -3468,6 +3511,7 @@ export function createClankyToolDefinitions(
 				promptGuidelines: [
 					"browser_navigate and browser_open_tab return as soon as navigation starts. Use browser_wait_for (selector or readyState:'complete') to know the page is ready before reading or clicking.",
 					"Provide one of: selector (with optional visible:true), readyState ('interactive'|'complete'), or jsCondition (a JS expression evaluated in the page).",
+					"Pass pierce:true with a selector to also wait on elements inside open shadow roots (web components).",
 					"timeoutMs defaults to 10000 (max 30000). The result has ok:false and timedOut:true if the condition never held — handle that instead of assuming success.",
 				],
 				parameters: browserWaitForSchema,

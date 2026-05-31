@@ -3,6 +3,7 @@ import {
 	browserClick,
 	browserCloseTab,
 	browserDoubleClick,
+	browserDrag,
 	browserEval,
 	browserFill,
 	browserForward,
@@ -160,6 +161,10 @@ export function createClankyHandlers(
 			}),
 		browserScroll: async (input) =>
 			browserScroll(input, {
+				homeDir: paths.homeDir,
+			}),
+		browserDrag: async (input) =>
+			browserDrag(input, {
 				homeDir: paths.homeDir,
 			}),
 		browserHover: async (input) =>

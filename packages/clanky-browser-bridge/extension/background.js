@@ -214,7 +214,7 @@ async function evalInPage(tabId, expression, awaitPromise) {
 // Locate elements by CSS selector via chrome.scripting (isolated world, DOM
 // access, no debugger bar). Coordinates are in CSS pixels — the same space the
 // screenshot is downscaled to and the click/scroll input ops consume.
-function querySelectorInfoFn(selector, returnAll, scrollIntoView) {
+function querySelectorInfoFn(selector, returnAll, scrollIntoView, pierce) {
 	const describe = (el) => {
 		if (scrollIntoView) el.scrollIntoView({ block: "center", inline: "center" });
 		const r = el.getBoundingClientRect();
@@ -243,33 +243,135 @@ function querySelectorInfoFn(selector, returnAll, scrollIntoView) {
 			inViewport,
 		};
 	};
-	const nodes = Array.from(document.querySelectorAll(selector));
+	let nodes;
+	if (pierce) {
+		// Descend into every open shadow root, running the selector per-scope.
+		nodes = [];
+		const seen = new Set();
+		const walk = (root) => {
+			let matched = [];
+			try {
+				matched = root.querySelectorAll(selector);
+			} catch {
+				matched = [];
+			}
+			for (const el of matched) {
+				if (!seen.has(el)) {
+					seen.add(el);
+					nodes.push(el);
+				}
+			}
+			let hosts = [];
+			try {
+				hosts = root.querySelectorAll("*");
+			} catch {
+				hosts = [];
+			}
+			for (const el of hosts) {
+				if (el.shadowRoot) walk(el.shadowRoot);
+			}
+		};
+		walk(document);
+	} else {
+		nodes = Array.from(document.querySelectorAll(selector));
+	}
 	if (returnAll) {
 		return { found: nodes.length > 0, count: nodes.length, elements: nodes.slice(0, 50).map(describe) };
 	}
 	return { found: nodes.length > 0, count: nodes.length, element: nodes.length > 0 ? describe(nodes[0]) : null };
 }
 
-// Reliably set an input/textarea/contenteditable value, the way Playwright's
-// fill() does: focus, set through the native value setter (so React's value
+// Reliably set the state of a form control, the way Playwright's fill/check/
+// selectOption do: focus, mutate through the native setter (so React's value
 // tracker sees the change), then fire input + change. Avoids the CDP key-event
 // limitation where browser accelerators like Cmd+A are not delivered to the page.
-function fillSelectorFn(selector, value) {
-	const el = document.querySelector(selector);
+// Handles checkboxes/radios (boolean-ish value -> checked state) and <select>
+// (match by option value OR visible label) instead of silently no-op'ing.
+function fillSelectorFn(selector, value, pierce) {
+	let el = document.querySelector(selector);
+	if (!el && pierce) {
+		const walk = (root) => {
+			let found = null;
+			try {
+				found = root.querySelector(selector);
+			} catch {
+				found = null;
+			}
+			if (found) return found;
+			let hosts = [];
+			try {
+				hosts = root.querySelectorAll("*");
+			} catch {
+				hosts = [];
+			}
+			for (const host of hosts) {
+				if (host.shadowRoot) {
+					const r = walk(host.shadowRoot);
+					if (r) return r;
+				}
+			}
+			return null;
+		};
+		el = walk(document);
+	}
 	if (!el) return { ok: false, error: "selector matched no element" };
 	if (typeof el.focus === "function") el.focus();
+
+	// Checkbox / radio: the meaningful state is `.checked`, not `.value`. Setting
+	// `.value` (the old behavior) silently did nothing visible. Interpret the
+	// value as a desired checked state instead.
+	if (el instanceof HTMLInputElement && (el.type === "checkbox" || el.type === "radio")) {
+		const v = String(value).trim().toLowerCase();
+		const truthy = ["true", "1", "on", "yes", "checked", "check"];
+		const falsy = ["false", "0", "off", "no", "unchecked", "uncheck", ""];
+		let desired;
+		if (truthy.includes(v)) desired = true;
+		else if (falsy.includes(v)) desired = false;
+		else {
+			return {
+				ok: false,
+				error: `${el.type} fill expects a boolean-ish value (true/false/on/off/1/0); got "${value}". To toggle by position, click it instead.`,
+			};
+		}
+		const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "checked")?.set;
+		if (setter) setter.call(el, desired);
+		else el.checked = desired;
+		el.dispatchEvent(new Event("input", { bubbles: true }));
+		el.dispatchEvent(new Event("change", { bubbles: true }));
+		return { ok: true, value: String(el.checked) };
+	}
+
+	// Select: match by option value first, then by visible label (exact, then
+	// case-insensitive). Throwing on no match kills the old silent-clear footgun
+	// where passing a label (e.g. "Blue") reset the select to no selection.
+	if (el instanceof HTMLSelectElement) {
+		const opts = Array.from(el.options);
+		const want = String(value);
+		let opt = opts.find((o) => o.value === want);
+		if (!opt) opt = opts.find((o) => (o.text || "").trim() === want.trim());
+		if (!opt) opt = opts.find((o) => (o.text || "").trim().toLowerCase() === want.trim().toLowerCase());
+		if (!opt) {
+			const list = opts
+				.map((o) => `${o.value}=${(o.text || "").trim()}`)
+				.join(", ")
+				.slice(0, 300);
+			return { ok: false, error: `select has no option matching value or label "${value}". Options: ${list}` };
+		}
+		const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
+		if (setter) setter.call(el, opt.value);
+		else el.value = opt.value;
+		el.dispatchEvent(new Event("input", { bubbles: true }));
+		el.dispatchEvent(new Event("change", { bubbles: true }));
+		return { ok: true, value: el.value };
+	}
+
 	if (el.isContentEditable) {
 		el.textContent = value;
 		el.dispatchEvent(new InputEvent("input", { bubbles: true }));
 		return { ok: true, value: el.textContent };
 	}
 	if (!("value" in el)) return { ok: false, error: "element is not fillable (no value)" };
-	const proto =
-		el instanceof HTMLTextAreaElement
-			? HTMLTextAreaElement.prototype
-			: el instanceof HTMLSelectElement
-				? HTMLSelectElement.prototype
-				: HTMLInputElement.prototype;
+	const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
 	const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
 	if (setter) setter.call(el, value);
 	else el.value = value;
@@ -292,6 +394,10 @@ function loadConfig() {
 
 function detectBrowser() {
 	const ua = self.navigator?.userAgent || "";
+	// Best-effort label from the UA. Note: privacy-focused forks like Helium ship a
+	// vanilla Chrome UA (no "Helium" token) and Chrome-only UA-CH brands by design, so
+	// they are web-indistinguishable from Chrome here and report as "chrome". The bridge
+	// behaves identically regardless of the label; this is cosmetic, not a bug.
 	if (/Helium/i.test(ua)) return "helium";
 	if (/Brave/i.test(ua)) return "brave";
 	if (/Edg\//i.test(ua)) return "edge";
@@ -607,6 +713,53 @@ async function dispatch(message) {
 		});
 		return { ok: true };
 	}
+	if (message.op === "drag") {
+		if (typeof message.tabId !== "number") throw new Error("tabId required");
+		for (const field of ["x", "y", "toX", "toY"]) {
+			if (typeof message[field] !== "number") throw new Error(`${field} required`);
+		}
+		const button = message.button || "left";
+		if (!CDP_BUTTONS.has(button)) throw new Error(`invalid button: ${button}`);
+		const buttons = MOUSE_BUTTON_MASK[button] || 1;
+		const steps =
+			typeof message.steps === "number" && message.steps >= 1 ? Math.min(Math.floor(message.steps), 100) : 12;
+		const holdMs = typeof message.holdMs === "number" && message.holdMs >= 0 ? Math.min(message.holdMs, 2000) : 0;
+		await ensureAttached(message.tabId);
+		// Press at the start point, then walk the pointer to the end across `steps`
+		// interpolated moves (buttons held the whole time) so drag handlers track the
+		// path, then release. Covers pointer/mouse-event draggables (sliders, canvas
+		// pans, reorder libs). Native HTML5 drag-and-drop is not driven by this.
+		await cdpSend(message.tabId, "Input.dispatchMouseEvent", {
+			type: "mousePressed",
+			x: message.x,
+			y: message.y,
+			button,
+			buttons,
+			clickCount: 1,
+		});
+		// An initial move at the press point helps libraries that begin a drag only
+		// after the first move past the threshold.
+		await cdpSend(message.tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x: message.x, y: message.y, buttons });
+		if (holdMs > 0) await sleep(holdMs);
+		for (let i = 1; i <= steps; i++) {
+			const t = i / steps;
+			await cdpSend(message.tabId, "Input.dispatchMouseEvent", {
+				type: "mouseMoved",
+				x: message.x + (message.toX - message.x) * t,
+				y: message.y + (message.toY - message.y) * t,
+				buttons,
+			});
+		}
+		await cdpSend(message.tabId, "Input.dispatchMouseEvent", {
+			type: "mouseReleased",
+			x: message.toX,
+			y: message.toY,
+			button,
+			buttons: 0,
+			clickCount: 1,
+		});
+		return { ok: true };
+	}
 	if (message.op === "eval") {
 		if (typeof message.tabId !== "number") throw new Error("tabId required");
 		if (typeof message.expression !== "string" || message.expression.length === 0) {
@@ -624,7 +777,7 @@ async function dispatch(message) {
 		const result = await chrome.scripting.executeScript({
 			target: { tabId: message.tabId },
 			func: fillSelectorFn,
-			args: [message.selector, message.value],
+			args: [message.selector, message.value, message.pierce === true],
 		});
 		const data = Array.isArray(result) ? result[0]?.result : undefined;
 		if (!data) throw new Error("fill could not access page contents (restricted URL?)");
@@ -641,7 +794,7 @@ async function dispatch(message) {
 		const result = await chrome.scripting.executeScript({
 			target: { tabId: message.tabId },
 			func: querySelectorInfoFn,
-			args: [message.selector, all, scrollIntoView],
+			args: [message.selector, all, scrollIntoView, message.pierce === true],
 		});
 		const data = Array.isArray(result) ? result[0]?.result : undefined;
 		if (!data) throw new Error("query could not access page contents (restricted URL?)");
@@ -658,13 +811,14 @@ async function dispatch(message) {
 			throw new Error("wait_for requires one of: selector, jsCondition, readyState");
 		}
 		const visible = message.visible === true;
+		const pierce = message.pierce === true;
 		const timeoutMs =
 			typeof message.timeoutMs === "number" && message.timeoutMs > 0 ? Math.min(message.timeoutMs, 30000) : 10000;
 		const pollMs = typeof message.pollMs === "number" && message.pollMs >= 50 ? Math.min(message.pollMs, 5000) : 150;
 		const start = Date.now();
 		// Probe runs in the isolated world (no debugger bar) for selector/readyState;
 		// jsCondition needs page-main-world eval, handled separately below.
-		const probeSelector = (sel, wantVisible, wantReady) => {
+		const probeSelector = (sel, wantVisible, wantReady, wantPierce) => {
 			if (
 				wantReady &&
 				document.readyState !== wantReady &&
@@ -675,7 +829,32 @@ async function dispatch(message) {
 				if ((order[document.readyState] ?? -1) < (order[wantReady] ?? 99)) return false;
 			}
 			if (!sel) return true;
-			const el = document.querySelector(sel);
+			let el = document.querySelector(sel);
+			if (!el && wantPierce) {
+				const walk = (root) => {
+					let f = null;
+					try {
+						f = root.querySelector(sel);
+					} catch {
+						f = null;
+					}
+					if (f) return f;
+					let hosts = [];
+					try {
+						hosts = root.querySelectorAll("*");
+					} catch {
+						hosts = [];
+					}
+					for (const h of hosts) {
+						if (h.shadowRoot) {
+							const r = walk(h.shadowRoot);
+							if (r) return r;
+						}
+					}
+					return null;
+				};
+				el = walk(document);
+			}
 			if (!el) return false;
 			if (!wantVisible) return true;
 			const r = el.getBoundingClientRect();
@@ -691,7 +870,7 @@ async function dispatch(message) {
 					const probe = await chrome.scripting.executeScript({
 						target: { tabId: message.tabId },
 						func: probeSelector,
-						args: [selector, visible, readyState],
+						args: [selector, visible, readyState, pierce],
 					});
 					ok = Array.isArray(probe) ? probe[0]?.result === true : false;
 				}
