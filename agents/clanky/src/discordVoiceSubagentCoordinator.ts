@@ -57,8 +57,6 @@ export interface DiscordVoiceSpeakerTranscriptRecord {
 const VOICE_AGENT_KIND = "discord-voice";
 const VOICE_WORKER_KIND = "voice-worker";
 const VOICE_GENERAL_SUBAGENT_KIND = "voice-general";
-const VOICE_WORKER_TIMEOUT_MS = 120_000;
-const VOICE_GENERAL_SUBAGENT_TIMEOUT_MS = 120_000;
 const MAX_TRANSCRIPT_TEXT_CHARS = 3000;
 const MAX_TOOL_TEXT_CHARS = 4000;
 
@@ -388,7 +386,7 @@ export class DiscordVoiceSubagentCoordinator {
 				...(runtime.session.sessionFile === undefined ? {} : { sessionFile: runtime.session.sessionFile }),
 			});
 			try {
-				const text = await sendSubagentMessageAndWaitForAssistantText(runtime, request, VOICE_WORKER_TIMEOUT_MS);
+				const text = await sendSubagentMessageAndWaitForAssistantText(runtime, request);
 				await this.store.setSubagentState(this.workerId, "idle", {
 					activeConversationId: this.channelId,
 					activeSummary: "idle",
@@ -473,11 +471,7 @@ export class DiscordVoiceSubagentCoordinator {
 					}),
 					this.env,
 				);
-				const response = await sendSubagentMessageAndWaitForAssistantText(
-					entry.runtime,
-					request,
-					VOICE_GENERAL_SUBAGENT_TIMEOUT_MS,
-				);
+				const response = await sendSubagentMessageAndWaitForAssistantText(entry.runtime, request);
 				await this.store.setSubagentState(workerId, "idle", {
 					activeConversationId: this.channelId,
 					activeSummary: `completed: ${truncateOneLine(title, 80)}`,
@@ -742,24 +736,21 @@ function normalizeGeneralSubagentWorkerKey(value: string): string {
 	return normalized.length > 0 ? normalized : randomUUID();
 }
 
-function sendSubagentMessageAndWaitForAssistantText(
-	runtime: AgentSessionRuntime,
-	message: string,
-	timeoutMs: number,
-): Promise<string> {
+function sendSubagentMessageAndWaitForAssistantText(runtime: AgentSessionRuntime, message: string): Promise<string> {
 	return new Promise<string>((resolve, reject) => {
 		let settled = false;
-		const timer = setTimeout(() => {
-			finish(undefined, new Error("Timed out waiting for voice worker subagent response."));
-		}, timeoutMs);
 		const unsubscribe = runtime.session.subscribe((event) => {
+			const terminalError = assistantTerminalError(event);
+			if (terminalError !== undefined) {
+				finish(undefined, terminalError);
+				return;
+			}
 			const text = assistantText(event);
 			if (text !== undefined) finish(text, undefined);
 		});
 		const finish = (text: string | undefined, error: Error | undefined) => {
 			if (settled) return;
 			settled = true;
-			clearTimeout(timer);
 			unsubscribe();
 			if (error !== undefined) reject(error);
 			else resolve(text ?? "");
@@ -779,6 +770,13 @@ function assistantText(event: AgentSessionEvent): string | undefined {
 		.join("\n")
 		.trim();
 	return text.length > 0 ? text : undefined;
+}
+
+function assistantTerminalError(event: AgentSessionEvent): Error | undefined {
+	if (event.type !== "message_end" || event.message.role !== "assistant") return undefined;
+	if (event.message.stopReason !== "aborted" && event.message.stopReason !== "error") return undefined;
+	const message = event.message.errorMessage ?? `Voice subagent response ${event.message.stopReason}.`;
+	return new Error(message);
 }
 
 async function isReadableFile(path: string): Promise<boolean> {
