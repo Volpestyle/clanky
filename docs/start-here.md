@@ -46,8 +46,8 @@ Let Clanky handle work that benefits from personal state and live tool access:
 - AgentRoom participation as a lead, worker, or reviewer
 
 Use AgentRoom when the problem becomes a room: multiple agents, runtime launch,
-audited terminal IO, task shadows, room-owned connectors, mobile checks, and
-handoffs between workers. Jump to
+audited terminal IO, tracker-aware coordination, room-owned connectors, mobile
+checks, and handoffs between workers. Jump to
 [AgentRoom Ecosystem Tour](docs://agent-room-docs/ecosystem) for that layer.
 
 ## 3. Mental Model

@@ -11,8 +11,8 @@ runtime. Clanky adds the personal layer. AgentRoom supplies the multi-agent room
 when Clanky needs to coordinate with other agents.
 
 Use Clanky when you want one agent that is yours. Use AgentRoom when you need a
-shared room around multiple agents, runtime audit, task shadows, handoffs, and
-mobile checks.
+shared room around multiple agents, runtime audit, handoffs, tracker-aware
+coordination, and mobile checks.
 
 ## 1. What You Can Do
 
@@ -51,13 +51,13 @@ Clanky is strongest when the work needs personal context plus tools:
 - using browser, web search, media, Linear, Discord, or MCP skills when the task
   calls for them
 - answering live voice questions quickly and handing longer work to Pi
-- joining an AgentRoom room and coordinating through room messages, tasks, and
-  audited runtime flow
+- joining an AgentRoom room and coordinating through room messages, DMs, waits,
+  reports, agent state, and audited runtime flow
 
 Let AgentRoom handle multi-agent room topology, runtime launch, audited
-send/read, task shadows, room-owned chat connectors, and mobile control. Let
-Clanky handle the personal profile, memory, agent-owned gateway credentials,
-voice settings, skills, and foreground Pi work.
+send/read, room-owned chat connectors, tracker-aware coordination, and mobile
+control. Let Clanky handle the personal profile, memory, agent-owned gateway
+credentials, voice settings, skills, and foreground Pi work.
 
 ## 3. Mental Model
 

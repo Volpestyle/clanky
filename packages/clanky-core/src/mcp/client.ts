@@ -81,15 +81,6 @@ export interface ProfileMcpServerStore {
 }
 
 const DEFAULT_MCP_TIMEOUT_MS = 30_000;
-const AGENTROOM_DEFAULT_TOOLS = [
-	"agentroom_whoami",
-	"agentroom_context",
-	"agentroom_messages",
-	"agentroom_events",
-	"agentroom_post",
-	"agentroom_dm",
-	"agentroom_wait",
-];
 const DISCORD_DEFAULT_TOOLS = [
 	"discord_whoami",
 	"discord_list_guilds",
@@ -221,8 +212,12 @@ export function resolveMcpServerConfigs(
 				command: env.CLANKY_AGENTROOM_MCP_COMMAND ?? "agent-room",
 				args: splitArgs(env.CLANKY_AGENTROOM_MCP_ARGS) ?? ["mcp"],
 				cwd: env.AGENTROOM_CWD ?? cwd,
-				description: "AgentRoom room coordination, messages, DMs, waits, and audit context.",
-				allowedTools: AGENTROOM_DEFAULT_TOOLS,
+				description:
+					"AgentRoom room coordination: identity, roster, feed, channel/thread/DM messages, directed messages, events, posts, reports, waits, enroll, and audit context.",
+				// No allowedTools: clanky exposes every tool the agentroom MCP server publishes so
+				// its surface stays in lockstep with the live room. Restricting to a hardcoded subset
+				// previously hid the roster/feed/directed-message tools the operator skill tells the
+				// agent to use, yielding "tool not allowed" errors. The agentroom server is trusted.
 			},
 			cwd,
 			env,
