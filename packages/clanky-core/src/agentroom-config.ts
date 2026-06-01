@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
+import { parse } from "yaml";
 
 export type PortableClankyChatGatewayOwner = "agent" | "room" | "off";
 
@@ -45,7 +46,7 @@ export function maybeLoadAgentRoomPortableConfig(
 	const configPath = resolveAgentRoomPortableConfigPath(cwd, env);
 	if (configPath === undefined) return undefined;
 	try {
-		const parsed = parseSimpleYaml(readFileSync(configPath, "utf8"));
+		const parsed = parseYamlRecord(readFileSync(configPath, "utf8"));
 		const rootDir = dirname(dirname(configPath));
 		const clanky = parsePortableClankyConfig(objectAt(parsed, "clanky"));
 		const workTracker = parsePortableWorkTrackerConfig(objectAt(parsed, "workTracker"));
@@ -183,50 +184,8 @@ function parseChatGatewayOwner(value: string | undefined): PortableClankyChatGat
 	return undefined;
 }
 
-function parseSimpleYaml(text: string): Record<string, unknown> {
-	const root: Record<string, unknown> = {};
-	const stack: Array<{ indent: number; value: Record<string, unknown> }> = [{ indent: -1, value: root }];
-
-	for (const rawLine of text.split("\n")) {
-		const withoutComment = rawLine.replace(/\s+#.*$/, "");
-		if (!withoutComment.trim()) continue;
-
-		const indent = withoutComment.match(/^ */)?.[0].length ?? 0;
-		const trimmed = withoutComment.trim();
-		const match = /^([^:]+):(.*)$/.exec(trimmed);
-		if (!match) continue;
-
-		while (stack.length > 1) {
-			const top = stack.at(-1);
-			if (top === undefined || indent > top.indent) break;
-			stack.pop();
-		}
-
-		const parent = stack.at(-1)?.value;
-		const key = match[1]?.trim();
-		const rest = match[2]?.trim();
-		if (parent === undefined || key === undefined || rest === undefined) continue;
-
-		if (rest === "") {
-			const child: Record<string, unknown> = {};
-			parent[key] = child;
-			stack.push({ indent, value: child });
-		} else {
-			parent[key] = parseScalar(rest);
-		}
-	}
-
-	return root;
-}
-
-function parseScalar(value: string): string | number | boolean {
-	if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-		return value.slice(1, -1);
-	}
-	if (value === "true") return true;
-	if (value === "false") return false;
-	if (/^-?\d+$/.test(value)) return Number.parseInt(value, 10);
-	return value;
+function parseYamlRecord(text: string): Record<string, unknown> {
+	return asRecord(parse(text));
 }
 
 function objectAt(value: Record<string, unknown>, key: string): Record<string, unknown> {

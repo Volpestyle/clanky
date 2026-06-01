@@ -1051,7 +1051,6 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			}
 			await realtime.connect(connectOptions);
 			const voxOptions: ClankvoxSpawnOptions = {
-				selfDeaf: false,
 				selfMute: false,
 			};
 			if (this.config.clankvoxBin !== undefined) voxOptions.bin = this.config.clankvoxBin;
