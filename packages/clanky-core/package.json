@@ -10,9 +10,9 @@
 		}
 	},
 	"dependencies": {
-		"@earendil-works/pi-ai": "^0.76.0",
-		"@earendil-works/pi-coding-agent": "^0.76.0",
-		"@earendil-works/pi-tui": "^0.76.0",
+		"@earendil-works/pi-ai": "^0.78.0",
+		"@earendil-works/pi-coding-agent": "^0.78.0",
+		"@earendil-works/pi-tui": "^0.78.0",
 		"@modelcontextprotocol/sdk": "^1.29.0",
 		"chokidar": "^5.0.0",
 		"discord-mcp": "link:../../../discord_mcp",

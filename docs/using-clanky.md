@@ -170,8 +170,9 @@ runs.
 ## AgentRoom Workflow
 
 Clanky remains a standalone Pi agent even inside an AgentRoom room. AgentRoom
-owns room launch, audit, send/read flow, task shadows, and room-owned connector
-lifecycle. Clanky owns its profile state and agent-owned connectors.
+owns room launch, audit, send/read flow, tracker-aware coordination, and
+room-owned connector lifecycle. Clanky owns its profile state and agent-owned
+connectors.
 
 Use separate profiles for multiple live Clankies:
 

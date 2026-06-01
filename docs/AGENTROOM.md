@@ -41,14 +41,14 @@ directly Discord <-> Clanky. This works both outside a room and while Clanky is
 participating in AgentRoom.
 
 Use case: personal Clanky keeps his own Discord identity and DMs with the
-human, while also using AgentRoom DMs/tasks/channels to coordinate with other
-agents.
+human, while also using AgentRoom DMs, channels, reports, and tracker-linked
+delegations to coordinate with other agents.
 
 Clanky's chat subagents belong to this agent-owned path. They are only for
 local multitasking while main Clanky is busy: if the main session is idle,
 normal accepted gateway chat is routed to main Clanky, not to a subagent.
-AgentRoom remains the path for real multi-agent development work, room tasks,
-audited worker coordination, and room-owned connector channels.
+AgentRoom remains the path for real multi-agent development work, audited
+worker coordination, tracker-aware handoffs, and room-owned connector channels.
 
 The runtime starts this gateway when a Discord token is resolvable and
 `CLANKY_CHAT_GATEWAY_OWNER=agent` (the default). The token is resolved from,
@@ -73,8 +73,8 @@ login time.
 AgentRoom daemon owns the gateway and token for a particular external
 conversation. With Discord, the Discord identity is the room's connector bot,
 not any individual Clanky. Inbound messages route to a configured target,
-often `agent-stdin:clanky-lead`. Worker Clankies receive tasks and DMs from
-the lead through AgentRoom's native messaging.
+often `agent-stdin:clanky-lead`. Worker Clankies receive DMs and
+tracker-linked work from the lead through AgentRoom's native messaging.
 
 The gateway library is the same in both Discord cases (`@agentroom/chat-discord`,
 which implements the chat gateway provider contract). Only the lifecycle owner
@@ -86,7 +86,7 @@ agent-owned gateway and a room-owned gateway at the same channel or DM.
 ## Ownership
 
 Clanky owns profile state and agent-owned gateway lifecycle. AgentRoom owns
-rooms, runtime providers, task/event audit, send/read coordination, and
+rooms, runtime providers, room event audit, send/read coordination, and
 room-owned gateway lifecycle.
 
 The complete file and token ownership map lives in
@@ -104,8 +104,8 @@ authors in the Discord channel without needing N bot accounts.
 
 The lead/worker split is an AgentRoom concern, not a Clanky concern. Clanky
 is always just "a Pi agent." The role comes from how AgentRoom routes
-inbound traffic and assigns tasks; Clanky's binary and persona do not
-change.
+inbound traffic and directs tracker-linked work; Clanky's binary and persona do
+not change.
 
 ### Profile isolation
 

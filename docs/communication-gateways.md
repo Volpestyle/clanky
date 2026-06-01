@@ -76,8 +76,9 @@ Gateway subagents are profile-local Clanky sessions. They are useful for
 handling accepted side requests while the foreground TUI keeps working. They are
 not AgentRoom workers and they do not create a separate credential boundary.
 
-Use AgentRoom when the work needs a shared room, audited runtime flow, task
-shadows, durable handoffs, or multiple independent coding agents.
+Use AgentRoom when the work needs a shared room, audited runtime flow,
+tracker-aware coordination, durable handoffs, or multiple independent coding
+agents.
 
 ## Where The Details Live
 
