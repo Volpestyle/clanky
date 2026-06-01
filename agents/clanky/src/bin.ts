@@ -137,7 +137,11 @@ async function runDiscordCli(rawArgs: string[]): Promise<void> {
 		const channelId = requiredArg(parsed.positionals[0], "channel id");
 		const content = parsed.positionals.slice(1).join(" ");
 		console.log(
-			JSON.stringify(await sendDiscordMessage({ channel_id: channelId, content, file_paths: parsed.files }, options), null, "\t"),
+			JSON.stringify(
+				await sendDiscordMessage({ channel_id: channelId, content, file_paths: parsed.files }, options),
+				null,
+				"\t",
+			),
 		);
 		return;
 	}
@@ -150,7 +154,13 @@ async function runDiscordCli(rawArgs: string[]): Promise<void> {
 		const channelId = requiredArg(parsed.positionals[0], "channel id");
 		const messageId = requiredArg(parsed.positionals[1], "message id");
 		const emoji = requiredArg(parsed.positionals[2], "emoji");
-		console.log(JSON.stringify(await addDiscordReaction({ channel_id: channelId, message_id: messageId, emoji }, options), null, "\t"));
+		console.log(
+			JSON.stringify(
+				await addDiscordReaction({ channel_id: channelId, message_id: messageId, emoji }, options),
+				null,
+				"\t",
+			),
+		);
 		return;
 	}
 	throw new Error(`Unknown discord command: ${parsed.command}`);
