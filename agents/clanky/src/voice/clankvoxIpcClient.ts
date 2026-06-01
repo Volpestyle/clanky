@@ -15,7 +15,6 @@ export interface ClankvoxLaunchOptions {
 }
 
 export interface ClankvoxSpawnOptions extends ClankvoxLaunchOptions {
-	selfDeaf?: boolean;
 	selfMute?: boolean;
 }
 
@@ -59,7 +58,7 @@ export interface ClankvoxTtsBufferOverflow {
 }
 
 type ClankvoxCommand =
-	| { type: "join"; guildId: string; channelId: string; selfDeaf: boolean; selfMute: boolean }
+	| { type: "join"; guildId: string; channelId: string; selfMute: boolean }
 	| { type: "voice_server"; data: JsonRecord }
 	| { type: "voice_state"; data: JsonRecord }
 	| { type: "audio"; pcmBase64: string; sampleRate: number }
@@ -382,7 +381,6 @@ export class ClankvoxIpcClient extends EventEmitter {
 			type: "join",
 			guildId: this.guildId,
 			channelId: this.channelId,
-			selfDeaf: options.selfDeaf ?? false,
 			selfMute: options.selfMute ?? false,
 		});
 		await ready;

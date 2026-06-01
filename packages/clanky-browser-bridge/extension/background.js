@@ -739,7 +739,12 @@ async function dispatch(message) {
 		});
 		// An initial move at the press point helps libraries that begin a drag only
 		// after the first move past the threshold.
-		await cdpSend(message.tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x: message.x, y: message.y, buttons });
+		await cdpSend(message.tabId, "Input.dispatchMouseEvent", {
+			type: "mouseMoved",
+			x: message.x,
+			y: message.y,
+			buttons,
+		});
 		if (holdMs > 0) await sleep(holdMs);
 		for (let i = 1; i <= steps; i++) {
 			const t = i / steps;
