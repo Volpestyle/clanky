@@ -455,7 +455,6 @@ const DEFAULT_TRANSCRIPT_RESPONSE_BATCH_DELAY_MS = 350;
 const DEFAULT_PARTICIPATION_EAGERNESS = 50;
 const REALTIME_TOOL_RESPONSE_DEBOUNCE_MS = 25;
 const REALTIME_DUPLICATE_TOOL_RESULT_CACHE_MS = 5_000;
-const PI_TOOL_TIMEOUT_MS = 120_000;
 const DEFAULT_VOICE_BARGE_IN_WAKE_WORDS = DEFAULT_DISCORD_WAKE_NAMES;
 const PRIMARY_WAKE_TOKEN_MIN_LEN = 4;
 const EN_WAKE_PRIMARY_GENERIC_TOKENS = new Set(["bot", "ai", "assistant"]);
@@ -1030,16 +1029,17 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			this.realtime = realtime;
 			this.speechSynthesizer = speechSynthesizer;
 			this.bindRealtime(realtime);
+			const supportsScreenShareSnapshots =
+				(this.config.realtimeAgentProvider ?? "openai") === "openai" &&
+				this.discordCredential.credentialKind === "user-token";
 			const connectOptions: OpenAiRealtimeConnectOptions = {
 				model: this.realtimeAgentModel(),
 				voice: this.realtimeAgentVoice(),
 				instructions: buildRealtimeInstructions(this.discordCredential, this.config.ttsProvider ?? "openai", {
 					participationEagerness: this.config.participationEagerness ?? DEFAULT_PARTICIPATION_EAGERNESS,
-					supportsScreenShareSnapshots: (this.config.realtimeAgentProvider ?? "openai") === "openai",
+					supportsScreenShareSnapshots,
 				}),
-				tools: buildVoiceTools({
-					supportsScreenShareSnapshots: (this.config.realtimeAgentProvider ?? "openai") === "openai",
-				}),
+				tools: buildVoiceTools({ supportsScreenShareSnapshots }),
 				toolChoice: "auto",
 				responseOutputModality: (this.config.ttsProvider ?? "openai") === "elevenlabs" ? "text" : "audio",
 			};
@@ -2454,7 +2454,7 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		].join("\n");
 		const trackedMessage = maybeInjectWorkTrackerSkill(message, this.env);
 		return await this.runtimeTurnQueue.enqueue(async () => {
-			return await sendUserMessageAndWaitForAssistantText(this.runtime, trackedMessage, PI_TOOL_TIMEOUT_MS);
+			return await sendUserMessageAndWaitForAssistantText(this.runtime, trackedMessage);
 		});
 	}
 
@@ -3061,9 +3061,13 @@ function buildRealtimeInstructions(
 		`Discord credential kind: ${config.credentialKind}.`,
 	];
 	if (options.supportsScreenShareSnapshots ?? true) {
-		lines.push("Screen-share image tools are available when you need to inspect a Discord Go Live stream.");
+		lines.push(
+			"To watch a Discord Go Live screen share: call list_screen_shares to find active streams, then start_screen_watch (optionally with a user-id, channel-id, or stream-key hint to disambiguate). While watching, recent frames auto-attach every couple of seconds, so you can already see the stream; call see_screenshare_snapshot only when you need a fresh frame right now. Call stop_screen_watch when you are done.",
+		);
 	} else {
-		lines.push("This realtime agent cannot inspect Discord screen-share image frames directly.");
+		lines.push(
+			"You cannot watch Discord Go Live screen shares in this session (native watching needs a user-token Discord credential and the OpenAI realtime voice agent). For web pages or tabs Clanky opened, delegate to ask_pi and use browser tools instead; otherwise tell the user screen watching is unavailable in this setup.",
+		);
 	}
 	if (ttsProvider === "elevenlabs") {
 		lines.push("External TTS speaks your text; avoid markdown formatting or stage directions unless requested.");
@@ -3375,16 +3379,9 @@ export function extractRealtimeFunctionCallEnvelopes(event: JsonRecord): Realtim
 	return [];
 }
 
-function sendUserMessageAndWaitForAssistantText(
-	runtime: AgentSessionRuntime,
-	message: string,
-	timeoutMs: number,
-): Promise<string> {
+function sendUserMessageAndWaitForAssistantText(runtime: AgentSessionRuntime, message: string): Promise<string> {
 	return new Promise<string>((resolve, reject) => {
 		let settled = false;
-		const timer = setTimeout(() => {
-			finish(undefined, new Error("Timed out waiting for Pi response to Discord voice request."));
-		}, timeoutMs);
 		const unsubscribe = runtime.session.subscribe((event) => {
 			const terminalError = assistantTerminalError(event);
 			if (terminalError !== undefined) {
@@ -3397,7 +3394,6 @@ function sendUserMessageAndWaitForAssistantText(
 		const finish = (text: string | undefined, error: Error | undefined) => {
 			if (settled) return;
 			settled = true;
-			clearTimeout(timer);
 			unsubscribe();
 			if (error !== undefined) reject(error);
 			else resolve(text ?? "");
