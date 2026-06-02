@@ -869,7 +869,14 @@ async function assertStoredDiscordCredentialPath(): Promise<void> {
 			`${JSON.stringify(
 				{
 					mcpServers: {
-						linear: { type: "http", url: "https://mcp.linear.app/mcp" },
+						linear: {
+							type: "http",
+							url: "https://mcp.linear.app/mcp",
+							deferLoading: true,
+							toolOverrides: {
+								search_issues: { deferLoading: false },
+							},
+						},
 					},
 				},
 				null,
@@ -883,6 +890,12 @@ async function assertStoredDiscordCredentialPath(): Promise<void> {
 		}).linear;
 		if (profileMcpConfig?.type !== "streamable-http" || profileMcpConfig.url !== "https://mcp.linear.app/mcp") {
 			throw new Error("smoke: profile-local HTTP MCP config should load");
+		}
+		if (profileMcpConfig.deferLoading !== true) {
+			throw new Error("smoke: profile-local MCP deferLoading should load");
+		}
+		if (profileMcpConfig.toolOverrides?.search_issues?.deferLoading !== false) {
+			throw new Error("smoke: profile-local MCP toolOverrides should load");
 		}
 	} finally {
 		await rm(mcpHome, { recursive: true, force: true });

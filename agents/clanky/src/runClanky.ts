@@ -12,6 +12,7 @@ import {
 	loadClankySkills,
 	loadStoredDiscordCredential,
 	resolveClankyPaths,
+	resolveMcpServerConfigs,
 	resolvePortableClankyDefaults,
 	truncateText,
 } from "@clanky/core";
@@ -298,7 +299,11 @@ function buildRuntimeFactory(opts: {
 			resourceLoaderOptions: {
 				extensionFactories: [
 					...createClankyExtensionFactories(handlers, { env }),
-					createToolSearchExtensionFactory({ env }),
+					createToolSearchExtensionFactory({
+						env,
+						mcpClientOptions: { cwd: runtimeCwd, env, authStorage, paths },
+						mcpServers: (ctx) => resolveMcpServerConfigs({ cwd: ctx.cwd, env, authStorage, paths }),
+					}),
 					...additionalExtensionFactories,
 					discordAuthFactory,
 					openAiAuthFactory,

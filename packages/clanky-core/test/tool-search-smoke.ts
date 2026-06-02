@@ -1,12 +1,16 @@
 import {
-	buildCatalog,
-	computeDeferrableNames,
 	createToolSearchExtensionFactory,
 	resolveToolSearchConfig,
-	searchCatalog,
-	TOOL_SEARCH_TOOL_NAME,
-	type ToolSearchToolInput,
+	rewriteAnthropicToolSearchPayload,
+	TOOL_SEARCH_BM25_NAME,
+	TOOL_SEARCH_BM25_TYPE,
+	TOOL_SEARCH_DIAGNOSTIC_TYPE,
+	TOOL_SEARCH_REGEX_NAME,
+	TOOL_SEARCH_REGEX_TYPE,
+	type ToolSearchConfig,
 } from "@clanky/core";
+import type { AssistantMessage, AssistantMessageEvent, Context, Model } from "@earendil-works/pi-ai";
+import { streamAnthropic } from "@earendil-works/pi-ai/anthropic";
 import type {
 	ExtensionContext,
 	ExtensionFactory,
@@ -16,254 +20,492 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 
 type Pi = Parameters<ExtensionFactory>[0];
-
-function sourceInfo(source: string, name: string): SourceInfo {
-	return { path: `<${source}:${name}>`, source, scope: "user", origin: "top-level" };
-}
-
-function tool(name: string, description: string, source: "sdk" | "builtin", paramNames: string[] = []): ToolInfo {
-	const properties: Record<string, unknown> = {};
-	for (const param of paramNames) properties[param] = { type: "string" };
-	return {
-		name,
-		description,
-		parameters: { type: "object", properties },
-		sourceInfo: sourceInfo(source, name),
-	} as unknown as ToolInfo;
-}
-
-const FIXTURE_TOOLS: ToolInfo[] = [
-	tool("read", "Read a file from disk.", "builtin", ["path"]),
-	tool("bash", "Run a shell command.", "builtin", ["command"]),
-	tool("edit", "Edit a file.", "builtin", ["path", "old", "new"]),
-	tool("memory_search", "Search Clanky's source-grounded memory atoms.", "sdk", ["query"]),
-	tool("memory_remember", "Store a durable memory atom.", "sdk", ["claim"]),
-	tool("memory_forget", "Forget a memory atom.", "sdk", ["id"]),
-	tool("main_session_context", "Read the main Pi session context window.", "sdk", ["limit"]),
-	tool("mcp_list_tools", "List tools exposed by external MCP servers.", "sdk", ["server"]),
-	tool("mcp_call", "Call a tool on an external MCP server.", "sdk", ["server", "tool"]),
-	tool("browser_click", "Click an element on the current web page.", "sdk", ["selector"]),
-	tool("browser_screenshot", "Capture a screenshot of the current browser tab.", "sdk", ["tabId"]),
-	tool("web_search", "Search the web for current information.", "sdk", ["query"]),
-	tool("openai_image_generate", "Generate an image with OpenAI from a text prompt.", "sdk", ["prompt"]),
-	tool("discord_send_message", "Send a message to a Discord channel.", "sdk", ["channelId", "content"]),
-];
-
-const DEFERRABLE_FIXTURE = [
-	"browser_click",
-	"browser_screenshot",
-	"web_search",
-	"openai_image_generate",
-	"discord_send_message",
-];
-
-function createFakePi(): {
-	pi: Pi;
-	getActive: () => string[];
-	getRegistered: () => ToolDefinition[];
-	getHandler: (event: string) => ((event: unknown, ctx: unknown) => unknown) | undefined;
-} {
-	const registry: ToolInfo[] = [...FIXTURE_TOOLS];
-	const registeredDefs: ToolDefinition[] = [];
-	let active = new Set(FIXTURE_TOOLS.map((t) => t.name));
-	const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
-	const pi = {
-		getAllTools: () => registry,
-		getActiveTools: () => [...active],
-		setActiveTools: (names: string[]) => {
-			active = new Set(names.filter((name) => registry.some((t) => t.name === name)));
-		},
-		registerTool: (definition: ToolDefinition) => {
-			registeredDefs.push(definition);
-			registry.push({
-				name: definition.name,
-				description: definition.description,
-				parameters: definition.parameters,
-				sourceInfo: sourceInfo("sdk", definition.name),
-			} as unknown as ToolInfo);
-			active.add(definition.name);
-		},
-		on: (event: string, handler: (event: unknown, ctx: unknown) => unknown) => {
-			handlers.set(event, handler);
-		},
-	} as unknown as Pi;
-	return {
-		pi,
-		getActive: () => [...active],
-		getRegistered: () => registeredDefs,
-		getHandler: (event) => handlers.get(event),
-	};
-}
+type Handler = (event: { payload?: unknown; message?: unknown }, ctx: ExtensionContext) => unknown;
 
 function assert(condition: boolean, message: string): void {
 	if (!condition) throw new Error(`tool-search-smoke: ${message}`);
 }
 
-// --- 1. Deferrable classification: only sdk tools, minus always-active and tool_search ---
-{
-	const config = resolveToolSearchConfig({ env: {} });
-	const deferrable = computeDeferrableNames(FIXTURE_TOOLS, config);
-	for (const expected of DEFERRABLE_FIXTURE) {
-		assert(deferrable.has(expected), `expected ${expected} to be deferrable`);
-	}
-	for (const builtin of ["read", "bash", "edit"]) {
-		assert(!deferrable.has(builtin), `builtin ${builtin} must never be deferred`);
-	}
-	for (const essential of [
-		"memory_search",
-		"memory_remember",
-		"memory_forget",
-		"main_session_context",
-		"mcp_list_tools",
-		"mcp_call",
-	]) {
-		assert(!deferrable.has(essential), `essential ${essential} must stay active`);
-	}
-	assert(deferrable.size === DEFERRABLE_FIXTURE.length, `unexpected deferrable count: ${deferrable.size}`);
+function sourceInfo(source: string, name: string, path = `<${source}:${name}>`): SourceInfo {
+	return { path, source, scope: "user", origin: "top-level" };
 }
 
-// --- 2. BM25 ranking returns the most relevant deferred tool first ---
-{
-	const config = resolveToolSearchConfig({ env: {} });
-	const deferrable = computeDeferrableNames(FIXTURE_TOOLS, config);
-	const catalog = buildCatalog(FIXTURE_TOOLS, deferrable);
-	const clickHits = searchCatalog(catalog, "click element web page", 3);
-	assert(clickHits[0]?.name === "browser_click", `expected browser_click first, got ${clickHits[0]?.name}`);
-	const imageHits = searchCatalog(catalog, "generate image from prompt", 3);
-	assert(
-		imageHits[0]?.name === "openai_image_generate",
-		`expected openai_image_generate first, got ${imageHits[0]?.name}`,
-	);
-	// Substring fallback when no token overlaps.
-	const fallback = searchCatalog(catalog, "discord", 3);
-	assert(
-		fallback.some((entry) => entry.name === "discord_send_message"),
-		"expected discord substring fallback hit",
-	);
+function tool(name: string, source = "sdk", path?: string): ToolInfo {
+	return {
+		name,
+		description: `${name} description`,
+		parameters: { type: "object", properties: { value: { type: "string" } } },
+		sourceInfo: sourceInfo(source, name, path),
+	} as unknown as ToolInfo;
 }
 
-// --- 3. Factory in "on" mode deactivates deferrable tools at session_start ---
-{
-	const { pi, getActive, getRegistered, getHandler } = createFakePi();
-	const factory = createToolSearchExtensionFactory({ env: {}, overrides: { mode: "on" } });
-	factory(pi);
-	assert(
-		getRegistered().some((def) => def.name === TOOL_SEARCH_TOOL_NAME),
-		"tool_search must be registered",
-	);
-
-	const sessionStart = getHandler("session_start");
-	assert(sessionStart !== undefined, "session_start handler must be registered");
-	const ctx = { getContextUsage: () => undefined } as unknown as ExtensionContext;
-	await sessionStart?.({ type: "session_start", reason: "startup" }, ctx);
-
-	const activeAfter = new Set(getActive());
-	for (const deferred of DEFERRABLE_FIXTURE) {
-		assert(!activeAfter.has(deferred), `${deferred} should be deactivated after session_start`);
-	}
-	assert(activeAfter.has(TOOL_SEARCH_TOOL_NAME), "tool_search must remain active");
-	assert(activeAfter.has("memory_search"), "memory_search must remain active");
-	assert(activeAfter.has("read"), "builtin read must remain active");
-
-	// --- 4. before_agent_start injects a reminder listing the still-deferred tools ---
-	const beforeAgent = getHandler("before_agent_start");
-	assert(beforeAgent !== undefined, "before_agent_start handler must be registered");
-	const result = (await beforeAgent?.(
-		{ type: "before_agent_start", prompt: "hi", systemPrompt: "BASE PROMPT" },
-		ctx,
-	)) as { systemPrompt?: string } | undefined;
-	const prompt = result?.systemPrompt ?? "";
-	assert(prompt.startsWith("BASE PROMPT"), "reminder must append to the existing system prompt");
-	assert(prompt.includes("<deferred-tools>"), "reminder must include the deferred-tools block");
-	assert(prompt.includes("browser_click"), "reminder must list a deferred tool name");
-	assert(!prompt.includes("memory_search"), "reminder must not list always-active tools");
-
-	// --- 5. tool_search activates a matched tool so it becomes directly callable ---
-	const toolSearch = getRegistered().find((def) => def.name === TOOL_SEARCH_TOOL_NAME);
-	assert(toolSearch !== undefined, "tool_search definition must exist");
-	const searchResult = await toolSearch?.execute(
-		"call-1",
-		{ query: "screenshot of the browser tab" } satisfies ToolSearchToolInput,
-		undefined,
-		undefined,
-		ctx,
-	);
-	const activated = (searchResult as { details: { activated: string[] } }).details.activated ?? [];
-	assert(
-		activated.includes("browser_screenshot"),
-		`tool_search should activate browser_screenshot, got ${activated.join(",")}`,
-	);
-	assert(getActive().includes("browser_screenshot"), "browser_screenshot must now be active");
-
-	// Re-running before_agent_start should no longer list the activated tool.
-	const reminder2 = (await beforeAgent?.({ type: "before_agent_start", prompt: "again", systemPrompt: "" }, ctx)) as
-		| { systemPrompt?: string }
-		| undefined;
-	assert(
-		!(reminder2?.systemPrompt ?? "").includes("browser_screenshot"),
-		"activated tool must drop out of the reminder",
-	);
-
-	// --- 6. select: syntax activates an exact tool by name ---
-	const selectResult = await toolSearch?.execute(
-		"call-2",
-		{ query: "select:openai_image_generate" } satisfies ToolSearchToolInput,
-		undefined,
-		undefined,
-		ctx,
-	);
-	const selectActivated = (selectResult as { details: { activated: string[]; mode: string } }).details ?? {
-		activated: [],
-		mode: "",
+function anthropicTool(name: string): Record<string, unknown> {
+	return {
+		name,
+		description: `${name} description`,
+		input_schema: { type: "object", properties: { value: { type: "string" } }, required: [] },
 	};
-	assert(selectActivated.mode === "select", "select: query must use select mode");
-	assert(selectActivated.activated.includes("openai_image_generate"), "select must activate the named tool");
-	assert(getActive().includes("openai_image_generate"), "openai_image_generate must now be active");
 }
 
-// --- 7. "off" mode registers nothing and defers nothing ---
-{
-	const { pi, getRegistered, getHandler } = createFakePi();
-	const factory = createToolSearchExtensionFactory({ env: {}, overrides: { mode: "off" } });
-	factory(pi);
-	assert(getRegistered().length === 0, "off mode must not register tool_search");
-	assert(getHandler("session_start") === undefined, "off mode must not register handlers");
+function payload(toolNames: string[], model = "claude-sonnet-4-20250514"): Record<string, unknown> {
+	return {
+		model,
+		messages: [{ role: "user", content: "hi" }],
+		max_tokens: 1024,
+		stream: true,
+		tools: toolNames.map(anthropicTool),
+	};
 }
 
-// --- 8. "auto" mode below the token threshold leaves everything active ---
+function sse(events: Record<string, unknown>[]): string {
+	return events
+		.map((event) => {
+			const type = typeof event.type === "string" ? event.type : "message";
+			return `event: ${type}\ndata: ${JSON.stringify(event)}\n\n`;
+		})
+		.join("");
+}
+
+function toolByName(tools: unknown[], name: string): Record<string, unknown> {
+	const found = tools.find(
+		(entry) => typeof entry === "object" && entry !== null && (entry as { name?: unknown }).name === name,
+	);
+	assert(found !== undefined, `expected tool ${name}`);
+	return found as Record<string, unknown>;
+}
+
+function createFakePi(allTools: ToolInfo[]): {
+	pi: Pi;
+	getHandler: (event: string) => Handler | undefined;
+	registeredTools: ToolDefinition[];
+} {
+	const handlers = new Map<string, Handler>();
+	const toolInfos = [...allTools];
+	const registeredTools: ToolDefinition[] = [];
+	const pi = {
+		getAllTools: () => toolInfos,
+		registerTool: (definition: ToolDefinition) => {
+			registeredTools.push(definition);
+			toolInfos.push({
+				name: definition.name,
+				description: definition.description,
+				parameters: definition.parameters,
+				promptGuidelines: definition.promptGuidelines,
+				sourceInfo: sourceInfo("extension", definition.name),
+			} as unknown as ToolInfo);
+		},
+		on: (event: string, handler: Handler) => {
+			handlers.set(event, handler);
+		},
+	} as unknown as Pi;
+	return { pi, getHandler: (event) => handlers.get(event), registeredTools };
+}
+
+const baseTools = [
+	"read",
+	"bash",
+	"edit",
+	"write",
+	"mcp_call",
+	"browser_click",
+	"web_search",
+	"openai_image_generate",
+	"mcp__linear__search",
+];
+
+const allTools = [
+	tool("read", "builtin"),
+	tool("bash", "builtin"),
+	tool("edit", "builtin"),
+	tool("write", "builtin"),
+	tool("mcp_call"),
+	tool("browser_click"),
+	tool("web_search"),
+	tool("openai_image_generate"),
+	tool("mcp__linear__search", "mcp", "mcp:linear:search"),
+];
+
+const toolSearchResultEvent = {
+	type: "content_block_start",
+	index: 0,
+	content_block: {
+		type: "tool_search_tool_result",
+		tool_use_id: "srvu_1",
+		content: [{ type: "tool_reference", name: "web_search" }],
+		error_code: "invalid_pattern",
+		message: "invalid search pattern",
+	},
+};
+
+const messageDeltaWithToolSearchUsage = {
+	type: "message_delta",
+	delta: { stop_reason: "stop", stop_sequence: null },
+	usage: {
+		input_tokens: 3,
+		output_tokens: 1,
+		cache_read_input_tokens: 0,
+		cache_creation_input_tokens: 0,
+		server_tool_use: { tool_search_requests: 7 },
+	},
+};
+
+// --- 1. Config defaults off, env enables server-side Anthropic tool search ---
 {
-	const { pi, getActive, getHandler } = createFakePi();
+	const defaults = resolveToolSearchConfig({ env: {} });
+	assert(defaults.enabled === false, "tool search must default off");
+	assert(defaults.variant === "bm25", "default variant must be bm25");
+
+	const envConfig = resolveToolSearchConfig({
+		env: { CLANKY_TOOL_SEARCH: "1", CLANKY_TOOL_SEARCH_VARIANT: "regex" },
+	});
+	assert(envConfig.enabled === true, "CLANKY_TOOL_SEARCH=1 must enable tool search");
+	assert(envConfig.variant === "regex", "regex env variant must be honored");
+}
+
+// --- 2. Enabled rewrite prepends Anthropic search and defers non-hot tools ---
+{
+	const config: ToolSearchConfig = {
+		...resolveToolSearchConfig({ env: {} }),
+		enabled: true,
+	};
+	const result = rewriteAnthropicToolSearchPayload({
+		payload: payload(baseTools),
+		config,
+		allTools,
+		mcpServers: {
+			linear: {
+				type: "http",
+				url: "https://mcp.linear.app/mcp",
+				deferLoading: true,
+				toolOverrides: { search: { deferLoading: false } },
+			},
+		},
+	});
+	const rewritten = result.payload as { tools: Record<string, unknown>[] };
+	assert(rewritten.tools[0]?.type === TOOL_SEARCH_BM25_TYPE, "bm25 search tool must be first");
+	assert(rewritten.tools[0]?.name === TOOL_SEARCH_BM25_NAME, "bm25 search tool name must match Anthropic spec");
+	assert(toolByName(rewritten.tools, "read").defer_loading !== true, "read must stay loaded");
+	assert(toolByName(rewritten.tools, "mcp_call").defer_loading !== true, "mcp_call must stay loaded");
+	assert(toolByName(rewritten.tools, "browser_click").defer_loading === true, "browser_click must be deferred");
+	assert(toolByName(rewritten.tools, "web_search").defer_loading === true, "web_search must be deferred");
+	assert(
+		toolByName(rewritten.tools, "mcp__linear__search").defer_loading !== true,
+		"per-tool MCP deferLoading:false override must keep the tool loaded",
+	);
+	assert(result.telemetry?.deferredTools.includes("browser_click") === true, "telemetry must list deferred tools");
+	assert(result.telemetry?.loadedTools.includes("mcp__linear__search") === true, "telemetry must list loaded tools");
+	assert(
+		(result.telemetry?.estimatedInputTokenDelta ?? 0) > 0,
+		"telemetry must include an estimated input token delta",
+	);
+}
+
+// --- 3. Regex variant uses the regex server-side search tool ---
+{
+	const result = rewriteAnthropicToolSearchPayload({
+		payload: payload(["read", "browser_click"]),
+		config: { enabled: true, variant: "regex", alwaysLoadedTools: ["read"] },
+		allTools,
+	});
+	const rewritten = result.payload as { tools: Record<string, unknown>[] };
+	assert(rewritten.tools[0]?.type === TOOL_SEARCH_REGEX_TYPE, "regex search tool type must match Anthropic spec");
+	assert(rewritten.tools[0]?.name === TOOL_SEARCH_REGEX_NAME, "regex search tool name must match Anthropic spec");
+}
+
+// --- 4. Unsupported models and disabled config are no-ops ---
+{
+	const disabledPayload = payload(["read", "browser_click"]);
+	const disabled = rewriteAnthropicToolSearchPayload({
+		payload: disabledPayload,
+		config: { enabled: false, variant: "bm25", alwaysLoadedTools: [] },
+		allTools,
+	});
+	assert(disabled.payload === disabledPayload, "disabled config must leave payload unchanged");
+
+	const unsupportedPayload = payload(["read", "browser_click"], "claude-3-5-sonnet-20241022");
+	const unsupported = rewriteAnthropicToolSearchPayload({
+		payload: unsupportedPayload,
+		config: { enabled: true, variant: "bm25", alwaysLoadedTools: [] },
+		allTools,
+	});
+	assert(unsupported.payload === unsupportedPayload, "unsupported Anthropic models must be skipped");
+}
+
+// --- 5. Guard keeps at least one non-deferred normal tool to avoid Anthropic 400s ---
+{
+	const result = rewriteAnthropicToolSearchPayload({
+		payload: payload(["browser_click"]),
+		config: { enabled: true, variant: "bm25", alwaysLoadedTools: [] },
+		allTools,
+	});
+	const rewritten = result.payload as { tools: Record<string, unknown>[] };
+	assert(toolByName(rewritten.tools, "browser_click").defer_loading !== true, "single normal tool must stay loaded");
+	assert(result.telemetry?.loadedTools.includes("browser_click") === true, "guarded tool must be counted as loaded");
+}
+
+// --- 6. Enabled extension registers MCP-discovered tools as direct wrappers ---
+{
+	globalThis.fetch = (async () =>
+		new Response(sse([messageDeltaWithToolSearchUsage, toolSearchResultEvent]), {
+			status: 200,
+			headers: { "content-type": "text/event-stream" },
+		})) as typeof fetch;
+
+	const mcpCalls: unknown[] = [];
+	const { pi, getHandler, registeredTools } = createFakePi(allTools);
 	const factory = createToolSearchExtensionFactory({
 		env: {},
-		// Huge fallback threshold -> the tiny fixture never crosses it -> no deferral.
-		overrides: { mode: "auto", fallbackThresholdTokens: 10_000_000 },
+		overrides: { enabled: true, variant: "bm25", alwaysLoadedTools: ["read"] },
+		mcpClientOptions: {},
+		mcpToolStatuses: async () => [
+			{
+				server: "linear",
+				type: "streamable-http",
+				args: [],
+				cwd: process.cwd(),
+				url: "https://mcp.linear.app/mcp",
+				deferLoading: true,
+				toolOverrides: { search_issues: { deferLoading: false } },
+				tools: [
+					{
+						server: "linear",
+						name: "search_issues",
+						description: "Search Linear issues.",
+						inputSchema: {
+							type: "object",
+							properties: { query: { type: "string" } },
+							required: ["query"],
+						},
+					},
+				],
+			},
+		],
+		mcpToolCaller: async (input) => {
+			mcpCalls.push(input);
+			return { ok: true };
+		},
+		mcpServers: () => ({
+			linear: {
+				type: "http",
+				url: "https://mcp.linear.app/mcp",
+				deferLoading: true,
+				toolOverrides: { search_issues: { deferLoading: false } },
+			},
+		}),
 	});
-	factory(pi);
-	const sessionStart = getHandler("session_start");
-	const ctx = { getContextUsage: () => undefined } as unknown as ExtensionContext;
-	await sessionStart?.({ type: "session_start", reason: "startup" }, ctx);
-	for (const deferred of DEFERRABLE_FIXTURE) {
-		assert(getActive().includes(deferred), `auto mode below threshold must keep ${deferred} active`);
+	await factory(pi);
+
+	const directMcpTool = registeredTools.find((entry) => entry.name === "mcp__linear__search_issues");
+	if (directMcpTool === undefined) {
+		throw new Error("tool-search-smoke: direct MCP wrapper was not registered");
 	}
+	const ctx = { sessionManager: { getSessionId: () => "session-1" } } as unknown as ExtensionContext;
+	await directMcpTool.execute("toolu_1", { query: "Tool Search" }, undefined, undefined, ctx);
+	const firstCall = mcpCalls[0] as { server?: unknown; tool?: unknown; arguments?: unknown } | undefined;
+	if (firstCall === undefined) throw new Error("tool-search-smoke: direct MCP wrapper did not call MCP client");
+	assert(firstCall?.server === "linear", "direct MCP wrapper must call the original server");
+	assert(firstCall?.tool === "search_issues", "direct MCP wrapper must call the original MCP tool");
+	assert(
+		(firstCall.arguments as { query?: unknown } | undefined)?.query === "Tool Search",
+		"direct MCP wrapper must forward arguments",
+	);
+
+	const beforeProviderRequest = getHandler("before_provider_request");
+	if (beforeProviderRequest === undefined)
+		throw new Error("tool-search-smoke: before_provider_request handler missing");
+	const rewritten = (await beforeProviderRequest(
+		{ payload: payload(["read", "mcp__linear__search_issues"]) },
+		ctx,
+	)) as {
+		tools: Record<string, unknown>[];
+	};
+	assert(
+		toolByName(rewritten.tools, "mcp__linear__search_issues").defer_loading !== true,
+		"per-tool MCP override must keep a direct MCP wrapper loaded",
+	);
+	const messageEnd = getHandler("message_end");
+	if (messageEnd === undefined) throw new Error("tool-search-smoke: message_end handler missing");
+	await messageEnd(
+		{
+			message: {
+				role: "assistant",
+				content: [{ type: "text", text: "done" }],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "claude-sonnet-4-20250514",
+				usage: {
+					input: 10,
+					output: 2,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 12,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "stop",
+				timestamp: Date.now(),
+			} as AssistantMessage,
+		},
+		{ sessionManager: { getSessionId: () => "session-1" } } as unknown as ExtensionContext,
+	);
 }
 
-// --- 9. Fallback: deferral applies on before_agent_start even if session_start never fires ---
+// --- 7. Extension records request telemetry and raw Anthropic response diagnostics ---
 {
-	const { pi, getActive, getHandler } = createFakePi();
-	const factory = createToolSearchExtensionFactory({ env: {}, overrides: { mode: "on" } });
-	factory(pi);
-	const ctx = { getContextUsage: () => undefined } as unknown as ExtensionContext;
-	const beforeAgent = getHandler("before_agent_start");
-	assert(beforeAgent !== undefined, "before_agent_start handler must be registered");
-	// No session_start call: simulate a runtime where it has not fired by the first turn.
-	await beforeAgent?.({ type: "before_agent_start", prompt: "first turn", systemPrompt: "BASE" }, ctx);
-	for (const deferred of DEFERRABLE_FIXTURE) {
-		assert(!getActive().includes(deferred), `${deferred} should be deferred by the before_agent_start fallback`);
-	}
-	// One-time guard: a tool activated mid-session must not be re-deferred on the next turn.
-	pi.setActiveTools([...getActive(), "browser_click"]);
-	await beforeAgent?.({ type: "before_agent_start", prompt: "second turn", systemPrompt: "BASE" }, ctx);
-	assert(getActive().includes("browser_click"), "mid-session activation must survive subsequent turns");
+	const { pi, getHandler } = createFakePi(allTools);
+	const factory = createToolSearchExtensionFactory({
+		env: {},
+		overrides: { enabled: true, variant: "bm25", alwaysLoadedTools: ["read"] },
+	});
+	await factory(pi);
+	const beforeProviderRequest = getHandler("before_provider_request");
+	const messageEnd = getHandler("message_end");
+	if (beforeProviderRequest === undefined)
+		throw new Error("tool-search-smoke: before_provider_request handler missing");
+	if (messageEnd === undefined) throw new Error("tool-search-smoke: message_end handler missing");
+
+	const ctx = {
+		sessionManager: { getSessionId: () => "session-1" },
+	} as unknown as ExtensionContext;
+	const rewritten = (await beforeProviderRequest({ payload: payload(["read", "browser_click"]) }, ctx)) as {
+		tools: Record<string, unknown>[];
+	};
+	assert(rewritten.tools[0]?.type === TOOL_SEARCH_BM25_TYPE, "extension must rewrite provider payload");
+	const observedResponse = await fetch("https://api.anthropic.com/v1/messages", {
+		method: "POST",
+		body: JSON.stringify(rewritten),
+	});
+	await observedResponse.text();
+
+	const message = {
+		role: "assistant",
+		content: [{ type: "text", text: "done" }],
+		api: "anthropic-messages",
+		provider: "anthropic",
+		model: "claude-sonnet-4-20250514",
+		usage: {
+			input: 10,
+			output: 2,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 12,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "stop",
+		timestamp: Date.now(),
+	} as AssistantMessage;
+	await messageEnd({ message }, ctx);
+	const diagnostic = message.diagnostics?.find((entry) => entry.type === TOOL_SEARCH_DIAGNOSTIC_TYPE);
+	if (diagnostic === undefined) throw new Error("tool-search-smoke: message_end did not append diagnostic");
+	assert(diagnostic.details?.toolSearchRequests === 7, "diagnostic must record raw usage.server_tool_use requests");
+	assert(diagnostic.details?.deferredToolCount === 1, "diagnostic must include deferred count");
+	assert(diagnostic.details?.loadedToolCount === 1, "diagnostic must include loaded count");
+	const errors = diagnostic.details?.toolSearchResultErrors;
+	assert(
+		Array.isArray(errors) && errors.some((entry) => (entry as { code?: unknown }).code === "invalid_pattern"),
+		"diagnostic must record 200-status tool_search_tool_result errors",
+	);
+	const discoveredTools = diagnostic.details?.discoveredToolReferences;
+	assert(
+		Array.isArray(discoveredTools) && discoveredTools.includes("web_search"),
+		"diagnostic must record discovered tool references",
+	);
 }
 
-console.log(JSON.stringify({ ok: true, deferrable: DEFERRABLE_FIXTURE.length }));
+// --- 8. Pi's Anthropic stream parser tolerates server-side search blocks ---
+{
+	const model = {
+		id: "claude-sonnet-4-20250514",
+		name: "Claude Sonnet 4",
+		api: "anthropic-messages",
+		provider: "anthropic",
+		baseUrl: "https://api.anthropic.com",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 200000,
+		maxTokens: 8192,
+	} satisfies Model<"anthropic-messages">;
+	const context = {
+		messages: [{ role: "user", content: "find the browser click tool", timestamp: Date.now() }],
+	} satisfies Context;
+	const fakeClient = {
+		messages: {
+			create: () => ({
+				asResponse: async () =>
+					new Response(
+						sse([
+							{
+								type: "message_start",
+								message: {
+									id: "msg_1",
+									usage: {
+										input_tokens: 2,
+										output_tokens: 0,
+										cache_read_input_tokens: 0,
+										cache_creation_input_tokens: 0,
+									},
+								},
+							},
+							{
+								type: "content_block_start",
+								index: 0,
+								content_block: {
+									type: "server_tool_use",
+									id: "srvu_1",
+									name: TOOL_SEARCH_BM25_NAME,
+									input: { query: "browser" },
+								},
+							},
+							{
+								type: "content_block_delta",
+								index: 0,
+								delta: { type: "input_json_delta", partial_json: "{}" },
+							},
+							{ type: "content_block_stop", index: 0 },
+							toolSearchResultEvent,
+							{ type: "content_block_stop", index: 1 },
+							{
+								type: "content_block_start",
+								index: 2,
+								content_block: { type: "tool_use", id: "toolu_1", name: "browser_click", input: {} },
+							},
+							{
+								type: "content_block_delta",
+								index: 2,
+								delta: { type: "input_json_delta", partial_json: '{"value":"x"}' },
+							},
+							{ type: "content_block_stop", index: 2 },
+							{
+								type: "message_delta",
+								delta: { stop_reason: "tool_use", stop_sequence: null },
+								usage: {
+									input_tokens: 2,
+									output_tokens: 1,
+									cache_read_input_tokens: 0,
+									cache_creation_input_tokens: 0,
+									server_tool_use: { tool_search_requests: 1 },
+								},
+							},
+							{ type: "message_stop" },
+						]),
+						{ status: 200, headers: { "content-type": "text/event-stream" } },
+					),
+			}),
+		},
+	};
+	const stream = streamAnthropic(model, context, { client: fakeClient as never });
+	const events: AssistantMessageEvent[] = [];
+	for await (const event of stream) events.push(event);
+	const result = await stream.result();
+	assert(!events.some((event) => event.type === "error"), "server-side search blocks must not crash the parser");
+	assert(result.stopReason === "toolUse", "normal tool use stop reason must still be preserved");
+	const content = result.content[0];
+	if (content?.type !== "toolCall") {
+		throw new Error("tool-search-smoke: only the normal downstream tool call should be emitted");
+	}
+	assert(content.name === "browser_click", "normal tool call name must be preserved");
+	assert(content.arguments.value === "x", "normal tool call arguments must be parsed");
+	assert(result.content.length === 1, "server_tool_use and tool_search_tool_result must not become assistant content");
+}
+
+console.log(JSON.stringify({ ok: true }));

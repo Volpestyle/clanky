@@ -186,6 +186,11 @@ Check:
 Custom MCP servers come from `CLANKY_MCP_SERVERS`, a JSON object keyed by server
 name. AgentRoom MCP is auto-added when enrolled in a room or when
 `.agentroom/config.yaml` exists. Discord MCP is auto-added unless disabled.
+When `CLANKY_TOOL_SEARCH=1` is set for supported Anthropic Claude 4+ models,
+Clanky registers configured MCP server tools as direct `mcp__server__tool`
+wrappers. Servers can set `deferLoading: true` and use
+`toolOverrides.<tool>.deferLoading: false` for hot tools that should remain
+loaded while the rest are discovered on demand.
 
 Disable auto-adds:
 

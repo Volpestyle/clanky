@@ -41,6 +41,8 @@ export interface ClankyMcpServerConfig {
 	url?: string;
 	description?: string;
 	allowedTools?: string[];
+	deferLoading?: boolean;
+	toolOverrides?: Record<string, { deferLoading?: boolean }>;
 	disabled?: boolean;
 }
 
@@ -61,6 +63,8 @@ export interface ClankyMcpServerStatus {
 	url?: string;
 	description?: string;
 	allowedTools?: string[];
+	deferLoading?: boolean;
+	toolOverrides?: Record<string, { deferLoading?: boolean }>;
 	disabled?: boolean;
 	error?: string;
 	tools?: ClankyMcpToolSummary[];
@@ -257,6 +261,8 @@ async function listServerTools(
 		...(config.url === undefined ? {} : { url: config.url }),
 		...(config.description === undefined ? {} : { description: config.description }),
 		...(config.allowedTools === undefined ? {} : { allowedTools: config.allowedTools }),
+		...(config.deferLoading === undefined ? {} : { deferLoading: config.deferLoading }),
+		...(config.toolOverrides === undefined ? {} : { toolOverrides: config.toolOverrides }),
 		...(config.disabled === undefined ? {} : { disabled: config.disabled }),
 	};
 	if (config.disabled === true) return statusBase;
@@ -387,6 +393,8 @@ function normalizeMcpServerConfig(
 		...(url !== undefined ? { url } : {}),
 		...stringProp(config, "description"),
 		...stringArrayProp(config, "allowedTools"),
+		...booleanProp(config, "deferLoading"),
+		...toolOverridesProp(config, "toolOverrides"),
 		...booleanProp(config, "disabled"),
 	};
 }
@@ -530,6 +538,21 @@ function booleanProp<T extends string>(
 ): { [K in T]?: boolean } {
 	const entry = value[key as keyof typeof value];
 	return typeof entry === "boolean" ? ({ [key]: entry } as { [K in T]?: boolean }) : {};
+}
+
+function toolOverridesProp<T extends string>(
+	value: Record<string, unknown> | ClankyMcpServerConfig,
+	key: T,
+): { [K in T]?: Record<string, { deferLoading?: boolean }> } {
+	const raw = value[key as keyof typeof value];
+	if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return {};
+	const overrides: Record<string, { deferLoading?: boolean }> = {};
+	for (const [toolName, override] of Object.entries(raw as Record<string, unknown>)) {
+		if (override === null || typeof override !== "object" || Array.isArray(override)) continue;
+		const deferLoading = (override as Record<string, unknown>).deferLoading;
+		if (typeof deferLoading === "boolean") overrides[toolName] = { deferLoading };
+	}
+	return Object.keys(overrides).length === 0 ? {} : ({ [key]: overrides } as { [K in T]?: typeof overrides });
 }
 
 function definedEnv(env: NodeJS.ProcessEnv): Record<string, string> {
