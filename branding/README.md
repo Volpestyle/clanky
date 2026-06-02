@@ -12,7 +12,9 @@ Source pixel art and the crops used across the docs site and elsewhere.
 - `masters/clanky-figure-600.png` — 600×600 tight crop on the hood figure alone.
 - `masters/clanky-icon-380.png` — 380×380 ultra-tight crop on the hood opening (glowing eyes). Best for small sizes.
 
-Web-ready exports (PNG, all square) live in `apps/docs/public/branding/`:
+Web-ready exports (PNG, all square) are published by the sibling docs site from
+`/Users/jamesvolpe/dev/agents/docs`; root-level copies for GitHub live directly
+in `branding/`.
 
 | File | Source | Use |
 |---|---|---|
@@ -24,8 +26,7 @@ Web-ready exports (PNG, all square) live in `apps/docs/public/branding/`:
 | `clanky-forest-run-1024.png` | forest run source | using-Clanky image and active companion/agent image |
 | `apple-touch-icon.png` (180×180) | with-companion master | iOS home-screen icon |
 
-Root-level copies of the README/docs images also live directly in `branding/`
-so GitHub can render Markdown links such as `/branding/clanky-logo-512.png`.
+GitHub can render Markdown links such as `/branding/clanky-logo-512.png`.
 
 ## Usage notes
 

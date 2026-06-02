@@ -46,7 +46,6 @@ const FIXTURE_TOOLS: ToolInfo[] = [
 	tool("browser_screenshot", "Capture a screenshot of the current browser tab.", "sdk", ["tabId"]),
 	tool("web_search", "Search the web for current information.", "sdk", ["query"]),
 	tool("openai_image_generate", "Generate an image with OpenAI from a text prompt.", "sdk", ["prompt"]),
-	tool("schedule_cron", "Schedule a prompt to run later on a cron schedule.", "sdk", ["schedule", "prompt"]),
 	tool("discord_send_message", "Send a message to a Discord channel.", "sdk", ["channelId", "content"]),
 ];
 
@@ -55,7 +54,6 @@ const DEFERRABLE_FIXTURE = [
 	"browser_screenshot",
 	"web_search",
 	"openai_image_generate",
-	"schedule_cron",
 	"discord_send_message",
 ];
 

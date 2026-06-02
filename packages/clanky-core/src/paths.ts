@@ -25,11 +25,6 @@ export interface ClankyPaths {
 	subagentsDbFile: string;
 	subagentSessionsDir: string;
 	indexDbFile: string;
-	cronDir: string;
-	cronJobsFile: string;
-	cronRunsFile: string;
-	cronOutputsDir: string;
-	cronTickLockFile: string;
 	httpTokenFile: string;
 	authFile: string;
 	discordVoiceSettingsFile: string;
@@ -62,11 +57,6 @@ export function resolveClankyPaths(options: ResolveClankyPathsOptions = {}): Cla
 		subagentsDbFile: join(profileDir, "subagents", "subagents.db"),
 		subagentSessionsDir: join(profileDir, "subagents", "sessions"),
 		indexDbFile: join(profileDir, "index.db"),
-		cronDir: join(profileDir, "cron"),
-		cronJobsFile: join(profileDir, "cron", "jobs.json"),
-		cronRunsFile: join(profileDir, "cron", "runs.json"),
-		cronOutputsDir: join(profileDir, "cron", ".outputs"),
-		cronTickLockFile: join(profileDir, "cron", ".tick.lock"),
 		httpTokenFile: join(homeDir, ".token"),
 		authFile: join(profileDir, "auth.json"),
 		discordVoiceSettingsFile: join(profileDir, "discord-voice.json"),

@@ -103,7 +103,6 @@ uses its own home and profile layout instead:
       work-trackers/
       subagents/
       index.db
-      scheduler/ (optional)
       discord-voice.json
       discord-bridge.log
       discord-voice.log

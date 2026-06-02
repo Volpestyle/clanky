@@ -1,5 +1,4 @@
 {
 	"extends": "./tsconfig.base.json",
-	"include": ["packages/*/src/**/*.ts", "packages/*/test/**/*.ts", "agents/*/src/**/*.ts", "agents/*/test/**/*.ts"],
-	"exclude": ["packages/night-compiler/**"]
+	"include": ["packages/*/src/**/*.ts", "packages/*/test/**/*.ts", "agents/*/src/**/*.ts", "agents/*/test/**/*.ts"]
 }

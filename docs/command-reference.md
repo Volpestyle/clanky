@@ -181,7 +181,6 @@ and `models.json` request auth still override stored credentials where supported
 | `/subagents hide` | Hide the panel. |
 | `/subagents status` | Print subagent status once. |
 | `/subagents json` | Print raw subagent status. |
-| `/cron` | Show configured Clanky scheduled jobs when scheduler handlers are wired. |
 
 ## Model-Facing Tool Families
 
@@ -203,7 +202,3 @@ are available and credentials/policy allow it:
 - Work tracking: `work_tracker_link` for binding issues created or found through
   MCP, CLI, or tracker-specific skills to the current Clanky session.
 - MCP: `mcp_list_tools`, `mcp_call`.
-
-`schedule_cron` exists in the shared tool layer, but is only present in a
-runtime when its handler is wired. It is not part of the default Pi
-foreground-thread path.
