@@ -220,7 +220,18 @@ Inspect configured servers:
 ```
 
 Configure custom MCP servers with `CLANKY_MCP_SERVERS`, a JSON object keyed by
-server name. Disable auto-adds with:
+server name. Anthropic server-side tool search can defer large tool schemas when
+enabled. When tool search is enabled, Clanky registers configured MCP server
+tools as direct `mcp__server__tool` wrappers and marks them deferred according
+to each server's `deferLoading` and `toolOverrides` settings:
+
+```bash
+CLANKY_TOOL_SEARCH=1
+CLANKY_TOOL_SEARCH_VARIANT=bm25
+CLANKY_MCP_SERVERS='{"mcpServers":{"linear":{"type":"http","url":"https://mcp.linear.app/mcp","deferLoading":true,"toolOverrides":{"search_issues":{"deferLoading":false}}}}}'
+```
+
+Disable auto-adds with:
 
 ```bash
 CLANKY_AGENTROOM_MCP=0

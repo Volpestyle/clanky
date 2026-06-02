@@ -1,112 +1,138 @@
-// Tool search: progressive tool disclosure for Clanky.
-//
-// Clanky registers ~50 model-facing tools (browser operator, media generation,
-// Discord, subagents, memory, MCP bridges, ...). Sending every schema to the
-// model on every turn burns a large, fixed slice of the context window before
-// any work starts. This module defers the bulk of those tools: at session start
-// it deactivates the deferrable tools so their schemas leave the provider
-// payload, registers a single `tool_search` tool, and injects a per-turn system
-// reminder listing the deferred tool names. When the model searches, the
-// matching tools are re-activated via Pi's setActiveTools, so their full schemas
-// appear on the next step and the model calls them directly. No bridge
-// re-dispatch is needed because Pi dispatches the activated tools natively.
-//
-// Ported in spirit from hermes-agent's tool_search (BM25 + substring fallback,
-// stateless catalog rebuilt from the live registry, core tools never deferred),
-// adapted to Pi's setActiveTools seam instead of tool_call bridges.
-
+import {
+	type AssistantMessage,
+	type AssistantMessageDiagnostic,
+	appendAssistantMessageDiagnostic,
+} from "@earendil-works/pi-ai";
 import {
 	type AgentToolResult,
 	defineTool,
 	type ExtensionAPI,
 	type ExtensionContext,
 	type ExtensionFactory,
-	type ToolDefinition,
 	type ToolInfo,
 } from "@earendil-works/pi-coding-agent";
-import { type Static, Type } from "typebox";
+import { type TSchema, Type } from "typebox";
+import {
+	type ClankyMcpServerConfig,
+	type ClankyMcpServerStatus,
+	type ClankyMcpToolSummary,
+	callExternalMcpTool,
+	type ExternalMcpCallInput,
+	type ExternalMcpClientOptions,
+	listExternalMcpTools,
+} from "./mcp/client.ts";
+import { isRecord } from "./util/values.ts";
 
-export const TOOL_SEARCH_TOOL_NAME = "tool_search";
+export type ToolSearchVariant = "bm25" | "regex";
 
-/** Direct-activation prefix: `tool_search` with `select:a,b,c` activates those exact tools. */
-const SELECT_PREFIX = "select:";
+export const TOOL_SEARCH_BM25_TYPE = "tool_search_tool_bm25_20251119";
+export const TOOL_SEARCH_REGEX_TYPE = "tool_search_tool_regex_20251119";
+export const TOOL_SEARCH_BM25_NAME = "tool_search_tool_bm25";
+export const TOOL_SEARCH_REGEX_NAME = "tool_search_tool_regex";
+export const TOOL_SEARCH_DIAGNOSTIC_TYPE = "clanky_tool_search";
 
-/** Rough chars-per-token estimate for gating. Intentionally conservative (underestimates). */
-const CHARS_PER_TOKEN = 4;
-
-/** Description cap in search results to keep chatty tools from bloating the payload. */
-const DESCRIPTION_CAP = 400;
-
-/**
- * Clanky-native tools that stay active regardless of deferral. These are the
- * tools used so often that searching for them would only add latency: memory,
- * the main-session context window, and the MCP bridges (which are themselves a
- * deferral mechanism for external MCP servers).
- */
-export const DEFAULT_ALWAYS_ACTIVE_TOOLS: readonly string[] = [
-	"memory_remember",
-	"memory_search",
-	"memory_forget",
-	"main_session_context",
-	"mcp_list_tools",
-	"mcp_call",
-];
-
-export type ToolSearchMode = "auto" | "on" | "off";
+export const DEFAULT_ALWAYS_LOADED_TOOLS: readonly string[] = ["read", "bash", "edit", "write", "mcp_call"];
 
 export interface ToolSearchConfig {
-	/** "off": never defer. "on": always defer the deferrable set. "auto": defer only past the token threshold. */
-	mode: ToolSearchMode;
-	/** In "auto" mode, defer when deferrable schemas exceed this percent of the context window. */
-	thresholdPct: number;
-	/** In "auto" mode, threshold used when the context window size is unknown. */
-	fallbackThresholdTokens: number;
-	/** Default number of matches returned by tool_search. */
-	searchDefaultLimit: number;
-	/** Upper bound on the matches tool_search will return. */
-	maxSearchLimit: number;
-	/** Tool names (in addition to Pi built-ins and tool_search) that are never deferred. */
-	alwaysActive: readonly string[];
+	enabled: boolean;
+	variant: ToolSearchVariant;
+	alwaysLoadedTools: readonly string[];
 }
 
 export interface ToolSearchConfigOverrides {
-	mode?: ToolSearchMode;
-	thresholdPct?: number;
-	fallbackThresholdTokens?: number;
-	searchDefaultLimit?: number;
-	maxSearchLimit?: number;
-	/** Extra always-active tool names, merged with DEFAULT_ALWAYS_ACTIVE_TOOLS. */
-	alsoAlwaysActive?: readonly string[];
+	enabled?: boolean;
+	variant?: ToolSearchVariant;
+	alwaysLoadedTools?: readonly string[];
 }
 
 export interface ToolSearchFactoryOptions {
 	env?: NodeJS.ProcessEnv;
 	overrides?: ToolSearchConfigOverrides;
+	mcpServers?: (ctx: ExtensionContext) => Record<string, ClankyMcpServerConfig>;
+	mcpClientOptions?: ExternalMcpClientOptions;
+	mcpToolStatuses?: (options: ExternalMcpClientOptions) => Promise<ClankyMcpServerStatus[]>;
+	mcpToolCaller?: (input: ExternalMcpCallInput, options: ExternalMcpClientOptions) => Promise<unknown>;
 }
 
-const DEFAULT_CONFIG: ToolSearchConfig = {
-	mode: "auto",
-	thresholdPct: 8,
-	fallbackThresholdTokens: 12_000,
-	searchDefaultLimit: 5,
-	maxSearchLimit: 20,
-	alwaysActive: DEFAULT_ALWAYS_ACTIVE_TOOLS,
-};
+interface AnthropicToolDefinition {
+	name?: unknown;
+	type?: unknown;
+	input_schema?: unknown;
+	defer_loading?: unknown;
+	cache_control?: unknown;
+	[key: string]: unknown;
+}
 
-function parseMode(value: string | undefined): ToolSearchMode | undefined {
+interface AnthropicPayload {
+	model?: unknown;
+	messages?: unknown;
+	tools?: unknown;
+	stream?: unknown;
+	max_tokens?: unknown;
+	[key: string]: unknown;
+}
+
+interface AnthropicMessagesPayload extends AnthropicPayload {
+	model: string;
+	messages: unknown[];
+	tools: unknown[];
+	stream?: true;
+	max_tokens: number;
+}
+
+export interface ToolSearchTelemetry {
+	requestId: number;
+	model: string;
+	variant: ToolSearchVariant;
+	totalTools: number;
+	deferredTools: string[];
+	loadedTools: string[];
+	estimatedInputTokensBefore: number;
+	estimatedInputTokensAfter: number;
+	estimatedInputTokenDelta: number;
+	toolSearchRequests?: number;
+	toolSearchResultErrors: ToolSearchToolResultError[];
+	discoveredToolReferences: string[];
+}
+
+export interface ToolSearchRewriteResult {
+	payload: unknown;
+	telemetry?: ToolSearchTelemetry;
+}
+
+export interface ToolSearchToolResultError {
+	code: "too_many_requests" | "invalid_pattern" | "pattern_too_long" | "unavailable";
+	message?: string;
+}
+
+const TOOL_SEARCH_RESULT_ERROR_CODES = new Set([
+	"too_many_requests",
+	"invalid_pattern",
+	"pattern_too_long",
+	"unavailable",
+]);
+
+const CHARS_PER_TOKEN = 4;
+const MAX_TOOL_NAME_LENGTH = 64;
+const RESPONSE_TELEMETRY_WAIT_MS = 100;
+
+let nextRequestId = 1;
+let fetchPatched = false;
+let originalFetch: typeof fetch | undefined;
+const pendingFetchTelemetry: ToolSearchTelemetry[] = [];
+
+function parseEnabled(value: string | undefined): boolean | undefined {
 	if (value === undefined) return undefined;
 	const normalized = value.trim().toLowerCase();
-	if (normalized === "off" || normalized === "on" || normalized === "auto") return normalized;
-	if (normalized === "false" || normalized === "0" || normalized === "no") return "off";
-	if (normalized === "true" || normalized === "1" || normalized === "yes") return "on";
+	if (["1", "true", "yes", "on"].includes(normalized)) return true;
+	if (["0", "false", "no", "off"].includes(normalized)) return false;
 	return undefined;
 }
 
-function parsePositiveNumber(value: string | undefined): number | undefined {
+function parseVariant(value: string | undefined): ToolSearchVariant | undefined {
 	if (value === undefined) return undefined;
-	const parsed = Number(value.trim());
-	if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
-	return parsed;
+	const normalized = value.trim().toLowerCase();
+	return normalized === "bm25" || normalized === "regex" ? normalized : undefined;
 }
 
 function parseNameList(value: string | undefined): string[] {
@@ -117,350 +143,548 @@ function parseNameList(value: string | undefined): string[] {
 		.filter((entry) => entry.length > 0);
 }
 
-function clamp(value: number, min: number, max: number): number {
-	return Math.max(min, Math.min(max, value));
-}
-
-/**
- * Resolve config from defaults, env overrides, then explicit overrides (explicit wins).
- * Env keys: CLANKY_TOOL_SEARCH, CLANKY_TOOL_SEARCH_THRESHOLD_PCT, CLANKY_TOOL_SEARCH_LIMIT,
- * CLANKY_TOOL_SEARCH_MAX_LIMIT, CLANKY_TOOL_SEARCH_ALWAYS_ACTIVE.
- */
 export function resolveToolSearchConfig(options: ToolSearchFactoryOptions = {}): ToolSearchConfig {
 	const env = options.env ?? process.env;
 	const overrides = options.overrides ?? {};
-	const mode = overrides.mode ?? parseMode(env.CLANKY_TOOL_SEARCH) ?? DEFAULT_CONFIG.mode;
-	const thresholdPct = clamp(
-		overrides.thresholdPct ?? parsePositiveNumber(env.CLANKY_TOOL_SEARCH_THRESHOLD_PCT) ?? DEFAULT_CONFIG.thresholdPct,
-		0.5,
-		100,
+	return {
+		enabled: overrides.enabled ?? parseEnabled(env.CLANKY_TOOL_SEARCH) ?? false,
+		variant: overrides.variant ?? parseVariant(env.CLANKY_TOOL_SEARCH_VARIANT) ?? "bm25",
+		alwaysLoadedTools: overrides.alwaysLoadedTools ?? [
+			...DEFAULT_ALWAYS_LOADED_TOOLS,
+			...parseNameList(env.CLANKY_TOOL_SEARCH_ALWAYS_LOADED),
+		],
+	};
+}
+
+function toolSearchTool(config: ToolSearchConfig): AnthropicToolDefinition {
+	return config.variant === "regex"
+		? { type: TOOL_SEARCH_REGEX_TYPE, name: TOOL_SEARCH_REGEX_NAME }
+		: { type: TOOL_SEARCH_BM25_TYPE, name: TOOL_SEARCH_BM25_NAME };
+}
+
+function isToolSearchTool(tool: AnthropicToolDefinition): boolean {
+	return (
+		tool.type === TOOL_SEARCH_BM25_TYPE ||
+		tool.type === TOOL_SEARCH_REGEX_TYPE ||
+		tool.name === TOOL_SEARCH_BM25_NAME ||
+		tool.name === TOOL_SEARCH_REGEX_NAME
 	);
-	const fallbackThresholdTokens = overrides.fallbackThresholdTokens ?? DEFAULT_CONFIG.fallbackThresholdTokens;
-	const maxSearchLimit = Math.floor(
-		clamp(
-			overrides.maxSearchLimit ??
-				parsePositiveNumber(env.CLANKY_TOOL_SEARCH_MAX_LIMIT) ??
-				DEFAULT_CONFIG.maxSearchLimit,
-			1,
-			50,
-		),
+}
+
+function isAnthropicTool(tool: unknown): tool is AnthropicToolDefinition {
+	return isRecord(tool) && typeof tool.name === "string" && isRecord(tool.input_schema);
+}
+
+function isAnthropicPayload(payload: unknown): payload is AnthropicMessagesPayload {
+	if (!isRecord(payload)) return false;
+	return (
+		typeof payload.model === "string" &&
+		Array.isArray(payload.messages) &&
+		Array.isArray(payload.tools) &&
+		(payload.stream === true || payload.stream === undefined) &&
+		typeof payload.max_tokens === "number"
 	);
-	const searchDefaultLimit = Math.floor(
-		clamp(
-			overrides.searchDefaultLimit ??
-				parsePositiveNumber(env.CLANKY_TOOL_SEARCH_LIMIT) ??
-				DEFAULT_CONFIG.searchDefaultLimit,
-			1,
-			maxSearchLimit,
-		),
+}
+
+function supportsAnthropicToolSearch(model: string): boolean {
+	const normalized = model.toLowerCase();
+	return (
+		normalized.includes("claude-sonnet-4") ||
+		normalized.includes("claude-opus-4") ||
+		normalized.includes("claude-haiku-4-5")
 	);
-	const alwaysActive = [
-		...DEFAULT_ALWAYS_ACTIVE_TOOLS,
-		...parseNameList(env.CLANKY_TOOL_SEARCH_ALWAYS_ACTIVE),
-		...(overrides.alsoAlwaysActive ?? []),
-	];
-	return { mode, thresholdPct, fallbackThresholdTokens, searchDefaultLimit, maxSearchLimit, alwaysActive };
 }
 
-// --- Catalog + BM25 (ported from hermes-agent tools/tool_search.py) ---
-
-export interface CatalogEntry {
-	name: string;
-	description: string;
-	source: string;
-	tokens: string[];
-	/** Estimated token cost of this tool's schema, used for threshold gating. */
-	schemaTokens: number;
+function estimateToolTokens(tool: AnthropicToolDefinition): number {
+	return Math.ceil(JSON.stringify(tool).length / CHARS_PER_TOKEN);
 }
 
-const TOKEN_RE = /[a-z0-9]+/g;
-
-function tokenize(text: string): string[] {
-	const matches = text.toLowerCase().match(TOKEN_RE);
-	return matches === null ? [] : matches;
+function normalName(name: string): string {
+	return name.toLowerCase();
 }
 
-function schemaPropertyNames(parameters: ToolInfo["parameters"]): string[] {
-	const props = (parameters as { properties?: Record<string, unknown> }).properties;
-	if (props === undefined || props === null || typeof props !== "object") return [];
-	return Object.keys(props);
+function parseMcpToolName(toolName: string): { server: string; tool: string } | undefined {
+	const match = /^mcp__([^_][^_]*)__([\s\S]+)$/.exec(toolName);
+	if (match === null) return undefined;
+	const [, server, tool] = match;
+	if (server === undefined || tool === undefined) return undefined;
+	return { server, tool };
 }
 
-function entrySearchText(tool: ToolInfo): string {
-	const nameWords = tool.name.replace(/[_.\-:]+/g, " ");
-	const paramNames = schemaPropertyNames(tool.parameters).join(" ");
-	return `${nameWords} ${tool.description ?? ""} ${paramNames}`;
+function sanitizeMcpToolNameSegment(value: string): string {
+	const sanitized = value
+		.replace(/[^A-Za-z0-9_-]/g, "_")
+		.replace(/_+/g, "_")
+		.replace(/^_+|_+$/g, "");
+	return sanitized.length > 0 ? sanitized : "tool";
 }
 
-function estimateSchemaTokens(tool: ToolInfo): number {
-	const serialized = JSON.stringify({
-		name: tool.name,
-		description: tool.description,
-		parameters: tool.parameters,
-	});
-	return Math.ceil(serialized.length / CHARS_PER_TOKEN);
+function trimMcpDirectToolName(base: string, suffix: string): string {
+	const maxBaseLength = MAX_TOOL_NAME_LENGTH - suffix.length;
+	return `${base.slice(0, maxBaseLength).replace(/[_-]+$/g, "")}${suffix}`;
 }
 
-function bm25Score(
-	queryTokens: readonly string[],
-	docTokens: readonly string[],
-	avgDocLength: number,
-	docFreq: Map<string, number>,
-	docCount: number,
-): number {
-	const k1 = 1.5;
-	const b = 0.75;
-	const docLength = docTokens.length;
-	const termFreq = new Map<string, number>();
-	for (const token of docTokens) termFreq.set(token, (termFreq.get(token) ?? 0) + 1);
-	let score = 0;
-	for (const query of queryTokens) {
-		const df = docFreq.get(query) ?? 0;
-		if (df === 0) continue;
-		const tf = termFreq.get(query) ?? 0;
-		if (tf === 0) continue;
-		const idf = Math.log(1 + (docCount - df + 0.5) / (df + 0.5));
-		const norm = (tf * (k1 + 1)) / (tf + k1 * (1 - b + (b * docLength) / Math.max(avgDocLength, 1)));
-		score += idf * norm;
+function mcpDirectToolName(server: string, tool: string, usedNames: Set<string>): string {
+	const base = `mcp__${sanitizeMcpToolNameSegment(server)}__${sanitizeMcpToolNameSegment(tool)}`;
+	let candidate = trimMcpDirectToolName(base, "");
+	let suffix = 1;
+	while (usedNames.has(candidate)) {
+		const suffixText = `_${suffix++}`;
+		candidate = trimMcpDirectToolName(base, suffixText);
 	}
-	return score;
+	usedNames.add(candidate);
+	return candidate;
 }
 
-/** Build the deferrable-tool catalog from the live registry. Stateless: rebuilt on each call. */
-export function buildCatalog(allTools: readonly ToolInfo[], deferrableNames: ReadonlySet<string>): CatalogEntry[] {
-	const catalog: CatalogEntry[] = [];
-	for (const tool of allTools) {
-		if (!deferrableNames.has(tool.name)) continue;
-		catalog.push({
-			name: tool.name,
-			description: tool.description ?? "",
-			source: tool.sourceInfo.source,
-			tokens: tokenize(entrySearchText(tool)),
-			schemaTokens: estimateSchemaTokens(tool),
-		});
-	}
-	return catalog;
+function parseMcpToolInfo(tool: ToolInfo | undefined): { server: string; tool: string } | undefined {
+	if (tool === undefined) return undefined;
+	const path = tool.sourceInfo.path;
+	const fromName = parseMcpToolName(tool.name);
+	if (fromName !== undefined) return fromName;
+	if (tool.sourceInfo.source !== "mcp") return undefined;
+	const match = /^mcp:([^:]+):(.+)$/.exec(path) ?? /^<mcp:([^:]+):(.+)>$/.exec(path);
+	if (match === null) return undefined;
+	const [, server, toolName] = match;
+	if (server === undefined || toolName === undefined) return undefined;
+	return { server, tool: toolName };
 }
 
-/** BM25 ranking with a name-substring fallback when every doc shares the query term (zero IDF). */
-export function searchCatalog(catalog: readonly CatalogEntry[], query: string, limit: number): CatalogEntry[] {
-	const queryTokens = tokenize(query);
-	if (queryTokens.length === 0) return [];
-	const docCount = catalog.length;
-	const docFreq = new Map<string, number>();
-	let totalLength = 0;
-	for (const entry of catalog) {
-		totalLength += entry.tokens.length;
-		for (const token of new Set(entry.tokens)) docFreq.set(token, (docFreq.get(token) ?? 0) + 1);
+function mcpToolOverride(config: ClankyMcpServerConfig | undefined, tool: string): boolean | undefined {
+	const override = config?.toolOverrides?.[tool];
+	return override?.deferLoading;
+}
+
+function shouldDeferTool(input: {
+	tool: AnthropicToolDefinition;
+	toolInfo: ToolInfo | undefined;
+	config: ToolSearchConfig;
+	mcpServers: Record<string, ClankyMcpServerConfig>;
+}): boolean {
+	if (typeof input.tool.name !== "string") return false;
+	const name = input.tool.name;
+	if (isToolSearchTool(input.tool)) return false;
+	if (input.config.alwaysLoadedTools.map(normalName).includes(normalName(name))) return false;
+
+	const mcpTool = parseMcpToolInfo(input.toolInfo) ?? parseMcpToolName(name);
+	if (mcpTool !== undefined) {
+		const serverConfig = input.mcpServers[mcpTool.server];
+		const override = mcpToolOverride(serverConfig, mcpTool.tool);
+		if (override !== undefined) return override;
+		if (serverConfig?.deferLoading !== undefined) return serverConfig.deferLoading;
 	}
-	const avgDocLength = docCount === 0 ? 0 : totalLength / docCount;
-	const scored: Array<{ score: number; entry: CatalogEntry }> = [];
-	for (const entry of catalog) {
-		const score = bm25Score(queryTokens, entry.tokens, avgDocLength, docFreq, docCount);
-		if (score > 0) scored.push({ score, entry });
-	}
-	if (scored.length === 0) {
-		const needle = query.trim().toLowerCase();
-		for (const entry of catalog) {
-			if (needle.length > 0 && entry.name.toLowerCase().includes(needle)) scored.push({ score: 0.1, entry });
+
+	return true;
+}
+
+function withoutDeferLoading(tool: AnthropicToolDefinition): AnthropicToolDefinition {
+	const { defer_loading: _deferLoading, ...rest } = tool;
+	return rest;
+}
+
+function withDeferLoading(tool: AnthropicToolDefinition, deferred: boolean): AnthropicToolDefinition {
+	const base = withoutDeferLoading(tool);
+	return deferred ? { ...base, defer_loading: true } : base;
+}
+
+function ensureLoadedTool(tools: AnthropicToolDefinition[]): AnthropicToolDefinition[] {
+	if (tools.some((tool) => tool.defer_loading !== true && !isToolSearchTool(tool))) return tools;
+	const index = tools.findIndex((tool) => !isToolSearchTool(tool));
+	if (index === -1) return tools;
+	const next = [...tools];
+	const firstLoadedTool = next[index];
+	if (firstLoadedTool === undefined) return tools;
+	next[index] = withoutDeferLoading(firstLoadedTool);
+	return next;
+}
+
+function buildToolInfoByName(tools: readonly ToolInfo[]): Map<string, ToolInfo> {
+	const byName = new Map<string, ToolInfo>();
+	for (const tool of tools) byName.set(tool.name, tool);
+	return byName;
+}
+
+function mcpToolParameters(schema: unknown): TSchema {
+	return isRecord(schema) ? (schema as unknown as TSchema) : Type.Object({});
+}
+
+function mcpToolDescription(tool: ClankyMcpToolSummary): string {
+	const base =
+		tool.description?.trim() || `Call MCP tool ${tool.name} from configured Clanky MCP server ${tool.server}.`;
+	return `MCP ${tool.server}.${tool.name}: ${base}`;
+}
+
+function toolResult(details: unknown): AgentToolResult<unknown> {
+	return {
+		content: [{ type: "text", text: JSON.stringify(details ?? null, null, "\t") }],
+		details,
+	};
+}
+
+async function registerMcpToolWrappers(pi: ExtensionAPI, options: ToolSearchFactoryOptions): Promise<void> {
+	if (options.mcpClientOptions === undefined && options.mcpToolStatuses === undefined) return;
+	const mcpClientOptions = options.mcpClientOptions ?? {};
+	const statuses =
+		options.mcpToolStatuses !== undefined
+			? await options.mcpToolStatuses(mcpClientOptions)
+			: await listExternalMcpTools({}, mcpClientOptions);
+	const callTool = options.mcpToolCaller ?? callExternalMcpTool;
+	const usedNames = new Set<string>();
+
+	for (const status of statuses) {
+		if (status.disabled === true || status.tools === undefined) continue;
+		for (const tool of status.tools) {
+			const name = mcpDirectToolName(tool.server, tool.name, usedNames);
+			pi.registerTool(
+				defineTool({
+					name,
+					label: `${tool.server}.${tool.name}`,
+					description: mcpToolDescription(tool),
+					promptSnippet: `${name}: call ${tool.server}.${tool.name} from the configured MCP server.`,
+					promptGuidelines: [
+						"Use this direct MCP tool when its name and schema match the user's requested external action.",
+						"Follow the source MCP server's policy and pass arguments matching the tool schema.",
+					],
+					parameters: mcpToolParameters(tool.inputSchema),
+					async execute(_toolCallId, params) {
+						return toolResult(
+							await callTool({ server: tool.server, tool: tool.name, arguments: params }, mcpClientOptions),
+						);
+					},
+				}),
+			);
 		}
 	}
-	scored.sort((a, b) => b.score - a.score);
-	return scored.slice(0, Math.max(1, limit)).map((hit) => hit.entry);
 }
 
-// --- Deferral classification ---
+export function rewriteAnthropicToolSearchPayload(input: {
+	payload: unknown;
+	config: ToolSearchConfig;
+	allTools?: readonly ToolInfo[];
+	mcpServers?: Record<string, ClankyMcpServerConfig> | undefined;
+}): ToolSearchRewriteResult {
+	if (!input.config.enabled) return { payload: input.payload };
+	if (!isAnthropicPayload(input.payload)) return { payload: input.payload };
+	const model = input.payload.model;
+	if (typeof model !== "string" || !supportsAnthropicToolSearch(model)) return { payload: input.payload };
 
-/**
- * A tool is deferrable when it is one of Clanky's own model-facing tools
- * (sourceInfo.source === "sdk"), is not tool_search itself, and is not in the
- * always-active allowlist. Pi built-ins (read/bash/edit/write/grep/find/ls) and
- * any non-sdk source are never deferred.
- */
-export function computeDeferrableNames(allTools: readonly ToolInfo[], config: ToolSearchConfig): Set<string> {
-	const alwaysActive = new Set(config.alwaysActive);
-	const deferrable = new Set<string>();
-	for (const tool of allTools) {
-		if (tool.name === TOOL_SEARCH_TOOL_NAME) continue;
-		if (tool.sourceInfo.source !== "sdk") continue;
-		if (alwaysActive.has(tool.name)) continue;
-		deferrable.add(tool.name);
-	}
-	return deferrable;
-}
+	const tools = input.payload.tools.filter(isAnthropicTool);
+	if (tools.length === 0) return { payload: input.payload };
 
-function resolveThresholdTokens(config: ToolSearchConfig, ctx: ExtensionContext): number {
-	const contextWindow = ctx.getContextUsage()?.contextWindow;
-	if (contextWindow !== undefined && contextWindow > 0) {
-		return Math.ceil((contextWindow * config.thresholdPct) / 100);
-	}
-	return config.fallbackThresholdTokens;
-}
-
-// --- The tool_search tool ---
-
-const toolSearchSchema = Type.Object({
-	query: Type.String({
-		description:
-			'Keywords describing the capability you need (e.g. "click button on web page", "generate an image"). Or "select:exact_tool_name,other_name" to activate specific tools by exact name.',
-	}),
-	limit: Type.Optional(
-		Type.Integer({
-			description: "Maximum number of matches to return and activate. Defaults to the configured limit.",
-		}),
-	),
-});
-
-export type ToolSearchToolInput = Static<typeof toolSearchSchema>;
-
-function activateTools(pi: ExtensionAPI, names: readonly string[]): void {
-	if (names.length === 0) return;
-	const next = new Set(pi.getActiveTools());
-	for (const name of names) next.add(name);
-	pi.setActiveTools([...next]);
-}
-
-function createToolSearchTool(pi: ExtensionAPI, config: ToolSearchConfig): ToolDefinition {
-	return defineTool({
-		name: TOOL_SEARCH_TOOL_NAME,
-		label: "Tool Search",
-		description:
-			"Search Clanky's deferred tools (loaded on demand to save context) and activate the matches. Returns matching tool names with short descriptions; the activated tools' full parameter schemas become available so you can call them directly on your next step. Pass a capability query, or 'select:exact_name,...' to activate tools by exact name.",
-		promptSnippet:
-			"tool_search: find and activate deferred tools (browser, media generation, Discord, subagents, scheduling, ...) by capability query before calling them.",
-		promptGuidelines: [
-			"When you need a capability whose tool is not in the active list, call tool_search first; activated tools become directly callable on the next step.",
-			"Use 'select:exact_name' in the query to re-activate a specific tool you already know by name.",
-		],
-		parameters: toolSearchSchema,
-		async execute(_toolCallId, params: ToolSearchToolInput): Promise<AgentToolResult<unknown>> {
-			const deferrableNames = computeDeferrableNames(pi.getAllTools(), config);
-			const rawQuery = (params.query ?? "").trim();
-			const limit = clamp(params.limit ?? config.searchDefaultLimit, 1, config.maxSearchLimit);
-
-			let matchedNames: string[];
-			let mode: "select" | "search";
-			if (rawQuery.toLowerCase().startsWith(SELECT_PREFIX)) {
-				mode = "select";
-				const requested = parseNameList(rawQuery.slice(SELECT_PREFIX.length));
-				matchedNames = requested.filter((name) => deferrableNames.has(name));
-			} else {
-				mode = "search";
-				const catalog = buildCatalog(pi.getAllTools(), deferrableNames);
-				matchedNames = searchCatalog(catalog, rawQuery, limit).map((entry) => entry.name);
-			}
-
-			activateTools(pi, matchedNames);
-
-			const allTools = pi.getAllTools();
-			const descriptionByName = new Map(allTools.map((tool) => [tool.name, tool.description ?? ""]));
-			const matches = matchedNames.map((name) => ({
-				name,
-				description: descriptionByName.get(name)?.slice(0, DESCRIPTION_CAP) ?? "",
-			}));
-			const unknownSelected =
-				mode === "select"
-					? parseNameList(rawQuery.slice(SELECT_PREFIX.length)).filter((name) => !deferrableNames.has(name))
-					: [];
-
-			const details = {
-				query: rawQuery,
-				mode,
-				total_deferred: deferrableNames.size,
-				activated: matchedNames,
-				matches,
-				...(unknownSelected.length > 0 ? { not_deferrable: unknownSelected } : {}),
-				note:
-					matchedNames.length > 0
-						? "Activated. These tools are now directly callable on your next step; do not call tool_search again for them."
-						: "No deferred tools matched. Try different keywords or 'select:exact_name'.",
-			};
-			return {
-				content: [{ type: "text", text: JSON.stringify(details, null, "\t") }],
-				details,
-			};
-		},
+	const toolInfoByName = buildToolInfoByName(input.allTools ?? []);
+	const mcpServers = input.mcpServers ?? {};
+	const rewrittenTools = tools.map((tool) => {
+		const defer = shouldDeferTool({
+			tool,
+			toolInfo: typeof tool.name === "string" ? toolInfoByName.get(tool.name) : undefined,
+			config: input.config,
+			mcpServers,
+		});
+		return withDeferLoading(tool, defer);
 	});
+	const guardedTools = ensureLoadedTool(rewrittenTools);
+	const searchTool = toolSearchTool(input.config);
+	const finalTools = [searchTool, ...guardedTools.filter((tool) => !isToolSearchTool(tool))];
+
+	const deferredTools = guardedTools
+		.filter((tool) => tool.defer_loading === true && typeof tool.name === "string")
+		.map((tool) => tool.name as string);
+	const loadedTools = guardedTools
+		.filter((tool) => tool.defer_loading !== true && typeof tool.name === "string")
+		.map((tool) => tool.name as string);
+	const estimatedInputTokensBefore = tools.reduce(
+		(sum, tool) => sum + estimateToolTokens(withoutDeferLoading(tool)),
+		0,
+	);
+	const estimatedInputTokensAfter =
+		estimateToolTokens(searchTool) +
+		guardedTools
+			.filter((tool) => tool.defer_loading !== true)
+			.reduce((sum, tool) => sum + estimateToolTokens(withoutDeferLoading(tool)), 0);
+
+	return {
+		payload: {
+			...input.payload,
+			tools: finalTools,
+		},
+		telemetry: {
+			requestId: nextRequestId++,
+			model,
+			variant: input.config.variant,
+			totalTools: tools.length,
+			deferredTools,
+			loadedTools,
+			estimatedInputTokensBefore,
+			estimatedInputTokensAfter,
+			estimatedInputTokenDelta: Math.max(0, estimatedInputTokensBefore - estimatedInputTokensAfter),
+			toolSearchResultErrors: [],
+			discoveredToolReferences: [],
+		},
+	};
 }
 
-// --- System reminder for deferred tools ---
-
-function formatDeferredReminder(deferredNames: readonly string[]): string {
-	const sorted = [...deferredNames].sort();
-	return [
-		"<deferred-tools>",
-		`${sorted.length} tools are deferred to save context: only their names are listed below, not their parameter schemas.`,
-		`To use one, call ${TOOL_SEARCH_TOOL_NAME} with a capability query (or "select:exact_name"). Matching tools are activated and become directly callable on your next step.`,
-		"",
-		sorted.join(", "),
-		"</deferred-tools>",
-	].join("\n");
+function readNumberPath(value: unknown, path: readonly string[]): number | undefined {
+	let current = value;
+	for (const key of path) {
+		if (!isRecord(current)) return undefined;
+		current = current[key];
+	}
+	return typeof current === "number" && Number.isFinite(current) ? current : undefined;
 }
 
-function appendReminder(systemPrompt: string, reminder: string): string {
-	return systemPrompt.length > 0 ? `${systemPrompt}\n\n${reminder}` : reminder;
+function responseToolSearchRequests(message: AssistantMessage): number | undefined {
+	const usage = message.usage as unknown;
+	return (
+		readNumberPath(usage, ["server_tool_use", "tool_search_requests"]) ??
+		readNumberPath(usage, ["serverToolUse", "toolSearchRequests"])
+	);
 }
 
-/** Names of deferrable tools that are not currently active (i.e. still hidden from the model). */
-function currentlyDeferredNames(pi: ExtensionAPI, config: ToolSearchConfig): string[] {
-	const deferrable = computeDeferrableNames(pi.getAllTools(), config);
-	const active = new Set(pi.getActiveTools());
-	return [...deferrable].filter((name) => !active.has(name));
+function readToolSearchResultError(value: unknown): ToolSearchToolResultError | undefined {
+	if (!isRecord(value)) return undefined;
+	const rawCode = value.error_code ?? value.errorCode ?? value.code;
+	if (typeof rawCode !== "string" || !TOOL_SEARCH_RESULT_ERROR_CODES.has(rawCode)) return undefined;
+	const rawMessage = value.error_message ?? value.errorMessage ?? value.message;
+	return {
+		code: rawCode as ToolSearchToolResultError["code"],
+		...(typeof rawMessage === "string" && rawMessage.length > 0 ? { message: rawMessage } : {}),
+	};
 }
 
-/**
- * Deactivate the deferrable tools when deferral should apply. In "auto" mode this
- * only happens once the deferrable schemas exceed the configured token threshold.
- * Returns the names that were deferred (empty when deferral did not apply).
- */
-function applyInitialDeferral(pi: ExtensionAPI, config: ToolSearchConfig, ctx: ExtensionContext): string[] {
-	const allTools = pi.getAllTools();
-	const deferrable = computeDeferrableNames(allTools, config);
-	if (deferrable.size === 0) return [];
+function collectToolReferenceNames(value: unknown, names: Set<string>): void {
+	if (Array.isArray(value)) {
+		for (const entry of value) collectToolReferenceNames(entry, names);
+		return;
+	}
+	if (!isRecord(value)) return;
+	if (value.type === "tool_reference" && typeof value.name === "string") {
+		names.add(value.name);
+	}
+	for (const entry of Object.values(value)) collectToolReferenceNames(entry, names);
+}
 
-	if (config.mode === "auto") {
-		const deferrableTokens = allTools
-			.filter((tool) => deferrable.has(tool.name))
-			.reduce((sum, tool) => sum + estimateSchemaTokens(tool), 0);
-		if (deferrableTokens < resolveThresholdTokens(config, ctx)) return [];
+interface SseDecodeState {
+	event: string | null;
+	data: string[];
+}
+
+function flushSseDecodeState(state: SseDecodeState): { event: string | null; data: string } | undefined {
+	if (state.event === null && state.data.length === 0) return undefined;
+	const event = { event: state.event, data: state.data.join("\n") };
+	state.event = null;
+	state.data = [];
+	return event;
+}
+
+function decodeSseLine(line: string, state: SseDecodeState): { event: string | null; data: string } | undefined {
+	if (line === "") return flushSseDecodeState(state);
+	if (line.startsWith(":")) return undefined;
+	const separator = line.indexOf(":");
+	const key = separator === -1 ? line : line.slice(0, separator);
+	const rawValue = separator === -1 ? "" : line.slice(separator + 1);
+	const value = rawValue.startsWith(" ") ? rawValue.slice(1) : rawValue;
+	if (key === "event") state.event = value;
+	if (key === "data") state.data.push(value);
+	return undefined;
+}
+
+function consumeLine(buffer: string): { line: string; rest: string } | undefined {
+	const newline = buffer.search(/\r?\n/);
+	if (newline === -1) return undefined;
+	const line = buffer.slice(0, newline);
+	const newlineLength = buffer[newline] === "\r" && buffer[newline + 1] === "\n" ? 2 : 1;
+	return { line, rest: buffer.slice(newline + newlineLength) };
+}
+
+async function collectResponseTelemetry(body: ReadableStream<Uint8Array>): Promise<{
+	toolSearchRequests?: number;
+	toolSearchResultErrors: ToolSearchToolResultError[];
+	discoveredToolReferences: string[];
+}> {
+	const reader = body.getReader();
+	const decoder = new TextDecoder();
+	const state: SseDecodeState = { event: null, data: [] };
+	let buffer = "";
+	let toolSearchRequests: number | undefined;
+	const errors: ToolSearchToolResultError[] = [];
+	const toolReferences = new Set<string>();
+
+	const handleEvent = (event: { event: string | null; data: string } | undefined): void => {
+		if (event === undefined || event.event === "error" || event.data.trim().length === 0) return;
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(event.data);
+		} catch {
+			return;
+		}
+		const usageRequests =
+			readNumberPath(parsed, ["usage", "server_tool_use", "tool_search_requests"]) ??
+			readNumberPath(parsed, ["message", "usage", "server_tool_use", "tool_search_requests"]);
+		if (usageRequests !== undefined) toolSearchRequests = usageRequests;
+		if (isRecord(parsed) && parsed.type === "content_block_start") {
+			const block = parsed.content_block;
+			if (isRecord(block) && block.type === "tool_search_tool_result") {
+				const error = readToolSearchResultError(block);
+				if (error !== undefined) errors.push(error);
+				collectToolReferenceNames(block, toolReferences);
+			}
+		}
+	};
+
+	try {
+		while (true) {
+			const { value, done } = await reader.read();
+			if (done) break;
+			buffer += decoder.decode(value, { stream: true });
+			let consumed = consumeLine(buffer);
+			while (consumed !== undefined) {
+				buffer = consumed.rest;
+				handleEvent(decodeSseLine(consumed.line, state));
+				consumed = consumeLine(buffer);
+			}
+		}
+		buffer += decoder.decode();
+		let consumed = consumeLine(buffer);
+		while (consumed !== undefined) {
+			buffer = consumed.rest;
+			handleEvent(decodeSseLine(consumed.line, state));
+			consumed = consumeLine(buffer);
+		}
+		if (buffer.length > 0) handleEvent(decodeSseLine(buffer, state));
+		handleEvent(flushSseDecodeState(state));
+	} finally {
+		reader.releaseLock();
 	}
 
-	const keep = pi.getActiveTools().filter((name) => !deferrable.has(name));
-	pi.setActiveTools(keep);
-	return [...deferrable];
+	return {
+		...(toolSearchRequests !== undefined ? { toolSearchRequests } : {}),
+		toolSearchResultErrors: errors,
+		discoveredToolReferences: [...toolReferences],
+	};
 }
 
-/**
- * Extension factory implementing tool search. Registers the tool_search tool,
- * deactivates the deferrable tools, and injects a per-turn system reminder
- * listing the still-deferred tool names.
- *
- * Deferral is applied at session_start (so the first assembled system prompt
- * already excludes deferred tools) and, as a fallback for runtimes where
- * session_start has not fired by the first turn, lazily at before_agent_start.
- * A one-time guard keeps the model's mid-session activations from being undone;
- * session_start resets it so a fresh/resumed session re-defers from scratch.
- */
+function isToolSearchRequestBody(text: string | undefined): boolean {
+	if (text === undefined || !text.includes("tool_search_tool_")) return false;
+	try {
+		const parsed = JSON.parse(text) as unknown;
+		if (!isRecord(parsed) || !Array.isArray(parsed.tools)) return false;
+		return parsed.tools.some((tool) => isRecord(tool) && isToolSearchTool(tool));
+	} catch {
+		return false;
+	}
+}
+
+async function readFetchBody(input: RequestInfo | URL, init?: RequestInit): Promise<string | undefined> {
+	if (typeof init?.body === "string") return init.body;
+	if (input instanceof Request) {
+		try {
+			return await input.clone().text();
+		} catch {
+			return undefined;
+		}
+	}
+	return undefined;
+}
+
+function applyResponseTelemetry(telemetry: {
+	toolSearchRequests?: number;
+	toolSearchResultErrors: ToolSearchToolResultError[];
+	discoveredToolReferences: string[];
+}): void {
+	const pending = pendingFetchTelemetry.find((entry) => entry.toolSearchRequests === undefined);
+	if (pending === undefined) return;
+	if (telemetry.toolSearchRequests !== undefined) pending.toolSearchRequests = telemetry.toolSearchRequests;
+	pending.toolSearchResultErrors.push(...telemetry.toolSearchResultErrors);
+	pending.discoveredToolReferences.push(...telemetry.discoveredToolReferences);
+}
+
+export function installToolSearchFetchTelemetry(): void {
+	if (fetchPatched || typeof fetch !== "function") return;
+	originalFetch = fetch.bind(globalThis);
+	fetchPatched = true;
+	globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+		const bodyText = await readFetchBody(input, init);
+		const shouldObserve = isToolSearchRequestBody(bodyText);
+		const response = await originalFetch?.(input, init);
+		if (response === undefined || !shouldObserve || response.body === null) return response;
+		const [providerBody, telemetryBody] = response.body.tee();
+		void collectResponseTelemetry(telemetryBody)
+			.then((telemetry) => applyResponseTelemetry(telemetry))
+			.catch(() => undefined);
+		return new Response(providerBody, {
+			status: response.status,
+			statusText: response.statusText,
+			headers: response.headers,
+		});
+	}) as typeof fetch;
+}
+
+async function waitForResponseTelemetry(): Promise<void> {
+	await new Promise<void>((resolve) => setTimeout(resolve, RESPONSE_TELEMETRY_WAIT_MS));
+}
+
+function buildDiagnostic(telemetry: ToolSearchTelemetry, message: AssistantMessage): AssistantMessageDiagnostic {
+	const toolSearchRequests = responseToolSearchRequests(message) ?? telemetry.toolSearchRequests;
+	return {
+		type: TOOL_SEARCH_DIAGNOSTIC_TYPE,
+		timestamp: Date.now(),
+		details: {
+			requestId: telemetry.requestId,
+			model: telemetry.model,
+			variant: telemetry.variant,
+			totalTools: telemetry.totalTools,
+			deferredToolCount: telemetry.deferredTools.length,
+			loadedToolCount: telemetry.loadedTools.length,
+			deferredTools: telemetry.deferredTools,
+			loadedTools: telemetry.loadedTools,
+			estimatedInputTokensBefore: telemetry.estimatedInputTokensBefore,
+			estimatedInputTokensAfter: telemetry.estimatedInputTokensAfter,
+			estimatedInputTokenDelta: telemetry.estimatedInputTokenDelta,
+			...(toolSearchRequests !== undefined ? { toolSearchRequests } : {}),
+			...(telemetry.toolSearchResultErrors.length > 0
+				? { toolSearchResultErrors: telemetry.toolSearchResultErrors }
+				: {}),
+			...(telemetry.discoveredToolReferences.length > 0
+				? { discoveredToolReferences: telemetry.discoveredToolReferences }
+				: {}),
+		},
+	};
+}
+
+function isAssistantMessage(message: unknown): message is AssistantMessage {
+	return isRecord(message) && message.role === "assistant" && Array.isArray(message.content) && isRecord(message.usage);
+}
+
 export function createToolSearchExtensionFactory(options: ToolSearchFactoryOptions = {}): ExtensionFactory {
 	const config = resolveToolSearchConfig(options);
-	return (pi) => {
-		if (config.mode === "off") return;
-		pi.registerTool(createToolSearchTool(pi, config));
-		let deferralApplied = false;
-		const ensureDeferral = (ctx: ExtensionContext): void => {
-			if (deferralApplied) return;
-			deferralApplied = true;
-			applyInitialDeferral(pi, config, ctx);
-		};
-		pi.on("session_start", async (_event, ctx) => {
-			deferralApplied = false;
-			ensureDeferral(ctx);
+	return async (pi) => {
+		if (!config.enabled) return;
+		await registerMcpToolWrappers(pi, options);
+		installToolSearchFetchTelemetry();
+		const pendingTelemetry: ToolSearchTelemetry[] = [];
+
+		pi.on("before_provider_request", (event, ctx) => {
+			const result = rewriteAnthropicToolSearchPayload({
+				payload: event.payload,
+				config,
+				allTools: pi.getAllTools(),
+				mcpServers: options.mcpServers?.(ctx),
+			});
+			if (result.telemetry !== undefined) {
+				pendingTelemetry.push(result.telemetry);
+				pendingFetchTelemetry.push(result.telemetry);
+			}
+			return result.payload;
 		});
-		pi.on("before_agent_start", async (event, ctx) => {
-			ensureDeferral(ctx);
-			const deferred = currentlyDeferredNames(pi, config);
-			if (deferred.length === 0) return undefined;
-			return { systemPrompt: appendReminder(event.systemPrompt, formatDeferredReminder(deferred)) };
+
+		pi.on("message_end", async (event) => {
+			if (!isAssistantMessage(event.message)) return undefined;
+			const telemetry = pendingTelemetry.shift();
+			if (telemetry === undefined) return undefined;
+			await waitForResponseTelemetry();
+			const index = pendingFetchTelemetry.indexOf(telemetry);
+			if (index !== -1) pendingFetchTelemetry.splice(index, 1);
+			appendAssistantMessageDiagnostic(event.message, buildDiagnostic(telemetry, event.message));
+			return { message: event.message };
 		});
 	};
 }
