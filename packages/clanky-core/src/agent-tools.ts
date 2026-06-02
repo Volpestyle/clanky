@@ -48,20 +48,6 @@ type ClankyMessageEndEvent = {
 	message: Parameters<typeof extractIndexableMessageText>[0];
 };
 
-const scheduleCronSchema = Type.Object({
-	schedule: Type.String(),
-	prompt: Type.String(),
-	deliver: Type.Optional(Type.String()),
-	skill: Type.Optional(Type.String()),
-	provider: Type.Optional(Type.String()),
-	model: Type.Optional(Type.String()),
-	timeoutSeconds: Type.Optional(Type.Number()),
-	timeout_seconds: Type.Optional(Type.Number()),
-	workdir: Type.Optional(Type.String()),
-	idempotencyKey: Type.Optional(Type.String()),
-	idempotency_key: Type.Optional(Type.String()),
-});
-
 const workTrackerProviderKindSchema = Type.Union([
 	Type.Literal("linear"),
 	Type.Literal("github-issues"),
@@ -481,7 +467,6 @@ const discordVoiceJoinSchema = Type.Object({
 	channel_id: Type.Optional(Type.String()),
 });
 
-export type ScheduleCronToolInput = Static<typeof scheduleCronSchema>;
 export type WorkTrackerLinkToolInput = Static<typeof workTrackerLinkSchema>;
 export type ExternalMcpCallToolInput = Static<typeof externalMcpCallSchema>;
 export type ExternalMcpListToolsInput = Static<typeof externalMcpListToolsSchema>;
@@ -543,7 +528,6 @@ export interface ClankyBeforeProviderRequestInput {
 }
 
 export interface ClankyAgentToolHandlers {
-	scheduleCron?: (input: ScheduleCronToolInput) => Promise<unknown>;
 	workTrackerLink?: (input: CreateWorkTrackerRefInput) => Promise<unknown>;
 	externalMcpCall?: (input: ExternalMcpCallToolInput) => Promise<unknown>;
 	externalMcpListTools?: (input: ExternalMcpListToolsInput) => Promise<unknown>;
@@ -560,7 +544,6 @@ export interface ClankyAgentToolHandlers {
 	memoryExport?: () => Promise<MemoryExport>;
 	memoryConsent?: (input: SetMemoryConsentInput) => Promise<unknown>;
 	selfMemory?: () => Promise<string>;
-	listCron?: () => Promise<unknown>;
 	externalMcpStatus?: () => Promise<unknown>;
 	listSkills?: () => Promise<unknown>;
 	createSkill?: (input: CreateClankySkillInput) => Promise<unknown>;
@@ -694,7 +677,6 @@ export function createClankyExtensionFactories(
 	const beforeProviderRequest = handlers.beforeProviderRequest;
 	const memoryPacket = handlers.memoryPacket;
 	const hasCommands =
-		handlers.listCron !== undefined ||
 		handlers.externalMcpStatus !== undefined ||
 		handlers.listSkills !== undefined ||
 		handlers.createSkill !== undefined ||
@@ -1619,14 +1601,6 @@ function registerClankyCommands(
 	handlers: ClankyAgentToolHandlers,
 	subagentPanel: SubagentPanelController | undefined,
 ): void {
-	if (handlers.listCron !== undefined) {
-		pi.registerCommand("cron", {
-			description: "Show configured Clanky scheduled jobs",
-			handler: async (_args, ctx) => {
-				ctx.ui.notify(formatCommandResult("Cron", await handlers.listCron?.()));
-			},
-		});
-	}
 	if (handlers.listSkills !== undefined) {
 		pi.registerCommand("skills", {
 			description: "Show Clanky skills",
@@ -2779,23 +2753,6 @@ export function createClankyToolDefinitions(
 ): ToolDefinition[] {
 	const tools: ToolDefinition[] = [];
 	const includeMainWorkerDelegation = options.includeMainWorkerDelegation ?? true;
-	const scheduleCron = handlers.scheduleCron;
-	if (scheduleCron !== undefined) {
-		tools.push(
-			defineTool({
-				name: "schedule_cron",
-				label: "Schedule Prompt",
-				description: "Create a Clanky scheduled prompt when a scheduler is configured.",
-				promptSnippet:
-					"schedule_cron: schedule a prompt to run later or repeatedly when a Clanky scheduler is configured.",
-				promptGuidelines: ["Set provider/model only when the user asks for a specific model for the scheduled prompt."],
-				parameters: scheduleCronSchema,
-				async execute(_toolCallId, params) {
-					return toolResult(await scheduleCron(normalizeScheduleCronToolInput(params)));
-				},
-			}),
-		);
-	}
 	const workTrackerLink = handlers.workTrackerLink;
 	const externalMcpListTools = handlers.externalMcpListTools;
 	if (externalMcpListTools !== undefined) {
@@ -4048,7 +4005,6 @@ function formatCommandResult(title: string, details: unknown): string {
 	if (title === "Memory" || title.startsWith("Memory ") || title.startsWith("Forget ")) {
 		return formatMemoryCommandResult(title, details);
 	}
-	if (title === "Cron") return formatCronCommandResult(details);
 	return formatGenericCommandResult(title, details);
 }
 
@@ -4283,20 +4239,6 @@ function formatMemoryAtom(atom: Record<string, unknown>): string {
 	return `- ${id} [${scope}/${subjectId}/${type}] ${claim}`;
 }
 
-function formatCronCommandResult(details: unknown): string {
-	if (Array.isArray(details)) return formatRecordListCommandResult("Cron", "Jobs", details.filter(isRecord));
-	if (!isRecord(details)) return formatGenericCommandResult("Cron", details);
-	const jobs = readRecordArray(details, "jobs");
-	if (jobs.length > 0 || details.jobs !== undefined) return formatRecordListCommandResult("Cron", "Jobs", jobs);
-	return formatGenericCommandResult("Cron", details);
-}
-
-function formatRecordListCommandResult(title: string, label: string, records: Record<string, unknown>[]): string {
-	const lines = [title, `${label}: ${records.length}`];
-	for (const record of records) lines.push(`- ${summarizeRecord(record)}`);
-	return lines.join("\n");
-}
-
 function formatGenericCommandResult(title: string, details: unknown): string {
 	if (details === undefined || details === null) return `${title}\nNo data.`;
 	if (Array.isArray(details)) {
@@ -4411,17 +4353,6 @@ function latestMemoryExplanation(ctx: ExtensionCommandContext): string {
 		].join("\n");
 	}
 	return "Why\nNo retrieved memory packet is recorded for the current session yet.";
-}
-
-function normalizeScheduleCronToolInput(input: ScheduleCronToolInput): ScheduleCronToolInput {
-	const output: ScheduleCronToolInput = { ...input };
-	if (output.timeoutSeconds === undefined && input.timeout_seconds !== undefined) {
-		output.timeoutSeconds = input.timeout_seconds;
-	}
-	if (output.idempotencyKey === undefined && input.idempotency_key !== undefined) {
-		output.idempotencyKey = input.idempotency_key;
-	}
-	return output;
 }
 
 function normalizeWorkTrackerLinkToolInput(

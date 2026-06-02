@@ -39,12 +39,6 @@ export interface SessionSearchOptions {
 	limit?: number;
 }
 
-export interface CronIdempotencyRunRecord {
-	key: string;
-	jobId: string;
-	recordedAt: string;
-}
-
 const DEFAULT_SEARCH_LIMIT = 20;
 const MAX_SEARCH_LIMIT = 100;
 
@@ -245,76 +239,6 @@ export class SessionIndexStore {
 	}
 }
 
-export class CronRunLedger {
-	private readonly paths: ClankyPaths;
-	private db: DatabaseSync | undefined;
-
-	constructor(paths: ClankyPaths) {
-		this.paths = paths;
-	}
-
-	async ensure(): Promise<void> {
-		await mkdir(dirname(this.paths.indexDbFile), { recursive: true, mode: 0o700 });
-		const db = this.database();
-		db.exec(`
-			PRAGMA journal_mode = WAL;
-			CREATE TABLE IF NOT EXISTS cron_runs (
-				key TEXT PRIMARY KEY,
-				job_id TEXT NOT NULL,
-				recorded_at TEXT NOT NULL
-			);
-			CREATE INDEX IF NOT EXISTS idx_cron_runs_job_id
-				ON cron_runs (job_id);
-		`);
-	}
-
-	async hasKey(key: string): Promise<boolean> {
-		await this.ensure();
-		const row = this.database().prepare("SELECT key FROM cron_runs WHERE key = ? LIMIT 1").get(cronRunKeyHash(key));
-		return row !== undefined;
-	}
-
-	async recordKey(key: string, jobId: string, now = new Date()): Promise<void> {
-		await this.ensure();
-		const storedKey = cronRunKeyHash(key);
-		this.database()
-			.prepare(`
-				INSERT OR IGNORE INTO cron_runs (
-					key,
-					job_id,
-					recorded_at
-				)
-				VALUES (?, ?, ?)
-			`)
-			.run(storedKey, jobId, now.toISOString());
-	}
-
-	async list(): Promise<CronIdempotencyRunRecord[]> {
-		await this.ensure();
-		const rows = this.database()
-			.prepare(`
-				SELECT key, job_id, recorded_at
-				FROM cron_runs
-				ORDER BY recorded_at DESC
-			`)
-			.all();
-		return rows.map(readCronRunRow).filter((row): row is CronIdempotencyRunRecord => row !== undefined);
-	}
-
-	close(): void {
-		if (this.db === undefined) return;
-		this.db.close();
-		this.db = undefined;
-	}
-
-	private database(): DatabaseSync {
-		if (this.db !== undefined) return this.db;
-		const Database = loadDatabaseSync();
-		this.db = new Database(this.paths.indexDbFile);
-		return this.db;
-	}
-}
-
 export function extractIndexableMessageText(message: SessionMessageEntry["message"]):
 	| {
 			role: SessionIndexRole;
@@ -367,10 +291,6 @@ function stableMessageKey(sessionId: string, role: SessionIndexRole, createdAt: 
 	return `${sessionId}:${role}:${createdAt}:${hash}`;
 }
 
-function cronRunKeyHash(key: string): string {
-	return `sha256:${createHash("sha256").update(key).digest("hex")}`;
-}
-
 function readSearchRow(row: Record<string, unknown>): SessionSearchResult | undefined {
 	const sessionId = readString(row, "session_id");
 	const role = readRole(row.role);
@@ -399,14 +319,6 @@ function readSearchRow(row: Record<string, unknown>): SessionSearchResult | unde
 	const messageKey = readString(row, "message_key");
 	if (messageKey !== undefined) result.messageKey = messageKey;
 	return result;
-}
-
-function readCronRunRow(row: Record<string, unknown>): CronIdempotencyRunRecord | undefined {
-	const key = readString(row, "key");
-	const jobId = readString(row, "job_id");
-	const recordedAt = readString(row, "recorded_at");
-	if (key === undefined || jobId === undefined || recordedAt === undefined) return undefined;
-	return { key, jobId, recordedAt };
 }
 
 function readString(row: Record<string, unknown>, key: string): string | undefined {

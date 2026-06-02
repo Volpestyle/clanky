@@ -11,7 +11,7 @@ Clanky, start with the [Pi quickstart](https://pi.dev/docs/latest/quickstart).
 ## Prerequisites
 
 - Node.js `>=22.19.0`.
-- pnpm `10.33.4` through Corepack or a matching global pnpm install.
+- pnpm `11.4.0` through Corepack or a matching global pnpm install.
 - This repository checked out locally.
 - An OpenAI API key or another Pi-supported model auth path.
 - Optional: a Discord bot token for the built-in agent-owned chat gateway
@@ -27,7 +27,7 @@ Clanky, start with the [Pi quickstart](https://pi.dev/docs/latest/quickstart).
 ```bash
 cd /path/to/clanky-pi
 corepack enable
-corepack prepare pnpm@10.33.4 --activate
+corepack prepare pnpm@11.4.0 --activate
 pnpm install
 export PATH="$PWD/node_modules/.bin:$PATH" # source checkout only
 clanky --help

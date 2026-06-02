@@ -104,7 +104,7 @@ real profile:
 ```bash
 cd /path/to/clanky-pi
 corepack enable
-corepack prepare pnpm@10.33.4 --activate
+corepack prepare pnpm@11.4.0 --activate
 pnpm install
 export PATH="$PWD/node_modules/.bin:$PATH" # source checkout only
 pnpm dev:setup:fresh
