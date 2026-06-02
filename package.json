@@ -11,7 +11,7 @@
 		"browser:playwright": "playwright",
 		"browser-bridge:install": "tsx packages/clanky-browser-bridge/bin/install.mts",
 		"browser-bridge:serve": "tsx packages/clanky-browser-bridge/bin/serve.mts",
-		"check": "biome check --error-on-warnings . && tsgo --noEmit && pnpm --dir ../docs --filter @volpestyle/night-compiler check",
+		"check": "biome check --error-on-warnings . && tsgo --noEmit",
 		"clanky": "tsx agents/clanky/src/bin.ts",
 		"dev:setup:fresh": "tsx scripts/clanky-setup-new-user.ts",
 		"fix": "biome check --write .",

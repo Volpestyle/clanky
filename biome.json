@@ -1,7 +1,7 @@
 {
 	"$schema": "https://biomejs.dev/schemas/2.3.5/schema.json",
 	"files": {
-		"includes": ["**", "!.clanky-tmp", "!apps/docs/dist"]
+		"includes": ["**", "!.clanky-tmp"]
 	},
 	"formatter": {
 		"enabled": true,

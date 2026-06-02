@@ -9,4 +9,3 @@ dist/
 .legacy-backup/
 tmp/
 agents/clanky/src/voice/clankvox/target/
-apps/docs/public/llms*.txt

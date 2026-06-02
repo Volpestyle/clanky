@@ -22,7 +22,6 @@ import {
 	resolveClankyChatGatewayOwner,
 	resolveClankyChatMode,
 	runOpenAiWebSearch,
-	type ScheduleCronToolInput,
 	type SubagentMessageToolInput,
 	saveStoredOpenAiApiKey,
 	shouldStartAgentChatGateway,
@@ -42,10 +41,6 @@ import {
 const calls: string[] = [];
 
 const handlers: ClankyAgentToolHandlers = {
-	scheduleCron: async (input) => {
-		calls.push(`schedule:${input.schedule}:${input.prompt}`);
-		return { scheduled: true, input };
-	},
 	workTrackerLink: async (input) => {
 		calls.push(`tracker:${input.providerKind ?? "custom"}:${input.issueId}:${input.sessionId ?? "none"}`);
 		return { ref: input };
@@ -178,7 +173,6 @@ await assertSubagentPanelCommand();
 await assertClankyCommandCompletions();
 assertWorkTrackerSkillInjection();
 const expectedNames = [
-	"schedule_cron",
 	"mcp_list_tools",
 	"mcp_call",
 	"work_tracker_link",
@@ -207,15 +201,6 @@ if (mainRuntimeTools.some((tool) => tool.name === "delegate_to_main_worker")) {
 }
 await assertOpenAiWebSearchUsesStoredCredential();
 await assertWebBackendStatusDetectsStaleBridgeState();
-
-await executeTool(tools, "schedule_cron", {
-	schedule: "every 1h",
-	prompt: "Summarize",
-	provider: "anthropic",
-	model: "claude-opus-4-5",
-	timeout_seconds: 600,
-	idempotency_key: "agent-tools-cron-smoke",
-} satisfies ScheduleCronToolInput);
 
 await executeTool(tools, "work_tracker_link", {
 	provider_kind: "github-issues",
@@ -324,7 +309,6 @@ if (!voiceLeaveUpdates.some((update) => update.includes("Updating Discord voice 
 await assertRecentDiscordAttachmentsLoadsMediaSources();
 
 const expectedCallPrefixes = [
-	"schedule:",
 	"tracker:",
 	"mcp-call:",
 	"mcp-list:",
