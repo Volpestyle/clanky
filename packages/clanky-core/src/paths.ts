@@ -25,12 +25,9 @@ export interface ClankyPaths {
 	subagentsDbFile: string;
 	subagentSessionsDir: string;
 	indexDbFile: string;
-	httpTokenFile: string;
 	authFile: string;
 	discordVoiceSettingsFile: string;
 	modelsFile: string;
-	socketFile: string;
-	daemonLockFile: string;
 }
 
 export function resolveClankyPaths(options: ResolveClankyPathsOptions = {}): ClankyPaths {
@@ -57,11 +54,8 @@ export function resolveClankyPaths(options: ResolveClankyPathsOptions = {}): Cla
 		subagentsDbFile: join(profileDir, "subagents", "subagents.db"),
 		subagentSessionsDir: join(profileDir, "subagents", "sessions"),
 		indexDbFile: join(profileDir, "index.db"),
-		httpTokenFile: join(homeDir, ".token"),
 		authFile: join(profileDir, "auth.json"),
 		discordVoiceSettingsFile: join(profileDir, "discord-voice.json"),
 		modelsFile: join(profileDir, "models.json"),
-		socketFile: join(profileDir, ".sock"),
-		daemonLockFile: join(profileDir, ".daemon.lock"),
 	};
 }
