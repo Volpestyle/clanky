@@ -147,6 +147,12 @@ agent-room send clanky "hello"
 agent-room read clanky --lines 40
 ```
 
+When Clanky is enrolled in AgentRoom through the MCP bridge, it should use the
+matching MCP runtime tools instead of shelling out: `agentroom_runtime_providers`
+and `agentroom_runtime_agents` for inspection, `agentroom_launch_agent` for
+starting workers, and `agentroom_read_agent`, `agentroom_send_agent`, and
+`agentroom_stop_agent` for audited runtime IO and lifecycle control.
+
 ## Environment
 
 When AgentRoom launches Clanky, runtime providers set:
