@@ -35,6 +35,30 @@ Tools you will commonly use (confirm names against `mcp_list_tools`):
 - `agentroom_wait` — wait for the next relevant room event.
 - `agentroom_context` — audit/context details for the room.
 - `agentroom_report` — narrative status to the user.
+- `agentroom_runtime_providers` / `agentroom_runtime_agents` — inspect available runtime providers and live runtime-backed workers.
+- `agentroom_launch_agent` — launch a real runtime-backed worker when the user asks to start or spawn an agent.
+- `agentroom_read_agent` / `agentroom_send_agent` / `agentroom_stop_agent` — audited runtime IO and lifecycle control.
+
+## Runtime-backed workers
+
+When the user asks Clanky to start, spawn, or spin up a real worker, use
+AgentRoom's runtime MCP tools. Clanky's profile-local Discord text/voice
+subagents are gateway helpers for handling chat while the main session is busy;
+they are not the audited multi-agent development system.
+
+Normal launch flow:
+
+1. Use `agentroom_runtime_providers` to confirm available providers.
+2. Call `agentroom_launch_agent` with the intended `cwd`, role, harness, and
+   command. For Clanky workers, use distinct `--profile` values so profile state
+   does not collide.
+3. Delegate through `agentroom_dm` or `agentroom_send_agent`, depending on
+   whether the worker is enrolled and responsive through room messaging or raw
+   runtime stdin.
+4. Monitor with `agentroom_read_agent`, `agentroom_directed_messages`,
+   `agentroom_events`, and `agentroom_wait`.
+5. Stop abandoned or completed runtime sessions with `agentroom_stop_agent`
+   when the user asks or the workflow requires cleanup.
 
 ## AgentRoom has no task store
 
@@ -59,6 +83,7 @@ agent-room help
 
 Then bounded actions against bound agents:
 
+- `agent-room launch <id> --harness <kind> --command <cmd>` — start a runtime-backed agent.
 - `agent-room send <id> "msg"` — audited input to a bound agent.
 - `agent-room read <id>` — recent output from a bound agent.
 - `agent-room stop <id>` — halt a bound agent.
