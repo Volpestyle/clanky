@@ -28,7 +28,6 @@ The installer:
 1. Generates an extension RSA key in `~/.clanky/browser-bridge/extension-key.pem` (first run only) and derives a stable extension id.
 2. Generates a 32-byte hex auth token (first run only) and writes both `~/.clanky/browser-bridge/config.json` (daemon) and `~/.clanky/browser-bridge/extension/config.json` (bundled with the extension).
 3. Materializes the extension into `~/.clanky/browser-bridge/extension/` with the key baked into `manifest.json`.
-4. Cleans up any stale `com.clanky.browser_bridge.json` native messaging manifests written by older versions of this package.
 
 Finish the install:
 

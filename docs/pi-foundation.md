@@ -90,7 +90,6 @@ uses its own home and profile layout instead:
 ```text
 ~/.clanky/
   .profile
-  .token
   skills/
   profiles/
     <profile>/

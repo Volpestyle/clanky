@@ -12,13 +12,6 @@ async function main(): Promise<void> {
 	lines.push(`Extension config:    ${result.extensionConfigFile}`);
 	lines.push(`Bridge port:         ${result.port}`);
 	lines.push(`Auth token:          ${result.tokenPreview} (32 bytes; full value in config files)`);
-	if (result.cleanedNativeMessagingManifests.length > 0) {
-		lines.push("");
-		lines.push("Removed legacy native-messaging manifests:");
-		for (const file of result.cleanedNativeMessagingManifests) {
-			lines.push(`  - ${file}`);
-		}
-	}
 	lines.push("");
 	lines.push("Next steps:");
 	lines.push("  1. Start the daemon (leave running):");
