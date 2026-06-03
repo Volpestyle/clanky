@@ -166,7 +166,7 @@ export async function loadBrowserBridgeState(options: BrowserBridgeClientOptions
 		raw = await readFile(paths.stateFile, "utf8");
 	} catch {
 		throw new BrowserBridgeUnavailableError(
-			`Browser bridge state file not found at ${paths.stateFile}. Run "pnpm browser-bridge:install" and load the unpacked extension in Helium/Chrome/Brave so the native host can register.`,
+			`Browser bridge state file not found at ${paths.stateFile}. Run "pnpm browser-bridge:install", start "pnpm browser-bridge:serve", and load the unpacked extension in Helium/Chrome/Brave.`,
 		);
 	}
 	let parsed: unknown;

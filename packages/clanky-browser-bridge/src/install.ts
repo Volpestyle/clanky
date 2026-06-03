@@ -7,7 +7,7 @@ import {
 	randomBytes,
 } from "node:crypto";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveBrowserBridgePaths, resolveBrowserBridgePort } from "./paths.ts";
@@ -25,10 +25,7 @@ export interface InstallResult {
 	extensionConfigFile: string;
 	port: number;
 	tokenPreview: string;
-	cleanedNativeMessagingManifests: string[];
 }
-
-const NATIVE_HOST_NAME = "com.clanky.browser_bridge";
 
 export async function installBrowserBridge(options: InstallOptions = {}): Promise<InstallResult> {
 	const env = options.env ?? process.env;
@@ -67,19 +64,6 @@ export async function installBrowserBridge(options: InstallOptions = {}): Promis
 	await chmod(paths.configFile, 0o600);
 	await writeFile(paths.extensionConfigFile, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 
-	const cleaned = await cleanupNativeMessagingManifests(env);
-
-	// Remove the legacy native-messaging host script if it still exists from the
-	// earlier transport. Safe to drop because no browser will spawn it anymore.
-	const legacyHostFile = join(paths.bridgeDir, "host.mjs");
-	if (existsSync(legacyHostFile)) {
-		try {
-			await unlink(legacyHostFile);
-		} catch {
-			// best effort
-		}
-	}
-
 	return {
 		bridgeDir: paths.bridgeDir,
 		extensionDir: paths.extensionDir,
@@ -88,7 +72,6 @@ export async function installBrowserBridge(options: InstallOptions = {}): Promis
 		extensionConfigFile: paths.extensionConfigFile,
 		port,
 		tokenPreview: `${token.slice(0, 4)}…${token.slice(-4)}`,
-		cleanedNativeMessagingManifests: cleaned,
 	};
 }
 
@@ -140,27 +123,4 @@ async function loadOrGenerateToken(configFile: string, expectedPort: number): Pr
 		}
 	}
 	return randomBytes(32).toString("hex");
-}
-
-async function cleanupNativeMessagingManifests(env: NodeJS.ProcessEnv): Promise<string[]> {
-	if (process.platform !== "darwin") return [];
-	const home = env.HOME ?? process.env.HOME;
-	if (home === undefined || home.length === 0) return [];
-	const appSupport = join(home, "Library", "Application Support");
-	const candidates = [
-		join(appSupport, "net.imput.helium", "NativeMessagingHosts", `${NATIVE_HOST_NAME}.json`),
-		join(appSupport, "Google", "Chrome", "NativeMessagingHosts", `${NATIVE_HOST_NAME}.json`),
-		join(appSupport, "BraveSoftware", "Brave-Browser", "NativeMessagingHosts", `${NATIVE_HOST_NAME}.json`),
-	];
-	const cleaned: string[] = [];
-	for (const file of candidates) {
-		if (!existsSync(file)) continue;
-		try {
-			await unlink(file);
-			cleaned.push(file);
-		} catch {
-			// best effort
-		}
-	}
-	return cleaned;
 }
