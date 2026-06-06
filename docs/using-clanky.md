@@ -1,6 +1,6 @@
 # Using Clanky
 
-![Clanky and companion moving through a green forest](branding/clanky-forest-run-1024.png)
+![Clanky and companion moving through a green forest](../branding/clanky-forest-run-1024.png)
 
 Once setup is done, treat Clanky as your personal Pi agent. Start it in the repo
 or workspace you want it to work on:

@@ -1,6 +1,6 @@
 # Start Here
 
-![Clanky and companion overlooking a mountain forest](branding/clanky-forest-overlook-1024.png)
+![Clanky and companion overlooking a mountain forest](../branding/clanky-forest-overlook-1024.png)
 
 Clanky is a personal agent built on [Pi](https://pi.dev). Learn it through
 three questions:
