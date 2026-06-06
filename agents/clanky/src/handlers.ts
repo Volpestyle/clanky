@@ -52,17 +52,15 @@ import type { ClankyStores } from "./stores.ts";
 /**
  * Build the agent-tool handlers wired against standalone clanky stores.
  *
- * Phase 1: only the gateway-uncoupled handlers are wired up:
- *
  * - memory.* (packet, remember, search, forget, export, consent, self)
  * - profileStatus
  * - listSkills + createSkill
  * - workTrackerLink for provider-neutral refs after tracker MCP/CLI/skill use
+ * - external MCP status, tool listing, and tool calls
  * - beforeProviderRequest (passthrough so the logging extension hook fires)
  *
  * Intentionally omitted (defer to a later phase):
  *
- * - externalMcpCall / externalMcpStatus (gateway-owned external MCP launcher)
  * - indexMessage (depends on SessionIndexStore)
  */
 export function createClankyHandlers(
