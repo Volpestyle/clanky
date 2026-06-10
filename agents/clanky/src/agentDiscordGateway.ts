@@ -1,5 +1,5 @@
 import { appendFile } from "node:fs/promises";
-import { DiscordChatGatewayProvider, type DiscordGatewayClient } from "@agentroom/chat-discord";
+import { DiscordChatGatewayProvider, type DiscordGatewayClient } from "@clanky/chat-discord";
 import {
 	type ChatInboxMessage,
 	type ClankyDiscordCredentialKind,

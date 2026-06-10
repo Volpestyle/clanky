@@ -301,8 +301,8 @@ function buildRuntimeFactory(opts: {
 					...createClankyExtensionFactories(handlers, { env }),
 					createToolSearchExtensionFactory({
 						env,
-						mcpClientOptions: { cwd: runtimeCwd, env, authStorage, paths },
-						mcpServers: (ctx) => resolveMcpServerConfigs({ cwd: ctx.cwd, env, authStorage, paths }),
+						mcpClientOptions: { cwd: runtimeCwd, env, paths },
+						mcpServers: (ctx) => resolveMcpServerConfigs({ cwd: ctx.cwd, env, paths }),
 					}),
 					...additionalExtensionFactories,
 					discordAuthFactory,

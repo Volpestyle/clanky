@@ -1,16 +1,11 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
-import type { AuthStorage } from "@earendil-works/pi-coding-agent";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { DEFAULT_CLANKY_DISCORD_PROVIDER_ID, loadStoredDiscordCredential } from "../discord-credentials.ts";
 import type { ClankyPaths } from "../paths.ts";
-
-const require = createRequire(import.meta.url);
 
 export interface ExternalMcpCallInput {
 	server: string;
@@ -26,7 +21,6 @@ export interface ExternalMcpClientOptions {
 	cwd?: string;
 	env?: NodeJS.ProcessEnv;
 	timeoutMs?: number;
-	authStorage?: AuthStorage;
 	paths?: Pick<ClankyPaths, "mcpServersFile">;
 }
 
@@ -85,17 +79,6 @@ export interface ProfileMcpServerStore {
 }
 
 const DEFAULT_MCP_TIMEOUT_MS = 30_000;
-const DISCORD_DEFAULT_TOOLS = [
-	"discord_whoami",
-	"discord_list_guilds",
-	"discord_list_channels",
-	"discord_read_messages",
-	"discord_recent_activity",
-	"discord_recent_attachments",
-	"discord_send_message",
-	"discord_list_emojis",
-	"discord_add_reaction",
-];
 
 export async function listExternalMcpTools(
 	input: ExternalMcpListToolsInput = {},
@@ -222,22 +205,6 @@ export function resolveMcpServerConfigs(
 				// its surface stays in lockstep with the live room. Restricting to a hardcoded subset
 				// previously hid the roster/feed/directed-message tools the operator skill tells the
 				// agent to use, yielding "tool not allowed" errors. The agentroom server is trusted.
-			},
-			cwd,
-			env,
-		);
-	}
-
-	if (shouldAutoAddDiscord(env) && configs.discord === undefined) {
-		const command = resolveDiscordMcpCommand(env);
-		configs.discord = resolveServerConfig(
-			{
-				command: command.command,
-				args: splitArgs(env.CLANKY_DISCORD_MCP_ARGS) ?? command.args,
-				cwd,
-				description: "Discord guild/channel/message/media/send/reaction tools from the local discord-mcp package.",
-				allowedTools: DISCORD_DEFAULT_TOOLS,
-				...(resolveStoredDiscordMcpEnv(env, options.authStorage) ?? {}),
 			},
 			cwd,
 			env,
@@ -426,44 +393,6 @@ function resolveServerConfig(
 function shouldAutoAddAgentRoom(env: NodeJS.ProcessEnv, cwd: string): boolean {
 	if (env.CLANKY_AGENTROOM_MCP === "0" || env.CLANKY_AGENTROOM_MCP === "false") return false;
 	return env.AGENTROOM === "1" || existsSync(`${env.AGENTROOM_CWD ?? cwd}/.agentroom/config.yaml`);
-}
-
-function shouldAutoAddDiscord(env: NodeJS.ProcessEnv): boolean {
-	return env.CLANKY_DISCORD_MCP !== "0" && env.CLANKY_DISCORD_MCP !== "false";
-}
-
-function resolveStoredDiscordMcpEnv(
-	env: NodeJS.ProcessEnv,
-	authStorage: AuthStorage | undefined,
-): Pick<ClankyMcpServerConfig, "env"> | undefined {
-	if (authStorage === undefined || hasDiscordTokenEnv(env)) return undefined;
-	const providerId = env.CLANKY_DISCORD_PROVIDER_ID?.trim() || DEFAULT_CLANKY_DISCORD_PROVIDER_ID;
-	const stored = loadStoredDiscordCredential(authStorage, providerId);
-	if (stored === undefined) return undefined;
-	return {
-		env: {
-			DISCORD_MCP_PROVIDER_ID: stored.providerId,
-			DISCORD_MCP_TOKEN: stored.payload.token,
-			DISCORD_MCP_CREDENTIAL_KIND: stored.payload.credentialKind,
-		},
-	};
-}
-
-function hasDiscordTokenEnv(env: NodeJS.ProcessEnv): boolean {
-	return [env.DISCORD_MCP_TOKEN, env.DISCORD_TOKEN, env.CLANKY_DISCORD_TOKEN].some(
-		(value) => value !== undefined && value.trim().length > 0,
-	);
-}
-
-function resolveDiscordMcpCommand(env: NodeJS.ProcessEnv): { command: string; args: string[] } {
-	if (env.CLANKY_DISCORD_MCP_COMMAND !== undefined && env.CLANKY_DISCORD_MCP_COMMAND.trim().length > 0) {
-		return { command: env.CLANKY_DISCORD_MCP_COMMAND.trim(), args: ["mcp"] };
-	}
-	try {
-		return { command: process.execPath, args: [require.resolve("discord-mcp/bin/discord-mcp"), "mcp"] };
-	} catch {
-		return { command: "discord-mcp", args: ["mcp"] };
-	}
 }
 
 function parseMcpTransportKind(

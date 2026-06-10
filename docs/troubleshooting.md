@@ -183,18 +183,13 @@ Check:
 ```
 
 Custom MCP servers come from `CLANKY_MCP_SERVERS`, a JSON object keyed by server
-name. Discord MCP is auto-added unless disabled.
+name. Discord tools are native Clanky tools, not an MCP server; they appear
+when the profile has a Discord credential.
 When `CLANKY_TOOL_SEARCH=1` is set for supported Anthropic Claude 4+ models,
 Clanky registers configured MCP server tools as direct `mcp__server__tool`
 wrappers. Servers can set `deferLoading: true` and use
 `toolOverrides.<tool>.deferLoading: false` for hot tools that should remain
 loaded while the rest are discovered on demand.
-
-Disable auto-adds:
-
-```bash
-CLANKY_DISCORD_MCP=0
-```
 
 ## Docs Checks
 
