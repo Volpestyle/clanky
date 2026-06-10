@@ -101,8 +101,6 @@ export function createClankyHandlers(
 			chatMode: resolveClankyChatMode(env),
 			chatGatewayOwner: resolveClankyChatGatewayOwner(env),
 			agentChatGatewayEnabled: shouldStartAgentChatGateway(env),
-			workTracker: env.CLANKY_WORK_TRACKER,
-			workTrackerProviderKind: env.CLANKY_WORK_TRACKER_PROVIDER_KIND,
 		}),
 
 		workTrackerLink: async (input) => stores.workTrackerRefs.link(input),

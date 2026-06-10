@@ -297,7 +297,7 @@ function buildRuntimeFactory(opts: {
 			settingsManager,
 			resourceLoaderOptions: {
 				extensionFactories: [
-					...createClankyExtensionFactories(handlers, { env }),
+					...createClankyExtensionFactories(handlers),
 					createToolSearchExtensionFactory({
 						env,
 						mcpClientOptions: { cwd: runtimeCwd, env, paths },

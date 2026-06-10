@@ -224,7 +224,6 @@ function formatClankySetupStatus(deps: ClankySetupWizardDeps): string {
 		`ElevenLabs: ${elevenLabsStatus.available ? (elevenLabsStatus.activeSource ?? "configured") : "missing"}`,
 		`xAI media: ${xaiStatus.available ? (xaiStatus.activeSource ?? "configured") : "missing"}`,
 		`MCP servers: ${Object.keys(profileMcp.servers).length} profile-local (${profileMcp.path})`,
-		`Work tracker: ${env.CLANKY_WORK_TRACKER ?? "profile/default"} (${env.CLANKY_WORK_TRACKER_PROVIDER_KIND ?? "unknown"})`,
 		"",
 		"Connector ownership:",
 		"Clanky-owned credentials live in this profile auth store.",
@@ -265,7 +264,6 @@ function formatClankyStatusDashboard(deps: ClankySetupWizardDeps): string {
 		`Chat mode: ${resolveClankyChatMode(env)}`,
 		`Gateway owner: ${resolveClankyChatGatewayOwner(env)}`,
 		`MCP servers: ${Object.keys(profileMcp.servers).length} profile-local`,
-		`Work tracker: ${env.CLANKY_WORK_TRACKER ?? "profile/default"} (${env.CLANKY_WORK_TRACKER_PROVIDER_KIND ?? "unknown"})`,
 	];
 	const nextSteps = formatStatusNextSteps(
 		openAiStatus.available,

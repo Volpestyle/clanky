@@ -9,7 +9,6 @@ import {
 	type JsonRecord,
 	type MainAgentActivityToolInput,
 	type MainAgentCancelToolInput,
-	maybeInjectWorkTrackerSkill,
 	resolveElevenLabsApiKeySync,
 	resolveOpenAiApiKeySync,
 	resolveXAiApiKeySync,
@@ -795,7 +794,6 @@ export async function startAgentDiscordVoiceBridge(
 		subagents,
 		input.subagentStore,
 		input.voiceLogPath,
-		input.env ?? process.env,
 	);
 	await bridge.start();
 	return bridge;
@@ -911,7 +909,6 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 	private readonly subagents: DiscordVoiceSubagentCoordinator | undefined;
 	private readonly subagentStore: ClankySubagentStore | undefined;
 	private readonly voiceLogPath: string | undefined;
-	private readonly env: NodeJS.ProcessEnv;
 	private realtime: VoiceRealtimeClientLike | undefined;
 	private vox: VoiceVoxClientLike | undefined;
 	private speechSynthesizer: VoiceSpeechSynthesizerLike | undefined;
@@ -975,7 +972,6 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		subagents: DiscordVoiceSubagentCoordinator | undefined,
 		subagentStore: ClankySubagentStore | undefined,
 		voiceLogPath: string | undefined,
-		env: NodeJS.ProcessEnv,
 	) {
 		this.runtime = runtime;
 		this.client = client;
@@ -986,7 +982,6 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 		this.subagents = subagents;
 		this.subagentStore = subagentStore;
 		this.voiceLogPath = voiceLogPath;
-		this.env = env;
 	}
 
 	async start(): Promise<void> {
@@ -2451,9 +2446,8 @@ class AgentDiscordVoiceBridge implements ClankyAgentDiscordVoiceHandle {
 			"",
 			"Answer concisely for spoken playback in the active Discord voice channel.",
 		].join("\n");
-		const trackedMessage = maybeInjectWorkTrackerSkill(message, this.env);
 		return await this.runtimeTurnQueue.enqueue(async () => {
-			return await sendUserMessageAndWaitForAssistantText(this.runtime, trackedMessage);
+			return await sendUserMessageAndWaitForAssistantText(this.runtime, message);
 		});
 	}
 
