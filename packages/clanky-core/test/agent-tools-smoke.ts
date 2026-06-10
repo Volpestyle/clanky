@@ -340,17 +340,11 @@ function assertChatModeHelpers(): void {
 	if (resolveClankyChatMode({}) !== "agent-owned") {
 		throw new Error("Expected default chat mode to be agent-owned");
 	}
-	if (resolveClankyChatMode({ AGENTROOM: "1" }) !== "agent-owned-in-room") {
-		throw new Error("Expected AGENTROOM=1 to preserve agent-owned gateway while marking room participation");
+	if (resolveClankyChatGatewayOwner({ CLANKY_CHAT_GATEWAY_OWNER: "off" }) !== "off") {
+		throw new Error("Expected CLANKY_CHAT_GATEWAY_OWNER=off to disable the gateway");
 	}
-	if (!shouldStartAgentChatGateway({ AGENTROOM: "1" })) {
-		throw new Error("Expected AGENTROOM=1 not to disable agent-owned chat gateway startup");
-	}
-	if (resolveClankyChatGatewayOwner({ CLANKY_CHAT_GATEWAY_OWNER: "room" }) !== "room") {
-		throw new Error("Expected CLANKY_CHAT_GATEWAY_OWNER=room to select room-owned gateway mode");
-	}
-	if (shouldStartAgentChatGateway({ CLANKY_CHAT_GATEWAY_OWNER: "room" })) {
-		throw new Error("Expected room-owned gateway mode to disable agent-owned gateway startup");
+	if (shouldStartAgentChatGateway({ CLANKY_CHAT_GATEWAY_OWNER: "off" })) {
+		throw new Error("Expected gateway owner off to disable agent-owned gateway startup");
 	}
 }
 

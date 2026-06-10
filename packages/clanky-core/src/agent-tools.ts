@@ -616,7 +616,6 @@ const MEMORY_REFLECTION_MIN_CHARS = 3000;
 const MEMORY_REFLECTION_MAX_CHARS = 18000;
 const WEB_OPERATOR_SKILL_NAME = "clanky-web-operator";
 const MEDIA_OPERATOR_SKILL_NAME = "clanky-media-operator";
-const AGENTROOM_OPERATOR_SKILL_NAME = "clanky-agentroom-operator";
 const WORK_TRACKER_SKILL_NAME = "clanky-work-tracker";
 const SUBAGENT_PANEL_WIDGET_KEY = "clanky-subagents";
 const SUBAGENT_PANEL_STATUS_KEY = "clanky-subagents";
@@ -720,10 +719,7 @@ export function createClankyExtensionFactories(
 					}
 				}
 				const transformed = maybeInjectWorkTrackerSkill(
-					maybeInjectAgentRoomOperatorSkill(
-						maybeInjectWebOperatorSkill(maybeInjectMediaOperatorSkill(event.text, env), env),
-						env,
-					),
+					maybeInjectWebOperatorSkill(maybeInjectMediaOperatorSkill(event.text, env), env),
 					env,
 				);
 				if (transformed === event.text) return { action: "continue" };
@@ -2950,7 +2946,7 @@ export function createClankyToolDefinitions(
 					"Use when an external request needs coding, deep research, multi-step operations, or other work likely to take more than 1-2 minutes.",
 					"Include enough context in prompt for the main worker to proceed without rereading the external conversation.",
 					"After delegating, tell the user that the existing main session has picked it up; do not call it a new subagent or imply a worker was spawned.",
-					"For tool-heavy or durable user requests — including phrasing like 'spawn an agent', 'spin up a worker', 'make a subagent', 'set up an agent that monitors X', AgentRoom collaboration, or anything else needing tools you do not have — dispatch this immediately with the user's verbatim request as the prompt and a short title you derive yourself. Do not interrogate the user to spec scope, name, tools, personality, or one-off-vs-reusable first. Remember this tool only hands off to the existing main session — main itself decides whether to do the work directly, spawn an AgentRoom agent, spawn a Pi worker, or route elsewhere. Your job is to delegate cleanly, not to pick the execution path.",
+					"For tool-heavy or durable user requests — including phrasing like 'spawn an agent', 'spin up a worker', 'make a subagent', 'set up an agent that monitors X', or anything else needing tools you do not have — dispatch this immediately with the user's verbatim request as the prompt and a short title you derive yourself. Do not interrogate the user to spec scope, name, tools, personality, or one-off-vs-reusable first. Remember this tool only hands off to the existing main session — main itself decides whether to do the work directly, fan out to herdr panes, spawn a Pi worker, or route elsewhere. Your job is to delegate cleanly, not to pick the execution path.",
 				],
 				parameters: delegateToMainWorkerSchema,
 				async execute(_toolCallId, params) {
@@ -3730,7 +3726,7 @@ export function createClankyToolDefinitions(
 				description: "Send a Discord message and optionally upload local file attachments to a channel.",
 				promptSnippet: "discord_send_message: send user-approved messages or upload generated local files to Discord.",
 				promptGuidelines: [
-					"Use Clanky's agent-owned Discord credential only; never use AgentRoom room connector tokens.",
+					"Use Clanky's agent-owned Discord credential only.",
 					"Confirm before sending sensitive files, high-impact messages, or messages to ambiguous channels.",
 				],
 				parameters: discordSendMessageSchema,
@@ -3888,14 +3884,6 @@ export function maybeInjectMediaOperatorSkill(text: string, env: NodeJS.ProcessE
 	});
 }
 
-export function maybeInjectAgentRoomOperatorSkill(text: string, env: NodeJS.ProcessEnv = process.env): string {
-	return maybeInjectSkill(text, env, {
-		autoEnvVar: "CLANKY_AGENTROOM_OPERATOR_AUTO_SKILL",
-		skillName: AGENTROOM_OPERATOR_SKILL_NAME,
-		predicate: shouldUseAgentRoomOperatorSkill,
-	});
-}
-
 export function maybeInjectWorkTrackerSkill(text: string, env: NodeJS.ProcessEnv = process.env): string {
 	return maybeInjectSkill(text, env, {
 		autoEnvVar: "CLANKY_WORK_TRACKER_AUTO_SKILL",
@@ -3950,17 +3938,6 @@ export function shouldUseMediaOperatorSkill(text: string): boolean {
 	) {
 		return true;
 	}
-	return false;
-}
-
-export function shouldUseAgentRoomOperatorSkill(text: string): boolean {
-	if (/\bagent[- ]?room\b/i.test(text)) return true;
-	if (/\bagent-room\b/i.test(text)) return true;
-	if (/\bAGENTROOM_[A-Z_]+\b/.test(text)) return true;
-	if (/\b(room|agentroom)\b.{0,40}\b(messages?|tasks?|workers?|agents?|runtime|coordination|dm)\b/i.test(text)) {
-		return true;
-	}
-	if (/\b(read|send|nudge|launch|stop)\b.{0,40}\b(room )?(worker|agent)\b/i.test(text)) return true;
 	return false;
 }
 

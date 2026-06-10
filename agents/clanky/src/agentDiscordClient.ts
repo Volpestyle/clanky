@@ -1,8 +1,8 @@
 // IMPORTANT: import discord.js primitives via @clanky/chat-discord so we
 // share the SAME discord.js module instance the user-token patches in
 // chat-discord/discordUserTokenPatches.ts resolve. Importing
-// `discord.js` directly here pulled in clanky-pi's own copy of the package,
-// leaving the agent-room copy unpatched and crashing on user-token READY.
+// `discord.js` directly here pulled in a second copy of the package,
+// leaving the patched copy unused and crashing on user-token READY.
 import {
 	applyDiscordUserTokenPatches,
 	DiscordClient,
