@@ -60,7 +60,3 @@ Example:
 - Send exactly the user-requested content when clear.
 - For vague requests like "send me a message," use a short harmless test message only after the destination is clear.
 - Do not claim a message was sent unless the tool returns success; include the message ID when available.
-
-## AgentRoom boundary
-
-AgentRoom owns room state and Discord projection semantics. Use AgentRoom MCP tools for room coordination, and use Discord MCP tools only for Discord-specific reads/actions.

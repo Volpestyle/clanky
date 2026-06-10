@@ -91,8 +91,7 @@ renders speakable text that the realtime agent already decided to say.
 
 `agents/clanky/src/discordGatewayController.ts` decides whether the current
 Discord adapter runs as an agent-owned chat client, a voice-only client, or no
-Discord client. Room-owned AgentRoom text connectors do not own this media
-gateway; voice uses Clanky's agent-owned Discord credential.
+Discord client. Voice uses Clanky's agent-owned Discord credential.
 
 `agents/clanky/src/agentDiscordVoice.ts` is the TypeScript voice orchestrator.
 It resolves settings, starts the selected realtime agent client, starts the
@@ -199,7 +198,7 @@ runtime through a serial queue so voice requests do not race each other.
 The voice supervisor is a real Clanky subagent: it uses the same runtime
 factory shape as the main agent, with the subagent effort default. Its context
 explicitly says that it is below the main foreground Clanky agent, that the
-main agent owns the user's primary window, AgentRoom/tmux authority, and final
+main agent owns the user's primary window, multiplexer authority, and final
 foreground coordination, and that the realtime voice agent owns live speech and
 media.
 

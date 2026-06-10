@@ -55,11 +55,10 @@ Common causes:
 
 - No Discord credential is stored and `CLANKY_DISCORD_TOKEN` is not set.
 - Clanky needs a restart after `/discord-login`.
-- `CLANKY_CHAT_GATEWAY_OWNER=room` or `off` is suppressing the agent-owned
-  gateway.
+- `CLANKY_CHAT_GATEWAY_OWNER=off` is suppressing the gateway.
 - The message does not match DMs, mentions, replies, wake names, conversation
   binding, or engagement-window rules.
-- Another owner is already handling the same Discord conversation.
+- Another Clanky instance is already handling the same Discord conversation.
 
 ## Discord Subagents Look Stuck
 
@@ -71,8 +70,8 @@ Check:
 clanky logs --profile personal --home ~/.clanky
 ```
 
-Use AgentRoom for real multi-agent room work. Clanky subagents are only the
-agent-owned Discord multitasking path.
+Clanky's gateway subagents are only the Discord multitasking path. For real
+multi-agent work, fan out into herdr panes instead.
 
 ## Discord Voice Does Not Join
 
@@ -184,8 +183,7 @@ Check:
 ```
 
 Custom MCP servers come from `CLANKY_MCP_SERVERS`, a JSON object keyed by server
-name. AgentRoom MCP is auto-added when enrolled in a room or when
-`.agentroom/config.yaml` exists. Discord MCP is auto-added unless disabled.
+name. Discord MCP is auto-added unless disabled.
 When `CLANKY_TOOL_SEARCH=1` is set for supported Anthropic Claude 4+ models,
 Clanky registers configured MCP server tools as direct `mcp__server__tool`
 wrappers. Servers can set `deferLoading: true` and use
@@ -195,21 +193,8 @@ loaded while the rest are discovered on demand.
 Disable auto-adds:
 
 ```bash
-CLANKY_AGENTROOM_MCP=0
 CLANKY_DISCORD_MCP=0
 ```
-
-## AgentRoom Launch Works But Discord Ownership Is Confusing
-
-Remember the two axes:
-
-- `AGENTROOM=1` means Clanky is participating in a room.
-- `CLANKY_CHAT_GATEWAY_OWNER` decides whether Clanky starts its own Discord
-  gateway.
-
-Use `CLANKY_CHAT_GATEWAY_OWNER=room` when AgentRoom owns the Discord connector.
-Use agent-owned Discord only when this Clanky profile owns the Discord
-conversation.
 
 ## Docs Checks
 

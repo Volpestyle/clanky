@@ -4,15 +4,12 @@
 
 Clanky is a personal Pi agent with profile state, memory, a canonical Pi
 session thread, communication gateway adapters, subagents, media tools,
-work-tracker refs, bundled skills, and AgentRoom participation.
+work-tracker refs, and bundled skills.
 
 It is not a separate daemon or scheduler. Pi supplies the terminal agent
-runtime. Clanky adds the personal layer. AgentRoom supplies the multi-agent room
-when Clanky needs to coordinate with other agents.
-
-Use Clanky when you want one agent that is yours. Use AgentRoom when you need a
-shared room around multiple agents, runtime audit, handoffs, tracker-aware
-coordination, and mobile checks.
+runtime. Clanky adds the personal layer. When work needs more than one agent,
+Clanky orchestrates subagents as [herdr](https://herdr.dev) panes — visible,
+inspectable terminal sessions in the same multiplexer you already run him in.
 
 ## 1. What You Can Do
 
@@ -20,19 +17,18 @@ Use Clanky as the agent that is always yours:
 
 - work in a repo through the Pi TUI with Clanky's persona, skills, memory, and
   profile-local credentials
-- keep separate profiles for personal work, room leads, reviewers, voice tests,
-  or temporary experiments
+- keep separate profiles for personal work, reviewers, voice tests, or
+  temporary experiments
 - store and inspect source-grounded memories with explicit privacy controls
 - connect external communication gateways, with Discord as the built-in
   agent-owned text adapter for DMs, mentions, replies, and channel bindings
 - let gateway side requests route to subagents while the main TUI session keeps
   working
+- fan out multi-agent work into herdr panes and watch every subagent run
 - join live voice through the Discord/ClankVox media adapter,
   transcribe speakers, speak through Realtime or ElevenLabs, and delegate
   durable work back to Pi
 - generate or inspect web/media artifacts through the bundled operator skills
-- participate in AgentRoom as a lead, worker, reviewer, or standalone personal
-  agent
 
 <!-- Capture backlog:
 - docs/assets/gifs/clanky-tui-discord.gif: local TUI work continuing while a Discord mention routes through a subagent.
@@ -48,39 +44,33 @@ Clanky is strongest when the work needs personal context plus tools:
 - deciding whether an external gateway message needs a response or should be skipped
 - splitting gateway side work into subagents so the foreground session stays
   useful
+- fanning out parallel work into herdr panes and synthesizing the results
 - using browser, web search, media, Linear, Discord, or MCP skills when the task
   calls for them
 - answering live voice questions quickly and handing longer work to Pi
-- joining an AgentRoom room and coordinating through room messages, DMs, waits,
-  reports, agent state, and audited runtime flow
-
-Let AgentRoom handle multi-agent room topology, runtime launch, audited
-send/read, room-owned chat connectors, tracker-aware coordination, and mobile
-control. Let Clanky handle the personal profile, memory, agent-owned gateway
-credentials, voice settings, skills, and foreground Pi work.
 
 ## 3. Mental Model
 
 ```mermaid
 flowchart TB
   user["Human"]
+  herdr["herdr<br/>terminal agent multiplexer"]
   tui["Pi TUI"]
   thread["Clanky Pi session thread<br/>canonical messaging"]
   clanky["Clanky runtime"]
   profile["Profile<br/>auth, memory, sessions, skills"]
-  chat["Communication gateway adapters<br/>Discord today, others later"]
-  voice["Voice/media gateway adapters<br/>ClankVox package"]
-  vox["ClankVox<br/>Discord today, other transports later"]
-  room["AgentRoom<br/>optional room participation"]
+  chat["Discord chat gateway<br/>agent-owned"]
+  voice["Voice/media gateway<br/>ClankVox package"]
+  subagents["Subagent panes<br/>herdr"]
 
-  user --> tui
+  user --> herdr
+  herdr --> tui
   tui --> thread
   thread --> clanky
   clanky --> profile
   chat <--> thread
   clanky --> voice
-  voice --> vox
-  clanky <--> room
+  clanky --> subagents
 ```
 
 Read it as:
@@ -88,13 +78,12 @@ Read it as:
 - Pi owns the TUI, sessions, model runtime, slash commands, and local repo tools.
 - Clanky configures Pi with persona, profile state, memory, skills, connectors,
   and voice/media capabilities.
-- Clanky's built-in messaging is the Pi session thread. Discord, AgentRoom, and
-  future Slack, Telegram, SMS, webhook, or huddle-style integrations are
-  gateways into or out of that thread.
-- ClankVox is Clanky's main voice/media transport package. It handles Discord
-  voice and Go Live, and future platform transports belong at that layer.
-- AgentRoom is optional room infrastructure around Clanky; it does not own
-  Clanky's profile.
+- Clanky's built-in messaging is the Pi session thread. Discord is a gateway
+  into and out of that thread.
+- ClankVox is Clanky's voice/media transport package. It handles Discord voice
+  and Go Live.
+- herdr is the multiplexer around everything: Clanky runs in a pane, and his
+  multi-agent work runs as sibling panes he spawns and watches.
 
 ## First Path
 
@@ -159,46 +148,31 @@ through `ask_pi`, and the bundled ClankVox Rust media process:
 For the full voice map, use
 [Discord Voice Architecture](docs/discord-voice-architecture.md). For the native
 media subprocess, jump to [ClankVox Docs](docs://clankvox-docs/overview).
-For the cross-channel abstraction, use
-[Communication Gateways](docs/communication-gateways.md).
 
-## AgentRoom
+## Orchestration
 
-Clanky can run inside AgentRoom as a normal Pi harness:
+Clanky's multi-agent path is herdr. When Clanky runs inside herdr
+(`HERDR_ENV=1`), he can split panes, spawn sibling agents, wait on their
+status, and harvest results — all visible in the same terminal. Gateway
+subagents handle Discord side requests without interrupting the foreground
+session; anything bigger fans out to panes.
 
-```bash
-agent-room launch clanky --harness pi --command clanky --cwd .
-agent-room send clanky "hello"
-agent-room read clanky --lines 40
-```
-
-Room participation and gateway ownership are separate:
-
-- agent-owned chat: Clanky uses its own profile credential and owns the
-  conversation through the Discord adapter
-- room-owned chat: AgentRoom owns the connector bot and routes the
-  conversation through the room
-
-One external conversation should have one owner. Use
-`CLANKY_CHAT_GATEWAY_OWNER=room` when an AgentRoom connector owns that gateway
-conversation.
-
-For the room side, jump to [AgentRoom Ecosystem Tour](docs://agent-room-docs/ecosystem).
+Remote access to Clanky and his subagents (herdr daemon bridge plus the Clanky
+iOS app) is in progress — see the [Roadmap](docs/ROADMAP.md).
 
 ## Docs Map
 
-- [Start Here](docs/start-here.md): new-user product path.
+- [Getting Started](docs/getting-started.md): install, setup, and daily use.
 - [Pi Foundation](docs/pi-foundation.md): what Pi owns and what Clanky adds.
-- [First-Time Setup](docs/first-time-setup.md): install, auth, connectors.
-- [Using Clanky](docs/using-clanky.md): daily TUI, memory, communication
-  gateways, voice/media, AgentRoom, skills, and connected tool workflows.
-- [Communication Gateways](docs/communication-gateways.md): chat and
-  voice/media gateway abstraction and ownership.
+- [Configuration Model](docs/configuration.md): profiles, durable stores, env
+  overrides, and gateway ownership.
 - [Command Reference](docs/command-reference.md): CLI and slash commands.
 - [Memory And Privacy](docs/memory-and-privacy.md): profile-local state and
   privacy controls.
-- [AgentRoom Integration](docs/AGENTROOM.md): launch, gateway ownership, and
-  room/profile boundaries.
+- [Discord Voice Architecture](docs/discord-voice-architecture.md): control
+  plane, Realtime, Pi delegation, and the ClankVox media plane.
+- [Troubleshooting](docs/troubleshooting.md): common setup failures.
+- [Roadmap](docs/ROADMAP.md): the AgentRoom retirement and herdr/iOS plan.
 
 ## Local Development
 
