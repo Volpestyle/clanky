@@ -13,7 +13,7 @@
 		}
 	},
 	"dependencies": {
-		"@agentroom/chat-discord": "link:../../../agent-room/packages/integrations/chat-discord",
+		"@clanky/chat-discord": "workspace:*",
 		"@clanky/browser-bridge": "workspace:*",
 		"@clanky/core": "workspace:*",
 		"@earendil-works/pi-coding-agent": "^0.78.0",

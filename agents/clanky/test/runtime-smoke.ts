@@ -17,7 +17,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import type { DiscordGatewayClient, DiscordMessageLike } from "@agentroom/chat-discord";
+import type { DiscordGatewayClient, DiscordMessageLike } from "@clanky/chat-discord";
 import {
 	DEFAULT_CLANKY_DISCORD_PROVIDER_ID,
 	DEFAULT_ELEVENLABS_PROVIDER_ID,
@@ -833,31 +833,8 @@ async function assertStoredDiscordCredentialPath(): Promise<void> {
 		throw new Error(`smoke: stored providerId default mismatch, got ${fromStored.providerId}`);
 	}
 
-	const discordMcpConfig = resolveMcpServerConfigs({
-		authStorage: stored,
-		cwd: "/tmp/clanky-mcp-smoke",
-		env: {},
-	}).discord;
-	if (discordMcpConfig === undefined) {
-		throw new Error("smoke: auto Discord MCP config should exist");
-	}
-	if (discordMcpConfig.env.DISCORD_MCP_TOKEN !== "stored-token") {
-		throw new Error("smoke: stored Discord credential should be injected into auto Discord MCP env");
-	}
-	if (discordMcpConfig.env.DISCORD_MCP_CREDENTIAL_KIND !== "bot-token") {
-		throw new Error("smoke: stored Discord credential kind should be injected into auto Discord MCP env");
-	}
-
-	const envDiscordMcpConfig = resolveMcpServerConfigs({
-		authStorage: stored,
-		cwd: "/tmp/clanky-mcp-smoke",
-		env: { CLANKY_DISCORD_TOKEN: "env-token" },
-	}).discord;
-	if (envDiscordMcpConfig?.env.DISCORD_MCP_TOKEN !== undefined) {
-		throw new Error("smoke: stored Discord MCP token should not override an env Discord token");
-	}
-	if (envDiscordMcpConfig?.env.CLANKY_DISCORD_TOKEN !== "env-token") {
-		throw new Error("smoke: Discord MCP env should preserve the explicit env token");
+	if (resolveMcpServerConfigs({ cwd: "/tmp/clanky-mcp-smoke", env: {} }).discord !== undefined) {
+		throw new Error("smoke: no Discord MCP server should be auto-registered; Discord tools are native");
 	}
 
 	const mcpHome = await mkdtemp(join(tmpdir(), "clanky-mcp-profile-smoke-"));

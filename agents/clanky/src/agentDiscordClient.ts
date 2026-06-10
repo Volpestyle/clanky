@@ -1,4 +1,4 @@
-// IMPORTANT: import discord.js primitives via @agentroom/chat-discord so we
+// IMPORTANT: import discord.js primitives via @clanky/chat-discord so we
 // share the SAME discord.js module instance the user-token patches in
 // chat-discord/discordUserTokenPatches.ts resolve. Importing
 // `discord.js` directly here pulled in clanky-pi's own copy of the package,
@@ -10,7 +10,7 @@ import {
 	type DiscordGatewayClient,
 	DiscordGatewayIntentBits,
 	DiscordPartials,
-} from "@agentroom/chat-discord";
+} from "@clanky/chat-discord";
 import type { ClankyAgentDiscordCredentialConfig } from "./agentDiscordGateway.ts";
 
 export interface CreateAgentDiscordClientOptions {

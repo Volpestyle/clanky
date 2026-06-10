@@ -1,18 +1,27 @@
 ---
 name: clanky-discord-operator
-description: Use Clanky's Discord MCP integration to inspect guilds/channels, read recent channel activity and media, send channel messages, upload attachments, and add reactions.
+description: Use Clanky's native Discord tools to inspect guilds/channels, read recent channel activity and media, send channel messages, upload attachments, and add reactions.
 when_to_use: Use when the user asks what Discord servers or channels Clanky can see, asks Clanky to send or read a Discord message, wants recent Discord media or a digest, provides Discord IDs, or wants a reaction added.
 allowed_tools:
-  - mcp_list_tools
-  - mcp_call
+  - discord_whoami
+  - discord_list_guilds
+  - discord_list_channels
+  - discord_read_messages
+  - discord_recent_activity
+  - discord_recent_attachments
+  - discord_send_message
+  - discord_list_emojis
+  - discord_add_reaction
 deps: []
 ---
 
 # Clanky Discord Operator
 
-Use the `discord` MCP server through `mcp_call`. Clanky auto-registers this server from the local `discord-mcp` package unless `CLANKY_DISCORD_MCP=0`.
+Use Clanky's native `discord_*` tools directly. They are available whenever the
+active profile has a Discord credential. From a shell, the same operations are
+available as `clanky discord <guilds|channels|messages|recent|send|emojis|react>`.
 
-## MCP tools
+## Tools
 
 - `discord_whoami`
 - `discord_list_guilds`
@@ -24,24 +33,20 @@ Use the `discord` MCP server through `mcp_call`. Clanky auto-registers this serv
 - `discord_list_emojis`
 - `discord_add_reaction`
 
-Example:
+Example — inspect media on a specific message:
 
 ```json
 {
-  "server": "discord",
-  "tool": "discord_recent_attachments",
-  "arguments": {
-    "channelId": "123",
-    "messageId": "456",
-    "mediaLimit": 4,
-    "load": true
-  }
+  "channelId": "123",
+  "messageId": "456",
+  "mediaLimit": 4,
+  "load": true
 }
 ```
 
 ## Preferred workflow
 
-- In the dedicated Discord subagent, rely on your own session continuity first. Use MCP when the current turn points at Discord history outside your context window, another channel, exact message IDs, media, or a send/reaction action.
+- In the dedicated Discord subagent, rely on your own session continuity first. Use the tools when the current turn points at Discord history outside your context window, another channel, exact message IDs, media, or a send/reaction action.
 - For "what happened recently", "what's going on in the server", or Discord digests, prefer `discord_recent_activity`.
 - For Discord media lookup, use `discord_recent_attachments` for recent images, GIF previews, image links, embeds, or video keyframes.
 - If the user references a specific Discord message, call `discord_recent_attachments` with both `channelId` and `messageId`.
