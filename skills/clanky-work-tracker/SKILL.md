@@ -29,12 +29,4 @@ Treat the configured work tracker as part of the working context. Do not wait fo
 
 ## MCP Pattern
 
-Use `mcp_list_tools` first when exact server or tool names are unknown. Then call the provider tool through `mcp_call`, and finally call `work_tracker_link` with the issue returned by the provider.
-
-## Provider: Linear
-
-Linear is the active provider, reached through the Linear MCP/CLI/connector tool.
-
-- Use the Linear MCP for issue creation, comments, and status changes; then call `work_tracker_link` with `providerKind: "linear"` to bind the issue to the Clanky session.
-- Keep Linear comments concise and technical: the action taken, the verification performed, and any remaining risk.
-- If Linear credentials or MCP tools are unavailable, report `tracker_update_skipped` with the reason.
+Use `mcp_list_tools` first when exact server or tool names are unknown. Then call the provider tool through `mcp_call`, and finally call `work_tracker_link` with the issue returned by the provider, setting `providerKind` to match the configured provider (e.g. `linear`, `github`, `jira`).
