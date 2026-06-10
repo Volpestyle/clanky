@@ -55,12 +55,15 @@ Goal: clanky builds standalone with no `link:` deps on sibling repos.
 - herdr: add pane metadata/tags (e.g. `agent=clanky`, `parent=<pane>`,
   `task=<one-liner>`) settable over the socket API, so a remote client can
   render Clanky's subagent tree instead of a flat pane list.
-- Clanky: when `HERDR_ENV=1`, spawn subagents as tagged herdr panes
-  (herdr-swarm pattern); keep the in-process path only as a fallback outside
-  herdr. Unify `discordSubagentCoordinator.ts` and
-  `discordVoiceSubagentCoordinator.ts` on that mechanism.
-- Ship herdr orchestration skills with Clanky (`skills/`), not only in
-  `~/.claude/skills`.
+- Clanky: when `HERDR_ENV=1`, spawn subagents as tagged herdr panes; keep the
+  in-process path only as a fallback outside herdr. Unify
+  `discordSubagentCoordinator.ts` and `discordVoiceSubagentCoordinator.ts` on
+  that mechanism.
+- Done: `skills/clanky-herdr-operator` ships with Clanky — spawn/harvest/
+  cleanup scripts, workers as herdr agents named `clanky:<slug>` in a
+  `clanky:<run-id>` tab, DONE/BLOCKED sentinel files under
+  `~/.clanky/herdr-runs` as the completion authority, and an attribution
+  contract for remote clients.
 
 ## Phase 4: Remote access (herdr bridge + Clanky iOS)
 
@@ -84,4 +87,7 @@ Goal: clanky builds standalone with no `link:` deps on sibling repos.
   `Volpestyle/agent-room` and `Volpestyle/discord_mcp` GitHub repos.
 - Phase 2 done: no room concept remains in the runtime;
   `CLANKY_CHAT_GATEWAY_OWNER` is `agent` or `off`.
-- Phases 3-4 not started (herdr pane metadata, herdr bridge, iOS rebrand).
+- Phase 3 partially done: the `clanky-herdr-operator` bundled skill is the
+  agent-facing fan-out path. Remaining: herdr pane metadata/tags and routing
+  Clanky's own subagent coordinators through herdr panes.
+- Phase 4 not started (herdr bridge, iOS rebrand).
