@@ -1,7 +1,7 @@
 ---
 name: clanky-work-tracker
 description: Provider-neutral work tracker protocol for using configured tracker MCP servers, CLIs, or skills and binding tracker refs to Clanky sessions.
-when_to_use: Use when CLANKY_WORK_TRACKER is configured and the user asks for durable work, implementation, debugging, review, status, issues, tickets, notifications, or follow-up.
+when_to_use: Use when SELF.md, the project's AGENTS.md, or the user designates a work tracker (Linear, GitHub Issues, Jira) and the task involves durable work, implementation, debugging, review, status, issues, tickets, notifications, or follow-up.
 allowed_tools:
   - mcp_list_tools
   - mcp_call

@@ -16,7 +16,6 @@ import {
 	type MemoryForgetToolInput,
 	type MemoryRememberToolInput,
 	type MemorySearchToolInput,
-	maybeInjectWorkTrackerSkill,
 	type OpenAiImageGenerateToolInput,
 	recentDiscordAttachments,
 	resolveClankyChatGatewayOwner,
@@ -171,7 +170,6 @@ const mainRuntimeTools = createClankyToolDefinitions(handlers, { includeMainWork
 assertChatModeHelpers();
 await assertSubagentPanelCommand();
 await assertClankyCommandCompletions();
-assertWorkTrackerSkillInjection();
 const expectedNames = [
 	"mcp_list_tools",
 	"mcp_call",
@@ -345,20 +343,6 @@ function assertChatModeHelpers(): void {
 	}
 	if (shouldStartAgentChatGateway({ CLANKY_CHAT_GATEWAY_OWNER: "off" })) {
 		throw new Error("Expected gateway owner off to disable agent-owned gateway startup");
-	}
-}
-
-function assertWorkTrackerSkillInjection(): void {
-	const prompt = "Implement the tracker cleanup";
-	const transformed = maybeInjectWorkTrackerSkill(prompt, { CLANKY_WORK_TRACKER: "linear" });
-	if (transformed !== `/skill:clanky-work-tracker ${prompt}`) {
-		throw new Error(`Expected configured work tracker prompt to inject skill, got ${transformed}`);
-	}
-	if (maybeInjectWorkTrackerSkill(prompt, {}) !== prompt) {
-		throw new Error("Expected unconfigured work tracker prompt to remain unchanged");
-	}
-	if (maybeInjectWorkTrackerSkill("/profile", { CLANKY_WORK_TRACKER: "linear" }) !== "/profile") {
-		throw new Error("Expected slash commands to skip work tracker skill injection");
 	}
 }
 

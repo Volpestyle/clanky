@@ -4,7 +4,6 @@ import { join } from "node:path";
 import {
 	type ClankySubagentStore,
 	type JsonRecord,
-	maybeInjectWorkTrackerSkill,
 	type SendSubagentMessageInput,
 	type SendSubagentMessageResult,
 	truncateText,
@@ -372,13 +371,10 @@ export class DiscordVoiceSubagentCoordinator {
 		const normalizedPrompt = prompt.trim();
 		if (normalizedPrompt.length === 0) throw new Error("ask_pi requires prompt.");
 		const runtime = await this.ensureWorkerRuntime();
-		const request = maybeInjectWorkTrackerSkill(
-			buildVoiceWorkerPrompt(normalizedPrompt, {
-				guildId: this.guildId,
-				channelId: this.channelId,
-			}),
-			this.env,
-		);
+		const request = buildVoiceWorkerPrompt(normalizedPrompt, {
+			guildId: this.guildId,
+			channelId: this.channelId,
+		});
 		return await this.workerQueue.enqueue(async () => {
 			await this.store.setSubagentState(this.workerId, "running", {
 				activeConversationId: this.channelId,
@@ -461,16 +457,13 @@ export class DiscordVoiceSubagentCoordinator {
 				...(entry.runtime.session.sessionFile === undefined ? {} : { sessionFile: entry.runtime.session.sessionFile }),
 			});
 			try {
-				const request = maybeInjectWorkTrackerSkill(
-					buildGeneralSubagentPrompt(input, {
-						guildId: this.guildId,
-						channelId: this.channelId,
-						scopeId: this.scopeId,
-						workerId,
-						workerKey,
-					}),
-					this.env,
-				);
+				const request = buildGeneralSubagentPrompt(input, {
+					guildId: this.guildId,
+					channelId: this.channelId,
+					scopeId: this.scopeId,
+					workerId,
+					workerKey,
+				});
 				const response = await sendSubagentMessageAndWaitForAssistantText(entry.runtime, request);
 				await this.store.setSubagentState(workerId, "idle", {
 					activeConversationId: this.channelId,
