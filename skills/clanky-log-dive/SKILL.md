@@ -9,13 +9,12 @@ deps: []
 
 # Clanky Log Dive
 
-Use this skill for Clanky's own local logs and subagent state. It is for Clanky Discord text/voice subagents, not AgentRoom coordination activity.
+Use this skill for Clanky's own local logs and subagent state, covering Clanky Discord text/voice subagents.
 
 ## Boundaries
 
 - Work from `/Users/jamesvolpe/dev/clanky-pi` unless the user gives another checkout.
 - Use the default profile at `/Users/jamesvolpe/.clanky/profiles/default` unless the user asks for another profile.
-- Do not reach for AgentRoom room tooling when debugging Clanky Discord voice/text subagents unless the user explicitly asks about the room.
 - Do not delete or rewrite skills under `~/.claude` or `~/.agents` while debugging logs.
 - Prefer the CLI output first; only open raw JSONL, SQLite, or log files when the CLI output is insufficient.
 

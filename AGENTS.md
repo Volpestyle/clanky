@@ -25,8 +25,8 @@
   - `agents/clanky` (`@clanky/agent`) owns the runnable Pi `InteractiveMode`, persona wiring, and the `clanky` bin.
   - `packages/clanky-core` (`@clanky/core`) owns Pi integration, memory, profile paths, state storage, work-tracker stores, skills loading, and model-facing tools.
   - `skills/` holds bundled Clanky skills loaded from disk.
-- Durable Clanky configuration belongs to the active profile (`auth.json`, `discord-voice.json`, `models.json`, profile-local stores). TUI setup commands should edit those stores and report the active source; env vars are explicit launch overrides. Do not add hidden TUI-only persistent state or move AgentRoom room topology into Clanky.
-- Chat gateways (Discord, etc.) are not packages in this repo. Clanky consumes them by importing `@agentroom/chat-discord` for agent-owned conversations, even when also participating in AgentRoom. Room-owned connector channels are owned by the AgentRoom daemon. See `docs/AGENTROOM.md`.
+- Durable Clanky configuration belongs to the active profile (`auth.json`, `discord-voice.json`, `models.json`, profile-local stores). TUI setup commands should edit those stores and report the active source; env vars are explicit launch overrides. Do not add hidden TUI-only persistent state.
+- The Discord chat gateway is agent-owned: Clanky holds the credential and the conversation. The gateway library currently comes from `@agentroom/chat-discord` (a `link:` dep) and is being vendored into `packages/`; `discord-mcp` is being merged in as a workspace package. See `docs/ROADMAP.md` for the migration state before touching gateway wiring.
 - Do not patch or vendor Pi. Use published `@earendil-works/pi-*` packages and exported APIs.
 
 ## Verification
@@ -39,7 +39,7 @@
 
 ## Live Gates
 
-- Model, work-tracker, and chat-gateway tokens (Discord bot tokens, etc.) remain live gates requiring credentials or user approval. Clanky's agent-owned Discord token is resolved from `CLANKY_DISCORD_TOKEN` env (wins) or the profile `AuthStorage` entry under provider id `clanky-discord` (`<profileDir>/auth.json`, perms `0600`, populated interactively by the `/discord-login` slash command). Clanky must never read the room connector token owned by AgentRoom.
+- Model, work-tracker, and chat-gateway tokens (Discord bot tokens, etc.) remain live gates requiring credentials or user approval. Clanky's agent-owned Discord token is resolved from `CLANKY_DISCORD_TOKEN` env (wins) or the profile `AuthStorage` entry under provider id `clanky-discord` (`<profileDir>/auth.json`, perms `0600`, populated interactively by the `/discord-login` slash command).
 
 ## State Safety
 
