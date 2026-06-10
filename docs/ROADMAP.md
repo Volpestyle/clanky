@@ -78,7 +78,10 @@ Goal: clanky builds standalone with no `link:` deps on sibling repos.
 
 ## Status
 
-- Docs rewritten to the target model (this phase).
-- Phases 1-2 not started: code still imports `@agentroom/chat-discord` via a
-  `link:` dep and contains `AGENTROOM`/room-owner branches until they land.
-- Phases 3-4 not started.
+- Docs rewritten to the target model. Done.
+- Phase 1 done: `packages/clanky-chat-discord` and `packages/discord-mcp` are
+  workspace packages; no `link:` deps remain. Archive the
+  `Volpestyle/agent-room` and `Volpestyle/discord_mcp` GitHub repos.
+- Phase 2 done: no room concept remains in the runtime;
+  `CLANKY_CHAT_GATEWAY_OWNER` is `agent` or `off`.
+- Phases 3-4 not started (herdr pane metadata, herdr bridge, iOS rebrand).
