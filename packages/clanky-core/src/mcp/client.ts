@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
@@ -193,24 +193,6 @@ export function resolveMcpServerConfigs(
 		configs[name] = resolveServerConfig(config, cwd, env);
 	}
 
-	if (shouldAutoAddAgentRoom(env, cwd) && configs.agentroom === undefined) {
-		configs.agentroom = resolveServerConfig(
-			{
-				command: env.CLANKY_AGENTROOM_MCP_COMMAND ?? "agent-room",
-				args: splitArgs(env.CLANKY_AGENTROOM_MCP_ARGS) ?? ["mcp"],
-				cwd: env.AGENTROOM_CWD ?? cwd,
-				description:
-					"AgentRoom room coordination: identity, roster, feed, channel/thread/DM messages, directed messages, events, posts, reports, waits, enroll, and audit context.",
-				// No allowedTools: clanky exposes every tool the agentroom MCP server publishes so
-				// its surface stays in lockstep with the live room. Restricting to a hardcoded subset
-				// previously hid the roster/feed/directed-message tools the operator skill tells the
-				// agent to use, yielding "tool not allowed" errors. The agentroom server is trusted.
-			},
-			cwd,
-			env,
-		);
-	}
-
 	return configs;
 }
 
@@ -390,11 +372,6 @@ function resolveServerConfig(
 	};
 }
 
-function shouldAutoAddAgentRoom(env: NodeJS.ProcessEnv, cwd: string): boolean {
-	if (env.CLANKY_AGENTROOM_MCP === "0" || env.CLANKY_AGENTROOM_MCP === "false") return false;
-	return env.AGENTROOM === "1" || existsSync(`${env.AGENTROOM_CWD ?? cwd}/.agentroom/config.yaml`);
-}
-
 function parseMcpTransportKind(
 	value: string | undefined,
 	input: { command?: string | undefined; url?: string | undefined },
@@ -412,11 +389,6 @@ function normalizeToolArguments(args: unknown): Record<string, unknown> {
 	if (args === undefined || args === null) return {};
 	if (typeof args === "object" && !Array.isArray(args)) return args as Record<string, unknown>;
 	throw new Error("mcp_call arguments must be a JSON object when provided.");
-}
-
-function splitArgs(raw: string | undefined): string[] | undefined {
-	if (raw === undefined || raw.trim().length === 0) return undefined;
-	return raw.split(/\s+/).filter((arg) => arg.length > 0);
 }
 
 function isStringRecord(value: unknown): value is Record<string, string> {

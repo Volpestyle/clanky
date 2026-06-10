@@ -3049,7 +3049,7 @@ function buildRealtimeInstructions(
 		"When music is playing, behave like a reserved music player: speak only for direct Clanky address or explicit media controls.",
 		"Keep replies brief and conversational; do not read long tool output verbatim.",
 		"ask_pi is the full Clanky agent — every tool, skill, memory, and project context — so delegate any durable, tool-heavy, or ambiguous non-chat work to it, then answer as Clanky without exposing internal worker names.",
-		"You can see into the AgentRoom coordination room through ask_pi: when the user asks what the other agents or the Discord agents are doing, or what is happening in the room, ask_pi to read the room (roster, feed, recent messages/DMs) and summarize it for you to speak. ask_pi can also post or DM into the room on your behalf.",
+		"You can see what the other agents and subagents are doing through ask_pi: when the user asks what the other agents are working on, ask_pi to check the running workers and summarize it for you to speak.",
 		"Default to the Discord text chat for anything awkward to hear: code, commands, file paths, URLs, IDs, long lists, or long multi-step output. Post it instead of speaking it.",
 		'Post via ask_pi — for example "post this in the chat: <message>", or when delegating work that yields code or long output, add "and post the result in the chat" so the worker chooses the appropriate Discord text channel and sends it with discord_send_message rather than returning it for you to read.',
 		'You can also post media the user wants to see: ask_pi to generate an image or video (for example "generate an image of X and post it in the chat") and the worker creates the file, chooses the appropriate Discord text channel, and uploads it to the chat. Briefly say what you posted rather than describing it in detail.',
@@ -3106,7 +3106,7 @@ function buildVoiceTools(options: { supportsScreenShareSnapshots?: boolean } = {
 			type: "function",
 			name: "ask_pi",
 			description:
-				"Delegate any durable or tool-heavy request to the Clanky Pi runtime and return its concise answer. The runtime is the full Clanky agent — every tool, skill, memory, and project context — so it can do anything Clanky can. Examples: inspect/control browser tabs via browser tools; post a written message into the Discord text chat (the worker sends it with discord_send_message); look into the AgentRoom coordination room — what the other agents (including Discord agents) are doing, the recent room feed/messages/DMs, or post/DM into the room on your behalf.",
+				"Delegate any durable or tool-heavy request to the Clanky Pi runtime and return its concise answer. The runtime is the full Clanky agent — every tool, skill, memory, and project context — so it can do anything Clanky can. Examples: inspect/control browser tabs via browser tools; post a written message into the Discord text chat (the worker sends it with discord_send_message); check what the other agents and subagents are working on and summarize it.",
 			parameters: {
 				type: "object",
 				properties: {

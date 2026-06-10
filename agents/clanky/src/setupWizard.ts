@@ -9,9 +9,7 @@ import {
 	getElevenLabsCredentialStatus,
 	getOpenAiCredentialStatus,
 	getXAiCredentialStatus,
-	isAgentRoomEnrolled,
 	loadStoredDiscordCredential,
-	maybeLoadAgentRoomPortableConfig,
 	readProfileMcpServers,
 	removeProfileMcpServer,
 	resolveClankyChatGatewayOwner,
@@ -37,12 +35,11 @@ interface ClankySetupWizardDeps {
 	env?: NodeJS.ProcessEnv;
 }
 
-type SetupChoice = "status" | "openai" | "discord" | "voice" | "elevenlabs" | "xai" | "mcp" | "agentroom" | "done";
+type SetupChoice = "status" | "openai" | "discord" | "voice" | "elevenlabs" | "xai" | "mcp" | "done";
 
 const SETUP_COMMAND_COMPLETIONS = [
 	{ value: "status", description: "Show connector and profile setup status." },
 	{ value: "mcp", description: "Show or configure profile-local MCP servers." },
-	{ value: "agentroom", description: "Show AgentRoom room config defaults." },
 	{ value: "fresh", description: "Show the fresh-profile setup smoke command." },
 ] satisfies readonly ClankyCommandCompletionSpec[];
 
@@ -82,10 +79,6 @@ async function runClankySetupCommand(
 	const command = args.trim().toLowerCase();
 	if (command === "status") {
 		ctx.ui.notify(formatClankySetupStatus(deps));
-		return;
-	}
-	if (command === "agentroom" || command === "room") {
-		ctx.ui.notify(formatAgentRoomParticipation(deps));
 		return;
 	}
 	if (command === "mcp") {
@@ -158,9 +151,6 @@ async function runClankySetupWizard(deps: ClankySetupWizardDeps, ctx: ExtensionC
 			case "mcp":
 				ctx.ui.notify(formatMcpSetupStatus(deps));
 				break;
-			case "agentroom":
-				ctx.ui.notify(formatAgentRoomParticipation(deps));
-				break;
 			case "done":
 				done = true;
 				break;
@@ -188,7 +178,6 @@ function setupOptions(deps: ClankySetupWizardDeps): string[] {
 	const elevenLabsStatus = getElevenLabsCredentialStatus(env, deps.authStorage, DEFAULT_ELEVENLABS_PROVIDER_ID);
 	const xaiStatus = getXAiCredentialStatus(env, deps.authStorage, DEFAULT_XAI_PROVIDER_ID);
 	const voiceSettings = deps.voiceSettings.read();
-	const roomConfig = maybeLoadAgentRoomPortableConfig(deps.cwd, env);
 	return [
 		"Status",
 		`Models / OpenAI [${openAiStatus.available ? "set" : "missing"}]`,
@@ -197,7 +186,6 @@ function setupOptions(deps: ClankySetupWizardDeps): string[] {
 		`Voice / ElevenLabs [${elevenLabsStatus.available ? "set" : "missing"}]`,
 		`Media / xAI [${xaiStatus.available ? "set" : "missing"}]`,
 		`MCP servers [${Object.keys(readProfileMcpServers(deps.paths).servers).length} profile]`,
-		`AgentRoom [${agentRoomSetupLabel(env, roomConfig !== undefined)}]`,
 		"Done",
 	];
 }
@@ -211,7 +199,6 @@ function parseSetupChoice(choice: string | undefined): SetupChoice {
 	if (choice.startsWith("Voice / ElevenLabs")) return "elevenlabs";
 	if (choice.startsWith("Media / xAI")) return "xai";
 	if (choice.startsWith("MCP servers")) return "mcp";
-	if (choice.startsWith("AgentRoom")) return "agentroom";
 	return "done";
 }
 
@@ -223,7 +210,6 @@ function formatClankySetupStatus(deps: ClankySetupWizardDeps): string {
 	const storedDiscord = loadStoredDiscordCredential(deps.authStorage, deps.discordProviderId);
 	const envDiscord = env.CLANKY_DISCORD_TOKEN?.trim();
 	const voiceSettings = deps.voiceSettings.read();
-	const roomConfig = maybeLoadAgentRoomPortableConfig(deps.cwd, env);
 	const profileMcp = readProfileMcpServers(deps.paths);
 	const lines = [
 		"Clanky setup",
@@ -238,13 +224,10 @@ function formatClankySetupStatus(deps: ClankySetupWizardDeps): string {
 		`ElevenLabs: ${elevenLabsStatus.available ? (elevenLabsStatus.activeSource ?? "configured") : "missing"}`,
 		`xAI media: ${xaiStatus.available ? (xaiStatus.activeSource ?? "configured") : "missing"}`,
 		`MCP servers: ${Object.keys(profileMcp.servers).length} profile-local (${profileMcp.path})`,
-		`AgentRoom: ${agentRoomSetupLabel(env, roomConfig !== undefined)}`,
-		`Room config: ${roomConfig?.configPath ?? "not detected"}`,
 		`Work tracker: ${env.CLANKY_WORK_TRACKER ?? "profile/default"} (${env.CLANKY_WORK_TRACKER_PROVIDER_KIND ?? "unknown"})`,
 		"",
 		"Connector ownership:",
 		"Clanky-owned credentials live in this profile auth store.",
-		"Room-owned connectors belong to AgentRoom and must not use this auth store.",
 	];
 	if (voiceSettings?.guildId !== undefined && voiceSettings.channelId !== undefined) {
 		lines.push(`Voice target: guild ${voiceSettings.guildId}, channel ${voiceSettings.channelId}`);
@@ -261,7 +244,6 @@ function formatClankyStatusDashboard(deps: ClankySetupWizardDeps): string {
 	const envDiscord = env.CLANKY_DISCORD_TOKEN?.trim();
 	const voiceSettings = deps.voiceSettings.read();
 	const bridge = deps.gatewayController.status();
-	const roomConfig = maybeLoadAgentRoomPortableConfig(deps.cwd, env);
 	const profileMcp = readProfileMcpServers(deps.paths);
 	const lines = [
 		"Clanky status",
@@ -283,8 +265,6 @@ function formatClankyStatusDashboard(deps: ClankySetupWizardDeps): string {
 		`Chat mode: ${resolveClankyChatMode(env)}`,
 		`Gateway owner: ${resolveClankyChatGatewayOwner(env)}`,
 		`MCP servers: ${Object.keys(profileMcp.servers).length} profile-local`,
-		`AgentRoom: ${agentRoomSetupLabel(env, roomConfig !== undefined)}`,
-		`Room config: ${roomConfig?.configPath ?? "not detected"}`,
 		`Work tracker: ${env.CLANKY_WORK_TRACKER ?? "profile/default"} (${env.CLANKY_WORK_TRACKER_PROVIDER_KIND ?? "unknown"})`,
 	];
 	const nextSteps = formatStatusNextSteps(
@@ -423,50 +403,6 @@ function isMcpUrl(value: string): boolean {
 	return value.startsWith("http://") || value.startsWith("https://");
 }
 
-function formatAgentRoomParticipation(deps: ClankySetupWizardDeps): string {
-	const env = setupEnv(deps);
-	const roomConfig = maybeLoadAgentRoomPortableConfig(deps.cwd, env);
-	const clanky = roomConfig?.clanky;
-	const trackerId = roomConfig?.workTracker?.default;
-	const tracker = trackerId === undefined ? undefined : roomConfig?.workTracker?.providers[trackerId];
-	const lines = [
-		"AgentRoom participation",
-		`Current mode: ${resolveClankyChatMode(env)}`,
-		`Working directory: ${deps.cwd}`,
-		`AGENTROOM: ${env.AGENTROOM === "1" ? "1" : "not set"}`,
-		`AGENTROOM_AGENT_ID: ${env.AGENTROOM_AGENT_ID ?? "not set"}`,
-		`AGENTROOM_ROOM_ID: ${env.AGENTROOM_ROOM_ID ?? "not set"}`,
-		`Portable config: ${roomConfig?.configPath ?? env.CLANKY_AGENTROOM_CONFIG ?? "not detected"}`,
-		`Work tracker: ${env.CLANKY_WORK_TRACKER ?? "profile/default"}`,
-		"",
-		"Room defaults",
-		`Clanky home: ${clanky?.home ?? clanky?.homeDir ?? "not set"}`,
-		`Clanky profile: ${clanky?.profile ?? "not set"}`,
-		`Chat owner: ${clanky?.chatGatewayOwner ?? resolveClankyChatGatewayOwner(env)}`,
-		`Tracker default: ${trackerId ?? "not set"}${tracker?.type !== undefined ? ` (${tracker.type})` : ""}`,
-		`Tracker team: ${tracker?.teamId ?? "not set"}`,
-		"",
-		"These values only mean Clanky is participating in a room.",
-		"They do not transfer Clanky's personal Discord token to AgentRoom.",
-		"",
-		"Room-level setup is edited in the AgentRoom TUI:",
-		"  agent-room",
-		"  /setup",
-		"  /setup clanky room .clanky-room lead",
-		"  /setup tracker linear team_123",
-		"",
-		"For room-owned Discord, configure the connector in AgentRoom setup.",
-		`Current profile remains isolated at ${deps.paths.profileDir}.`,
-	];
-	return lines.join("\n");
-}
-
-function agentRoomSetupLabel(env: NodeJS.ProcessEnv, hasRoomConfig: boolean): string {
-	if (isAgentRoomEnrolled(env)) return "participating";
-	if (hasRoomConfig) return "room config detected";
-	return "not enrolled";
-}
-
 function setupEnv(deps: ClankySetupWizardDeps): NodeJS.ProcessEnv {
 	return deps.env ?? process.env;
 }
@@ -493,7 +429,6 @@ function formatSetupUsage(): string {
 		"  /setup status",
 		"  /setup mcp",
 		"  /setup mcp linear https://mcp.linear.app/mcp",
-		"  /setup agentroom",
 		"  /setup fresh",
 	].join("\n");
 }

@@ -16,7 +16,6 @@
 		"@modelcontextprotocol/sdk": "^1.29.0",
 		"chokidar": "^5.0.0",
 		"discord-mcp": "workspace:*",
-		"typebox": "^1.1.38",
-		"yaml": "^2.9.0"
+		"typebox": "^1.1.38"
 	}
 }
