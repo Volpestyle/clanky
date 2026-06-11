@@ -32,15 +32,10 @@ The active profile owns durable personal Clanky configuration and state:
   `work-trackers/` store profile-local memory, sessions, subagent state, and
   external tracker issue refs.
 
-For the combined AgentRoom + Clanky file ownership map, including commit rules
-and room-owned gateway token boundaries, see
-[AgentRoom Configuration](docs://agent-room-docs/configuration).
-
 The TUI setup and status commands edit or report these stores:
 
 ```text
 /setup
-/setup agentroom
 /openai-login
 /auth
 /discord-login
@@ -57,9 +52,8 @@ variables.
 
 ## Environment Overrides
 
-Environment variables are launch-time overrides. They are useful for CI,
-AgentRoom launches, and temporary sessions, but they do not replace the profile
-store.
+Environment variables are launch-time overrides. They are useful for CI and
+temporary sessions, but they do not replace the profile store.
 
 Credential precedence follows the existing pattern:
 
@@ -75,22 +69,21 @@ env overrides for one-off launches.
 If a new setting supports env overrides, document the exact precedence and show
 the active source in status output.
 
-## AgentRoom Boundary
+## Gateway Ownership
 
-Clanky profile config and AgentRoom room config are separate. `AGENTROOM=1`
-means room participation only; it does not move profile credentials into
-AgentRoom and it does not make Clanky read a room-owned connector token.
+Clanky's canonical conversation is the Pi session thread. The Discord chat
+gateway is agent-owned: Clanky holds the credential in the active profile and
+owns the gateway lifecycle. A gateway can be absent entirely and Clanky still
+works as a local Pi agent.
 
-The only portable overlap is non-secret launch defaults. When Clanky starts
-inside a project with `.agentroom/config.yaml`, it may read `workTracker` and
-`clanky` blocks for default home, profile, tracker, and chat ownership values.
+A chat gateway delivers inbound messages, receives replies, and routes accepted
+side requests to profile-local subagents so the foreground session stays
+useful. The voice/media gateway (ClankVox) is a separate live media path with
+its own settings; it is not coupled to chat.
 
-Precedence remains explicit: `--home` / `--profile` and `CLANKY_HOME` /
-`CLANKY_PROFILE` win over the portable Clanky defaults. The AgentRoom block can
-set the selected work tracker and provider-local defaults such as a team id, but
-it does not store API keys or make Clanky own provider-specific API calls.
-Tracker creation, comments, and status updates still go through the installed
-MCP server, CLI, connector, or skill for that provider.
+Work-tracker creation, comments, and status updates go through the installed
+MCP server, CLI, or skill for that provider; Clanky stores only issue refs in
+the profile.
 
 ## Rule For New Settings
 

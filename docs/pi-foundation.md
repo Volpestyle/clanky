@@ -57,10 +57,9 @@ If an external gateway identity is stored in the active profile, that identity
 is appended to the startup prompt as well. It also uses Pi's `skillsOverride` to
 merge bundled/profile Clanky skills with Pi-discovered skills.
 
-Clanky's built-in messaging is still Pi's session thread. Discord text,
-AgentRoom send/read, and future Slack, Telegram, SMS, webhook, or huddle-style
-integrations are gateways into or out of that thread; they do not replace the
-native session model.
+Clanky's built-in messaging is still Pi's session thread. Discord text is a
+gateway into and out of that thread; it does not replace the native session
+model.
 
 ## Runtime Flow
 

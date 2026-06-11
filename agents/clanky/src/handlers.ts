@@ -22,6 +22,7 @@ import {
 	browserWaitFor,
 } from "@clanky/browser-bridge";
 import {
+	addDiscordReaction,
 	type ClankyAgentToolHandlers,
 	type ClankyPaths,
 	callExternalMcpTool,
@@ -33,11 +34,17 @@ import {
 	getExternalMcpStatus,
 	getMediaBackendStatus,
 	getWebBackendStatus,
+	listDiscordChannels,
+	listDiscordEmojis,
+	listDiscordGuilds,
 	listExternalMcpTools,
 	loadClankySkills,
 	type MainAgentActivityToolInput,
 	type MainAgentCancelToolInput,
 	type MainSessionContextToolInput,
+	readDiscordMessages,
+	recentDiscordActivity,
+	recentDiscordAttachments,
 	resolveClankyChatGatewayOwner,
 	resolveClankyChatMode,
 	runOpenAiWebSearch,
@@ -101,8 +108,6 @@ export function createClankyHandlers(
 			chatMode: resolveClankyChatMode(env),
 			chatGatewayOwner: resolveClankyChatGatewayOwner(env),
 			agentChatGatewayEnabled: shouldStartAgentChatGateway(env),
-			workTracker: env.CLANKY_WORK_TRACKER,
-			workTrackerProviderKind: env.CLANKY_WORK_TRACKER_PROVIDER_KIND,
 		}),
 
 		workTrackerLink: async (input) => stores.workTrackerRefs.link(input),
@@ -224,8 +229,44 @@ export function createClankyHandlers(
 			getMediaBackendStatus({
 				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
 			}),
+		discordListGuilds: async () =>
+			listDiscordGuilds({
+				env,
+				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
+			}),
+		discordListChannels: async (input) =>
+			listDiscordChannels(input, {
+				env,
+				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
+			}),
+		discordReadMessages: async (input) =>
+			readDiscordMessages(input, {
+				env,
+				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
+			}),
+		discordRecentActivity: async (input) =>
+			recentDiscordActivity(input, {
+				env,
+				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
+			}),
+		discordRecentAttachments: async (input, signal) =>
+			recentDiscordAttachments(input, {
+				env,
+				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
+				...(signal === undefined ? {} : { signal }),
+			}),
 		discordSendMessage: async (input) =>
 			sendDiscordMessage(input, {
+				env,
+				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
+			}),
+		discordListEmojis: async (input) =>
+			listDiscordEmojis(input, {
+				env,
+				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
+			}),
+		discordAddReaction: async (input) =>
+			addDiscordReaction(input, {
 				env,
 				...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
 			}),

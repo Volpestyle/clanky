@@ -12,7 +12,7 @@
  *
  * Token validation hits Discord's REST API directly (`GET /users/@me`)
  * so we do not pull in discord.js just for login. The chat gateway itself
- * still goes through `@agentroom/chat-discord`.
+ * still goes through `@clanky/chat-discord`.
  */
 import {
 	type ClankyCommandCompletionSpec,

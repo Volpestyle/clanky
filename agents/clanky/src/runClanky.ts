@@ -13,7 +13,6 @@ import {
 	loadStoredDiscordCredential,
 	resolveClankyPaths,
 	resolveMcpServerConfigs,
-	resolvePortableClankyDefaults,
 	truncateText,
 } from "@clanky/core";
 import {
@@ -298,11 +297,11 @@ function buildRuntimeFactory(opts: {
 			settingsManager,
 			resourceLoaderOptions: {
 				extensionFactories: [
-					...createClankyExtensionFactories(handlers, { env }),
+					...createClankyExtensionFactories(handlers),
 					createToolSearchExtensionFactory({
 						env,
-						mcpClientOptions: { cwd: runtimeCwd, env, authStorage, paths },
-						mcpServers: (ctx) => resolveMcpServerConfigs({ cwd: ctx.cwd, env, authStorage, paths }),
+						mcpClientOptions: { cwd: runtimeCwd, env, paths },
+						mcpServers: (ctx) => resolveMcpServerConfigs({ cwd: ctx.cwd, env, paths }),
 					}),
 					...additionalExtensionFactories,
 					discordAuthFactory,
@@ -546,16 +545,11 @@ function formatClankyVoiceFooterStatus(status: unknown): string | undefined {
  */
 export async function createClankyRuntime(options: RunClankyOptions = {}) {
 	const cwd = options.cwd ?? process.cwd();
-	const portableDefaults = resolvePortableClankyDefaults({
-		cwd,
-		...(options.homeDir !== undefined ? { explicitHomeDir: options.homeDir } : {}),
-		...(options.profile !== undefined ? { explicitProfile: options.profile } : {}),
-	});
 	const pathsOptions: Parameters<typeof resolveClankyPaths>[0] = {};
-	if (portableDefaults.homeDir !== undefined) pathsOptions.homeDir = portableDefaults.homeDir;
-	if (portableDefaults.profile !== undefined) pathsOptions.profile = portableDefaults.profile;
+	if (options.homeDir !== undefined) pathsOptions.homeDir = options.homeDir;
+	if (options.profile !== undefined) pathsOptions.profile = options.profile;
 	const paths = resolveClankyPaths(pathsOptions);
-	const runtimeEnv = portableDefaults.env;
+	const runtimeEnv = process.env;
 	const basePersona = await loadPersona(resolvePackageRoot());
 	const authStorage = AuthStorage.create(paths.authFile);
 	const discordProviderId = resolveDefaultDiscordProviderId(runtimeEnv);
