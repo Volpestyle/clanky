@@ -3,7 +3,6 @@ name: clanky-discord-operator
 description: Use Clanky's native Discord tools to inspect guilds/channels, read recent channel activity and media, send channel messages, upload attachments, and add reactions.
 when_to_use: Use when the user asks what Discord servers or channels Clanky can see, asks Clanky to send or read a Discord message, wants recent Discord media or a digest, provides Discord IDs, or wants a reaction added.
 allowed_tools:
-  - discord_whoami
   - discord_list_guilds
   - discord_list_channels
   - discord_read_messages
@@ -23,7 +22,6 @@ available as `clanky discord <guilds|channels|messages|recent|send|emojis|react>
 
 ## Tools
 
-- `discord_whoami`
 - `discord_list_guilds`
 - `discord_list_channels`
 - `discord_read_messages`
