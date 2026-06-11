@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
@@ -370,8 +370,7 @@ export async function saveStoredDiscordCredential(
 		},
 	};
 	existing[providerId] = stored;
-	await mkdir(dirname(path), { recursive: true });
-	await writeFile(path, JSON.stringify(existing, null, "\t"));
+	await writeCredentialFile(path, existing);
 	return stored;
 }
 
@@ -389,7 +388,7 @@ export async function removeStoredDiscordCredential(
 		});
 		return true;
 	}
-	await writeFile(path, JSON.stringify(existing, null, "\t"));
+	await writeCredentialFile(path, existing);
 	return true;
 }
 
@@ -1034,6 +1033,15 @@ async function readCredentialFile(path: string): Promise<Record<string, unknown>
 		if (isNotFoundError(error)) return {};
 		throw error;
 	}
+}
+
+// Tokens live in this file; keep the directory and file private even when the
+// process umask is permissive, and repair permissions on files written before
+// the mode was enforced.
+async function writeCredentialFile(path: string, contents: Record<string, unknown>): Promise<void> {
+	await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+	await writeFile(path, JSON.stringify(contents, null, "\t"), { mode: 0o600 });
+	await chmod(path, 0o600);
 }
 
 function parseDiscordIdentity(value: unknown): DiscordIdentity | undefined {
