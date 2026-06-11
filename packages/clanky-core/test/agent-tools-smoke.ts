@@ -16,7 +16,6 @@ import {
 	type MemoryForgetToolInput,
 	type MemoryRememberToolInput,
 	type MemorySearchToolInput,
-	maybeInjectWorkTrackerSkill,
 	type OpenAiImageGenerateToolInput,
 	recentDiscordAttachments,
 	resolveClankyChatGatewayOwner,
@@ -171,7 +170,6 @@ const mainRuntimeTools = createClankyToolDefinitions(handlers, { includeMainWork
 assertChatModeHelpers();
 await assertSubagentPanelCommand();
 await assertClankyCommandCompletions();
-assertWorkTrackerSkillInjection();
 const expectedNames = [
 	"mcp_list_tools",
 	"mcp_call",
@@ -340,31 +338,11 @@ function assertChatModeHelpers(): void {
 	if (resolveClankyChatMode({}) !== "agent-owned") {
 		throw new Error("Expected default chat mode to be agent-owned");
 	}
-	if (resolveClankyChatMode({ AGENTROOM: "1" }) !== "agent-owned-in-room") {
-		throw new Error("Expected AGENTROOM=1 to preserve agent-owned gateway while marking room participation");
+	if (resolveClankyChatGatewayOwner({ CLANKY_CHAT_GATEWAY_OWNER: "off" }) !== "off") {
+		throw new Error("Expected CLANKY_CHAT_GATEWAY_OWNER=off to disable the gateway");
 	}
-	if (!shouldStartAgentChatGateway({ AGENTROOM: "1" })) {
-		throw new Error("Expected AGENTROOM=1 not to disable agent-owned chat gateway startup");
-	}
-	if (resolveClankyChatGatewayOwner({ CLANKY_CHAT_GATEWAY_OWNER: "room" }) !== "room") {
-		throw new Error("Expected CLANKY_CHAT_GATEWAY_OWNER=room to select room-owned gateway mode");
-	}
-	if (shouldStartAgentChatGateway({ CLANKY_CHAT_GATEWAY_OWNER: "room" })) {
-		throw new Error("Expected room-owned gateway mode to disable agent-owned gateway startup");
-	}
-}
-
-function assertWorkTrackerSkillInjection(): void {
-	const prompt = "Implement the tracker cleanup";
-	const transformed = maybeInjectWorkTrackerSkill(prompt, { CLANKY_WORK_TRACKER: "linear" });
-	if (transformed !== `/skill:clanky-work-tracker ${prompt}`) {
-		throw new Error(`Expected configured work tracker prompt to inject skill, got ${transformed}`);
-	}
-	if (maybeInjectWorkTrackerSkill(prompt, {}) !== prompt) {
-		throw new Error("Expected unconfigured work tracker prompt to remain unchanged");
-	}
-	if (maybeInjectWorkTrackerSkill("/profile", { CLANKY_WORK_TRACKER: "linear" }) !== "/profile") {
-		throw new Error("Expected slash commands to skip work tracker skill injection");
+	if (shouldStartAgentChatGateway({ CLANKY_CHAT_GATEWAY_OWNER: "off" })) {
+		throw new Error("Expected gateway owner off to disable agent-owned gateway startup");
 	}
 }
 

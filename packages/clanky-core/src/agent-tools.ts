@@ -614,10 +614,6 @@ const CLANKY_SOCIAL_MEMORY_OP_MESSAGE = "social_memory_op";
 const MEMORY_REFLECTION_MIN_MESSAGES = 12;
 const MEMORY_REFLECTION_MIN_CHARS = 3000;
 const MEMORY_REFLECTION_MAX_CHARS = 18000;
-const WEB_OPERATOR_SKILL_NAME = "clanky-web-operator";
-const MEDIA_OPERATOR_SKILL_NAME = "clanky-media-operator";
-const AGENTROOM_OPERATOR_SKILL_NAME = "clanky-agentroom-operator";
-const WORK_TRACKER_SKILL_NAME = "clanky-work-tracker";
 const SUBAGENT_PANEL_WIDGET_KEY = "clanky-subagents";
 const SUBAGENT_PANEL_STATUS_KEY = "clanky-subagents";
 const SUBAGENT_TRANSCRIPT_WIDGET_KEY = "clanky-subagent-transcript";
@@ -664,15 +660,7 @@ const MEMORY_COMMAND_COMPLETIONS = [
 	{ value: "off", description: "Disable local user memory." },
 ] satisfies readonly ClankyCommandCompletionSpec[];
 
-export interface CreateClankyExtensionFactoriesOptions {
-	env?: NodeJS.ProcessEnv;
-}
-
-export function createClankyExtensionFactories(
-	handlers: ClankyAgentToolHandlers,
-	options: CreateClankyExtensionFactoriesOptions = {},
-): ExtensionFactory[] {
-	const env = options.env ?? process.env;
+export function createClankyExtensionFactories(handlers: ClankyAgentToolHandlers): ExtensionFactory[] {
 	const indexMessage = handlers.indexMessage;
 	const beforeProviderRequest = handlers.beforeProviderRequest;
 	const memoryPacket = handlers.memoryPacket;
@@ -719,16 +707,7 @@ export function createClankyExtensionFactories(
 						}
 					}
 				}
-				const transformed = maybeInjectWorkTrackerSkill(
-					maybeInjectAgentRoomOperatorSkill(
-						maybeInjectWebOperatorSkill(maybeInjectMediaOperatorSkill(event.text, env), env),
-						env,
-					),
-					env,
-				);
-				if (transformed === event.text) return { action: "continue" };
-				if (event.images !== undefined) return { action: "transform", text: transformed, images: event.images };
-				return { action: "transform", text: transformed };
+				return { action: "continue" };
 			});
 			if (indexMessage !== undefined) {
 				pi.on("message_end", async (event, ctx) => {
@@ -2950,7 +2929,7 @@ export function createClankyToolDefinitions(
 					"Use when an external request needs coding, deep research, multi-step operations, or other work likely to take more than 1-2 minutes.",
 					"Include enough context in prompt for the main worker to proceed without rereading the external conversation.",
 					"After delegating, tell the user that the existing main session has picked it up; do not call it a new subagent or imply a worker was spawned.",
-					"For tool-heavy or durable user requests — including phrasing like 'spawn an agent', 'spin up a worker', 'make a subagent', 'set up an agent that monitors X', AgentRoom collaboration, or anything else needing tools you do not have — dispatch this immediately with the user's verbatim request as the prompt and a short title you derive yourself. Do not interrogate the user to spec scope, name, tools, personality, or one-off-vs-reusable first. Remember this tool only hands off to the existing main session — main itself decides whether to do the work directly, spawn an AgentRoom agent, spawn a Pi worker, or route elsewhere. Your job is to delegate cleanly, not to pick the execution path.",
+					"For tool-heavy or durable user requests — including phrasing like 'spawn an agent', 'spin up a worker', 'make a subagent', 'set up an agent that monitors X', or anything else needing tools you do not have — dispatch this immediately with the user's verbatim request as the prompt and a short title you derive yourself. Do not interrogate the user to spec scope, name, tools, personality, or one-off-vs-reusable first. Remember this tool only hands off to the existing main session — main itself decides whether to do the work directly, fan out to herdr panes, spawn a Pi worker, or route elsewhere. Your job is to delegate cleanly, not to pick the execution path.",
 				],
 				parameters: delegateToMainWorkerSchema,
 				async execute(_toolCallId, params) {
@@ -3730,7 +3709,7 @@ export function createClankyToolDefinitions(
 				description: "Send a Discord message and optionally upload local file attachments to a channel.",
 				promptSnippet: "discord_send_message: send user-approved messages or upload generated local files to Discord.",
 				promptGuidelines: [
-					"Use Clanky's agent-owned Discord credential only; never use AgentRoom room connector tokens.",
+					"Use Clanky's agent-owned Discord credential only.",
 					"Confirm before sending sensitive files, high-impact messages, or messages to ambiguous channels.",
 				],
 				parameters: discordSendMessageSchema,
@@ -3847,129 +3826,6 @@ export function createClankyToolDefinitions(
 		);
 	}
 	return tools;
-}
-
-interface MaybeInjectSkillOptions {
-	autoEnvVar: string;
-	skillName: string;
-	predicate: (trimmed: string) => boolean;
-	/**
-	 * Optional extra precondition evaluated before any text inspection. When it
-	 * returns false the text is returned untouched.
-	 */
-	precondition?: (env: NodeJS.ProcessEnv) => boolean;
-}
-
-function maybeInjectSkill(text: string, env: NodeJS.ProcessEnv, options: MaybeInjectSkillOptions): string {
-	const auto = env[options.autoEnvVar];
-	if (auto === "0" || auto === "false") return text;
-	if (options.precondition !== undefined && !options.precondition(env)) return text;
-	const trimmed = text.trimStart();
-	if (trimmed.length === 0) return text;
-	if (trimmed.startsWith("/")) return text;
-	if (trimmed.includes(`<skill name="${options.skillName}"`)) return text;
-	if (!options.predicate(trimmed)) return text;
-	return `/skill:${options.skillName} ${text}`;
-}
-
-export function maybeInjectWebOperatorSkill(text: string, env: NodeJS.ProcessEnv = process.env): string {
-	return maybeInjectSkill(text, env, {
-		autoEnvVar: "CLANKY_WEB_OPERATOR_AUTO_SKILL",
-		skillName: WEB_OPERATOR_SKILL_NAME,
-		predicate: shouldUseWebOperatorSkill,
-	});
-}
-
-export function maybeInjectMediaOperatorSkill(text: string, env: NodeJS.ProcessEnv = process.env): string {
-	return maybeInjectSkill(text, env, {
-		autoEnvVar: "CLANKY_MEDIA_OPERATOR_AUTO_SKILL",
-		skillName: MEDIA_OPERATOR_SKILL_NAME,
-		predicate: shouldUseMediaOperatorSkill,
-	});
-}
-
-export function maybeInjectAgentRoomOperatorSkill(text: string, env: NodeJS.ProcessEnv = process.env): string {
-	return maybeInjectSkill(text, env, {
-		autoEnvVar: "CLANKY_AGENTROOM_OPERATOR_AUTO_SKILL",
-		skillName: AGENTROOM_OPERATOR_SKILL_NAME,
-		predicate: shouldUseAgentRoomOperatorSkill,
-	});
-}
-
-export function maybeInjectWorkTrackerSkill(text: string, env: NodeJS.ProcessEnv = process.env): string {
-	return maybeInjectSkill(text, env, {
-		autoEnvVar: "CLANKY_WORK_TRACKER_AUTO_SKILL",
-		skillName: WORK_TRACKER_SKILL_NAME,
-		predicate: shouldUseWorkTrackerSkill,
-		precondition: (current) => {
-			const tracker = current.CLANKY_WORK_TRACKER?.trim() || current.CLANKY_WORK_TRACKER_PROVIDER_KIND?.trim();
-			return tracker !== undefined && tracker.length > 0;
-		},
-	});
-}
-
-export function shouldUseWebOperatorSkill(text: string): boolean {
-	const normalized = text.toLowerCase();
-	if (/\bhttps?:\/\/|\bwww\./i.test(text)) return true;
-	if (/\b(look\s*up|lookup|google|browse|navigate|visit|screenshot|screen\s*shot)\b/i.test(text)) return true;
-	if (/\b(open|inspect|read|extract)\b.{0,40}\b(site|page|website|webpage|url)\b/i.test(text)) return true;
-	if (
-		/\b(search|find)\b.{0,30}\b(web|internet|online|site|page|price|pricing|cost|subscription|docs?|documentation)\b/i.test(
-			text,
-		)
-	) {
-		return true;
-	}
-	if (/\b(latest|current|up[- ]to[- ]date|today|recent|newest|pricing|price|cost|subscription)\b/i.test(text)) {
-		return true;
-	}
-	if (normalized.includes("what does") && /\b(cost|price)\b/i.test(text)) return true;
-	return false;
-}
-
-export function shouldUseMediaOperatorSkill(text: string): boolean {
-	if (/\b(grok\s+imagine|xai\s+imagine|openai\s+image|gpt-image)\b/i.test(text)) return true;
-	if (
-		/\b(text[- ]to[- ]video|image[- ]to[- ]video|generate\s+a\s+video|make\s+a\s+video|create\s+a\s+video)\b/i.test(
-			text,
-		)
-	) {
-		return true;
-	}
-	if (
-		/\b(generate|create|make|draw|render|design|imagine)\b.{0,50}\b(image|picture|photo|illustration|art|logo|icon|banner|thumbnail|poster|video|animation|clip)\b/i.test(
-			text,
-		)
-	) {
-		return true;
-	}
-	if (
-		/\b(image|picture|photo|illustration|logo|icon|banner|thumbnail|poster)\b.{0,30}\b(generate|create|make|draw|render|design)\b/i.test(
-			text,
-		)
-	) {
-		return true;
-	}
-	return false;
-}
-
-export function shouldUseAgentRoomOperatorSkill(text: string): boolean {
-	if (/\bagent[- ]?room\b/i.test(text)) return true;
-	if (/\bagent-room\b/i.test(text)) return true;
-	if (/\bAGENTROOM_[A-Z_]+\b/.test(text)) return true;
-	if (/\b(room|agentroom)\b.{0,40}\b(messages?|tasks?|workers?|agents?|runtime|coordination|dm)\b/i.test(text)) {
-		return true;
-	}
-	if (/\b(read|send|nudge|launch|stop)\b.{0,40}\b(room )?(worker|agent)\b/i.test(text)) return true;
-	return false;
-}
-
-export function shouldUseWorkTrackerSkill(text: string): boolean {
-	if (/\b(linear|jira|github issues?|tracker|ticket|issue|inbox|notification)\b/i.test(text)) return true;
-	if (/\b(task|todo|follow[- ]?up|status|roadmap|milestone)\b/i.test(text)) return true;
-	if (/\b(fix|debug|implement|build|add|change|refactor|investigate|review|ship)\b/i.test(text)) return true;
-	if (/\b(pr|pull request|commit|branch|release)\b/i.test(text)) return true;
-	return false;
 }
 
 function appendMemoryToSystemPrompt(systemPrompt: string, packet: MemoryPacket): string {

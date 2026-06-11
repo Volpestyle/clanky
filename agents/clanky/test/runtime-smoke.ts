@@ -17,7 +17,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import type { DiscordGatewayClient, DiscordMessageLike } from "@agentroom/chat-discord";
+import type { DiscordGatewayClient, DiscordMessageLike } from "@clanky/chat-discord";
 import {
 	DEFAULT_CLANKY_DISCORD_PROVIDER_ID,
 	DEFAULT_ELEVENLABS_PROVIDER_ID,
@@ -25,7 +25,6 @@ import {
 	DEFAULT_XAI_PROVIDER_ID,
 	resolveClankyPaths,
 	resolveMcpServerConfigs,
-	resolvePortableClankyDefaults,
 	saveStoredDiscordCredential,
 	saveStoredElevenLabsApiKey,
 	saveStoredOpenAiApiKey,
@@ -90,7 +89,6 @@ async function main(): Promise<void> {
 	await assertClankySetupExtensionCommand();
 	await assertClankyVoiceLogsExtensionCommand();
 	await assertDiscordGatewayControllerStartup();
-	await assertAgentRoomPortableConfigDefaults();
 	const tmpRoot = await mkdtemp(join(tmpdir(), "clanky-agent-smoke-"));
 	const homeDir = join(tmpRoot, "home");
 	const cwd = join(tmpRoot, "work");
@@ -221,66 +219,6 @@ function mainSessionContextHasText(value: unknown, expected: string): boolean {
 	});
 }
 
-async function assertAgentRoomPortableConfigDefaults(): Promise<void> {
-	const tmpRoot = await mkdtemp(join(tmpdir(), "clanky-agentroom-portable-"));
-	const cwd = join(tmpRoot, "work");
-	await mkdir(join(cwd, ".agentroom"), { recursive: true });
-	await writeFile(
-		join(cwd, ".agentroom", "config.yaml"),
-		`room:
-  id: portable-smoke
-
-runtime:
-  default: fake
-
-workTracker:
-  default: linear
-  providers:
-    linear:
-      type: linear
-      teamId: team_123
-
-clanky:
-  home: .clanky-room
-  profile: lead
-  chatGatewayOwner: room
-
-runtimes:
-  fake:
-    type: fake
-
-storage:
-  driver: jsonl
-  path: .agentroom/events.jsonl
-`,
-	);
-	try {
-		const defaults = resolvePortableClankyDefaults({ cwd, env: {} });
-		if (defaults.homeDir !== join(cwd, ".clanky-room")) {
-			throw new Error(`smoke: portable Clanky home mismatch: ${defaults.homeDir}`);
-		}
-		if (defaults.profile !== "lead") {
-			throw new Error(`smoke: portable Clanky profile mismatch: ${defaults.profile}`);
-		}
-		if (defaults.env.CLANKY_CHAT_GATEWAY_OWNER !== "room") {
-			throw new Error("smoke: portable Clanky chat owner was not applied");
-		}
-		if (defaults.env.CLANKY_WORK_TRACKER !== "linear" || defaults.env.CLANKY_WORK_TRACKER_TEAM_ID !== "team_123") {
-			throw new Error(`smoke: portable work tracker env mismatch: ${JSON.stringify(defaults.env)}`);
-		}
-		const { runtime, paths } = await createClankyRuntime({ cwd });
-		try {
-			if (paths.homeDir !== join(cwd, ".clanky-room") || paths.profile !== "lead") {
-				throw new Error(`smoke: runtime did not adopt portable Clanky config: ${JSON.stringify(paths)}`);
-			}
-		} finally {
-			await runtime.dispose();
-		}
-	} finally {
-		await rm(tmpRoot, { recursive: true, force: true });
-	}
-}
-
 function assertAgentDiscordVoiceConfig(): void {
 	if (resolveAgentDiscordVoiceConfig({}) !== undefined) {
 		throw new Error("smoke: Discord voice should not start unless CLANKY_DISCORD_VOICE_ENABLED is set");
@@ -403,7 +341,7 @@ function assertAgentDiscordVoiceConfig(): void {
 		throw new Error("smoke: stored /elevenlabs-login API key should configure Discord voice");
 	}
 	const voiceOnlyCredentials = resolveAgentDiscordCredentialConfig({
-		CLANKY_CHAT_GATEWAY_OWNER: "room",
+		CLANKY_CHAT_GATEWAY_OWNER: "off",
 		CLANKY_DISCORD_TOKEN: "token",
 	});
 	if (voiceOnlyCredentials === undefined) {
@@ -411,7 +349,7 @@ function assertAgentDiscordVoiceConfig(): void {
 	}
 	const voiceOnlyConfig = resolveAgentDiscordVoiceConfig(
 		{
-			CLANKY_CHAT_GATEWAY_OWNER: "room",
+			CLANKY_CHAT_GATEWAY_OWNER: "off",
 			CLANKY_DISCORD_VOICE_ENABLED: "1",
 			CLANKY_DISCORD_TOKEN: "token",
 			CLANKY_DISCORD_VOICE_GUILD_ID: "guild-1",
@@ -429,32 +367,31 @@ function assertAgentDiscordGatewayConfig(): void {
 	if (resolveAgentDiscordGatewayConfig({}) !== undefined) {
 		throw new Error("smoke: Discord gateway should not start without CLANKY_DISCORD_TOKEN");
 	}
-	const enrolledConfig = resolveAgentDiscordGatewayConfig({
-		AGENTROOM: "1",
+	const envConfig = resolveAgentDiscordGatewayConfig({
 		CLANKY_DISCORD_TOKEN: "token",
 		CLANKY_DISCORD_CONVERSATION_ID: "conversation-1",
 	});
-	if (enrolledConfig?.conversationId !== "conversation-1") {
-		throw new Error("smoke: AGENTROOM=1 should still allow agent-owned Discord config");
+	if (envConfig?.conversationId !== "conversation-1") {
+		throw new Error("smoke: env conversation id should drive agent-owned Discord config");
 	}
-	if (enrolledConfig?.source !== "env") {
-		throw new Error(`smoke: env-driven config source should be "env", got ${enrolledConfig?.source}`);
+	if (envConfig?.source !== "env") {
+		throw new Error(`smoke: env-driven config source should be "env", got ${envConfig?.source}`);
 	}
 	if (
 		resolveAgentDiscordGatewayConfig({
-			CLANKY_CHAT_GATEWAY_OWNER: "room",
+			CLANKY_CHAT_GATEWAY_OWNER: "off",
 			CLANKY_DISCORD_TOKEN: "token",
 		}) !== undefined
 	) {
-		throw new Error("smoke: room-owned mode should suppress agent Discord config");
+		throw new Error("smoke: gateway owner off should suppress agent Discord config");
 	}
 	if (
 		resolveAgentDiscordCredentialConfig({
-			CLANKY_CHAT_GATEWAY_OWNER: "room",
+			CLANKY_CHAT_GATEWAY_OWNER: "off",
 			CLANKY_DISCORD_TOKEN: "token",
 		}) === undefined
 	) {
-		throw new Error("smoke: room-owned mode should not hide raw Discord credentials from voice");
+		throw new Error("smoke: gateway owner off should not hide raw Discord credentials from voice");
 	}
 }
 
@@ -668,18 +605,18 @@ async function assertAgentDiscordGatewayReceivesBotMessages(): Promise<void> {
 	const restoreEnv = withoutDiscordOperatorEnv();
 	try {
 		client.emitMessage({
-			id: "agentroom-hi-1",
+			id: "external-bot-hi-1",
 			content: "Hi Clanky",
 			channelId: "channel-1",
 			guildId: "guild-1",
 			createdTimestamp: Date.parse("2026-05-31T22:05:37.697Z"),
 			author: {
-				id: "agentroom-bot",
-				username: "AgentRoom",
-				globalName: "Agent Room",
+				id: "external-bot",
+				username: "ExternalBot",
+				globalName: "External Bot",
 				bot: true,
 			},
-			member: { displayName: "Agent Room" },
+			member: { displayName: "External Bot" },
 			channel: {
 				id: "channel-1",
 				name: "announcements",
@@ -694,7 +631,7 @@ async function assertAgentDiscordGatewayReceivesBotMessages(): Promise<void> {
 		if (!prompt.includes("Bridge context: This profile is bound to the current Discord conversation.")) {
 			throw new Error(`smoke: bot-authored Discord prompt had wrong acceptance context: ${prompt}`);
 		}
-		if (!prompt.includes("From: Agent Room") || !prompt.includes("Text: Hi Clanky")) {
+		if (!prompt.includes("From: External Bot") || !prompt.includes("Text: Hi Clanky")) {
 			throw new Error(`smoke: bot-authored Discord message was not forwarded intact: ${prompt}`);
 		}
 	} finally {
@@ -833,31 +770,8 @@ async function assertStoredDiscordCredentialPath(): Promise<void> {
 		throw new Error(`smoke: stored providerId default mismatch, got ${fromStored.providerId}`);
 	}
 
-	const discordMcpConfig = resolveMcpServerConfigs({
-		authStorage: stored,
-		cwd: "/tmp/clanky-mcp-smoke",
-		env: {},
-	}).discord;
-	if (discordMcpConfig === undefined) {
-		throw new Error("smoke: auto Discord MCP config should exist");
-	}
-	if (discordMcpConfig.env.DISCORD_MCP_TOKEN !== "stored-token") {
-		throw new Error("smoke: stored Discord credential should be injected into auto Discord MCP env");
-	}
-	if (discordMcpConfig.env.DISCORD_MCP_CREDENTIAL_KIND !== "bot-token") {
-		throw new Error("smoke: stored Discord credential kind should be injected into auto Discord MCP env");
-	}
-
-	const envDiscordMcpConfig = resolveMcpServerConfigs({
-		authStorage: stored,
-		cwd: "/tmp/clanky-mcp-smoke",
-		env: { CLANKY_DISCORD_TOKEN: "env-token" },
-	}).discord;
-	if (envDiscordMcpConfig?.env.DISCORD_MCP_TOKEN !== undefined) {
-		throw new Error("smoke: stored Discord MCP token should not override an env Discord token");
-	}
-	if (envDiscordMcpConfig?.env.CLANKY_DISCORD_TOKEN !== "env-token") {
-		throw new Error("smoke: Discord MCP env should preserve the explicit env token");
+	if (resolveMcpServerConfigs({ cwd: "/tmp/clanky-mcp-smoke", env: {} }).discord !== undefined) {
+		throw new Error("smoke: no Discord MCP server should be auto-registered; Discord tools are native");
 	}
 
 	const mcpHome = await mkdtemp(join(tmpdir(), "clanky-mcp-profile-smoke-"));
@@ -909,9 +823,6 @@ async function assertStoredDiscordCredentialPath(): Promise<void> {
 		throw new Error(`smoke: env token should win, got ${envOverridesStored.token}`);
 	}
 
-	if (resolveAgentDiscordGatewayConfig({ CLANKY_CHAT_GATEWAY_OWNER: "room" }, stored) !== undefined) {
-		throw new Error("smoke: room-owned mode should suppress stored-credential gateway too");
-	}
 	if (resolveAgentDiscordGatewayConfig({ CLANKY_CHAT_GATEWAY_OWNER: "off" }, stored) !== undefined) {
 		throw new Error("smoke: off-owner should suppress stored-credential gateway");
 	}
@@ -2142,7 +2053,7 @@ async function assertControllerVoiceOnlyStartup(): Promise<void> {
 		authStorage,
 		paths: testControllerPaths(),
 		env: {
-			CLANKY_CHAT_GATEWAY_OWNER: "room",
+			CLANKY_CHAT_GATEWAY_OWNER: "off",
 			CLANKY_DISCORD_TOKEN: "discord-token",
 			CLANKY_DISCORD_VOICE_ENABLED: "1",
 			CLANKY_DISCORD_VOICE_AUTO_JOIN: "1",
@@ -2388,7 +2299,7 @@ async function assertControllerVoiceOnlyFailureCleanup(): Promise<void> {
 		authStorage,
 		paths: testControllerPaths(),
 		env: {
-			CLANKY_CHAT_GATEWAY_OWNER: "room",
+			CLANKY_CHAT_GATEWAY_OWNER: "off",
 			CLANKY_DISCORD_TOKEN: "discord-token",
 			CLANKY_DISCORD_VOICE_ENABLED: "1",
 			CLANKY_DISCORD_VOICE_AUTO_JOIN: "1",

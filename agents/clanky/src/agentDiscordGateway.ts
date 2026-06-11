@@ -1,5 +1,5 @@
 import { appendFile } from "node:fs/promises";
-import { DiscordChatGatewayProvider, type DiscordGatewayClient } from "@agentroom/chat-discord";
+import { DiscordChatGatewayProvider, type DiscordGatewayClient } from "@clanky/chat-discord";
 import {
 	type ChatInboxMessage,
 	type ClankyDiscordCredentialKind,
@@ -181,8 +181,8 @@ export interface ClankyAgentDiscordGatewayHandle extends AgentChatGatewayHandle 
  * Resolve the Discord gateway config.
  *
  * Precedence:
- *  1. Owner gate. If `CLANKY_CHAT_GATEWAY_OWNER` resolves to `room` or
- *     `off` the agent-owned gateway is suppressed entirely.
+ *  1. Owner gate. If `CLANKY_CHAT_GATEWAY_OWNER` resolves to `off` the
+ *     agent-owned gateway is suppressed entirely.
  *  2. `CLANKY_DISCORD_TOKEN` env always wins over stored credentials. Companion env vars
  *     `CLANKY_DISCORD_CREDENTIAL_KIND`, `CLANKY_DISCORD_PROVIDER_ID`,
  *     and `CLANKY_DISCORD_CONVERSATION_ID` take effect when env is the source.
@@ -213,7 +213,7 @@ export function resolveAgentDiscordGatewayConfig(
  *
  * Voice uses the same Discord credential but owns a media connection, not a
  * text chat gateway. Keeping this resolver separate lets
- * CLANKY_CHAT_GATEWAY_OWNER=room/off suppress text handling without making
+ * CLANKY_CHAT_GATEWAY_OWNER=off suppress text handling without making
  * Discord voice impossible.
  */
 export function resolveAgentDiscordCredentialConfig(

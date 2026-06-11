@@ -98,21 +98,3 @@ XAI_API_KEY=... clanky --home ~/.clanky --profile personal
 Expected result: `media_backend_status` shows xAI image/video backends as
 configured and media-generation prompts can call the relevant tool.
 
-## AgentRoom Launch
-
-Required only when testing Clanky as a runtime-backed agent inside an AgentRoom
-room.
-
-From an initialized AgentRoom room:
-
-```bash
-agent-room launch clanky \
-  --harness pi \
-  --command "clanky --home ./.clanky-room --profile clanky" \
-  --cwd .
-agent-room send clanky "hello"
-agent-room read clanky --lines 40
-```
-
-Expected result: AgentRoom owns the room/runtime audit flow, while Clanky remains
-standalone and keeps its profile-local state under the configured `--home`.

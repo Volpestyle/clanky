@@ -13,10 +13,8 @@ Default home:
 
 Important profile stores include credentials, model registry entries, sessions,
 memory, skills, subagent state, tracker refs, voice settings, and local
-gateway/voice logs. The file-level ownership and commit rules are maintained in
-[AgentRoom Configuration](docs://agent-room-docs/configuration); Clanky's own
-[Configuration Model](configuration.md) explains the profile resolver and active
-profile paths.
+gateway/voice logs. The [Configuration Model](configuration.md) explains the
+profile resolver and active profile paths.
 
 Use separate profiles for separate identities, rooms, experiments, or live
 instances.
@@ -35,9 +33,9 @@ Environment variables override stored profile credentials where supported. This
 is useful for CI and launchers, but it also means `/setup status` or
 `/openai-whoami` may report an env source instead of a stored source.
 
-Do not paste tokens into docs, Discord, AgentRoom messages, or normal chat.
-Prefer the interactive login commands so the secret is masked in the TUI and
-stored in the active profile.
+Do not paste tokens into docs, Discord, or normal chat. Prefer the interactive
+login commands so the secret is masked in the TUI and stored in the active
+profile.
 
 ## Memory Policy
 
@@ -97,16 +95,9 @@ Export:
 
 ## Gateway Privacy Boundary
 
-Agent-owned gateways use Clanky's own profile credential. Room-owned gateways
-use AgentRoom's connector credential. For any gateway adapter, including the
-Discord adapter, those credentials should not cross:
-
-- Clanky must not read AgentRoom room connector tokens.
-- AgentRoom must not read Clanky's profile token.
-- One external conversation should not be owned by both at once.
-
-Gateway subagents are profile-local Clanky sessions. They are not AgentRoom
-workers and do not create a separate credential boundary.
+Gateways use Clanky's own profile credential, stored in the active profile's
+`auth.json`. Gateway subagents are profile-local Clanky sessions; they share
+the profile credential boundary and do not create a separate one.
 
 ## Voice Privacy Boundary
 
