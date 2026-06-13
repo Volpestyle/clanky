@@ -24,7 +24,9 @@ if [ "${HERDR_ENV:-}" != "1" ]; then
 	exit 1
 fi
 
-SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# -P: resolve symlinks so the repo-root fallback works when the skill is
+# invoked through a symlinked skills dir (e.g. ~/.claude/skills)
+SKILL_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 RUN_ROOT="${CLANKY_HERDR_RUN_ROOT:-$HOME/.clanky/herdr-runs}"
 
 RUN_ID="" SLUG="" TASK="" PROMPT="" PROMPT_FILE="" WORKER_CWD="$PWD"
