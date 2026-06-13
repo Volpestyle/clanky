@@ -16,8 +16,8 @@
 		"@clanky/chat-discord": "workspace:*",
 		"@clanky/browser-bridge": "workspace:*",
 		"@clanky/core": "workspace:*",
-		"@earendil-works/pi-coding-agent": "^0.78.0",
-		"@earendil-works/pi-tui": "^0.78.0",
+		"@earendil-works/pi-coding-agent": "^0.79.2",
+		"@earendil-works/pi-tui": "^0.79.2",
 		"typebox": "^1.1.38",
 		"ws": "^8.20.1"
 	}
