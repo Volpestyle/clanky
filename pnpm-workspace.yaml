@@ -4,9 +4,10 @@ packages:
 
 minimumReleaseAge: 1440
 minimumReleaseAgeExclude:
-  - "@earendil-works/pi-ai@0.78.0"
-  - "@earendil-works/pi-coding-agent@0.78.0"
-  - "@earendil-works/pi-tui@0.78.0"
+  - "@earendil-works/pi-agent-core@0.79.2"
+  - "@earendil-works/pi-ai@0.79.2"
+  - "@earendil-works/pi-coding-agent@0.79.2"
+  - "@earendil-works/pi-tui@0.79.2"
 strictPeerDependencies: true
 verifyStoreIntegrity: true
 onlyBuiltDependencies:
