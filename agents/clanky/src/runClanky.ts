@@ -283,11 +283,12 @@ function buildRuntimeFactory(opts: {
 
 	return async ({ cwd: runtimeCwd, sessionManager, sessionStartEvent }) => {
 		const modelRegistry = ModelRegistry.create(authStorage, paths.modelsFile);
-		const settingsManager = SettingsManager.inMemory({
-			defaultProvider: DEFAULT_CLANKY_MODEL_PROVIDER,
-			defaultModel: DEFAULT_CLANKY_MODEL_ID,
-			defaultThinkingLevel: defaultThinkingLevel(),
-		});
+		// Profile-local settings file so the last /model selection persists
+		// across sessions and spawned workers. The boot model is resolved
+		// explicitly below and passed to the session, so a profile authed only
+		// via OAuth (e.g. openai-codex) boots on a usable model instead of
+		// hard-failing on the openai default.
+		const settingsManager = SettingsManager.create(runtimeCwd, paths.profileDir);
 
 		const servicesOptions = {
 			cwd: runtimeCwd,
@@ -333,15 +334,41 @@ function buildRuntimeFactory(opts: {
 		const fromServicesOptions: Parameters<typeof createAgentSessionFromServices>[0] = {
 			services,
 			sessionManager,
+			thinkingLevel: defaultThinkingLevel(),
 			customTools: createClankyToolDefinitions(handlers, {
 				includeMainWorkerDelegation: includeMainWorkerDelegationTool,
 			}),
 		};
+		// Resolved after createAgentSessionServices: that call reloads the
+		// settings manager from disk, so the persisted default is only
+		// trustworthy here.
+		const bootModel = resolveBootModel(modelRegistry, settingsManager);
+		if (bootModel !== undefined) fromServicesOptions.model = bootModel;
 		if (sessionStartEvent !== undefined) fromServicesOptions.sessionStartEvent = sessionStartEvent;
 
 		const result = await createAgentSessionFromServices(fromServicesOptions);
 		return { ...result, services, diagnostics: services.diagnostics };
 	};
+}
+
+/**
+ * Pick the boot model: the persisted default when it still has auth
+ * configured (whatever /model set last), else the first model with auth —
+ * preferring the canonical default and then its model id on any authed
+ * provider (e.g. gpt-5.5 via openai-codex OAuth) — else the persisted or
+ * canonical default unauthed so startup errors stay actionable.
+ */
+function resolveBootModel(modelRegistry: ModelRegistry, settingsManager: SettingsManager) {
+	const provider = settingsManager.getDefaultProvider();
+	const modelId = settingsManager.getDefaultModel();
+	const persisted = provider !== undefined && modelId !== undefined ? modelRegistry.find(provider, modelId) : undefined;
+	if (persisted !== undefined && modelRegistry.hasConfiguredAuth(persisted)) return persisted;
+	const available = modelRegistry.getAvailable();
+	const fallback =
+		available.find((m) => m.provider === DEFAULT_CLANKY_MODEL_PROVIDER && m.id === DEFAULT_CLANKY_MODEL_ID) ??
+		available.find((m) => m.id === DEFAULT_CLANKY_MODEL_ID) ??
+		available[0];
+	return fallback ?? persisted ?? modelRegistry.find(DEFAULT_CLANKY_MODEL_PROVIDER, DEFAULT_CLANKY_MODEL_ID);
 }
 
 export function createClankyEffortExtensionFactory(
@@ -474,23 +501,27 @@ function createClankyWelcomeExtensionFactory(input: {
 	authStorage: AuthStorage;
 	profile: string;
 	env: NodeJS.ProcessEnv;
+	modelsFile: string;
 }): ExtensionFactory {
 	return (pi) => {
 		pi.on("session_start", async (_event, ctx) => {
 			if (!ctx.hasUI) return;
 			const status = getOpenAiCredentialStatus(input.env, input.authStorage);
-			if (status.available) {
+			const hasModelAuth = ModelRegistry.create(input.authStorage, input.modelsFile).getAvailable().length > 0;
+			if (status.available || hasModelAuth) {
 				ctx.ui.setHeader(undefined);
 				return;
 			}
 			ctx.ui.setHeader((_tui, theme) => ({
 				render(width: number): string[] {
+					// Truncate before styling: pi's renderer crashes on lines wider
+					// than the pane (seen in narrow herdr worker splits).
 					const profile = truncateText(input.profile, Math.max(12, width - "Profile: ".length));
 					return [
 						"",
-						theme.bold("Clanky"),
-						theme.fg("error", "OpenAI is not configured. Type /setup to begin."),
-						theme.fg("dim", `Profile: ${profile}`),
+						theme.bold(truncateText("Clanky", width)),
+						theme.fg("error", truncateText("OpenAI is not configured. Type /setup to begin.", width)),
+						theme.fg("dim", truncateText(`Profile: ${profile}`, width)),
 						"",
 					];
 				},
@@ -589,6 +620,7 @@ export async function createClankyRuntime(options: RunClankyOptions = {}) {
 				authStorage,
 				profile: paths.profile,
 				env: runtimeEnv,
+				modelsFile: paths.modelsFile,
 			}),
 			createClankyVoiceStatusExtensionFactory(gatewayController),
 			createClankySetupExtensionFactory({
