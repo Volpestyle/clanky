@@ -73,11 +73,12 @@ Goal: clanky builds standalone with no `link:` deps on sibling repos.
   spawn/stop, health, pairing grant, device registration.
 - Notification hook on `blocked`/`done` transitions: ntfy first, APNs relay
   behind the same interface later.
-- iOS app: rename from AgentRoom to Clanky (assets in `branding/`), repoint
-  `AgentRoomAPIClient` at the herdr bridge, delete room-only models
-  (room agents, messages/events, channels). Home screen becomes Clanky: his
-  thread (terminal view + composer) and his subagent tree; the raw
-  workspace/pane browser becomes a secondary view.
+- iOS app: repo renamed to `clanky-ios`; repoint the API client at the herdr
+  bridge, delete room-only models (room agents, messages/events, channels).
+  Home screen becomes Clanky: his thread (terminal view + composer) and his
+  subagent tree; the raw workspace/pane browser becomes a secondary view.
+- Deferred: upstreaming the bridge to `ogulcancelik/herdr` (would shed fork
+  maintenance; requires their discussion-first contribution flow).
 
 ## Status
 
@@ -90,4 +91,6 @@ Goal: clanky builds standalone with no `link:` deps on sibling repos.
 - Phase 3 partially done: the `clanky-herdr-operator` bundled skill is the
   agent-facing fan-out path. Remaining: herdr pane metadata/tags and routing
   Clanky's own subagent coordinators through herdr panes.
-- Phase 4 not started (herdr bridge, iOS rebrand).
+- Phase 4 herdr side done: `herdr bridge` (HTTP/WS over the socket API,
+  bearer auth) merged to Volpestyle/herdr master; fork synced to upstream
+  v0.6.10. iOS repoint/rebrand in progress in `clanky-ios`.
