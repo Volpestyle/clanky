@@ -1,0 +1,499 @@
+# Clanky Architecture Spec
+
+Status: target architecture. This document is the source of truth for the
+rebuilt Clanky. It supersedes the previous "Pi is the foundation, Clanky is not
+a daemon" model and every doc written against it.
+
+## 1. Summary
+
+Clanky is an always-on personal agent that lives inside a persistent
+[herdr](https://herdr.dev) session and is reachable from anywhere through a
+native iOS app. He is built on three off-the-shelf systems and a thin layer of
+glue:
+
+- **herdr** is the *stage* — a vanilla, persistent terminal-agent multiplexer.
+  Every agent is a visible pane. herdr also provides the swarm coordination CLI.
+- **[eve](https://eve.dev)** is the *conductor* — Clanky's durable backend brain
+  *and* his visible face. eve owns inbound channels (Discord, voice), cron
+  schedules, durable sessions, and memory. Its interactive TUI runs in a herdr
+  pane and *is* what you see as "Clanky."
+- **Performers** are panes — `eve`, `claude`, or `codex` agents that Clanky
+  spawns into herdr for parallel or specialized work, all visible.
+- The **window** is the Clanky iOS app, which reaches the stage over the tailnet
+  through an eve relay channel.
+
+The previous build was a Pi runtime with personal resources injected and the
+gateways, turn queue, and subagent coordination hand-rolled in-process. The
+rebuild keeps nothing load-bearing from that model: eve provides the durable
+backend primitives Clanky used to hand-roll, herdr provides visibility and swarm
+coordination, and **Pi is removed entirely** — it is not a dependency, not a
+runtime, and not a performer. The only remaining use of the local Pi checkout
+(`~/dev/pi`) is a **one-time code donation**: the OpenAI Codex OAuth flow is
+ported out of it into `agent/lib` (§4.6). After that port, deleting `~/dev/pi`
+changes nothing about how Clanky runs.
+
+## 2. Goals and non-goals
+
+### Goals
+
+- Clanky is **always on** (a Mac mini) and part of a persistent herdr session by
+  default.
+- Turning Clanky on shows him in the iOS app; everything he does is a **visible
+  TUI pane** in herdr.
+- Inbound Discord and voice work surfaces **as panes**, not as hidden in-process
+  subagents.
+- Clanky can spawn other agents — `claude`, `codex`, more `eve` agents, or
+  subagents of himself — all visible.
+- **herdr stays vanilla.** No maintained fork. Remote access is solved without
+  patching herdr.
+- The swarm is **decoupled from Clanky**: a herdr session is a swarm-ready
+  environment on its own. Agents coordinate with or without Clanky present, and
+  any agent can take the orchestrator role on demand.
+
+### Non-goals
+
+- No custom multiplexer, scheduler, or chat server. herdr and eve own those.
+- No hidden background agents. If it runs, it is a pane.
+- No backwards-compatibility shims for the old Pi-runtime model. Old surfaces
+  are removed, not migrated behind flags.
+- Cloud (Mac-off) availability is out of scope for v1. The Mac mini is the host.
+
+## 3. Mental model
+
+Stage, conductor, performers, window.
+
+```mermaid
+flowchart TB
+  subgraph mac["Mac mini — always on"]
+    subgraph herdr["herdr (vanilla) — the STAGE: persistent session 'clankies'"]
+      direction TB
+      face["pane: eve dev<br/>Clanky's visible face"]
+      disc["pane: clanky:discord<br/>(spawned on inbound)"]
+      voice["pane: clanky:voice<br/>(spawned on inbound)"]
+      w1["pane: claude<br/>coding subagent"]
+      w2["pane: codex<br/>subagent"]
+    end
+    eve["eve service — the CONDUCTOR<br/>channels · schedules · durable sessions · memory"]
+    relay["eve relay channel<br/>WS over herdr socket"]
+  end
+
+  phone["Clanky iOS — the WINDOW"]
+  discord["Discord<br/>text + voice"]
+
+  discord -->|webhook| eve
+  eve -->|spawns visible work| herdr
+  eve --- face
+  eve --> relay
+  relay -->|reads herdr.sock| herdr
+  phone <-->|tailnet| relay
+
+  face -. swarm CLI .- w1
+  face -. swarm CLI .- w2
+```
+
+Read it as:
+
+- **herdr is the stage.** A vanilla, persistent named session (`clankies`) on
+  the Mac mini. It provides panes, the swarm coordination CLI
+  (`herdr agent list/read/send/wait`, `herdr pane report-agent`), and session
+  durability. No fork.
+- **eve is the conductor — Clanky's brain and face.** A long-lived local service
+  that owns Discord/voice channels, cron schedules, durable session state, and
+  memory. Its `eve dev` interactive TUI runs in a pane and is what you see and
+  talk to as "Clanky." When eve has inbound or background work, it does not
+  answer headlessly — it spawns or routes to a herdr pane so the work is
+  visible.
+- **Performers are panes.** `eve`, `claude`, or `codex` agents started with
+  `herdr agent start`. (herdr can start any binary in a pane, but Pi is not a
+  Clanky-blessed performer — see §4.3.)
+- **The window is the iOS app.** It reaches the stage through an eve relay
+  channel over the tailnet. One front door (eve) serves both chat with Clanky and
+  visibility into every pane.
+
+## 4. Roles in detail
+
+### 4.1 herdr — the stage (vanilla)
+
+herdr is used unmodified. It provides:
+
+- **Panes** — every agent is a real terminal, visible and attributable.
+- **A persistent named session** (`herdr --session clankies`) that survives
+  across restarts and disconnects, so "always on" is herdr's job, not a daemon
+  Clanky writes.
+- **The swarm coordination CLI**, all over the local unix socket:
+  - discovery: `herdr agent list`, `herdr agent get <name>`
+  - observation: `herdr agent read <name>` / `herdr pane read`
+  - messaging: `herdr agent send <name> <text>` / `herdr pane send-text`
+  - synchronization: `herdr agent wait <name> --status idle|working|blocked`
+  - presence: `herdr pane report-agent --state … --message …`
+  - spawning: `herdr agent start <name> -- <argv…>`
+
+Constraint: **no fork.** herdr's native API is a local unix socket; remote
+access is provided by eve (4.4), not by patching herdr. If a herdr-side feature
+is genuinely needed (e.g. the old bridge subcommand), it is **upstreamed** to
+`ogulcancelik/herdr`, never carried as a private fork.
+
+### 4.2 eve — the conductor (Clanky's brain and face)
+
+Clanky *is* an eve agent: a directory of files (`agent/instructions.md`,
+`agent/tools/`, `agent/channels/`, `agent/schedules/`, `agent/skills/`,
+`agent/lib/`) that eve compiles and runs as a durable local service.
+
+eve provides, off the shelf, everything Clanky used to hand-roll on Pi:
+
+| Clanky need | eve primitive | Replaces (old in-process code) |
+| --- | --- | --- |
+| Discord text in/out | `agent/channels/discord.ts` | `agentDiscordGateway`, `discordGatewayController` |
+| Voice in/out | `agent/channels/voice.ts` + ClankVox media | `agentVoiceGateway`, voice supervisor wiring |
+| Durable session state | eve sessions + `continuationToken` | `runtimeTurnQueue`, `mainSessionContext`, `stores` |
+| Scheduled/autonomous runs | `agent/schedules/*.ts` (cron) | (none existed) |
+| Visible face | `eve dev` TUI in a pane | the Pi `InteractiveMode` TUI |
+| Memory | eve session context + Clanky memory lib | `@clanky/core` memory (ported) |
+
+**Clanky's face is `eve dev`.** `eve dev` boots the runtime into an interactive
+terminal UI — you chat, watch it stream, approve tools, answer its questions,
+and subagent work renders indented under a `◆` header. Run inside a herdr pane,
+this is the visible, steerable "Clanky" you see locally and through the iOS app.
+The same HTTP routes back the iOS chat surface.
+
+### 4.3 Performers — panes
+
+When Clanky needs parallel or specialized work, he spawns it as a pane via
+`herdr agent start`, never as an eve in-process subagent (which would render
+only inside eve's own transcript). Performer types:
+
+- `eve` — another eve agent (e.g. a subagent of Clanky with a narrower brief).
+- `claude` — a Claude Code worker for coding tasks.
+- `codex` — a Codex worker (and the way to use the OpenAI subscription for
+  delegated coding, distinct from Clanky's own model in §4.6).
+
+Pi is **not** a performer. herdr can technically start any binary in a pane, so
+nothing stops a one-off `pi` pane, but Pi is not part of Clanky, not installed,
+and not maintained as a performer. The `pi-tui-coder` skill is removed.
+
+All performers coordinate through the vanilla `herdr` skill (4.5). Whoever is
+orchestrating loads `clanky-herdr-operator` for the harvestable fan-out
+protocol.
+
+### 4.4 The window — iOS app + eve relay channel
+
+Remote access must not require a herdr fork, and should present a single front
+door. Solution: a **custom eve channel** (`defineChannel`, raw `WS` route) that
+relays herdr's local unix socket to the network.
+
+```mermaid
+flowchart LR
+  phone["Clanky iOS"]
+  subgraph mac["Mac mini"]
+    relay["eve relay channel (WS)<br/>auth: bearer token"]
+    sock["herdr.sock<br/>(local unix socket)"]
+    herdr["herdr panes"]
+  end
+  phone <-->|tailnet, bearer token| relay
+  relay <-->|read scrollback / inject input / stream status| sock
+  sock --- herdr
+```
+
+- The relay is a raw WS route, so it bypasses eve's session framing and carries
+  terminal scrollback, status, and input injection faithfully.
+- The iOS app talks to **one endpoint** (eve) for both chat-with-Clanky and
+  pane visibility/steering. No second service.
+- herdr stays vanilla; the glue is TypeScript inside the Clanky eve app.
+- The iOS app's `Services/` layer targets this eve WS contract (replacing the
+  earlier herdr-bridge contract).
+
+### 4.5 Skills model
+
+Two skills, split on capability vs protocol — see also
+`skills/clanky-herdr-operator` and the vanilla `herdr` skill.
+
+| Skill | Audience | Purpose |
+| --- | --- | --- |
+| `herdr` (vanilla, vendor) | **every** agent in a pane | flat full-picture literacy: discover/read/message/wait/`report-agent` |
+| `clanky-herdr-operator` | **coordinator only** | opinionated harvestable fan-out: run dirs, manifest, sentinel files, spawn/harvest/cleanup |
+
+- The `herdr` skill is the non-rigid "every agent sees everyone" layer. It is
+  already shipped with herdr; the only addition is a short **presence
+  self-report** section (`herdr pane report-agent`) so agents publish status for
+  peers. That addition is vanilla and upstreamable.
+- Do **not** push `clanky-herdr-operator` onto workers; it is the hub-role
+  protocol. Workers carry only `herdr`.
+- Decision rule: new skill only when trigger *and* audience differ; otherwise
+  extend the existing skill.
+
+### 4.6 Model and provider auth — Clanky runs on the OpenAI (Codex) subscription
+
+**Requirement (hard):** Clanky's conductor model is backed by the user's
+ChatGPT/Codex **subscription via OpenAI OAuth**, not a per-token OpenAI API key.
+The old build got this from Pi's `/login` (Pi owned the OAuth flow and the
+subscription-backed model). Dropping Pi drops that, so eve must provide it.
+
+**How eve allows it.** eve's `model:` accepts either a Vercel AI Gateway id
+string (key-billed) **or a provider-authored AI SDK `LanguageModel` passed in
+code**. Clanky uses the second form: a custom `LanguageModel` that authenticates
+with the Codex subscription.
+
+**Port shape (versions resolved):** eve is on the Vercel AI SDK
+(`ai@7.0.0-beta.178`, `@ai-sdk/openai@4.0.0-beta.74`,
+`@ai-sdk/provider@4.0.0-beta.19` — modern `LanguageModelV2`-era spec). Pi does
+**not** use the Vercel AI SDK; its `packages/ai` is a bespoke LLM library on the
+official `openai@6.26.0` SDK, and its Codex provider is Pi's own
+`StreamFunction`, **not** an AI SDK `LanguageModel`. So the port splits in two —
+the OAuth half lifts, the provider half is rebuilt against eve's AI SDK:
+
+- **OAuth flow — lift ~verbatim** (plain HTTP + PKCE + token mint/**refresh**,
+  SDK-independent): `~/dev/pi/packages/ai/src/utils/oauth/openai-codex.ts`,
+  `utils/oauth/pkce.ts`, `utils/oauth/device-code.ts`.
+- **Subscription provider — reference only, rebuild** (it is Pi's
+  `StreamFunction` on the `openai` SDK, not portable as code):
+  `~/dev/pi/packages/ai/src/providers/openai-codex-responses.ts`. Reuse it as the
+  spec for endpoint/headers/request shape — base URL
+  `https://chatgpt.com/backend-api`, path `/codex/responses`, headers
+  `chatgpt-account-id` and `OpenAI-Beta: responses=experimental`, OpenAI
+  **Responses API** shape (note Pi also carries ~1400 lines of WebSocket
+  transport and header handling for backend quirks).
+
+**Implementation in eve (`agent/lib/`) — route (a), spike-verified:**
+
+A live spike against the Codex backend with the existing subscription token
+confirmed **route (a) works** — the stock `@ai-sdk/openai` Responses model talks
+to the Codex backend; no custom `LanguageModelV2` (route b) is needed. The
+working recipe:
+
+1. Port the OAuth util to mint and refresh the Codex token (lift from
+   `~/dev/pi/.../utils/oauth/openai-codex.ts`). Refresh runs inside the always-on
+   eve service; credentials live in the eve secret store / env, never in version
+   control. Token shape is `{ access, refresh, expires, accountId }`.
+2. Build the model on eve's `@ai-sdk/openai@4.0.0-beta.74`:
+   ```ts
+   const provider = createOpenAI({
+     baseURL: "https://chatgpt.com/backend-api/codex", // .responses() appends /responses
+     apiKey: oauth.access,
+     fetch: injectHeaders, // sets: chatgpt-account-id, OpenAI-Beta: responses=experimental, originator
+   });
+   const model = provider.responses("gpt-5.4"); // or gpt-5.3-codex-spark, etc.
+   ```
+3. Pass `model` as `model:` in `agent.ts`. **Every call must** run streamed and
+   carry the Codex-required provider options — verified mandatory:
+   - `providerOptions.openai.instructions` — non-empty (Clanky's instructions;
+     the `system` message does **not** populate this field — proven in the spike)
+   - `providerOptions.openai.store = false`
+   - streaming (`stream: true`) — non-streamed calls are rejected
+   Wire these as model defaults (a thin wrapper / middleware that always injects
+   `instructions` + `store:false`), so callers can't omit them.
+
+Route (b) (hand-write a `LanguageModelV2` from Pi's `openai-codex-responses.ts`)
+stays documented as the **fallback only** if the backend later breaks route (a).
+
+**Caveats / to verify:**
+
+- **Route (a) confirmed; the watch item is drift, not feasibility.** The required
+  param set (`instructions`, `store:false`, `stream:true`) was reverse-engineered
+  from the backend's 400s and may change.
+- The Codex Responses surface is **experimental and evolving**
+  (`responses=experimental`); it is the same path the official Codex CLI uses
+  with your own subscription, not a scrape, but expect drift.
+- Token **refresh lifecycle** must be owned by the daemon, not a TUI session.
+- Keep the existing **API-key** path (ported from `openAiAuth.ts`) as a fallback
+  provider, and the AI Gateway / Anthropic options available for performers.
+
+## 5. Key flows
+
+### 5.1 Always-on boot (Mac mini)
+
+1. herdr server runs with a persistent session: `herdr --session clankies`.
+2. The eve Clanky service starts (channels listening, schedules armed).
+3. A pane in `clankies` runs `eve dev` (or `eve dev --url <local>`) as Clanky's
+   face.
+4. The eve relay channel listens on the tailnet for the iOS app.
+
+"Turning Clanky on" means the eve service and his face pane are up. The iOS app
+then shows him.
+
+### 5.2 Inbound Discord message becomes a visible pane
+
+```mermaid
+sequenceDiagram
+  participant D as Discord
+  participant E as eve (Clanky)
+  participant H as herdr
+  participant P as pane clanky:discord-<id>
+  D->>E: webhook (message)
+  E->>E: resolve session (continuationToken), decide respond/skip
+  alt needs visible work
+    E->>H: herdr agent start clanky:discord-<id> -- <agent argv>
+    H-->>P: pane spawned (visible)
+    P->>P: do the work, report-agent status
+    P-->>E: result (file / agent read)
+    E->>D: reply
+  else quick answer
+    E->>D: reply directly from the conductor
+  end
+```
+
+The rule: **eve owns inbound + durability; herdr owns visibility.** Anything
+worth watching becomes a pane.
+
+### 5.3 Voice
+
+Voice is an eve channel backed by the ClankVox Rust media process (Discord voice
+transport, Opus, speaker transcription, Realtime/ElevenLabs TTS). The control
+plane (Realtime clients, turn buffering, transcription) ports from the current
+`agents/clanky/src/voice/*` into the eve voice channel + `agent/lib`. Live voice
+work that should be watched spawns a `clanky:voice-<id>` pane like 5.2.
+
+### 5.4 Fan-out / swarm orchestration
+
+Clanky (or any agent) acting as orchestrator loads `clanky-herdr-operator`,
+spawns one pane per task (`clanky:<slug>`), monitors via sentinel files +
+`herdr agent read`, unblocks by injecting into panes, and harvests results.
+Unchanged from today's operator skill, now driven by an eve conductor instead of
+a Pi runtime.
+
+### 5.5 Self-subagents
+
+A subagent of Clanky is another `eve` agent (narrower brief, shared memory lib)
+started as a pane. It is visible and coordinates through the `herdr` skill like
+any performer.
+
+## 6. Decoupled swarm sessions (Clanky optional)
+
+Because all coordination is vanilla herdr (the `herdr` skill), the swarm does
+not depend on Clanky.
+
+- **`clankies` session** = stage + conductor present → full personal agent.
+- **A bare swarm session** = stage only. Agents self-coordinate with
+  `herdr agent list/read/send/wait`; any one of them loads
+  `clanky-herdr-operator` to become the orchestrator on demand.
+
+The session is the primitive. Clanky is one optional conductor process you
+attach to whichever session you point him at. You may run multiple sessions.
+
+## 7. Always-on / deployment
+
+- Host: Mac mini, always on.
+- Durability: herdr persistent session (panes survive) + the eve service
+  (durable sessions, memory). Both restart with the machine.
+- Reachability: tailnet only; the eve relay binds to a private address with a
+  bearer token. No public exposure.
+- Cloud / Mac-off availability is explicitly deferred. If pursued later, a
+  separate deployed eve could cover headless chat only — pane access always
+  requires the local herdr.
+
+## 8. Vanilla vs. build
+
+**Off the shelf (no custom maintenance):**
+
+- herdr — stage, persistent session, swarm CLI.
+- eve — brain, `eve dev` TUI, channels, schedules, durable sessions.
+- `claude` / `codex` — performer agents (Pi is not used).
+- the vanilla `herdr` skill.
+
+**We build (all TypeScript, no fork):**
+
+1. The **Clanky eve agent** — instructions, persona, tools, memory lib, Discord
+   and voice channels, schedules.
+2. The **eve → herdr-pane spawn seam** — the conductor surfaces inbound and
+   background work as `herdr agent start` panes (5.2). This is the core
+   integration.
+3. The **eve relay channel** — raw WS route bridging the iOS app to `herdr.sock`
+   (4.4).
+4. iOS `Services/` repointed at the relay contract.
+5. The **presence self-report** addition to the `herdr` skill (vanilla,
+   upstreamable).
+
+## 9. Repository and package layout
+
+### 9.1 Target layout
+
+```
+clanky/
+  agent/                     # the eve Clanky agent (NEW — the conductor)
+    instructions.md
+    agent.ts
+    channels/
+      discord.ts             # Discord text channel
+      voice.ts               # voice channel (ClankVox-backed)
+      relay.ts               # raw WS relay to herdr.sock (the iOS window)
+    tools/                   # typed tools (herdr spawn seam, media, web, etc.)
+    schedules/               # cron jobs
+    skills/                  # agent-local skills (or symlinked)
+    lib/                     # ported memory, persona, herdr seam helpers
+  skills/
+    clanky-herdr-operator/   # coordinator fan-out protocol (kept)
+    clanky-*-operator/       # web/media/figma/work-tracker/etc. (kept, audited)
+  branding/
+  SPEC.md                    # this document
+  README.md
+```
+
+ClankVox stays a sibling Rust repo (`../clankvox`) feeding the voice channel.
+
+### 9.2 Migration map (old Pi runtime → new eve agent)
+
+| Old (current) | Disposition |
+| --- | --- |
+| `agents/clanky/` (Pi runtime, 38 `pi-coding-agent` imports) | **Removed.** Replaced by `agent/` (eve). |
+| `agentDiscordGateway`, `agentChatGateway`, `discordGatewayController`, `discordSubagentCoordinator` | **Removed.** Logic → `agent/channels/discord.ts` + the spawn seam. |
+| `agentVoiceGateway`, `agentDiscordVoice`, `voiceSupervisorExtension`, voice coordinators | **Removed.** Logic → `agent/channels/voice.ts`. |
+| `agents/clanky/src/voice/*` (Realtime, transcription, ClankVox IPC) | **Ported** into the voice channel + `agent/lib`. |
+| `runtimeTurnQueue`, `mainSessionContext`, `mainWorkerDelegation`, `stores` | **Removed.** Replaced by eve durable sessions + `continuationToken` + the spawn seam. |
+| `@clanky/core` (memory, agent tools, subagent store) | **Ported** to `agent/lib` + eve tools; drop the Pi-specific subagent store. |
+| `@clanky/chat-discord` | **Folded** into `agent/channels/discord.ts`. |
+| `@clanky/browser-bridge`, `discord-mcp` | **Removed** in teardown (recoverable on `master`); re-integrate as eve tools/connections when their capabilities are wired back in. |
+| `persona/`, profile/auth commands (`*Auth.ts`, `setupWizard`, `secretPrompt`) | **Re-expressed** as eve instructions + connections/env; drop Pi slash-command wiring. |
+| OpenAI **OAuth** model (was Pi's `/login`) | **Ported** into `agent/lib` as a custom AI SDK `LanguageModel` (§4.6); source: `~/dev/pi/packages/ai` oauth util + codex-responses provider. |
+| `openAiAuth.ts` (OpenAI **API-key** flow) | **Ported** as the fallback provider; the OAuth subscription path is primary. |
+| `skills/pi-tui-coder` | **Removed.** Pi is not a performer. |
+| All `docs/*` written against the Pi-foundation model | **Removed** (this spec replaces them). |
+
+### 9.3 Removed docs
+
+The following are deleted as part of this rebuild; their accurate content is
+absorbed here:
+
+- `docs/pi-foundation.md` — Pi is no longer the foundation.
+- `docs/discord-voice-architecture.md` — voice is an eve channel now.
+- `docs/configuration.md`, `docs/getting-started.md`,
+  `docs/command-reference.md`, `docs/memory-and-privacy.md`,
+  `docs/troubleshooting.md` — written against Pi profiles/TUI flows.
+- `docs/ROADMAP.md` — the AgentRoom retirement plan is complete/superseded.
+- `docs/qa/*` — Pi-runtime live runbooks.
+
+## 10. Build phases
+
+1. **Skeleton + model auth** — scaffold the eve Clanky agent (`npx eve init`),
+   port persona + instructions, and wire the **OpenAI Codex-subscription OAuth
+   model** (§4.6) so the conductor runs on the subscription from day one. Get
+   `eve dev` running in a herdr pane as the face.
+2. **Spawn seam** — implement the eve tool that does `herdr agent start` and
+   tracks the pane; prove "background work becomes a visible pane." Add the
+   presence self-report to the `herdr` skill.
+3. **Discord channel** — port the Discord gateway to `agent/channels/discord.ts`;
+   inbound messages route to panes via the seam.
+4. **Relay channel** — raw WS relay to `herdr.sock`; repoint the iOS app; verify
+   pane visibility/steering from the phone.
+5. **Voice channel** — port the voice control plane + ClankVox into
+   `agent/channels/voice.ts`.
+6. **Schedules + cleanup** — add cron jobs; delete the old `agents/clanky` Pi
+   runtime, dead packages, and superseded docs.
+
+Each phase keeps the system runnable; the old Pi runtime is removed only in
+phase 6, once the eve agent covers its surface.
+
+## 11. Open decisions
+
+- **Relay transport fit** — confirm a raw eve WS channel carries live terminal
+  scrollback cleanly (spike before phase 4). Fallback: upstream the herdr bridge
+  subcommand and let eve be a client of it.
+- **Face surface** — `eve dev` local vs `eve dev --url` against the running
+  service. Pick based on which gives the cleaner always-on pane.
+- **Memory store** — reuse `@clanky/core` memory verbatim in `agent/lib` vs.
+  adopt eve session context as the primary store.
+- **Performer default** — which agent type is the default subagent (`eve` vs
+  `claude`) for Clanky's generic fan-out.
+- **Codex provider route (§4.6) — RESOLVED: route (a).** A live spike confirmed
+  the stock `@ai-sdk/openai` `.responses()` model works against the Codex backend
+  with the subscription OAuth token, given `instructions` + `store:false` +
+  streaming. No custom `LanguageModelV2` needed; route (b) is fallback-only.
+  Remaining risk is backend drift, not feasibility.
