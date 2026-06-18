@@ -7,9 +7,10 @@
  *
  * Run: pnpm face   (CLANKY_EVE_PORT to change the port, default 2000)
  */
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { Client } from "eve/client";
 import {
 	EveTUIRunner,
@@ -33,6 +34,8 @@ const REPO = process.env.CLANKY_REPO_DIR ?? process.cwd();
 const PORT = Number.parseInt(process.env.CLANKY_EVE_PORT ?? "2000", 10);
 const HOST = `http://127.0.0.1:${PORT}`;
 const ENV_PATH = join(REPO, ".env.local");
+const CLANKY_HEADER_NOTE = "Clanky face on eve/client. Type /help for commands.";
+const runHostCommand = promisify(execFile);
 
 type ClankyExtensionCommandName = "discord-token" | "model" | "effort" | "status";
 type ClankyExtensionCommand = {
@@ -90,7 +93,9 @@ let forwardServerOutput = false;
 installClankyPromptCommands();
 
 process.stdout.write("\x1b[2mstarting Clanky...\x1b[22m\n");
+await reportClankyFaceToHerdr("working", "starting Clanky face");
 ownsServer = await ensureServer();
+await reportClankyFaceToHerdr("idle", "Clanky face ready");
 
 const client = new Client({ host: HOST });
 const renderer = new TerminalRenderer({
@@ -110,6 +115,7 @@ const runner = new EveTUIRunner({
 try {
 	await runner.run();
 } finally {
+	await reportClankyFaceToHerdr("unknown", "Clanky face stopped");
 	if (ownsServer) await stopServer();
 }
 
@@ -223,14 +229,31 @@ function gateServerOutputUntilHeader(renderer: TerminalRenderer): void {
 	};
 }
 
+async function reportClankyFaceToHerdr(state: "idle" | "working" | "blocked" | "unknown", message: string): Promise<void> {
+	if (process.env.HERDR_ENV !== "1") return;
+	const paneId = process.env.HERDR_PANE_ID;
+	if (paneId === undefined || paneId.length === 0) return;
+	await runHostCommand("herdr", [
+		"pane",
+		"report-agent",
+		paneId,
+		"--source",
+		"clanky-face",
+		"--agent",
+		"clanky:main",
+		"--state",
+		state,
+		"--message",
+		message,
+	]).catch(() => {});
+}
+
 function rewriteHeader(chunk: string): string {
 	return chunk
 		.replace("\x1b[1meve\x1b[22m \x1b[2mClanky\x1b[22m", "\x1b[1mClanky\x1b[22m \x1b[2meve-backed face\x1b[22m")
 		.replace("eve Clanky", "Clanky eve-backed face")
-		.replace(
-			"Public preview: https://vercel.com/docs/release-phases/public-beta-agreement",
-			"Clanky face on eve/client. Type /help for commands.",
-		);
+		.replace(/Public preview: https:\/\/vercel\.com\/docs\/release-phases\/[^\x1b\r\n]*/g, CLANKY_HEADER_NOTE)
+		.replace(/eve is currently in preview: https:\/\/vercel\.com\/docs\/release-phases\/[^\x1b\r\n]*/g, CLANKY_HEADER_NOTE);
 }
 
 function createClankyCommandHandler(): PromptCommandHandler {

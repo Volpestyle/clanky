@@ -13,6 +13,8 @@
 		"typecheck": "tsc --noEmit -p tsconfig.json",
 		"smoke:discord": "node test/discord-acceptance-smoke.ts",
 		"smoke:model": "node test/codex-model-smoke.ts",
+		"smoke:send:routing": "node test/herdr-send-routing-smoke.ts",
+		"smoke:spawn:argv": "node test/herdr-spawn-argv-smoke.ts",
 		"smoke:spawn": "node test/herdr-spawn-smoke.ts",
 		"smoke:relay": "node test/relay-smoke.ts",
 		"smoke:voice": "node test/voice-smoke.ts",

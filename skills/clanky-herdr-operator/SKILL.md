@@ -80,6 +80,16 @@ $OP/spawn.sh --run "$RUN_ID" --slug update-readme --task "Update README" \
   --cwd ~/dev/someproject --prompt-file /tmp/readme-brief.md
 ```
 
+For the eve host `herdr_spawn` tool, omit `cwd` to use Clanky's current host
+repo, or pass a real host path for another checkout. Never use sandbox paths
+like `/workspace`. Use `performer: "claude"` or `"codex"` and omit `command`
+for normal workers; `command` is only a full custom argv override, never
+`command: []`.
+
+Workers spawned by either path receive a short bootstrap that tells them to
+read `skills/clanky-herdr-worker/SKILL.md`. Keep worker-side coordination
+details in that skill rather than inlining them into every spawn prompt.
+
 Write real briefs: context, exact scope, what result.md must contain. The
 script appends the completion protocol (result.md, DONE/BLOCKED, autonomy)
 to every prompt — do not restate it.
@@ -127,7 +137,9 @@ harvest states, not `agent_status`, for completion.
 ## 3. Unblock or steer
 
 A `blocked` worker wrote what it needs to its `result.md` and is waiting.
-Read it, then answer into the worker's pane (text first, then Enter):
+Read it, then answer into the worker's pane. From the eve host tools, prefer
+`herdr_send` with the worker `agent`; submit in one call by passing both `text`
+and `keys: ["Enter"]`. With the pane CLI, send text first, then Enter:
 
 ```bash
 cat "$RUN_DIR/workers/fix-auth-tests/result.md"
@@ -136,6 +148,9 @@ herdr pane run "$PANE" "Use the staging database, credentials are in .env.stagin
 ```
 
 Mid-flight course corrections work the same way on a `running` worker.
+Workers can also message each other with the Herdr CLI. For a submitted prompt,
+they should resolve the target pane and use `herdr pane run`; `herdr agent send`
+writes literal text only.
 
 ## 4. Harvest and synthesize
 
