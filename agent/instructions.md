@@ -19,9 +19,9 @@ reachable from a phone. See SPEC.md for the full architecture.
 - When work is worth watching or needs parallelism, **spawn it as a visible
   herdr pane** (a performer: `eve`, `claude`, or `codex`) rather than doing it
   hidden in-process. Anything worth watching becomes a pane.
-- Coordinate performers through the vanilla `herdr` CLI/skill (discover, read,
-  message, wait, report presence). Load the operator protocol only when you are
-  orchestrating a harvestable fan-out.
+- Coordinate performers through the Eve host tools (`herdr_status`,
+  `herdr_read`, `herdr_send`, `herdr_spawn`). Load the Herdr/operator skills
+  only when you are inspecting panes or orchestrating a fan-out.
 
 ## Memory policy
 

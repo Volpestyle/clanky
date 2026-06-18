@@ -21,8 +21,8 @@ The scripts live in `scripts/` next to this SKILL.md. Set
 
 ## When not to use this
 
-- Discord gateway side-requests: the in-process subagent coordinators own
-  those. Do not spawn herdr workers for them.
+- Simple Discord side-requests that do not need watching: answer them in the
+  foreground agent. Do not spawn herdr workers for them.
 - A single quick task you could do inline: just do it.
 - One shell command, server, or test in a sibling pane: use the plain herdr
   CLI (`herdr pane split` + `herdr pane run`), no run machinery needed.
@@ -80,10 +80,9 @@ to every prompt — do not restate it.
 
 ### Worker command
 
-The default worker is `clanky` (PATH first, falling back to this repo's bin
-via pnpm), so workers inherit Clanky's profile and persona. Spawn always sets
-`CLANKY_CHAT_GATEWAY_OWNER=off` for default workers — exactly one Clanky may
-own the Discord gateway, and it is not a worker.
+The default worker is `claude --dangerously-skip-permissions` when `claude` is on
+PATH, falling back to `codex --dangerously-bypass-approvals-and-sandbox` when
+available. There is no Pi-era `clanky` binary fallback in this repo.
 
 Override with `--` for a different agent. The `{KICKOFF}` token is replaced
 with the kickoff message; without it, the kickoff is appended as the last
@@ -97,11 +96,11 @@ $OP/spawn.sh --run "$RUN_ID" --slug audit-deps --task "Audit dependencies" \
 
 # Arbitrary worker with an explicit kickoff slot
 $OP/spawn.sh --run "$RUN_ID" --slug triage --task "Triage open issues" \
-  --prompt "..." -- pi {KICKOFF}
+  --prompt "..." -- codex --dangerously-bypass-approvals-and-sandbox {KICKOFF}
 ```
 
-`claude --dangerously-skip-permissions` only for throwaway work in disposable
-checkouts. Pi and clanky workers have no approval gates; nothing extra needed.
+This setup intentionally gives workers autonomy inside their panes. Pick an
+explicit command after `--` when a task needs a different permission mode.
 
 ## 2. Monitor and wait
 
@@ -116,8 +115,7 @@ Exit 0 means every worker is done. Peek at a live worker anytime:
 herdr agent read clanky:fix-auth-tests --source recent --lines 60
 ```
 
-`herdr agent list` shows all workers; `agent_status` there is heuristic (the
-`clanky` binary is not a recognized process, so expect `unknown`) — trust the
+`herdr agent list` shows all workers; `agent_status` is heuristic. Trust the
 harvest states, not `agent_status`, for completion.
 
 ## 3. Unblock or steer

@@ -1,9 +1,8 @@
 import { type ChildProcessByStdio, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import type { Readable, Writable } from "node:stream";
-import { fileURLToPath } from "node:url";
 import { isRecord, type JsonRecord, stringValue } from "./json.ts";
 
 export interface ClankvoxLaunchOptions {
@@ -604,11 +603,12 @@ export function createClankvoxVoiceAdapterProxy(
 }
 
 function resolveLaunch(options: ClankvoxLaunchOptions): { command: string; args: string[]; cwd: string } {
-	if (options.bin !== undefined && options.bin.trim().length > 0) {
-		return { command: options.bin.trim(), args: options.args ?? [], cwd: resolve(options.cwd ?? process.cwd()) };
+	const configuredBin = options.bin ?? process.env.CLANKY_CLANKVOX_BIN;
+	if (configuredBin !== undefined && configuredBin.trim().length > 0) {
+		return { command: configuredBin.trim(), args: options.args ?? [], cwd: resolve(options.cwd ?? process.cwd()) };
 	}
 
-	const cwd = resolve(options.cwd ?? defaultClankvoxDir());
+	const cwd = resolve(options.cwd ?? process.env.CLANKY_CLANKVOX_DIR ?? defaultClankvoxDir());
 	const binName = process.platform === "win32" ? "clankvox.exe" : "clankvox";
 	const releaseBin = join(cwd, "target", "release", binName);
 	if (existsSync(releaseBin)) return { command: releaseBin, args: [], cwd };
@@ -619,12 +619,8 @@ function resolveLaunch(options: ClankvoxLaunchOptions): { command: string; args:
 }
 
 function defaultClankvoxDir(): string {
-	// clankvox lives as a sibling repo in the workspace root, not vendored here.
-	// This file is at clanky-pi/agents/clanky/src/voice/, so five levels up is the
-	// workspace root that also contains the standalone clankvox crate.
-	// Override with CLANKY_CLANKVOX_DIR or CLANKY_CLANKVOX_BIN when deployed elsewhere.
-	const here = dirname(fileURLToPath(import.meta.url));
-	return join(here, "..", "..", "..", "..", "..", "clankvox");
+	// clankvox lives as a sibling repo of this Eve app in the local dev workspace.
+	return resolve(process.cwd(), "..", "clankvox");
 }
 
 function normalizeSampleRate(value: number): number {

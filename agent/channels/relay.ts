@@ -4,19 +4,17 @@
  * operations to a remote client (the Clanky iOS app) over the tailnet, so
  * herdr stays vanilla (no fork) and the phone talks to one front door: eve.
  *
- * This relays herdr CLI operations (the panes live on this host). It is a raw
- * proxy and does not start eve agent sessions.
+ * This relays herdr socket operations (the panes live on this host). It is a
+ * raw proxy and does not start eve agent sessions.
  *
  * Env:
  *   CLANKY_RELAY_TOKEN   bearer token the client must present (?token= or
  *                        Authorization: Bearer). Fails closed when unset.
  */
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import { defineChannel, WS } from "eve/channels";
+import { defineChannel, GET, WS } from "eve/channels";
 import type { WebSocketMessage, WebSocketPeer } from "eve/channels";
-
-const run = promisify(execFile);
+import { isFrontdoorAuthorized } from "../lib/frontdoor-auth.ts";
+import { herdrRequest, herdrStreamLines, type HerdrStream } from "../lib/herdr-socket.ts";
 
 interface RelayRequest {
 	id?: string | number;
@@ -28,44 +26,66 @@ function str(v: unknown): string | undefined {
 	return typeof v === "string" && v.length > 0 ? v : undefined;
 }
 
-async function herdr(args: string[]): Promise<string> {
-	const { stdout } = await run("herdr", args, { encoding: "utf8" });
-	return stdout.trim();
+function num(v: unknown, fallback: number): number {
+	return typeof v === "number" && Number.isFinite(v) ? v : fallback;
 }
 
-// Map a relay op to a herdr CLI invocation. Returns raw stdout (JSON or text).
-async function dispatch(op: string, args: Record<string, unknown>): Promise<string> {
+function rec(v: unknown): Record<string, unknown> {
+	return v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+}
+
+function requestId(id: RelayRequest["id"]): string {
+	return id === undefined ? `relay_${Date.now().toString(36)}` : String(id);
+}
+
+// Map a relay op to a herdr socket API request. Returns the decoded result.
+async function dispatch(op: string, args: Record<string, unknown>): Promise<unknown> {
 	const target = str(args.agent) ?? str(args.pane);
 	switch (op) {
+		case "api": {
+			const method = str(args.method);
+			if (!method) throw new Error("api requires method");
+			return herdrRequest(method, rec(args.params));
+		}
+		case "health":
+			return herdrRequest("ping");
 		case "list":
-			return herdr(["agent", "list"]);
+			return herdrRequest("agent.list");
 		case "workspaces":
-			return herdr(["workspace", "list"]);
+			return herdrRequest("workspace.list");
+		case "tabs":
+			return herdrRequest("tab.list", args.workspace_id ? { workspace_id: args.workspace_id } : {});
+		case "panes":
+			return herdrRequest("pane.list", args.workspace_id ? { workspace_id: args.workspace_id } : {});
 		case "get":
 			if (!target) throw new Error("get requires agent or pane");
-			return herdr(["agent", "get", target]);
+			return args.pane ? herdrRequest("pane.get", { pane_id: target }) : herdrRequest("agent.get", { target });
 		case "read": {
 			if (!target) throw new Error("read requires agent or pane");
 			const source = str(args.source) ?? "recent";
-			const lines = String(typeof args.lines === "number" ? args.lines : 80);
-			return herdr(["agent", "read", target, "--source", source, "--lines", lines]);
+			const lines = num(args.lines, 80);
+			return args.pane
+				? herdrRequest("pane.read", { pane_id: target, source, lines })
+				: herdrRequest("agent.read", { target, source, lines });
 		}
 		case "send": {
 			const text = str(args.text);
 			if (!target || text === undefined) throw new Error("send requires agent/pane and text");
-			return herdr(["agent", "send", target, text]);
+			return args.pane
+				? herdrRequest("pane.send_input", { pane_id: target, text, keys: ["Enter"] })
+				: herdrRequest("agent.send", { target, text });
 		}
 		case "run": {
 			const pane = str(args.pane);
 			const text = str(args.text);
 			if (!pane || text === undefined) throw new Error("run requires pane and text");
-			return herdr(["pane", "run", pane, text]);
+			return herdrRequest("pane.send_input", { pane_id: pane, text, keys: ["Enter"] });
 		}
 		case "keys": {
 			const pane = str(args.pane);
 			const keys = Array.isArray(args.keys) ? (args.keys as unknown[]).map(String) : [];
 			if (!pane || keys.length === 0) throw new Error("keys requires pane and keys[]");
-			return herdr(["pane", "send-keys", pane, ...keys]);
+			return herdrRequest("pane.send_keys", { pane_id: pane, keys });
 		}
 		default:
 			throw new Error(`unknown op '${op}'`);
@@ -73,27 +93,53 @@ async function dispatch(op: string, args: Record<string, unknown>): Promise<stri
 }
 
 function authorize(peer: WebSocketPeer): boolean {
-	const expected = process.env.CLANKY_RELAY_TOKEN;
-	if (!expected) return false; // fail closed when unconfigured
-	let presented: string | null = null;
-	try {
-		presented = new URL(peer.request.url).searchParams.get("token");
-	} catch {
-		presented = null;
-	}
-	if (!presented) {
-		const header = peer.request.headers.get("authorization");
-		if (header?.startsWith("Bearer ")) presented = header.slice("Bearer ".length);
-	}
-	return presented === expected;
+	return isFrontdoorAuthorized(peer.request);
 }
 
 function reply(peer: WebSocketPeer, body: Record<string, unknown>): void {
 	peer.send(JSON.stringify(body));
 }
 
+const activeStreams = new WeakMap<WebSocketPeer, HerdrStream>();
+
+function closeStream(peer: WebSocketPeer): void {
+	activeStreams.get(peer)?.close();
+	activeStreams.delete(peer);
+}
+
+function subscribe(peer: WebSocketPeer, req: RelayRequest): void {
+	const subscriptions = Array.isArray(req.args?.subscriptions) ? req.args.subscriptions : [];
+	if (subscriptions.length === 0) throw new Error("subscribe requires subscriptions[]");
+	closeStream(peer);
+	const stream = herdrStreamLines(
+		{
+			id: requestId(req.id),
+			method: "events.subscribe",
+			params: { subscriptions },
+		},
+		(line) => {
+			let body: unknown = line;
+			try {
+				body = JSON.parse(line);
+			} catch {}
+			reply(peer, { id: req.id, ok: true, stream: true, body });
+		},
+		(error) => reply(peer, { id: req.id, ok: false, stream: true, error: error.message }),
+	);
+	activeStreams.set(peer, stream);
+}
+
 export default defineChannel({
 	routes: [
+		GET("/relay/health", async (req) => {
+			if (!isFrontdoorAuthorized(req)) return new Response("unauthorized", { status: 401 });
+			try {
+				const result = await herdrRequest("ping");
+				return Response.json({ ok: true, herdr: result });
+			} catch (error) {
+				return Response.json({ ok: false, error: (error as Error).message }, { status: 502 });
+			}
+		}),
 		WS("/relay/ws", async () => ({
 			open(peer: WebSocketPeer) {
 				if (!authorize(peer)) {
@@ -115,11 +161,23 @@ export default defineChannel({
 					return;
 				}
 				try {
+					if (req.op === "subscribe") {
+						subscribe(peer, req);
+						return;
+					}
+					if (req.op === "unsubscribe") {
+						closeStream(peer);
+						reply(peer, { id: req.id, ok: true, unsubscribed: true });
+						return;
+					}
 					const result = await dispatch(req.op, req.args ?? {});
 					reply(peer, { id: req.id, ok: true, result });
 				} catch (error) {
 					reply(peer, { id: req.id, ok: false, error: (error as Error).message });
 				}
+			},
+			close(peer: WebSocketPeer) {
+				closeStream(peer);
 			},
 		})),
 	],

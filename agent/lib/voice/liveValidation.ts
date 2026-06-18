@@ -202,7 +202,7 @@ export function describeVoiceLiveValidationRequirements(requirements: VoiceLiveV
 		lines.push("Ask for any tool-backed action so Realtime emits a function call.");
 	}
 	if (requirements.askPi) {
-		lines.push("Ask Clanky to delegate a durable/task-style request to Pi, exercising ask_pi.");
+		lines.push("Ask Clanky to delegate a durable task to a visible Herdr worker.");
 	}
 	if (requirements.streamWatch) {
 		lines.push("Use a user-token Discord credential, start a Go Live stream, and ask Clanky to watch it.");
