@@ -297,6 +297,20 @@ stays documented as the **fallback only** if the backend later breaks route (a).
 - Keep the existing **API-key** path (ported from `openAiAuth.ts`) as a fallback
   provider, and the AI Gateway / Anthropic options available for performers.
 
+**Optional second provider — Claude Pro/Max subscription.** `agent/lib/claude-*`
+ports Pi's Anthropic OAuth the same way: `claude-auth.ts` (browser login via
+`pnpm claude:login`, refresh, store under `anthropic-oauth`) and `claude-model.ts`
+(`createClaudeModel` on `@ai-sdk/anthropic`). Select it with
+`CLANKY_MODEL_PROVIDER=claude`. Unlike Codex, Anthropic has **no sanctioned
+third-party subscription path**: the OAuth model authenticates by presenting
+**Claude Code's identity** — `Authorization: Bearer` + `anthropic-beta:
+claude-code-…,oauth-…` + `user-agent: claude-cli/…` + `x-app: cli`, and a
+middleware that prepends the required first system block *"You are Claude Code,
+Anthropic's official CLI for Claude."* This impersonates Anthropic's official
+client and is a **ToS-gray path**; use for a personal account, opt-in only. For
+Claude *performers* (a `claude` herdr pane) this is unnecessary — Claude Code in
+the pane already uses the subscription natively.
+
 ## 5. Key flows
 
 ### 5.1 Always-on boot (Mac mini)
