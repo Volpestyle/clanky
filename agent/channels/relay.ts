@@ -87,6 +87,24 @@ async function dispatch(op: string, args: Record<string, unknown>): Promise<unkn
 			if (!pane || keys.length === 0) throw new Error("keys requires pane and keys[]");
 			return herdrRequest("pane.send_keys", { pane_id: pane, keys });
 		}
+		case "start": {
+			const name = str(args.name);
+			const argv = Array.isArray(args.argv) ? (args.argv as unknown[]).map(String) : [];
+			if (!name || argv.length === 0) throw new Error("start requires name and argv[]");
+			const params: Record<string, unknown> = { name, argv, focus: args.focus === true };
+			const cwd = str(args.cwd);
+			if (cwd) params.cwd = cwd;
+			if (args.workspace_id) params.workspace_id = args.workspace_id;
+			if (args.tab_id) params.tab_id = args.tab_id;
+			const split = str(args.split);
+			if (split) params.split = split;
+			return herdrRequest("agent.start", params);
+		}
+		case "close": {
+			const pane = str(args.pane);
+			if (!pane) throw new Error("close requires pane");
+			return herdrRequest("pane.close", { pane_id: pane });
+		}
 		default:
 			throw new Error(`unknown op '${op}'`);
 	}

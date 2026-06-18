@@ -175,32 +175,44 @@ All performers coordinate through the vanilla `herdr` skill (4.5). Whoever is
 orchestrating loads `clanky-herdr-operator` for the harvestable fan-out
 protocol.
 
-### 4.4 The window — iOS app + eve relay channel
+### 4.4 The window — iOS app, SSH lifecycle + eve relay channel
 
-Remote access must not require a herdr fork, and should present a single front
-door. Solution: a **custom eve channel** (`defineChannel`, raw `WS` route) that
-relays herdr's local unix socket to the network.
+Remote access must not require a herdr fork. Interaction goes through a **custom
+eve channel** (`defineChannel`, raw `WS` route) that relays herdr's local unix
+socket to the network. But the relay lives *inside* the eve brain, so it cannot
+be what *starts* the brain — that bootstrap rides the one channel that is always
+present on the Mac: **SSH**.
 
 ```mermaid
 flowchart LR
   phone["Clanky iOS"]
   subgraph mac["Mac mini"]
+    sshd["sshd (always-on)<br/>runs scripts/clanky-up.ts"]
     relay["eve relay channel (WS)<br/>auth: bearer token"]
     sock["herdr.sock<br/>(local unix socket)"]
     herdr["herdr panes"]
   end
-  phone <-->|tailnet, bearer token| relay
+  phone <-->|tailnet, ssh key: ensure session + brain| sshd
+  phone <-->|tailnet, bearer token: chat + pane steer| relay
+  sshd -->|herdr agent start| herdr
   relay <-->|read scrollback / inject input / stream status| sock
   sock --- herdr
 ```
 
-- The relay is a raw WS route, so it bypasses eve's session framing and carries
-  terminal scrollback, status, and input injection faithfully.
-- The iOS app talks to **one endpoint** (eve) for both chat-with-Clanky and
-  pane visibility/steering. No second service.
+- **Lifecycle (SSH).** The app runs `scripts/clanky-up.ts` over SSH to ensure the
+  `clankies` session exists and Clanky's brain (`eve dev --no-ui`) runs as a
+  pane. Auth: an ed25519 key the app generates and holds in the iOS Keychain.
+  Modes: `up` / `status` / `down`, each emitting JSON the app parses.
+- **Interaction (relay).** The relay is a raw WS route, so it bypasses eve's
+  session framing and carries terminal scrollback, status, and input injection
+  faithfully. It adds explicit `start`/`close` ops alongside `read`/`send`/
+  `run`/`keys`/`subscribe` and a raw `api` passthrough. Chat-with-Clanky uses
+  eve's session routes (`/eve/v1/session`).
+- The brain is just another herdr pane — the lead pane — which is why lifecycle
+  (SSH) sits below it and interaction (relay) sits inside it.
 - herdr stays vanilla; the glue is TypeScript inside the Clanky eve app.
-- The iOS app's `Services/` layer targets this eve WS contract (replacing the
-  earlier herdr-bridge contract).
+- The iOS app's `Services/` layer targets this relay + SSH contract (replacing
+  the earlier herdr-bridge contract, which is gone from the herdr CLI).
 
 ### 4.5 Skills model
 
