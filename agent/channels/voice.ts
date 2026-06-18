@@ -35,6 +35,24 @@ export function attachVoiceRuntime(value: VoiceRuntime): void {
 	runtime = value;
 }
 
+/** Programmatic join, for the gateway host's "hop in vc" intent (SPEC.md §5.3). */
+export async function joinVoice(guildId: string, channelId: string): Promise<void> {
+	if (!runtime) throw new Error("voice runtime not attached (no Discord adapter / creds)");
+	if (session) await session.stop();
+	session = await startVoiceSession({ guildId, channelId, ...runtime });
+}
+
+/** Programmatic leave. */
+export async function leaveVoice(): Promise<void> {
+	if (!session) return;
+	await session.stop();
+	session = null;
+}
+
+export function voiceStatus(): { runtimeAttached: boolean; sessionActive: boolean } {
+	return { runtimeAttached: runtime !== null, sessionActive: session !== null };
+}
+
 interface VoiceRequest {
 	id?: string | number;
 	op: string;
@@ -54,21 +72,16 @@ function authorized(peer: WebSocketPeer): boolean {
 async function dispatch(op: string, args: Record<string, unknown>): Promise<unknown> {
 	switch (op) {
 		case "status":
-			return { runtimeAttached: runtime !== null, sessionActive: session !== null };
+			return voiceStatus();
 		case "join": {
 			const guildId = str(args.guildId);
 			const channelId = str(args.channelId);
 			if (!guildId || !channelId) throw new Error("join requires guildId and channelId");
-			if (!runtime) throw new Error("voice runtime not attached (no Discord adapter / creds)");
-			if (session) await session.stop();
-			session = await startVoiceSession({ guildId, channelId, ...runtime });
+			await joinVoice(guildId, channelId);
 			return { joined: true, guildId, channelId };
 		}
 		case "leave": {
-			if (session) {
-				await session.stop();
-				session = null;
-			}
+			await leaveVoice();
 			return { left: true };
 		}
 		case "delegate": {
