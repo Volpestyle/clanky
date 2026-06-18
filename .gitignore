@@ -1,5 +1,7 @@
 node_modules/
 dist/
+.eve/
+.output/
 *.tsbuildinfo
 .env
 .DS_Store
