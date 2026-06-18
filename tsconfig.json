@@ -11,5 +11,5 @@
 		"skipLibCheck": true,
 		"types": ["node"]
 	},
-	"include": ["agent/**/*.ts", "test/**/*.ts"]
+	"include": ["agent/**/*.ts", "test/**/*.ts", "scripts/clanky.ts"]
 }
