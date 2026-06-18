@@ -77,8 +77,21 @@ flowchart TB
 - `clanky-herdr-operator` (coordinator only): the harvestable fan-out protocol —
   spawn workers into a tagged run, monitor, unblock, harvest, clean up.
 
+## Free-will Discord presence
+
+Clanky is *present* in Discord, not just callable. A Gateway connection
+(`agent/channels/discord-gateway.ts`) lets him read whole channels and decide
+for himself when to speak — addressed by name ("hey clanky", "yo clank"),
+@mentioned, replied to, or following up in an active exchange — and stay quiet
+otherwise (`[SKIP]`). "Hop in vc" makes him join voice. Each conversation runs as
+a **presence session**: a separate eve session of the same agent, so it shares
+his memory, persona, and tools without clogging the main face-pane thread, and
+it is mirrored into a watchable herdr pane. See [SPEC.md](SPEC.md) §5.2–§5.6.
+
 ## Status
 
 This is the rebuild on the eve + herdr architecture. It replaces the previous
 Pi-runtime build. See [SPEC.md](SPEC.md) §10 for build phases and §9 for the
-migration map from the old model.
+migration map from the old model. The free-will presence (phase 7) is wired and
+verified offline (`pnpm check`, `pnpm smoke:discord`); the live voice loop is
+gated on the bot token + ClankVox + Realtime credentials.

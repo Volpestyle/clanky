@@ -67,20 +67,20 @@ flowchart TB
   subgraph mac["Mac mini — always on"]
     subgraph herdr["herdr (vanilla) — the STAGE: persistent session 'clankies'"]
       direction TB
-      face["pane: eve dev<br/>Clanky's visible face"]
-      disc["pane: clanky:discord<br/>(spawned on inbound)"]
-      voice["pane: clanky:voice<br/>(spawned on inbound)"]
-      w1["pane: claude<br/>coding subagent"]
-      w2["pane: codex<br/>subagent"]
+      face["pane: eve dev<br/>Clanky's visible face (main session)"]
+      disc["pane: clanky:discord-chat<br/>presence-session mirror"]
+      voice["pane: clanky:voice<br/>presence-session mirror + transcript"]
+      w1["pane: claude<br/>delegated worker"]
+      w2["pane: codex<br/>delegated worker"]
     end
-    eve["eve service — the CONDUCTOR<br/>channels · schedules · durable sessions · memory"]
+    eve["eve service — the CONDUCTOR<br/>Discord gateway · channels · schedules · sessions · memory"]
     relay["eve relay channel<br/>WS over herdr socket"]
   end
 
   phone["Clanky iOS — the WINDOW"]
   discord["Discord<br/>text + voice"]
 
-  discord -->|webhook| eve
+  discord -->|gateway WS + webhook| eve
   eve -->|spawns visible work| herdr
   eve --- face
   eve --> relay
@@ -324,39 +324,140 @@ the pane already uses the subscription natively.
 "Turning Clanky on" means the eve service and his face pane are up. The iOS app
 then shows him.
 
-### 5.2 Inbound Discord message becomes a visible pane
+### 5.2 Discord presence — text (free-will chat)
+
+Clanky is *present* in Discord, not merely callable. He listens to whole
+channels, decides for himself when a message is for him, replies in natural
+conversation, and can jump in or stay quiet. This is the eve+herdr port of the
+Pi-era `agentDiscordGateway` + `discordSubagentCoordinator`.
+
+**The gateway (the always-on ear).** eve's stock `discord.ts` is HTTP
+Interactions only — slash commands, request/response. Presence needs to read
+*every* message, so the conductor owns a persistent **Discord Gateway**
+WebSocket (`agent/lib/discord/gateway.ts`) with the `GUILDS`, `GUILD_MESSAGES`,
+`MESSAGE_CONTENT`, and `GUILD_VOICE_STATES` intents. The gateway is a single
+connection per bot token (a singleton), so the conductor owns it. Outbound
+replies use the stateless Discord **REST** API (`agent/lib/discord/rest.ts`),
+which any holder of the bot token can call — so a presence session can post its
+own replies without routing audio/text back through the gateway owner. The
+HTTP-interactions `discord.ts` stays for slash commands; the gateway is the
+free-will surface.
+
+**Addressing + free will.** Every inbound message runs the pure
+`decideDiscordInbound` (`agent/lib/discord/acceptance.ts`, ported from
+`evaluateDiscordMessageAcceptance`). It *accepts* — i.e. spends a model turn —
+on any of: a DM, a platform `@mention`, a reply to one of Clanky's own messages,
+a **wake-name address** ("hey clanky", "yo clank", "clanker, …" — matched by
+`agent/lib/discord/wake-names.ts`), a bare wake-name **mention**, or a message
+inside the **engagement window** (recent active exchange with the same user, so
+follow-ups land without re-tagging). Everything else is ignored cheaply, before
+any model cost. Acceptance only decides *whether to think*; the model still has
+the last word: an accepted turn may answer, or output exactly `[SKIP]` to stay
+silent. That two-stage gate (cheap heuristic, then model judgment) is the "free
+will" to continue, ignore irrelevant chatter, or jump in. The engagement window
+only re-extends when Clanky actually replies, so a `[SKIP]` does not keep him
+latched onto a conversation that moved on.
+
+**The presence session (the "Discord subagent").** Accepted chat does **not**
+run on Clanky's main face-pane thread — that would clog the window you talk to
+and watch. It runs in a dedicated **presence session**: a separate eve session,
+keyed per Discord channel, of the *same* root agent. Because it is the same
+agent, it shares Clanky's durable **memory store**, persona (`instructions.md`),
+and full tool surface automatically (eve shares the memory store across
+sessions; only per-session conversation history is separate). So the Discord
+Clanky is the same Clanky — same character, same memory, same abilities — on a
+thread of his own. Bridge commands escape the subagent and address the main
+thread directly: `/clanky <msg>` / `/clanky direct <msg>` → main session,
+`/clanky new` → fresh main session, `/clanky compact` → compact main context.
 
 ```mermaid
 sequenceDiagram
-  participant D as Discord
-  participant E as eve (Clanky)
-  participant H as herdr
-  participant P as pane clanky:discord-<id>
-  D->>E: webhook (message)
-  E->>E: resolve session (continuationToken), decide respond/skip
-  alt needs visible work
-    E->>H: herdr agent start clanky:discord-<id> -- <agent argv>
-    H-->>P: pane spawned (visible)
-    P->>P: do the work, report-agent status
-    P-->>E: result (file / agent read)
-    E->>D: reply
-  else quick answer
-    E->>D: reply directly from the conductor
+  participant D as Discord channel
+  participant G as gateway (conductor)
+  participant S as presence session (per channel)
+  participant P as pane clanky:discord-chat (mirror)
+  participant W as pane clanky:<slug> (delegated work)
+  D->>G: MESSAGE_CREATE (every message)
+  G->>G: decideDiscordInbound (addressed? engaged? else ignore)
+  alt accepted
+    G->>S: send(text, continuationToken=channel)
+    S-->>P: stream reasoning + tools + reply (watchable)
+    opt heavy/parallel work
+      S->>W: herdr_spawn (web, code review, …)
+      W-->>S: result
+    end
+    S->>D: reply via REST  (or [SKIP] → say nothing)
+  else ignored
+    G->>G: drop (no model turn)
   end
 ```
 
-The rule: **eve owns inbound + durability; herdr owns visibility.** Anything
-worth watching becomes a pane.
+**Watchable in herdr.** Each presence session is mirrored into a herdr pane
+(`clanky:discord-chat`) by a viewer that tails the session NDJSON stream
+(`GET /eve/v1/session/:id/stream`) and renders reasoning, tool calls, and
+messages. You watch the Discord subagent think and act on the stage, exactly
+like any performer (§5.6).
 
-### 5.3 Voice
+**Awareness + delegation.** The presence session has the same `herdr_*` tools as
+the conductor, so it has *total awareness of what main Clanky is doing*: it reads
+the live stage (`herdr_status`, `herdr_read` on the face pane and other panes)
+and shares Clanky's memory. To keep the conversation responsive it **delegates**
+heavy work (web browsing, code review, long builds) to `clanky:<slug>` performer
+panes via `herdr_spawn` rather than blocking the chat turn, and it can hand a
+matter to main Clanky directly (`herdr_send` to the face pane, or a `/clanky
+direct` style escalation) when the human is really asking the foreground agent.
 
-Voice is an eve channel backed by the ClankVox Rust media process (Discord voice
-transport, Opus, speaker transcription, Realtime/ElevenLabs TTS). The control
-plane (Realtime clients, turn buffering, transcription) ports from the current
-`agents/clanky/src/voice/*` into the eve voice channel + `agent/lib`. Live voice
-work that should be watched spawns a `clanky:voice-<id>` pane like 5.2.
+The rule still holds: **eve owns inbound + durability; herdr owns visibility.**
+The presence session is the durability; its mirror pane and any delegated
+performers are the visibility.
 
-### 5.4 Fan-out / swarm orchestration
+### 5.3 Discord presence — voice
+
+Voice is the same presence model with a live media plane. The conductor's
+gateway already holds `GUILD_VOICE_STATES`, so "hop in vc" (a wake-addressed
+chat message, a voice op, or the existing `discord_voice_join` intent) makes
+Clanky join the caller's voice channel. The media path is the ported control
+plane in `agent/lib/voice/*` (ClankVox Rust transport for Discord RTP/Opus,
+per-speaker OpenAI Realtime transcription, Realtime or ElevenLabs TTS), attached
+to the gateway's Discord client via `attachVoiceRuntime()` on
+`agent/channels/voice.ts`.
+
+- **Inbound:** ClankVox emits per-speaker PCM; per-speaker STT produces labeled
+  transcripts; those become text turns in a dedicated **voice presence session**
+  (separate thread, same shared memory + persona, like §5.2).
+- **Reasoning + free will:** the realtime agent keeps a small, latency-friendly
+  control surface and **delegates** real work — it routes substantive requests
+  to the voice presence session / `herdr_spawn` performers rather than mirroring
+  Clanky's whole tool set into the low-latency loop. Wake-name barge-in
+  interrupts playback; floor control suppresses transcripts while Clanky speaks.
+- **Outbound:** the agent's reply is rendered to PCM (internal Realtime audio or
+  ElevenLabs) and sent back through ClankVox to Discord.
+- **Watchable in herdr:** the `clanky:voice` pane mirrors the live **transcript**
+  (who said what) plus the agent's reasoning, tool calls, and spoken replies, so
+  a voice room is as inspectable on the stage as a text channel.
+
+Because the voice presence is the same agent on its own session, a thing said in
+VC and a thing said in chat reach the same memory and character — and neither
+clogs the main face-pane thread.
+
+### 5.4 Continuity across surfaces
+
+Text chat, voice, and the herdr face-pane TUI are three windows onto **one**
+Clanky: the same root agent, the same durable memory store, the same tool
+surface. They differ only in *which session thread* a turn lands on:
+
+| Surface | Session | Clogs main thread? | Watchable as |
+| --- | --- | --- | --- |
+| herdr TUI (`eve dev`) | main | — (it *is* the main thread) | the face pane |
+| Discord text | per-channel presence | no | `clanky:discord-chat` mirror |
+| Discord voice | voice presence | no | `clanky:voice` mirror |
+| iOS app | main (via relay) | — | the face pane |
+
+This is what lets you talk to Clanky in the TUI and have him doing parallel work
+while, independently, Discord text and voice presences carry on their own
+conversations with full awareness of that work.
+
+### 5.5 Fan-out / swarm orchestration
 
 Clanky (or any agent) acting as orchestrator loads `clanky-herdr-operator`,
 spawns one pane per task (`clanky:<slug>`), monitors via sentinel files +
@@ -364,11 +465,24 @@ spawns one pane per task (`clanky:<slug>`), monitors via sentinel files +
 Unchanged from today's operator skill, now driven by an eve conductor instead of
 a Pi runtime.
 
-### 5.5 Self-subagents
+### 5.6 Self-subagents and pane mirrors
 
-A subagent of Clanky is another `eve` agent (narrower brief, shared memory lib)
-started as a pane. It is visible and coordinates through the `herdr` skill like
-any performer.
+There are two distinct things called "subagents" here; keep them apart:
+
+- **Performer panes** — another `eve`, `claude`, or `codex` process started with
+  `herdr agent start` (via `herdr_spawn`). Its own process, its own pane, fully
+  interactive and watchable, coordinating through the `herdr` skill. This is how
+  Clanky (or a presence session) does parallel/specialized work.
+- **eve child sessions** — eve's native `agent` tool / declared subagents spin up
+  a *child session* in the same service. They share the memory store but render
+  only inside eve's own transcript, with no pane. Clanky's **presence sessions**
+  (§5.2/§5.3) are this kind: separate session threads of the root agent, made
+  watchable not by being a process but by a **pane mirror** that tails the
+  session's NDJSON stream into `clanky:discord-chat` / `clanky:voice`.
+
+The mirror is the bridge between the two: it gives a session-only "subagent" the
+on-stage visibility that the project's "everything worth watching is a pane" rule
+requires, without spawning a redundant process.
 
 ## 6. Decoupled swarm sessions (Clanky optional)
 
@@ -426,13 +540,19 @@ clanky/
     instructions.md
     agent.ts
     channels/
-      discord.ts             # Discord text channel
-      voice.ts               # voice channel (ClankVox-backed)
+      discord.ts             # Discord HTTP Interactions (slash commands)
+      discord-gateway.ts     # free-will presence boot seam (Gateway WS owner)
+      voice.ts               # voice channel (ClankVox-backed) + join/leave seam
       relay.ts               # raw WS relay to herdr.sock (the iOS window)
     tools/                   # typed tools (herdr spawn seam, media, web, etc.)
     schedules/               # cron jobs
     skills/                  # agent-local skills (or symlinked)
-    lib/                     # ported memory, persona, herdr seam helpers
+    lib/
+      discord/               # gateway, acceptance/free-will, wake-names, host
+      voice/                 # ported Realtime/ClankVox control plane
+      ...                    # ported memory, persona, herdr seam helpers
+  scripts/
+    discord-pane-mirror.ts   # tails a presence session into a herdr pane
   skills/
     clanky-herdr-operator/   # coordinator fan-out protocol (kept)
     clanky-*-operator/       # web/media/figma/work-tracker/etc. (kept, audited)
@@ -448,8 +568,8 @@ ClankVox stays a sibling Rust repo (`../clankvox`) feeding the voice channel.
 | Old (current) | Disposition |
 | --- | --- |
 | `agents/clanky/` (Pi runtime, 38 `pi-coding-agent` imports) | **Removed.** Replaced by `agent/` (eve). |
-| `agentDiscordGateway`, `agentChatGateway`, `discordGatewayController`, `discordSubagentCoordinator` | **Removed.** Logic → `agent/channels/discord.ts` + the spawn seam. |
-| `agentVoiceGateway`, `agentDiscordVoice`, `voiceSupervisorExtension`, voice coordinators | **Removed.** Logic → `agent/channels/voice.ts`. |
+| `agentDiscordGateway`, `agentChatGateway`, `discordGatewayController`, `discordSubagentCoordinator`, `discordWakeNames` | **Ported** to `agent/lib/discord/*` (gateway, acceptance/free-will, wake-names, host) + `agent/channels/discord-gateway.ts`; the "Discord subagent" is a per-channel eve presence session mirrored to a pane. |
+| `agentVoiceGateway`, `agentDiscordVoice`, `voiceSupervisorExtension`, voice coordinators | **Ported.** Control plane → `agent/lib/voice/*`; join/leave + runtime attach → `agent/channels/voice.ts`; "hop in vc" intent + runtime build → `agent/lib/discord/`. |
 | `agents/clanky/src/voice/*` (Realtime, transcription, ClankVox IPC) | **Ported** into the voice channel + `agent/lib`. |
 | `runtimeTurnQueue`, `mainSessionContext`, `mainWorkerDelegation`, `stores` | **Removed.** Replaced by eve durable sessions + `continuationToken` + the spawn seam. |
 | `@clanky/core` (memory, agent tools, subagent store) | **Ported** to `agent/lib` + eve tools; drop the Pi-specific subagent store. |
@@ -483,14 +603,27 @@ absorbed here:
 2. **Spawn seam** — implement the eve tool that does `herdr agent start` and
    tracks the pane; prove "background work becomes a visible pane." Add the
    presence self-report to the `herdr` skill.
-3. **Discord channel** — port the Discord gateway to `agent/channels/discord.ts`;
-   inbound messages route to panes via the seam.
+3. **Discord channel** — stock `agent/channels/discord.ts` (HTTP Interactions /
+   slash commands) for request/response use.
 4. **Relay channel** — raw WS relay to `herdr.sock`; repoint the iOS app; verify
    pane visibility/steering from the phone.
 5. **Voice channel** — port the voice control plane + ClankVox into
    `agent/channels/voice.ts`.
 6. **Schedules + cleanup** — add cron jobs; delete the old `agents/clanky` Pi
    runtime, dead packages, and superseded docs.
+7. **Free-will Discord presence** (§5.2/§5.3) — the Gateway-owned text + voice
+   presence. **Done (verified offline):** wake-name + acceptance/free-will gate
+   (`agent/lib/discord/acceptance.ts`, `wake-names.ts`) with a pure smoke
+   (`pnpm smoke:discord`); the Gateway WS client (`gateway.ts`, discord.js);
+   the host/router to per-channel presence sessions with `[SKIP]`, engagement
+   window, and bridge commands (`host.ts`); the pane mirror
+   (`scripts/discord-pane-mirror.ts`) + boot seam (`discord-gateway.ts`);
+   awareness/delegation via the shared tool surface + instructions; and the
+   "hop in vc" intent + voice join seam (`voice-intent.ts`, `voice-runtime.ts`).
+   **Live-gated remainder** (needs the bot token, ClankVox, and OpenAI Realtime
+   creds, so not verifiable offline): the realtime voice loop routing
+   substantive turns into a shared voice **eve session** (for unified memory)
+   rather than only the realtime brain, and the `clanky:voice` transcript pane.
 
 Each phase keeps the system runnable; the old Pi runtime is removed only in
 phase 6, once the eve agent covers its surface.
