@@ -19,7 +19,10 @@
 		"smoke:relay": "node test/relay-smoke.ts",
 		"smoke:voice": "node test/voice-smoke.ts",
 		"claude:login": "node scripts/claude-login.ts",
-		"face": "node scripts/clanky.ts"
+		"face": "node scripts/clanky.ts",
+		"clanky:up": "node scripts/clanky-up.ts",
+		"clanky:status": "node scripts/clanky-up.ts status",
+		"clanky:down": "node scripts/clanky-up.ts down"
 	},
 	"dependencies": {
 		"@ai-sdk/anthropic": "4.0.0-beta.67",
