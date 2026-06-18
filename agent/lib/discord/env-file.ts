@@ -1,5 +1,5 @@
 /**
- * Pure .env upsert used by the custom face's /token and /model slash commands
+ * Pure .env upsert used by the custom face's /discord-token and /model slash commands
  * (SPEC.md §5.3). Splitting the merge from the filesystem keeps it testable:
  * given the current .env.local contents and a set of key=value updates, return
  * the new contents — replacing existing keys in place and appending new ones,
