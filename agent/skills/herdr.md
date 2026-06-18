@@ -4,8 +4,10 @@ description: Use when Clanky needs to inspect, read, or steer the live Herdr ses
 
 # Herdr Host Control
 
-You are running from the Eve host process. Prefer the host tools over shelling
-out:
+You are running from the Eve host process, not from inside a Herdr pane. This is
+the host-control counterpart to the vanilla pane-oriented `herdr` skill bundled
+under the repo-level `skills/herdr/` directory. Prefer the host tools over
+shelling out:
 
 - Use `herdr_status` to list agents, panes, tabs, and workspaces.
 - Use `herdr_read` to inspect recent or visible output from a named agent or

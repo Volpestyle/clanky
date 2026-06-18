@@ -4,13 +4,19 @@ description: Run Clanky's parallel subagents as named herdr panes. Spawn workers
 when_to_use: Use when running inside herdr (HERDR_ENV=1) and work should fan out to parallel visible workers, e.g. "spawn workers/subagents for these tasks", "run these refactors in parallel", "swarm this", "farm this out to agents", "check on the workers", "harvest the run", "clean up worker panes". Not for single quick tasks, Discord gateway side-requests, or when HERDR_ENV is unset.
 allowed_tools:
   - Bash
-deps: []
+deps:
+  - herdr
 ---
 
 # Clanky herdr Operator
 
 This is Clanky's one multi-agent substrate: parallel workers run as herdr
 panes, visible and attributable, never as hidden processes.
+
+This skill is a Clanky-specific overlay on top of the vanilla `herdr` skill.
+Use `herdr` for generic workspace, tab, pane, split, wait, read, send, and
+presence mechanics. Use this skill only for Clanky's run grouping, worker
+manifest, completion sentinels, harvest, synthesis, and cleanup protocol.
 
 Before anything else, check that `HERDR_ENV=1`. If it is not set to `1`, say
 you are not running inside herdr and stop; never control herdr from outside
@@ -24,8 +30,8 @@ The scripts live in `scripts/` next to this SKILL.md. Set
 - Simple Discord side-requests that do not need watching: answer them in the
   foreground agent. Do not spawn herdr workers for them.
 - A single quick task you could do inline: just do it.
-- One shell command, server, or test in a sibling pane: use the plain herdr
-  CLI (`herdr pane split` + `herdr pane run`), no run machinery needed.
+- One shell command, server, or test in a sibling pane: use the vanilla `herdr`
+  skill directly, no Clanky run machinery needed.
 
 ## Model
 
