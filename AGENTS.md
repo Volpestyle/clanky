@@ -24,7 +24,7 @@
 - Keep package boundaries clean (target layout, SPEC.md §9):
   - `agent/` is the eve Clanky agent: `instructions.md`, `agent.ts`, `channels/`, `tools/`, `schedules/`, `skills/`, `lib/`.
   - `agent/lib/` owns ported memory, persona, and the herdr spawn-seam helpers.
-  - `skills/` holds bundled Clanky operator skills loaded from disk; `clanky-herdr-operator` is the coordinator-only fan-out protocol.
+  - `skills/` holds bundled Clanky operator/worker skills loaded from disk; `clanky-herdr-operator` is the coordinator-only fan-out protocol, and `clanky-herdr-worker` is the worker-side coordination protocol.
 - The Discord chat gateway is agent-owned via `agent/channels/discord.ts`: Clanky holds the credential and the conversation. Inbound work that should be watched is surfaced as a herdr pane through the spawn seam, never as a hidden in-process subagent.
 - Do not fork herdr. Use the vanilla `herdr` CLI/skill; if a herdr-side feature is needed, upstream it to `ogulcancelik/herdr`. Pi is fully removed from Clanky (not a dependency, runtime, or performer); the only use of the local Pi checkout (`~/dev/pi`) is the one-time Codex OAuth code port (SPEC.md §4.6).
 

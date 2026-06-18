@@ -16,9 +16,26 @@ shelling out:
 - Use `herdr_spawn` for watchable or parallel work that should become a visible
   `clanky:<slug>` pane.
 
+If the task involves spawning, fan-out, or creating a performer, load
+`clanky-herdr-operator` before calling `herdr_spawn`. This skill is enough for
+status/read/send operations, but the operator skill owns Clanky's spawn protocol.
+
+When calling `herdr_spawn`, use `performer: "claude"` or `"codex"` and omit
+`command` for normal workers. `command` is only a raw argv override for custom
+commands; never pass `command: []`. Omit `cwd` to use Clanky's host repo cwd, or
+pass a real host path. Do not use sandbox paths like `/workspace`.
+Spawned workers receive a compact bootstrap pointing them to
+`skills/clanky-herdr-worker/SKILL.md`; put worker-side coordination changes
+there, not in one-off task prompts.
+
+When calling `herdr_send`, address workers by `agent` when possible. To submit a
+prompt in one call, pass both `text` and `keys: ["Enter"]`. Keys-only sends such
+as `keys: ["Enter"]` are valid for named agents and panes.
+
 Treat pane ids as temporary. Re-read status before sending to a pane if there is
 any chance the layout changed. Agent names such as `clanky:fix-tests` are the
-durable address when a named worker exists.
+durable address when a named worker exists. The foreground Clanky face reports
+as `clanky:main` when it is running inside Herdr.
 
 Do not spawn work just to have activity. If no workers are running, report that
 plainly.

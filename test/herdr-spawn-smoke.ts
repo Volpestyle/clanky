@@ -10,17 +10,46 @@ const SLUG = "spawn-smoke";
 const AGENT = `clanky:${SLUG}`;
 
 // Best-effort pre-clean in case a prior run left it.
-await run("herdr", ["agent", "close", AGENT]).catch(() => {});
+await closeAgentPane(AGENT);
 
-const res = (await tool.execute(
-	{ slug: SLUG, task: "echo SPAWN_OK; sleep 20", performer: "claude", command: ["bash", "-lc", "{KICKOFF}"] },
-	undefined as never,
-)) as { agent: string; paneId: string; started: boolean };
-console.log("spawn result:", JSON.stringify(res));
+let paneId: string | null = null;
+let ok = false;
+try {
+	const res = (await tool.execute(
+		{
+			slug: SLUG,
+			task: "Smoke task",
+			performer: "claude",
+			command: [
+				"bash",
+				"-lc",
+				"printf '%s\\n' \"$1\" | grep -q 'skills/clanky-herdr-worker/SKILL.md'; echo SPAWN_OK; read line; echo GOT:$line; sleep 20",
+				"bash",
+				"{KICKOFF}",
+			],
+		},
+		undefined as never,
+	)) as { agent: string; paneId: string | null; started: boolean };
+	paneId = res.paneId;
+	console.log("spawn result:", JSON.stringify(res));
 
-const got = await run("herdr", ["agent", "get", AGENT], { encoding: "utf8" }).then((r) => r.stdout.trim());
-const ok = got.includes(AGENT);
-console.log(ok ? "PANE VISIBLE OK" : "FAIL: pane not found");
+	const got = await run("herdr", ["agent", "get", AGENT], { encoding: "utf8" }).then((r) => r.stdout.trim());
+	ok = got.includes(AGENT);
+	console.log(ok ? "PANE VISIBLE OK" : "FAIL: pane not found");
+} finally {
+	if (paneId !== null) await run("herdr", ["pane", "close", paneId]).catch(() => {});
+	await closeAgentPane(AGENT);
+}
 
-await run("herdr", ["agent", "close", AGENT]).catch(() => {});
 process.exit(ok ? 0 : 1);
+
+async function closeAgentPane(agent: string): Promise<void> {
+	const paneId = await run("herdr", ["agent", "get", agent], { encoding: "utf8" }).then(
+		(result) => {
+			const envelope = JSON.parse(result.stdout) as { result?: { agent?: { pane_id?: string } } };
+			return envelope.result?.agent?.pane_id;
+		},
+		() => undefined,
+	);
+	if (paneId !== undefined) await run("herdr", ["pane", "close", paneId]).catch(() => {});
+}

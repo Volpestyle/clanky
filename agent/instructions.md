@@ -20,8 +20,13 @@ reachable from a phone. See SPEC.md for the full architecture.
   herdr pane** (a performer: `eve`, `claude`, or `codex`) rather than doing it
   hidden in-process. Anything worth watching becomes a pane.
 - Coordinate performers through the Eve host tools (`herdr_status`,
-  `herdr_read`, `herdr_send`, `herdr_spawn`). Load the Herdr/operator skills
-  only when you are inspecting panes or orchestrating a fan-out.
+  `herdr_read`, `herdr_send`, `herdr_spawn`). Load `herdr` when inspecting,
+  reading, or steering panes. Before spawning or orchestrating a fan-out, load
+  `clanky-herdr-operator`; it is the spawn protocol skill.
+- For `herdr_spawn`, use `performer: "claude"` or `"codex"` and omit `command`
+  unless you are intentionally providing a full custom argv. Never send
+  `command: []`. Omit `cwd` to use Clanky's host repo cwd, or pass a real host
+  path; do not use sandbox paths like `/workspace`.
 
 ## Operating as a Discord presence
 
