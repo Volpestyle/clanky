@@ -147,14 +147,31 @@ eve provides, off the shelf, everything Clanky used to hand-roll on Pi:
 | Voice in/out | `agent/channels/voice.ts` + ClankVox media | `agentVoiceGateway`, voice supervisor wiring |
 | Durable session state | eve sessions + `continuationToken` | `runtimeTurnQueue`, `mainSessionContext`, `stores` |
 | Scheduled/autonomous runs | `agent/schedules/*.ts` (cron) | (none existed) |
-| Visible face | `eve dev` TUI in a pane | the Pi `InteractiveMode` TUI |
+| Visible face | custom face on `eve/client` (`pnpm face`); `eve dev` for debugging | the Pi `InteractiveMode` TUI |
 | Memory | eve session context + Clanky memory lib | `@clanky/core` memory (ported) |
 
-**Clanky's face is `eve dev`.** `eve dev` boots the runtime into an interactive
-terminal UI — you chat, watch it stream, approve tools, answer its questions,
-and subagent work renders indented under a `◆` header. Run inside a herdr pane,
-this is the visible, steerable "Clanky" you see locally and through the iOS app.
-The same HTTP routes back the iOS chat surface.
+**Clanky's face is a custom client on `eve/client`.** `eve dev`'s slash-command
+set is fixed and non-extensible, so Clanky's visible face (`scripts/clanky.ts`,
+`pnpm face`) is our own terminal UI built on the public `eve/client`. It owns a
+headless `eve dev --no-ui` brain (same sessions, memory, tools), starts a
+session over the default eve HTTP channel (`POST /eve/v1/session`,
+`POST /eve/v1/session/:id`, `GET /eve/v1/session/:id/stream`), and renders the
+streamed events (`message.appended`, `reasoning.completed`, `actions.requested`,
+`action.result`, `turn.failed`, …) closely mirroring `eve dev`'s look — gutter
+glyphs, a yellow phase-aware working spinner, and a persistent bottom status
+line (model · effort · tokens · endpoint). On top it adds the config slash
+commands `eve dev` can't: `/discord-token`, `/model`, `/effort` (they rewrite
+`.env.local` and restart the brain). The stock `eve dev` TUI stays available as
+a local dev/debug interface against the same runtime.
+
+Known gap: the face does not yet surface `input.requested` (tool-approval /
+human-input prompts) or `session.waiting`; only the streaming render path above
+is wired.
+
+The same HTTP routes back the iOS chat surface. For any non-local client, eve's
+default dev auth is not sufficient — public surfaces need their own route auth
+(see eve's `docs/guides/auth-and-route-protection.md`); `eve/client` supports
+bearer/basic auth and custom headers for that.
 
 ### 4.3 Performers — panes
 
@@ -456,7 +473,7 @@ clogs the main face-pane thread.
 selects `bot-token` (default) or `user-token`. Bot tokens cover text presence and
 normal voice audio. **Go Live publish/watch is only exposed to user-token
 behavior**, so screen share requires a self token — set it (via the custom
-face's `/token … --user-token` slash command), and the gateway applies the discord.js
+face's `/discord-token … --user-token` slash command), and the gateway applies the discord.js
 user-token patches (`agent/lib/discord/user-token-patches.ts`: strip the `Bot `
 REST prefix, identify as a desktop client, use `/gateway`, synthesize the READY
 `application`). Automating a user account is against Discord's ToS; it is opt-in,
@@ -660,7 +677,7 @@ absorbed here:
    control layer (`golive.ts` + `discord_golive` tool) over the raw-gateway
    opcode seam + `discordStreamDiscovery`; and the **custom face**
    (`scripts/clanky.ts`, `pnpm face`) on eve/client that mirrors eve's TUI and
-   adds the slash commands eve can't — `/token`, `/model` (rewrite `.env.local`
+   adds the slash commands eve can't — `/discord-token`, `/model` (rewrite `.env.local`
    via the pure `env-file.ts` merge + restart the brain), `/new`, `/status`.
    **Live-gated remainder** (needs the token, ClankVox, and OpenAI
    Realtime creds, so not verifiable offline): the realtime voice loop routing
@@ -680,7 +697,7 @@ phase 6, once the eve agent covers its surface.
 - **Face surface — RESOLVED: custom face.** eve's stock TUI has a fixed,
   non-extensible slash-command set, so the face is `scripts/clanky.ts` (`pnpm
   face`) on the public eve/client: it mirrors eve dev's look and adds the slash
-  commands eve can't (`/token`, `/model`, …). It attaches to a running eve
+  commands eve can't (`/discord-token`, `/model`, …). It attaches to a running eve
   server or spawns/owns a headless one (eve allows one dev server per agent).
 - **Memory store** — reuse `@clanky/core` memory verbatim in `agent/lib` vs.
   adopt eve session context as the primary store.
