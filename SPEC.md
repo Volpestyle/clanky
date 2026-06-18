@@ -440,6 +440,28 @@ Because the voice presence is the same agent on its own session, a thing said in
 VC and a thing said in chat reach the same memory and character — and neither
 clogs the main face-pane thread.
 
+**Credential kind (bot vs user/self token).** `CLANKY_DISCORD_CREDENTIAL_KIND`
+selects `bot-token` (default) or `user-token`. Bot tokens cover text presence and
+normal voice audio. **Go Live publish/watch is only exposed to user-token
+behavior**, so screen share requires a self token — set it (via the custom
+face's `/token … --user-token` slash command), and the gateway applies the discord.js
+user-token patches (`agent/lib/discord/user-token-patches.ts`: strip the `Bot `
+REST prefix, identify as a desktop client, use `/gateway`, synthesize the READY
+`application`). Automating a user account is against Discord's ToS; it is opt-in,
+for a personal account, and off by default.
+
+**Go Live.** With a user token, the gateway exposes a raw opcode seam
+(`rawGatewayClient()`) that drives Discord's screen-share opcodes through the
+already-ported `discordStreamDiscovery` (watch op 20, publish op 18, stop 19,
+pause 22). `agent/lib/discord/golive.ts` wraps this as a `GoLiveController`
+(list / watch / go-live / stop / pause), registered active when Clanky is in a
+vc, and surfaced to him as the `discord_golive` tool. Discovered stream
+credentials (`endpoint`/`token`/`rtc_server_id`) are forwarded into ClankVox via
+`streamWatchConnect` / `streamPublishConnect` to decode others' streams or
+publish his own. **Live-gated:** the actual decode/publish needs a user token + a
+running ClankVox + a real call, so the forwarding sink is wired but unexercised
+offline; the opcode/discovery/tool layer is verified by `pnpm smoke:discord`.
+
 ### 5.4 Continuity across surfaces
 
 Text chat, voice, and the herdr face-pane TUI are three windows onto **one**
@@ -552,6 +574,7 @@ clanky/
       voice/                 # ported Realtime/ClankVox control plane
       ...                    # ported memory, persona, herdr seam helpers
   scripts/
+    clanky.ts                # custom face on eve/client (pnpm face)
     discord-pane-mirror.ts   # tails a presence session into a herdr pane
   skills/
     clanky-herdr-operator/   # coordinator fan-out protocol (kept)
@@ -620,10 +643,19 @@ absorbed here:
    (`scripts/discord-pane-mirror.ts`) + boot seam (`discord-gateway.ts`);
    awareness/delegation via the shared tool surface + instructions; and the
    "hop in vc" intent + voice join seam (`voice-intent.ts`, `voice-runtime.ts`).
-   **Live-gated remainder** (needs the bot token, ClankVox, and OpenAI Realtime
-   creds, so not verifiable offline): the realtime voice loop routing
+   **Also done (verified offline):** user/self-token login for selfbot use
+   (`user-token-patches.ts`, `CLANKY_DISCORD_CREDENTIAL_KIND`); the Go Live
+   control layer (`golive.ts` + `discord_golive` tool) over the raw-gateway
+   opcode seam + `discordStreamDiscovery`; and the **custom face**
+   (`scripts/clanky.ts`, `pnpm face`) on eve/client that mirrors eve's TUI and
+   adds the slash commands eve can't — `/token`, `/model` (rewrite `.env.local`
+   via the pure `env-file.ts` merge + restart the brain), `/new`, `/status`.
+   **Live-gated remainder** (needs the token, ClankVox, and OpenAI
+   Realtime creds, so not verifiable offline): the realtime voice loop routing
    substantive turns into a shared voice **eve session** (for unified memory)
-   rather than only the realtime brain, and the `clanky:voice` transcript pane.
+   rather than only the realtime brain; the `clanky:voice` transcript pane; and
+   the ClankVox Go Live decode/publish forwarding (the sink is wired, the media
+   path is unexercised offline).
 
 Each phase keeps the system runnable; the old Pi runtime is removed only in
 phase 6, once the eve agent covers its surface.
@@ -633,8 +665,11 @@ phase 6, once the eve agent covers its surface.
 - **Relay transport fit** — confirm a raw eve WS channel carries live terminal
   scrollback cleanly (spike before phase 4). Fallback: upstream the herdr bridge
   subcommand and let eve be a client of it.
-- **Face surface** — `eve dev` local vs `eve dev --url` against the running
-  service. Pick based on which gives the cleaner always-on pane.
+- **Face surface — RESOLVED: custom face.** eve's stock TUI has a fixed,
+  non-extensible slash-command set, so the face is `scripts/clanky.ts` (`pnpm
+  face`) on the public eve/client: it mirrors eve dev's look and adds the slash
+  commands eve can't (`/token`, `/model`, …). It attaches to a running eve
+  server or spawns/owns a headless one (eve allows one dev server per agent).
 - **Memory store** — reuse `@clanky/core` memory verbatim in `agent/lib` vs.
   adopt eve session context as the primary store.
 - **Performer default** — which agent type is the default subagent (`eve` vs

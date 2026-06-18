@@ -28,6 +28,13 @@
 - The Discord chat gateway is agent-owned via `agent/channels/discord.ts`: Clanky holds the credential and the conversation. Inbound work that should be watched is surfaced as a herdr pane through the spawn seam, never as a hidden in-process subagent.
 - Do not fork herdr. Use the vanilla `herdr` CLI/skill; if a herdr-side feature is needed, upstream it to `ogulcancelik/herdr`. Pi is fully removed from Clanky (not a dependency, runtime, or performer); the only use of the local Pi checkout (`~/dev/pi`) is the one-time Codex OAuth code port (SPEC.md §4.6).
 
+## Custom Face / TUI
+
+- Clanky's face is the custom TUI at `scripts/clanky.ts` (`pnpm face`), built on the public `eve/client`. eve's own dev TUI has a fixed, non-extensible slash-command set, which is why we own the face.
+- **Reference eve's TUI source when working on the face.** Before changing rendering or input, read the matching file under `node_modules/eve/dist/src/cli/dev/tui/` and copy its behavior/appearance for parity: `theme.js` (glyphs + colors), `blocks.js` (per-block layout), `tool-format.js` (tool summaries), `status-line.js`, `command-typeahead.js` (slash typeahead + inline arg hint on exact match), `line-editor.js` (key handling + history), `prompt-commands.js` (command shape). Match eve's look unless we deliberately diverge.
+- Keep the slash-command set in the shared `COMMANDS` registry so the typeahead, `/help`, and the handler never drift. The face attaches to a running eve server or spawns/owns a headless `eve dev --no-ui` (eve allows one dev server per agent); default port 2000.
+- A turn that produces no assistant text must stay legible (spinner while thinking, an explicit no-reply note) — never leave the user staring at silence.
+
 ## Verification
 
 - After code changes, run `pnpm check`.

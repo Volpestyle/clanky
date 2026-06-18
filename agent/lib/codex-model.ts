@@ -22,8 +22,10 @@ const CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex";
 // Identifies the client to the Codex backend, mirroring the Codex CLI.
 const ORIGINATOR = "codex_cli_rs";
 
+export type CodexReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
+
 export interface CodexModelOptions {
-	/** Codex model id, e.g. "gpt-5.4", "gpt-5.3-codex-spark". */
+	/** Codex model id, e.g. "gpt-5.5", "gpt-5.4", "gpt-5.3-codex-spark". */
 	modelId: string;
 	/**
 	 * Non-empty text for the Responses `instructions` field. Required by the
@@ -31,6 +33,8 @@ export interface CodexModelOptions {
 	 * the harness preamble that satisfies the backend contract.
 	 */
 	instructions: string;
+	/** Reasoning effort for the Responses API; omit to use the backend default. */
+	reasoningEffort?: CodexReasoningEffort;
 }
 
 /** Per-request fetch that attaches fresh Codex credentials and required headers. */
@@ -67,6 +71,9 @@ export function createCodexModel(options: CodexModelOptions): LanguageModel {
 					openai.instructions = options.instructions;
 				}
 				openai.store = false;
+				if (options.reasoningEffort !== undefined && openai.reasoningEffort === undefined) {
+					openai.reasoningEffort = options.reasoningEffort;
+				}
 				return { ...params, providerOptions: { ...providerOptions, openai } };
 			},
 		},

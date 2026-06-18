@@ -16,7 +16,7 @@ import {
 	isSkipReplyText,
 	resolveEngagementWindowMs,
 } from "./acceptance.ts";
-import { DiscordGateway } from "./gateway.ts";
+import { type DiscordCredentialKind, DiscordGateway } from "./gateway.ts";
 import { formatPresencePrompt } from "./prompt.ts";
 import { type VoiceIntent, detectVoiceIntent } from "./voice-intent.ts";
 import { resolveWakeNames } from "./wake-names.ts";
@@ -63,6 +63,8 @@ export const BRIDGE_HELP_TEXT = [
 
 export interface DiscordPresenceHostOptions {
 	token: string;
+	/** Bot token (default) or user/self token (selfbot, unlocks Go Live). */
+	credentialKind?: DiscordCredentialKind;
 	/** eve loopback base URL for the conductor's own session API. */
 	eveHost?: string;
 	/** Join voice intents so "hop in vc" and the media plane can attach. */
@@ -77,7 +79,7 @@ export interface DiscordPresenceHostOptions {
 	onVoiceIntent?: (intent: VoiceIntent, message: DiscordInboundMessage) => void | Promise<void>;
 }
 
-const DEFAULT_EVE_HOST = "http://127.0.0.1:3000";
+const DEFAULT_EVE_HOST = "http://127.0.0.1:2000";
 
 export class DiscordPresenceHost {
 	private readonly gateway: DiscordGateway;
@@ -90,7 +92,12 @@ export class DiscordPresenceHost {
 
 	constructor(options: DiscordPresenceHostOptions) {
 		this.options = options;
-		this.gateway = new DiscordGateway({ token: options.token, chat: true, voice: options.voice });
+		this.gateway = new DiscordGateway({
+			token: options.token,
+			credentialKind: options.credentialKind,
+			chat: true,
+			voice: options.voice,
+		});
 		this.client = new Client({ host: options.eveHost ?? DEFAULT_EVE_HOST });
 		this.tracker = new EngagementTracker(resolveEngagementWindowMs(process.env));
 		this.wakeNames = options.wakeNames ?? resolveWakeNames(process.env);

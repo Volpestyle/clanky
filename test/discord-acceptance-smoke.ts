@@ -9,7 +9,13 @@ import {
 	isSkipReplyText,
 } from "../agent/lib/discord/acceptance.ts";
 import { parseBridgeCommand } from "../agent/lib/discord/host.ts";
+import { applyEnvUpserts } from "../agent/lib/discord/env-file.ts";
+import { resolveDiscordCredentialKind } from "../agent/lib/discord/gateway.ts";
 import { detectVoiceIntent } from "../agent/lib/discord/voice-intent.ts";
+import {
+	buildDiscordStreamKey,
+	deriveDiscordStreamWatchDaveChannelId,
+} from "../agent/lib/voice/discordStreamDiscovery.ts";
 import { DEFAULT_DISCORD_WAKE_NAMES, resolveWakeNameMatch } from "../agent/lib/discord/wake-names.ts";
 
 let failures = 0;
@@ -128,6 +134,45 @@ check("normal reply is not skip", !isSkipReplyText("sure, on it"));
 	check("bare '/clanky' -> help", parseBridgeCommand("/clanky")?.type === "help");
 	check("normal chat -> not a bridge command", parseBridgeCommand("just chatting about clanky") === null);
 }
+
+// --- credential kind -----------------------------------------------------
+check("default credential kind is bot-token", resolveDiscordCredentialKind({}) === "bot-token");
+check(
+	"user-token credential kind resolves",
+	resolveDiscordCredentialKind({ CLANKY_DISCORD_CREDENTIAL_KIND: "user-token" }) === "user-token",
+);
+check(
+	"unknown credential kind falls back to bot-token",
+	resolveDiscordCredentialKind({ CLANKY_DISCORD_CREDENTIAL_KIND: "nonsense" }) === "bot-token",
+);
+
+// --- .env upsert (TUI token config) --------------------------------------
+{
+	const replaced = applyEnvUpserts("FOO=1\nDISCORD_BOT_TOKEN=old\n# note\n", {
+		DISCORD_BOT_TOKEN: "new",
+		CLANKY_DISCORD_CREDENTIAL_KIND: "user-token",
+	});
+	check("upsert replaces existing key in place", replaced.includes("DISCORD_BOT_TOKEN=new"));
+	check("upsert drops the old value", !replaced.includes("DISCORD_BOT_TOKEN=old"));
+	check("upsert preserves other lines", replaced.includes("FOO=1") && replaced.includes("# note"));
+	check("upsert appends new key", replaced.includes("CLANKY_DISCORD_CREDENTIAL_KIND=user-token"));
+	const fromEmpty = applyEnvUpserts("", { DISCORD_BOT_TOKEN: "abc" });
+	check("upsert from empty writes the key", fromEmpty === "DISCORD_BOT_TOKEN=abc\n");
+	const quoted = applyEnvUpserts("", { CLANKY_VOICE_INSTRUCTIONS: "be brief" });
+	check("upsert quotes values with spaces", quoted.includes('CLANKY_VOICE_INSTRUCTIONS="be brief"'));
+}
+
+// --- Go Live stream-key helpers ------------------------------------------
+check(
+	"buildDiscordStreamKey shapes guild:g:c:u",
+	buildDiscordStreamKey({ guildId: "g1", channelId: "c1", userId: "u1" }) === "guild:g1:c1:u1",
+);
+check(
+	"dave channel id is rtcServerId - 1",
+	deriveDiscordStreamWatchDaveChannelId("100") === "99",
+);
+check("dave channel id undefined for empty rtcServerId", deriveDiscordStreamWatchDaveChannelId(null) === undefined);
+check("dave channel id undefined for non-numeric", deriveDiscordStreamWatchDaveChannelId("abc") === undefined);
 
 // --- voice intent --------------------------------------------------------
 check("'clanky hop in vc' -> join", detectVoiceIntent("clanky hop in vc") === "join");

@@ -11,16 +11,19 @@
  *
  * Env:
  *   CLANKY_DISCORD_PRESENCE=1   opt in (set by the always-on runtime, not build)
- *   DISCORD_BOT_TOKEN           the agent-owned bot credential
- *   CLANKY_EVE_HOST             loopback base URL of this eve server (default :3000)
+ *   DISCORD_BOT_TOKEN           the agent-owned credential (bot or user/self token)
+ *   CLANKY_DISCORD_CREDENTIAL_KIND  bot-token (default) | user-token (Go Live)
+ *   CLANKY_EVE_HOST             loopback base URL of this eve server (default :2000)
  *   CLANKY_DISCORD_VOICE=1      include voice intents for "hop in vc"
  *   CLANKY_MAIN_AGENT           herdr agent name of the main face pane (default clanky)
  *   CLANKY_REPO_DIR             repo checkout dir, for resolving the mirror script
  */
 import { join } from "node:path";
 import { defineChannel, GET } from "eve/channels";
-import { attachVoiceRuntime, joinVoice, leaveVoice } from "./voice.ts";
+import { attachVoiceRuntime, getActiveVoiceVox, joinVoice, leaveVoice } from "./voice.ts";
 import { type BridgeCommand, DiscordPresenceHost } from "../lib/discord/host.ts";
+import { resolveDiscordCredentialKind } from "../lib/discord/gateway.ts";
+import { type GoLiveSink, GoLiveController, clearActiveGoLive, setActiveGoLive } from "../lib/discord/golive.ts";
 import type { DiscordInboundMessage } from "../lib/discord/acceptance.ts";
 import { buildGuildVoiceRuntime } from "../lib/discord/voice-runtime.ts";
 import type { VoiceIntent } from "../lib/discord/voice-intent.ts";
@@ -30,7 +33,7 @@ let host: DiscordPresenceHost | null = null;
 let startError: string | null = null;
 
 function eveHost(): string {
-	return process.env.CLANKY_EVE_HOST ?? "http://127.0.0.1:3000";
+	return process.env.CLANKY_EVE_HOST ?? "http://127.0.0.1:2000";
 }
 
 function mirrorScriptPath(): string {
@@ -73,6 +76,7 @@ async function handleVoiceIntent(
 	message: DiscordInboundMessage,
 ): Promise<void> {
 	if (intent === "leave") {
+		clearActiveGoLive();
 		await leaveVoice();
 		return;
 	}
@@ -84,6 +88,22 @@ async function handleVoiceIntent(
 	if (channel === null) throw new Error(`${message.authorName ?? message.authorId} is not in a voice channel`);
 	attachVoiceRuntime(buildGuildVoiceRuntime(guild, process.env));
 	await joinVoice(guild.id, channel.id);
+
+	// Go Live needs the user-token raw seam + a live ClankVox to decode/publish.
+	if (resolveDiscordCredentialKind(process.env) === "user-token") {
+		const sink: GoLiveSink = {
+			watch: (creds) =>
+				getActiveVoiceVox()?.streamWatchConnect({ ...creds, sessionId: guild.members.me?.voice.sessionId ?? "" }),
+			publish: (creds) =>
+				getActiveVoiceVox()?.streamPublishConnect({ ...creds, sessionId: guild.members.me?.voice.sessionId ?? "" }),
+		};
+		setActiveGoLive(
+			new GoLiveController(presence.discordGateway.rawGatewayClient(), {
+				selfUserId: () => presence.discordGateway.selfUserId,
+				sink,
+			}),
+		);
+	}
 }
 
 function ensureStarted(): void {
@@ -93,6 +113,7 @@ function ensureStarted(): void {
 	const voiceEnabled = process.env.CLANKY_DISCORD_VOICE === "1";
 	const presence: DiscordPresenceHost = new DiscordPresenceHost({
 		token,
+		credentialKind: resolveDiscordCredentialKind(process.env),
 		eveHost: eveHost(),
 		voice: voiceEnabled,
 		onPresenceSession: ({ channelId, sessionId }) =>
