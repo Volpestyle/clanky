@@ -4,8 +4,8 @@
  * Ported from ~/dev/pi/packages/ai/src/utils/oauth/openai-codex.ts, trimmed to
  * what the eve runtime needs: read the stored credential, refresh it before
  * expiry, and persist the result. The interactive login flow (browser /
- * device-code) is not reproduced here — the credential is minted once by the
- * Codex CLI / Pi `/login` and lives in the auth store this module reads.
+ * device-code) is not reproduced here; the credential is minted once by the
+ * Codex CLI and lives in the auth store this module reads.
  *
  * See SPEC.md §4.6.
  */
@@ -109,7 +109,7 @@ export async function getValidCodexCredentials(): Promise<CodexCredentials> {
 	const stored = (await readStore())[STORE_KEY];
 	if (!stored?.access || !stored.refresh) {
 		throw new Error(
-			`No '${STORE_KEY}' credential in ${authPath()}. Mint one with the Codex CLI / pi /login.`,
+			`No '${STORE_KEY}' credential in ${authPath()}. Mint one with the Codex CLI login.`,
 		);
 	}
 	// Some writers store seconds, some milliseconds; normalize to ms.

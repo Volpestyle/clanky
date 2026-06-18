@@ -9,18 +9,16 @@
  *
  * Env: CLANKY_RELAY_TOKEN — the same tailnet front-door bearer token.
  */
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { defineChannel, WS } from "eve/channels";
 import type { WebSocketMessage, WebSocketPeer } from "eve/channels";
+import { isFrontdoorAuthorized } from "../lib/frontdoor-auth.ts";
+import { herdrRequest } from "../lib/herdr-socket.ts";
 import {
 	type ClankvoxGuildLike,
 	type OpenAiRealtimeConnectOptions,
 	startVoiceSession,
 	type VoiceSession,
 } from "../lib/voice/index.ts";
-
-const run = promisify(execFile);
 
 /** Live voice runtime injected by a Discord-connected host process. */
 export interface VoiceRuntime {
@@ -50,19 +48,7 @@ function str(v: unknown): string | undefined {
 }
 
 function authorized(peer: WebSocketPeer): boolean {
-	const expected = process.env.CLANKY_RELAY_TOKEN;
-	if (!expected) return false;
-	let token: string | null = null;
-	try {
-		token = new URL(peer.request.url).searchParams.get("token");
-	} catch {
-		token = null;
-	}
-	if (!token) {
-		const header = peer.request.headers.get("authorization");
-		if (header?.startsWith("Bearer ")) token = header.slice("Bearer ".length);
-	}
-	return token === expected;
+	return isFrontdoorAuthorized(peer.request);
 }
 
 async function dispatch(op: string, args: Record<string, unknown>): Promise<unknown> {
@@ -92,12 +78,12 @@ async function dispatch(op: string, args: Record<string, unknown>): Promise<unkn
 			if (!slug || !SLUG_RE.test(slug)) throw new Error("delegate requires a kebab-case slug");
 			if (!task) throw new Error("delegate requires a task");
 			const agent = `clanky:voice-${slug}`;
-			const { stdout } = await run(
-				"herdr",
-				["agent", "start", agent, "--no-focus", "--", "claude", "--dangerously-skip-permissions", task],
-				{ encoding: "utf8" },
-			);
-			return { agent, started: true, raw: stdout.trim() };
+			const result = await herdrRequest("agent.start", {
+				name: agent,
+				focus: false,
+				argv: ["claude", "--dangerously-skip-permissions", task],
+			});
+			return { agent, started: true, result };
 		}
 		default:
 			throw new Error(`unknown voice op '${op}'`);

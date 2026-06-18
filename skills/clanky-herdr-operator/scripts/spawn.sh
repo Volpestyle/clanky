@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Spawn one Clanky worker as a named herdr agent pane inside a run tab.
+# Spawn one worker as a named herdr agent pane inside a run tab.
 set -euo pipefail
 
 usage() {
@@ -9,9 +9,10 @@ Usage: spawn.sh --slug <task-slug> --task "<one-line summary>" \
                 [--run <run-id>] [--cwd <dir>] [-- <worker argv...>]
 
 Spawns one worker agent named clanky:<slug> into the run's herdr tab.
-Default worker is clanky (Discord gateway off). In a custom argv, the
-token {KICKOFF} is replaced with the kickoff message; without the token
-the kickoff is appended as the final argument.
+Default worker is claude --dangerously-skip-permissions when available,
+falling back to codex --dangerously-bypass-approvals-and-sandbox. In a
+custom argv, the token {KICKOFF} is replaced with the kickoff message;
+without the token the kickoff is appended as the final argument.
 
 Prints RUN_ID, RUN_DIR, AGENT, PANE_ID lines on success. Pass the same
 --run to later spawns to group workers into one run.
@@ -90,11 +91,13 @@ EOF
 KICKOFF="You are Clanky's worker $AGENT_NAME. Read $WORKER_DIR/prompt.md and do the task it describes, following its completion protocol exactly. Work autonomously."
 
 if [ ${#ARGV[@]} -eq 0 ]; then
-	if command -v clanky >/dev/null 2>&1; then
-		ARGV=(env CLANKY_CHAT_GATEWAY_OWNER=off clanky --message "{KICKOFF}")
+	if command -v claude >/dev/null 2>&1; then
+		ARGV=(claude --dangerously-skip-permissions "{KICKOFF}")
+	elif command -v codex >/dev/null 2>&1; then
+		ARGV=(codex --dangerously-bypass-approvals-and-sandbox "{KICKOFF}")
 	else
-		REPO_ROOT="$(cd "$SKILL_DIR/../.." && pwd)"
-		ARGV=(env CLANKY_CHAT_GATEWAY_OWNER=off pnpm --dir "$REPO_ROOT" exec tsx "$REPO_ROOT/agents/clanky/src/bin.ts" --message "{KICKOFF}")
+		echo "spawn.sh: no default worker found on PATH (expected claude or codex); pass an explicit argv after --" >&2
+		exit 1
 	fi
 fi
 HAS_TOKEN=0

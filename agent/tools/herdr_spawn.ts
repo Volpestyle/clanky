@@ -17,11 +17,11 @@ const KICKOFF_TOKEN = "{KICKOFF}";
 const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
 
 // Default performer command lines. {KICKOFF} is replaced by the task brief.
-// claude workers use --dangerously-skip-permissions so they do not hang waiting
-// for approval in a headless pane.
+// Workers run in visible Herdr panes, so use each CLI's no-approval mode to keep
+// them from stalling on unattended permission prompts.
 const PERFORMER_ARGV: Record<string, readonly string[]> = {
 	claude: ["claude", "--dangerously-skip-permissions", KICKOFF_TOKEN],
-	codex: ["codex", KICKOFF_TOKEN],
+	codex: ["codex", "--dangerously-bypass-approvals-and-sandbox", KICKOFF_TOKEN],
 };
 
 function applyKickoff(argv: readonly string[], task: string): string[] {
