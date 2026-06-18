@@ -14,13 +14,24 @@
  * is committed.
  */
 import { Client, Events, GatewayIntentBits, type Message, Partials } from "discord.js";
+import type { DiscordRawGatewayClient } from "../voice/discordStreamDiscovery.ts";
 import type { DiscordConversationKind, DiscordInboundMessage } from "./acceptance.ts";
+import { applyDiscordUserTokenPatches } from "./user-token-patches.ts";
 
 const DISCORD_MAX_MESSAGE_CHARS = 2000;
 const SELF_MESSAGE_MEMORY = 500;
 
+/** A bot token (the default) or a user/self token (selfbot, for Go Live). */
+export type DiscordCredentialKind = "bot-token" | "user-token";
+
+export function resolveDiscordCredentialKind(env: NodeJS.ProcessEnv): DiscordCredentialKind {
+	return env.CLANKY_DISCORD_CREDENTIAL_KIND === "user-token" ? "user-token" : "bot-token";
+}
+
 export interface DiscordGatewayOptions {
 	token: string;
+	/** Bot token (default) or user/self token. User tokens unlock Go Live. */
+	credentialKind?: DiscordCredentialKind;
 	/** Include voice-state intent so "hop in vc" and the media plane can join. */
 	voice?: boolean;
 	/** Include DM + message-content intents for free-will text presence. */
@@ -58,6 +69,7 @@ function conversationKind(message: Message): DiscordConversationKind {
 export class DiscordGateway {
 	private readonly client: Client;
 	private readonly token: string;
+	private readonly credentialKind: DiscordCredentialKind;
 	/** Recently-sent message ids, for reply-to-self detection (bounded FIFO). */
 	private readonly selfMessageIds: string[] = [];
 	private readonly selfMessageSet = new Set<string>();
@@ -65,6 +77,7 @@ export class DiscordGateway {
 
 	constructor(options: DiscordGatewayOptions) {
 		this.token = options.token;
+		this.credentialKind = options.credentialKind ?? "bot-token";
 		const intents = [GatewayIntentBits.Guilds];
 		if (options.chat !== false) {
 			intents.push(
@@ -85,6 +98,11 @@ export class DiscordGateway {
 	/** Underlying discord.js client, for the voice runtime's voice-state joins. */
 	get discordClient(): Client {
 		return this.client;
+	}
+
+	/** Raw-gateway view for Go Live stream discovery (op send + raw dispatch). */
+	rawGatewayClient(): DiscordRawGatewayClient {
+		return this.client as unknown as DiscordRawGatewayClient;
 	}
 
 	isKnownSelfMessage(messageId: string): boolean {
@@ -126,6 +144,9 @@ export class DiscordGateway {
 				console.error("discord inbound handler failed:", error);
 			});
 		});
+		// User/self tokens need discord.js patched before login (no "Bot " prefix,
+		// /gateway instead of /gateway/bot, synthetic READY application).
+		if (this.credentialKind === "user-token") applyDiscordUserTokenPatches(this.client);
 		await new Promise<void>((resolve, reject) => {
 			this.client.once(Events.ClientReady, () => {
 				this.ready = true;

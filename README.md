@@ -86,7 +86,23 @@ for himself when to speak — addressed by name ("hey clanky", "yo clank"),
 otherwise (`[SKIP]`). "Hop in vc" makes him join voice. Each conversation runs as
 a **presence session**: a separate eve session of the same agent, so it shares
 his memory, persona, and tools without clogging the main face-pane thread, and
-it is mirrored into a watchable herdr pane. See [SPEC.md](SPEC.md) §5.2–§5.6.
+it is mirrored into a watchable herdr pane. With a user/self token
+(`CLANKY_DISCORD_CREDENTIAL_KIND=user-token`) he can also watch others' Go Live
+screen shares and publish his own (`discord_golive`). Configure the token and
+model from the custom face's `/token` and `/model` slash commands (see below)
+instead of hand-editing `.env.local`. See [SPEC.md](SPEC.md) §5.2–§5.6.
+
+## Running Clanky
+
+Clanky's brain is the eve server; his face is a client of it. Two ways to run:
+
+- **`pnpm dev`** — eve's stock dev TUI (fixed slash-command set).
+- **`pnpm face`** — Clanky's custom face (`scripts/clanky.ts`) on `eve/client`:
+  mirrors eve's look, owns/attaches the headless brain, and adds the slash
+  commands eve can't — `/token <token> [--user-token] [--voice]`,
+  `/model <codex|claude> [id]`, `/new`, `/status`, `/help`, `/exit`. Config
+  commands rewrite `.env.local` and restart the brain. Default port 2000
+  (`CLANKY_EVE_PORT`).
 
 ## Status
 

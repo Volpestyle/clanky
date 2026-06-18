@@ -13,6 +13,7 @@ import { defineChannel, WS } from "eve/channels";
 import type { WebSocketMessage, WebSocketPeer } from "eve/channels";
 import { isFrontdoorAuthorized } from "../lib/frontdoor-auth.ts";
 import { herdrRequest } from "../lib/herdr-socket.ts";
+import type { ClankvoxIpcClient } from "../lib/voice/clankvoxIpcClient.ts";
 import {
 	type ClankvoxGuildLike,
 	type OpenAiRealtimeConnectOptions,
@@ -51,6 +52,11 @@ export async function leaveVoice(): Promise<void> {
 
 export function voiceStatus(): { runtimeAttached: boolean; sessionActive: boolean } {
 	return { runtimeAttached: runtime !== null, sessionActive: session !== null };
+}
+
+/** Active ClankVox client, for forwarding Go Live stream credentials (§5.3). */
+export function getActiveVoiceVox(): ClankvoxIpcClient | null {
+	return session?.vox ?? null;
 }
 
 interface VoiceRequest {
