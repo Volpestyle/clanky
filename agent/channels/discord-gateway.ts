@@ -20,9 +20,15 @@
  */
 import { join } from "node:path";
 import { defineChannel, GET } from "eve/channels";
-import { attachVoiceRuntime, getActiveVoiceVox, joinVoice, leaveVoice } from "./voice.ts";
+import {
+	attachVoiceRuntime,
+	getActiveVoiceVox,
+	joinVoice,
+	leaveVoice,
+	recordActiveVoiceStreamWatchConnect,
+} from "./voice.ts";
 import { type BridgeCommand, DiscordPresenceHost } from "../lib/discord/host.ts";
-import { resolveDiscordCredentialKind } from "../lib/discord/gateway.ts";
+import { resolveDiscordCredentialKind, resolveDiscordToken } from "../lib/discord/gateway.ts";
 import { type GoLiveSink, GoLiveController, clearActiveGoLive, setActiveGoLive } from "../lib/discord/golive.ts";
 import type { DiscordInboundMessage } from "../lib/discord/acceptance.ts";
 import { buildGuildVoiceRuntime } from "../lib/discord/voice-runtime.ts";
@@ -86,14 +92,23 @@ async function handleVoiceIntent(
 	const member = await guild.members.fetch(message.authorId);
 	const channel = member.voice.channel;
 	if (channel === null) throw new Error(`${message.authorName ?? message.authorId} is not in a voice channel`);
-	attachVoiceRuntime(buildGuildVoiceRuntime(guild, process.env));
+	attachVoiceRuntime(
+		buildGuildVoiceRuntime(guild, process.env, {
+			userId: message.authorId,
+			...(message.authorName === undefined ? {} : { userName: message.authorName }),
+		}),
+	);
 	await joinVoice(guild.id, channel.id);
 
 	// Go Live needs the user-token raw seam + a live ClankVox to decode/publish.
 	if (resolveDiscordCredentialKind(process.env) === "user-token") {
 		const sink: GoLiveSink = {
-			watch: (creds) =>
-				getActiveVoiceVox()?.streamWatchConnect({ ...creds, sessionId: guild.members.me?.voice.sessionId ?? "" }),
+			watch: (creds) => {
+				const vox = getActiveVoiceVox();
+				if (vox === null) return;
+				vox.streamWatchConnect({ ...creds, sessionId: guild.members.me?.voice.sessionId ?? "" });
+				recordActiveVoiceStreamWatchConnect();
+			},
 			publish: (creds) =>
 				getActiveVoiceVox()?.streamPublishConnect({ ...creds, sessionId: guild.members.me?.voice.sessionId ?? "" }),
 		};
@@ -108,7 +123,7 @@ async function handleVoiceIntent(
 
 function ensureStarted(): void {
 	if (host !== null || startError !== null) return;
-	const token = process.env.DISCORD_BOT_TOKEN;
+	const token = resolveDiscordToken(process.env);
 	if (process.env.CLANKY_DISCORD_PRESENCE !== "1" || token === undefined || token.length === 0) return;
 	const voiceEnabled = process.env.CLANKY_DISCORD_VOICE === "1";
 	const presence: DiscordPresenceHost = new DiscordPresenceHost({

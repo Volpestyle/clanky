@@ -17,7 +17,8 @@ import {
 	resolveEngagementWindowMs,
 } from "./acceptance.ts";
 import { type DiscordCredentialKind, DiscordGateway } from "./gateway.ts";
-import { formatPresencePrompt } from "./prompt.ts";
+import { rememberDiscordMessageFacts } from "./memory.ts";
+import { buildPresenceSessionMessage } from "./presence-payload.ts";
 import { type VoiceIntent, detectVoiceIntent } from "./voice-intent.ts";
 import { resolveWakeNames } from "./wake-names.ts";
 
@@ -150,10 +151,14 @@ export class DiscordPresenceHost {
 				if (intent !== null) await this.options.onVoiceIntent(intent, message);
 			}
 
+			await rememberDiscordMessageFacts(message).catch((error: unknown) =>
+				console.error("discord memory capture failed:", error),
+			);
+
 			await this.gateway.sendTyping(message.channelId);
-			const prompt = formatPresencePrompt(message, decision.reason, message.authorName ?? message.authorId);
+			const prompt = await buildPresenceSessionMessage(message, decision.reason, message.authorName ?? message.authorId);
 			const session = this.sessionFor(message.channelId);
-			const response = await session.send(prompt);
+			const response = await session.send({ message: prompt });
 			const result = await response.result();
 
 			if (!this.mirrored.has(message.channelId) && result.sessionId.length > 0) {
