@@ -7,6 +7,7 @@ export interface DiscordVoiceTurnBufferOptions {
 	appendInputAudio(userId: string, pcm: Buffer): void;
 	commitInputAudioBuffer(): void;
 	createAudioResponse(): void;
+	onFlushSpeakers?(userIds: string[]): void;
 	onError?(error: unknown): void;
 	setTimer?(callback: () => void, delayMs: number): TimerHandle;
 	clearTimer?(handle: TimerHandle): void;
@@ -14,6 +15,7 @@ export interface DiscordVoiceTurnBufferOptions {
 
 export interface DiscordVoiceTurnBufferStatus {
 	activeSpeakers: string[];
+	pendingAudioSpeakers: string[];
 	hasPendingAudio: boolean;
 	hasScheduledFlush: boolean;
 }
@@ -26,11 +28,13 @@ export class DiscordVoiceTurnBuffer {
 	private readonly appendInputAudio: (userId: string, pcm: Buffer) => void;
 	private readonly commitInputAudioBuffer: () => void;
 	private readonly createAudioResponse: () => void;
+	private readonly onFlushSpeakers: ((userIds: string[]) => void) | undefined;
 	private readonly mixAudio: boolean;
 	private readonly onError: ((error: unknown) => void) | undefined;
 	private readonly setTimer: (callback: () => void, delayMs: number) => TimerHandle;
 	private readonly clearTimer: (handle: TimerHandle) => void;
 	private readonly activeSpeakers = new Set<string>();
+	private readonly pendingAudioSpeakers = new Set<string>();
 	private readonly queuedAudioByUser = new Map<string, Buffer[]>();
 	private pendingFlush: TimerHandle | undefined;
 	private audioDrainScheduled = false;
@@ -44,6 +48,7 @@ export class DiscordVoiceTurnBuffer {
 		this.appendInputAudio = options.appendInputAudio;
 		this.commitInputAudioBuffer = options.commitInputAudioBuffer;
 		this.createAudioResponse = options.createAudioResponse;
+		this.onFlushSpeakers = options.onFlushSpeakers;
 		this.onError = options.onError;
 		this.setTimer = options.setTimer ?? setTimeout;
 		this.clearTimer = options.clearTimer ?? clearTimeout;
@@ -68,6 +73,7 @@ export class DiscordVoiceTurnBuffer {
 		const normalizedUserId = normalizeUserId(userId);
 		if (this.disposed || normalizedUserId.length === 0 || pcm.length === 0) return;
 		this.hasPendingAudio = true;
+		this.pendingAudioSpeakers.add(normalizedUserId);
 		if (!this.mixAudio) {
 			this.safeCall(() => this.appendInputAudio(normalizedUserId, pcm));
 			return;
@@ -89,7 +95,14 @@ export class DiscordVoiceTurnBuffer {
 		if (this.disposed || !this.hasPendingAudio) return;
 		this.clearPendingFlush();
 		this.drainQueuedAudio();
+		const speakers = [...this.pendingAudioSpeakers].sort();
+		this.pendingAudioSpeakers.clear();
 		this.hasPendingAudio = false;
+		// Fire on every commit, even with no resolved speakers: each commit below
+		// produces exactly one input transcript, and the speaker tracker pairs
+		// flushes to transcripts in FIFO order, so a skipped notify would shift a
+		// later turn's speakers onto this transcript.
+		this.safeCall(() => this.onFlushSpeakers?.(speakers));
 		this.safeCall(() => {
 			this.commitInputAudioBuffer();
 			this.createAudioResponse();
@@ -100,6 +113,7 @@ export class DiscordVoiceTurnBuffer {
 		this.disposed = true;
 		this.clearPendingFlush();
 		this.activeSpeakers.clear();
+		this.pendingAudioSpeakers.clear();
 		this.queuedAudioByUser.clear();
 		this.audioDrainScheduled = false;
 		this.hasPendingAudio = false;
@@ -108,6 +122,7 @@ export class DiscordVoiceTurnBuffer {
 	status(): DiscordVoiceTurnBufferStatus {
 		return {
 			activeSpeakers: [...this.activeSpeakers].sort(),
+			pendingAudioSpeakers: [...this.pendingAudioSpeakers].sort(),
 			hasPendingAudio: this.hasPendingAudio,
 			hasScheduledFlush: this.pendingFlush !== undefined,
 		};

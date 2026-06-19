@@ -24,6 +24,7 @@ export interface BindClankvoxRealtimeBridgeOptions {
 	realtime: ClankvoxRealtimeBridgeRealtime | OpenAiRealtimeClient;
 	onDecodedVideoFrame?(frame: ClankvoxDecodedVideoFrame): void;
 	onIpcError?(event: JsonRecord): void;
+	onFlushSpeakers?(userIds: string[]): void;
 	autoAppendDecodedVideoFrames?: boolean;
 	turnBuffer?: Pick<DiscordVoiceTurnBufferOptions, "flushDelayMs" | "mixAudio" | "setTimer" | "clearTimer" | "onError">;
 }
@@ -35,6 +36,7 @@ export function bindClankvoxRealtimeBridge(options: BindClankvoxRealtimeBridgeOp
 		appendInputAudio: (_userId, pcm) => options.realtime.appendInputAudioPcm(pcm),
 		commitInputAudioBuffer: () => options.realtime.commitInputAudioBuffer(),
 		createAudioResponse: () => options.realtime.createAudioResponse(),
+		onFlushSpeakers: options.onFlushSpeakers,
 	};
 	if (options.turnBuffer?.flushDelayMs !== undefined) turnOptions.flushDelayMs = options.turnBuffer.flushDelayMs;
 	if (options.turnBuffer?.mixAudio !== undefined) turnOptions.mixAudio = options.turnBuffer.mixAudio;
