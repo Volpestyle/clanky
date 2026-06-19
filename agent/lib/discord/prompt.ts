@@ -40,6 +40,8 @@ export function formatPresencePrompt(
 		.slice(-20)
 		.map((entry) => `- ${entry.author}: ${entry.text}`)
 		.join("\n");
+	const attachmentBlock = formatAttachmentBlock(message);
+	const embedBlock = formatEmbedBlock(message);
 	return [
 		"Discord conversation update:",
 		"",
@@ -57,12 +59,51 @@ export function formatPresencePrompt(
 		...(message.threadId === undefined ? [] : [`- threadId: ${message.threadId}`]),
 		...(message.guildId === undefined ? [] : [`- serverId: ${message.guildId}`]),
 		`- newestMessageId: ${message.externalMessageId}`,
+		`- authorId: ${message.authorId}`,
+		...(message.authorName === undefined ? [] : [`- authorName: ${message.authorName}`]),
 		"",
 		...(historyBlock.length > 0 ? ["Recent chat before the newest message:", historyBlock, ""] : []),
+		...(attachmentBlock.length > 0 ? ["Discord attachments on the newest message:", attachmentBlock, ""] : []),
+		...(embedBlock.length > 0 ? ["Discord embeds/previews on the newest message:", embedBlock, ""] : []),
 		"Newest Discord message:",
 		`From: ${sender}`,
 		`Text: ${text}`,
-	]
-		.filter((line) => line.length > 0 || line === "")
+	].join("\n");
+}
+
+function formatAttachmentBlock(message: DiscordInboundMessage): string {
+	return (message.attachments ?? [])
+		.map((attachment, index) => {
+			const details = [
+				`id=${attachment.id}`,
+				`url=${attachment.url}`,
+				attachment.filename === undefined ? undefined : `filename=${attachment.filename}`,
+				attachment.contentType === undefined ? undefined : `type=${attachment.contentType}`,
+				attachment.size === undefined ? undefined : `bytes=${attachment.size}`,
+				attachment.width === undefined || attachment.height === undefined
+					? undefined
+					: `size=${attachment.width}x${attachment.height}`,
+				attachment.description === undefined ? undefined : `description=${attachment.description}`,
+			].filter((part): part is string => part !== undefined);
+			return `- attachment ${index + 1}: ${details.join("; ")}`;
+		})
+		.join("\n");
+}
+
+function formatEmbedBlock(message: DiscordInboundMessage): string {
+	return (message.embeds ?? [])
+		.map((embed, index) => {
+			const details = [
+				embed.type === undefined ? undefined : `type=${embed.type}`,
+				embed.provider === undefined ? undefined : `provider=${embed.provider}`,
+				embed.title === undefined ? undefined : `title=${embed.title}`,
+				embed.url === undefined ? undefined : `url=${embed.url}`,
+				embed.description === undefined ? undefined : `description=${embed.description}`,
+				embed.imageUrl === undefined ? undefined : `image=${embed.imageUrl}`,
+				embed.thumbnailUrl === undefined ? undefined : `thumbnail=${embed.thumbnailUrl}`,
+				embed.videoUrl === undefined ? undefined : `video=${embed.videoUrl}`,
+			].filter((part): part is string => part !== undefined);
+			return `- embed ${index + 1}: ${details.join("; ")}`;
+		})
 		.join("\n");
 }
