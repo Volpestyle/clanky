@@ -18,14 +18,23 @@ import {
 	type ClankvoxGuildLike,
 	type OpenAiRealtimeConnectOptions,
 	startVoiceSession,
+	type VoiceExternalTtsConfig,
+	type VoiceRealtimeConfig,
 	type VoiceSession,
+	type VoiceSpeakerResolver,
+	summarizeVoiceRuntimeConfig,
 } from "../lib/voice/index.ts";
 
 /** Live voice runtime injected by a Discord-connected host process. */
 export interface VoiceRuntime {
 	guild: ClankvoxGuildLike;
-	openAiApiKey: string;
+	realtime: VoiceRealtimeConfig;
 	connect: OpenAiRealtimeConnectOptions;
+	externalTts?: VoiceExternalTtsConfig;
+	memorySpeaker?: { userId: string; userName?: string };
+	resolveSpeaker?: VoiceSpeakerResolver;
+	eveSessionHost?: string;
+	memoryContextLimit?: number;
 }
 
 let runtime: VoiceRuntime | null = null;
@@ -50,13 +59,35 @@ export async function leaveVoice(): Promise<void> {
 	session = null;
 }
 
-export function voiceStatus(): { runtimeAttached: boolean; sessionActive: boolean } {
-	return { runtimeAttached: runtime !== null, sessionActive: session !== null };
+export function voiceStatus(): { runtimeAttached: boolean; sessionActive: boolean; voice: Record<string, unknown> } {
+	const sessionStatus = session?.status();
+	const voice: Record<string, unknown> = {
+		runtimeAttached: runtime !== null,
+		sessionActive: session !== null,
+	};
+	if (runtime !== null) {
+		const settings = summarizeVoiceRuntimeConfig(runtime);
+		voice.realtimeProvider = settings.realtimeProvider;
+		voice.ttsProvider = settings.ttsProvider;
+		voice.settings = settings;
+	}
+	if (sessionStatus !== undefined) {
+		voice.realtimeProvider = sessionStatus.realtimeProvider;
+		voice.ttsProvider = sessionStatus.ttsProvider;
+		voice.settings = sessionStatus.settings;
+		voice.turnBuffer = sessionStatus.turnBuffer;
+		voice.stats = sessionStatus.stats;
+	}
+	return { runtimeAttached: runtime !== null, sessionActive: session !== null, voice };
 }
 
 /** Active ClankVox client, for forwarding Go Live stream credentials (§5.3). */
 export function getActiveVoiceVox(): ClankvoxIpcClient | null {
 	return session?.vox ?? null;
+}
+
+export function recordActiveVoiceStreamWatchConnect(): void {
+	session?.recordStreamWatchConnect();
 }
 
 interface VoiceRequest {
