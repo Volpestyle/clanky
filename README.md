@@ -2,191 +2,112 @@
 
 ![Clanky](branding/clanky-logo-512.png)
 
-Clanky is a personal Pi agent with profile state, memory, a canonical Pi
-session thread, communication gateway adapters, subagents, media tools,
-work-tracker refs, and bundled skills.
+Clanky is an always-on personal agent that lives inside a persistent
+[herdr](https://herdr.dev) session and is reachable from anywhere through a
+native iOS app.
 
-It is not a separate daemon or scheduler. Pi supplies the terminal agent
-runtime. Clanky adds the personal layer. When work needs more than one agent,
-Clanky orchestrates subagents as [herdr](https://herdr.dev) panes — visible,
-inspectable terminal sessions in the same multiplexer you already run him in.
+He is built on three off-the-shelf systems plus a thin layer of glue:
 
-## 1. What You Can Do
+- **herdr** is the *stage* — a vanilla terminal-agent multiplexer. Every agent
+  is a visible pane, and herdr supplies the swarm coordination CLI.
+- **[eve](https://eve.dev)** is the *conductor* — Clanky's durable backend brain
+  and his visible face. eve owns inbound channels (Discord, voice), cron
+  schedules, durable sessions, and memory. Its interactive TUI runs in a herdr
+  pane and *is* what you see as Clanky.
+- The **iOS app** is the *window* — it reaches the stage over the tailnet
+  through an eve relay channel.
 
-Use Clanky as the agent that is always yours:
+When Clanky needs more than himself, he spawns **performers** — `eve`, `claude`,
+or `codex` agents — as visible herdr panes, and orchestrates them through the
+herdr swarm CLI. (The prior Pi runtime is fully removed; see SPEC.md.)
 
-- work in a repo through the Pi TUI with Clanky's persona, skills, memory, and
-  profile-local credentials
-- keep separate profiles for personal work, reviewers, voice tests, or
-  temporary experiments
-- store and inspect source-grounded memories with explicit privacy controls
-- connect external communication gateways, with Discord as the built-in
-  agent-owned text adapter for DMs, mentions, replies, and channel bindings
-- let gateway side requests route to subagents while the main TUI session keeps
-  working
-- fan out multi-agent work into herdr panes and watch every subagent run
-- join live voice through the Discord/ClankVox media adapter,
-  transcribe speakers, speak through Realtime or ElevenLabs, and delegate
-  durable work back to Pi
-- generate or inspect web/media artifacts through the bundled operator skills
+> **Architecture:** see [SPEC.md](SPEC.md) for the complete, authoritative
+> design. This README is a short orientation; the spec is the source of truth.
 
-<!-- Capture backlog:
-- docs/assets/gifs/clanky-tui-discord.gif: local TUI work continuing while a Discord mention routes through a subagent.
-- docs/assets/gifs/clankvox-voice-live.gif: Discord voice live run with speaker transcript, spoken response, ask_pi delegation, and screen-watch or media counters.
--->
+## What Clanky does
 
-## 2. What To Let Clanky Handle
+- runs always-on (a Mac mini) as a member of a persistent herdr session
+- shows up in the Clanky iOS app the moment he is on, with every pane visible
+- handles inbound Discord text and voice — surfacing the work **as visible
+  panes**, not hidden background processes
+- spawns other agents (`claude`, `codex`, more `eve` agents, or subagents of
+  himself), all visible as TUIs in herdr
+- coordinates a swarm through the vanilla herdr CLI, and orchestrates harvestable
+  fan-out runs through the `clanky-herdr-operator` skill
+- remembers durable preferences, project facts, and recurring context
+- runs scheduled jobs on a cron cadence
 
-Clanky is strongest when the work needs personal context plus tools:
+## Mental model
 
-- orienting in a local repository
-- remembering durable preferences, project facts, and recurring context
-- deciding whether an external gateway message needs a response or should be skipped
-- splitting gateway side work into subagents so the foreground session stays
-  useful
-- fanning out parallel work into herdr panes and synthesizing the results
-- using browser, web search, media, Linear, Discord, or MCP skills when the task
-  calls for them
-- answering live voice questions quickly and handing longer work to Pi
-
-## 3. Mental Model
+Stage, conductor, performers, window.
 
 ```mermaid
 flowchart TB
-  user["Human"]
-  herdr["herdr<br/>terminal agent multiplexer"]
-  tui["Pi TUI"]
-  thread["Clanky Pi session thread<br/>canonical messaging"]
-  clanky["Clanky runtime"]
-  profile["Profile<br/>auth, memory, sessions, skills"]
-  chat["Discord chat gateway<br/>agent-owned"]
-  voice["Voice/media gateway<br/>ClankVox package"]
-  subagents["Subagent panes<br/>herdr"]
+  subgraph mac["Mac mini — always on"]
+    subgraph herdr["herdr (vanilla) — STAGE: persistent session 'clankies'"]
+      face["pane: eve dev<br/>Clanky's face"]
+      disc["pane: clanky:discord"]
+      w1["pane: claude / codex / eve<br/>performers"]
+    end
+    eve["eve service — CONDUCTOR<br/>channels · schedules · memory"]
+    relay["eve relay channel (WS)"]
+  end
+  phone["Clanky iOS — WINDOW"]
+  discord["Discord (text + voice)"]
 
-  user --> herdr
-  herdr --> tui
-  tui --> thread
-  thread --> clanky
-  clanky --> profile
-  chat <--> thread
-  clanky --> voice
-  clanky --> subagents
+  discord -->|webhook| eve
+  eve -->|spawns visible work| herdr
+  eve --- face
+  eve --> relay
+  relay -->|reads herdr.sock| herdr
+  phone <-->|tailnet| relay
 ```
 
-Read it as:
+- **eve owns inbound and durability; herdr owns visibility.** Anything worth
+  watching becomes a pane.
+- **herdr stays vanilla** — no fork. Remote access is the eve relay channel.
+- **The swarm is decoupled from Clanky.** A herdr session is a swarm-ready
+  environment on its own; agents coordinate with or without Clanky, and any one
+  of them can take the orchestrator role.
 
-- Pi owns the TUI, sessions, model runtime, slash commands, and local repo tools.
-- Clanky configures Pi with persona, profile state, memory, skills, connectors,
-  and voice/media capabilities.
-- Clanky's built-in messaging is the Pi session thread. Discord is a gateway
-  into and out of that thread.
-- ClankVox is Clanky's voice/media transport package. It handles Discord voice
-  and Go Live.
-- herdr is the multiplexer around everything: Clanky runs in a pane, and his
-  multi-agent work runs as sibling panes he spawns and watches.
+## Skills
 
-## First Path
+- `herdr` (vanilla, every agent): flat full-picture coordination — discover,
+  read, message, wait, and report presence across panes.
+- `clanky-herdr-operator` (coordinator only): the harvestable fan-out protocol —
+  spawn workers into a tagged run, monitor, unblock, harvest, clean up.
 
-Run the fresh-user flow first so you can test onboarding without touching your
-real profile:
+## Free-will Discord presence
 
-```bash
-cd /path/to/clanky-pi
-corepack enable
-corepack prepare pnpm@11.4.0 --activate
-pnpm install
-export PATH="$PWD/node_modules/.bin:$PATH" # source checkout only
-pnpm dev:setup:fresh
-```
+Clanky is *present* in Discord, not just callable. A Gateway connection
+(`agent/channels/discord-gateway.ts`) lets him read whole channels and decide
+for himself when to speak — addressed by name ("hey clanky", "yo clank"),
+@mentioned, replied to, or following up in an active exchange — and stay quiet
+otherwise (`[SKIP]`). "Hop in vc" makes him join voice. Each conversation runs as
+a **presence session**: a separate eve session of the same agent, so it shares
+his memory, persona, and tools without clogging the main face-pane thread, and
+it is mirrored into a watchable herdr pane. With a user/self token
+(`CLANKY_DISCORD_CREDENTIAL_KIND=user-token`) he can also watch others' Go Live
+screen shares and publish his own (`discord_golive`). Configure the token and
+model from the custom face's `/token` and `/model` slash commands (see below)
+instead of hand-editing `.env.local`. See [SPEC.md](SPEC.md) §5.2–§5.6.
 
-Inside the TUI:
+## Running Clanky
 
-```text
-/setup
-/setup status
-/openai-login
-```
+Clanky's brain is the eve server; his face is a client of it. Two ways to run:
 
-Then ask:
+- **`pnpm dev`** — eve's stock dev TUI (fixed slash-command set).
+- **`pnpm face`** — Clanky's custom face (`scripts/clanky.ts`) on `eve/client`:
+  mirrors eve's look, owns/attaches the headless brain, and adds the slash
+  commands eve can't — `/token <token> [--user-token] [--voice]`,
+  `/model <codex|claude> [id]`, `/new`, `/status`, `/help`, `/exit`. Config
+  commands rewrite `.env.local` and restart the brain. Default port 2000
+  (`CLANKY_EVE_PORT`).
 
-```text
-Summarize this repository and tell me how to run the non-live checks.
-```
+## Status
 
-For a persistent profile:
-
-```bash
-clanky --home ~/.clanky --profile personal --cwd .
-```
-
-The released CLI is intended to be used directly as `clanky`. The `PATH` line
-is only for a source checkout before the CLI is installed globally.
-
-## Communication Gateways And Voice
-
-Agent-owned communication gateways are configured from inside the TUI. Discord
-is the built-in chat adapter:
-
-```text
-/discord-login
-/discord-whoami
-/discord-status
-```
-
-Voice/media gateways are separate from Clanky's native Pi thread. The Discord
-voice adapter uses the same profile credential, Clanky's TypeScript
-control plane, OpenAI/xAI Realtime, optional ElevenLabs speech, Pi delegation
-through `ask_pi`, and the bundled ClankVox Rust media process:
-
-```text
-/discord-voice
-/discord-voice setup
-/discord-voice join <guild-id> <voice-channel-id>
-/voice-logs
-```
-
-For the full voice map, use
-[Discord Voice Architecture](docs/discord-voice-architecture.md). For the native
-media subprocess, jump to [ClankVox Docs](docs://clankvox-docs/overview).
-
-## Orchestration
-
-Clanky's multi-agent path is herdr. When Clanky runs inside herdr
-(`HERDR_ENV=1`), he can split panes, spawn sibling agents, wait on their
-status, and harvest results — all visible in the same terminal. Gateway
-subagents handle Discord side requests without interrupting the foreground
-session; anything bigger fans out to panes.
-
-Remote access to Clanky and his subagents (herdr daemon bridge plus the Clanky
-iOS app) is in progress — see the [Roadmap](docs/ROADMAP.md).
-
-## Docs Map
-
-- [Getting Started](docs/getting-started.md): install, setup, and daily use.
-- [Pi Foundation](docs/pi-foundation.md): what Pi owns and what Clanky adds.
-- [Configuration Model](docs/configuration.md): profiles, durable stores, env
-  overrides, and gateway ownership.
-- [Command Reference](docs/command-reference.md): CLI and slash commands.
-- [Memory And Privacy](docs/memory-and-privacy.md): profile-local state and
-  privacy controls.
-- [Discord Voice Architecture](docs/discord-voice-architecture.md): control
-  plane, Realtime, Pi delegation, and the ClankVox media plane.
-- [Troubleshooting](docs/troubleshooting.md): common setup failures.
-- [Roadmap](docs/ROADMAP.md): the AgentRoom retirement and herdr/iOS plan.
-
-## Local Development
-
-```bash
-pnpm check
-pnpm smoke
-clanky --help
-```
-
-Focused non-live checks:
-
-```bash
-pnpm smoke:clanky
-pnpm smoke:voice
-pnpm smoke:agent-tools
-pnpm voice:native:test
-```
+This is the rebuild on the eve + herdr architecture. It replaces the previous
+Pi-runtime build. See [SPEC.md](SPEC.md) §10 for build phases and §9 for the
+migration map from the old model. The free-will presence (phase 7) is wired and
+verified offline (`pnpm check`, `pnpm smoke:discord`); the live voice loop is
+gated on the bot token + ClankVox + Realtime credentials.

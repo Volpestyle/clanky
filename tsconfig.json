@@ -1,4 +1,15 @@
 {
-	"extends": "./tsconfig.base.json",
-	"include": ["packages/*/src/**/*.ts", "packages/*/test/**/*.ts", "agents/*/src/**/*.ts", "agents/*/test/**/*.ts"]
+	"compilerOptions": {
+		"target": "ESNext",
+		"module": "NodeNext",
+		"moduleResolution": "NodeNext",
+		"strict": true,
+		"noEmit": true,
+		"allowImportingTsExtensions": true,
+		"verbatimModuleSyntax": true,
+		"erasableSyntaxOnly": true,
+		"skipLibCheck": true,
+		"types": ["node"]
+	},
+	"include": ["agent/**/*.ts", "test/**/*.ts", "scripts/clanky.ts"]
 }

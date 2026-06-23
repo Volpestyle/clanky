@@ -5,39 +5,42 @@
 	"type": "module",
 	"packageManager": "pnpm@11.4.0",
 	"scripts": {
-		"browser:cdp": "chrome-remote-interface",
-		"browser:chrome-debug": "tsx scripts/chrome-cdp-launch.ts",
-		"browser:install": "playwright install chromium",
-		"browser:playwright": "playwright",
-		"browser-bridge:install": "tsx packages/clanky-browser-bridge/bin/install.mts",
-		"browser-bridge:serve": "tsx packages/clanky-browser-bridge/bin/serve.mts",
-		"check": "biome check --error-on-warnings . && tsgo --noEmit",
-		"clanky": "tsx agents/clanky/src/bin.ts",
-		"dev:setup:fresh": "tsx scripts/clanky-setup-new-user.ts",
-		"fix": "biome check --write .",
-		"smoke": "pnpm smoke:clanky && pnpm smoke:voice && pnpm smoke:agent-tools && pnpm smoke:tool-search && pnpm smoke:subagents",
-		"smoke:agent-tools": "tsx packages/clanky-core/test/agent-tools-smoke.ts",
-		"smoke:tool-search": "tsx packages/clanky-core/test/tool-search-smoke.ts",
-		"smoke:clanky": "tsx agents/clanky/test/runtime-smoke.ts",
-		"smoke:subagents": "tsx packages/clanky-core/test/subagent-store-smoke.ts && tsx agents/clanky/test/discord-subagent-coordinator-smoke.ts",
-		"smoke:voice": "tsx agents/clanky/test/voice-smoke.ts",
-		"voice:native:check": "OPUS_STATIC=1 LIBOPUS_STATIC=1 OPUS_NO_PKG=1 LIBOPUS_NO_PKG=1 OPUS_NO_PKG_CONFIG=1 CMAKE_POLICY_VERSION_MINIMUM=3.5 cargo check --locked --manifest-path ../clankvox/Cargo.toml",
-		"voice:native:clean": "cargo clean --manifest-path ../clankvox/Cargo.toml",
-		"voice:native:test": "OPUS_STATIC=1 LIBOPUS_STATIC=1 OPUS_NO_PKG=1 LIBOPUS_NO_PKG=1 OPUS_NO_PKG_CONFIG=1 CMAKE_POLICY_VERSION_MINIMUM=3.5 cargo test --locked --manifest-path ../clankvox/Cargo.toml",
-		"voice:build": "OPUS_STATIC=1 LIBOPUS_STATIC=1 OPUS_NO_PKG=1 LIBOPUS_NO_PKG=1 OPUS_NO_PKG_CONFIG=1 CMAKE_POLICY_VERSION_MINIMUM=3.5 cargo build --release --locked --manifest-path ../clankvox/Cargo.toml",
-		"voice:live": "tsx agents/clanky/test/voice-live.ts"
+		"info": "eve info",
+		"build": "eve build",
+		"dev": "eve dev",
+		"start": "eve start",
+		"check": "tsc --noEmit -p tsconfig.json && eve build",
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"smoke:discord": "node test/discord-acceptance-smoke.ts",
+		"smoke:model": "node test/codex-model-smoke.ts",
+		"smoke:send:routing": "node test/herdr-send-routing-smoke.ts",
+		"smoke:spawn:argv": "node test/herdr-spawn-argv-smoke.ts",
+		"smoke:spawn": "node test/herdr-spawn-smoke.ts",
+		"smoke:relay": "node test/relay-smoke.ts",
+		"smoke:voice": "node test/voice-smoke.ts",
+		"claude:login": "node scripts/claude-login.ts",
+		"face": "node scripts/clanky.ts",
+		"clanky:up": "node scripts/clanky-up.ts",
+		"clanky:status": "node scripts/clanky-up.ts status",
+		"clanky:down": "node scripts/clanky-up.ts down"
+	},
+	"dependencies": {
+		"@ai-sdk/anthropic": "4.0.0-beta.67",
+		"@ai-sdk/openai": "4.0.0-beta.74",
+		"ai": "7.0.0-beta.178",
+		"discord.js": "^14.26.4",
+		"eve": "0.11.4",
+		"ws": "^8.21.0",
+		"zod": "4.4.3"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.3.5",
 		"@types/node": "^24.3.0",
 		"@types/ws": "^8.18.1",
-		"@typescript/native-preview": "7.0.0-dev.20260120.1",
-		"chrome-remote-interface": "^0.34.0",
-		"playwright": "^1.60.0",
-		"tsx": "^4.20.3",
-		"typescript": "^5.9.2"
+		"just-bash": "^3.0.1",
+		"typescript": "^5.9.3"
 	},
 	"engines": {
-		"node": ">=22.19.0"
+		"node": ">=24"
 	}
 }
