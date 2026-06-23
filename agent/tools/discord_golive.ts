@@ -5,12 +5,13 @@
  * no Go Live controller and the tool says so.
  */
 import { defineTool } from "eve/tools";
-import { never } from "eve/tools/approval";
 import { z } from "zod";
 import { getActiveGoLive } from "../lib/discord/golive.ts";
 
 export default defineTool({
-	needsApproval: never(),
+	// Reads (list) run freely; every publish/watch/control op publishes or joins
+	// an external Discord stream, so it goes through approval.
+	needsApproval: (ctx) => ctx.toolInput?.op !== "list",
 	description:
 		"Watch a Discord screen share or publish your own Go Live in the voice channel you are in. Requires having joined a vc on a user/self token. ops: list (show active streams), watch (start watching a stream by target), golive (publish your own), stop, pause, resume.",
 	inputSchema: z.object({
