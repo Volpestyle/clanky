@@ -18,7 +18,8 @@ function resolveCodexEffort(value: string | undefined): CodexReasoningEffort | u
 //            MLX / llama-server / Ollama, OR a self-hosted orchestrator such as
 //            OpenFugu / Maestro routing across a local model pool.
 // CLANKY_CODEX_MODEL picks the codex model (e.g. gpt-5.5) and CLANKY_CODEX_EFFORT
-// the reasoning effort. Persona lives in instructions.md.
+// the reasoning effort. CLANKY_LOCAL_EFFORT sets the reasoning effort for thinking
+// local models (forwarded as reasoning_effort). Persona lives in instructions.md.
 function selectModel(): LanguageModel {
 	switch (process.env.CLANKY_MODEL_PROVIDER ?? "codex") {
 		case "claude":
@@ -29,6 +30,7 @@ function selectModel(): LanguageModel {
 				modelId: process.env.CLANKY_LOCAL_MODEL ?? "qwen3-coder-next",
 				baseURL: process.env.CLANKY_LOCAL_BASE_URL ?? "http://127.0.0.1:11434/v1",
 				providerName: process.env.CLANKY_LOCAL_PROVIDER_NAME,
+				reasoningEffort: process.env.CLANKY_LOCAL_EFFORT,
 			});
 
 		default:
