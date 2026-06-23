@@ -5,6 +5,7 @@ import type {
 	DiscordInboundAttachment,
 	DiscordInboundMessage,
 } from "./acceptance.ts";
+import { guardedFetch } from "../net-guard.ts";
 import { buildDiscordMediaFetchHeaders } from "./media.ts";
 import { formatPresencePrompt, type DiscordHistoryEntry } from "./prompt.ts";
 
@@ -78,8 +79,9 @@ async function fetchInlineAttachment(
 	env: NodeJS.ProcessEnv,
 ): Promise<{ file?: FilePart; reason: string }> {
 	try {
-		const response = await fetchImpl(attachment.url, {
-			headers: buildDiscordMediaFetchHeaders(attachment.url, env),
+		const response = await guardedFetch(attachment.url, {
+			fetchImpl,
+			headersFor: (url) => buildDiscordMediaFetchHeaders(url.href, env),
 		});
 		if (!response.ok) return { reason: `download failed (${response.status})` };
 		const contentLength = parseContentLength(response.headers.get("content-length"));
