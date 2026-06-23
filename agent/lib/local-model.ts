@@ -13,7 +13,7 @@
  * with tool parsing enabled (e.g. llama-server --jinja, or Ollama's OpenAI API).
  */
 import { createOpenAI } from "@ai-sdk/openai";
-import type { LanguageModel } from "ai";
+import { wrapLanguageModel, type LanguageModel } from "ai";
 
 export interface LocalModelOptions {
 	/** Local model id as the server names it, e.g. "qwen3-coder-next". */
@@ -31,6 +31,12 @@ export interface LocalModelOptions {
 	 * backend (e.g. "lmstudio", "llamacpp") when not using Ollama.
 	 */
 	providerName?: string;
+	/**
+	 * Reasoning effort (low/medium/high) forwarded to the server as
+	 * `reasoning_effort`, honored by thinking models like GLM-4.7-Flash. Omit for
+	 * non-thinking models or to use the server default.
+	 */
+	reasoningEffort?: string;
 }
 
 /**
@@ -49,5 +55,20 @@ export function createLocalModel(options: LocalModelOptions): LanguageModel {
 		name: options.providerName ?? "ollama",
 	});
 	// .chat() — local endpoints speak Chat Completions, not the Responses API.
-	return provider.chat(options.modelId);
+	const model = provider.chat(options.modelId);
+	if (options.reasoningEffort === undefined) return model;
+	// Thread reasoning effort through as providerOptions.openai.reasoningEffort,
+	// which @ai-sdk/openai forwards as the `reasoning_effort` request field.
+	const reasoningEffort = options.reasoningEffort;
+	return wrapLanguageModel({
+		model,
+		middleware: {
+			transformParams: async ({ params }) => {
+				const providerOptions = params.providerOptions ?? {};
+				const openai = { ...(providerOptions.openai ?? {}) };
+				if (openai.reasoningEffort === undefined) openai.reasoningEffort = reasoningEffort;
+				return { ...params, providerOptions: { ...providerOptions, openai } };
+			},
+		},
+	});
 }
