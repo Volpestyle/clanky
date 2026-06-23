@@ -1,21 +1,5 @@
-packages:
-  - "packages/*"
-  - "agents/*"
-
-minimumReleaseAge: 1440
-minimumReleaseAgeExclude:
-  - "@earendil-works/pi-agent-core@0.79.2"
-  - "@earendil-works/pi-ai@0.79.2"
-  - "@earendil-works/pi-coding-agent@0.79.2"
-  - "@earendil-works/pi-tui@0.79.2"
-strictPeerDependencies: true
-verifyStoreIntegrity: true
-onlyBuiltDependencies:
-  - "@google/genai"
-  - esbuild
-  - koffi
-  - protobufjs
 allowBuilds:
-  '@google/genai': true
-  esbuild: true
-  protobufjs: true
+  '@mongodb-js/zstd': false
+  node-liblzma: false
+minimumReleaseAgeExclude:
+  - eve@0.11.4

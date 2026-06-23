@@ -1,0 +1,35 @@
+/**
+ * Value-coercion and guard helpers used across the voice control plane.
+ * Ported from @clanky/core (packages/clanky-core/src/util/values.ts) so the
+ * voice stack carries no dependency on the retired Pi-era packages.
+ */
+
+export type JsonRecord = Record<string, unknown>;
+
+/** Type guard for plain object records. Arrays and `null` are rejected. */
+export function isRecord(value: unknown): value is JsonRecord {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Returns the value when it is a string, otherwise an empty string. */
+export function stringValue(value: unknown): string {
+	return typeof value === "string" ? value : "";
+}
+
+/** Extracts a human-readable message from an unknown thrown value. */
+export function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+/** Coerces a finite number into an integer clamped to `[min, max]`. */
+export function clampInteger(value: number | undefined, fallback: number, min: number, max: number): number {
+	if (value === undefined || !Number.isFinite(value)) return fallback;
+	return Math.min(max, Math.max(min, Math.floor(value)));
+}
+
+/** Truncates `text` to `maxLength` characters, appending an ellipsis when longer. */
+export function truncateText(text: string, maxLength: number): string {
+	if (text.length <= maxLength) return text;
+	if (maxLength <= 3) return text.slice(0, maxLength);
+	return `${text.slice(0, maxLength - 3)}...`;
+}

@@ -4,13 +4,19 @@ description: Run Clanky's parallel subagents as named herdr panes. Spawn workers
 when_to_use: Use when running inside herdr (HERDR_ENV=1) and work should fan out to parallel visible workers, e.g. "spawn workers/subagents for these tasks", "run these refactors in parallel", "swarm this", "farm this out to agents", "check on the workers", "harvest the run", "clean up worker panes". Not for single quick tasks, Discord gateway side-requests, or when HERDR_ENV is unset.
 allowed_tools:
   - Bash
-deps: []
+deps:
+  - herdr
 ---
 
 # Clanky herdr Operator
 
 This is Clanky's one multi-agent substrate: parallel workers run as herdr
 panes, visible and attributable, never as hidden processes.
+
+This skill is a Clanky-specific overlay on top of the vanilla `herdr` skill.
+Use `herdr` for generic workspace, tab, pane, split, wait, read, send, and
+presence mechanics. Use this skill only for Clanky's run grouping, worker
+manifest, completion sentinels, harvest, synthesis, and cleanup protocol.
 
 Before anything else, check that `HERDR_ENV=1`. If it is not set to `1`, say
 you are not running inside herdr and stop; never control herdr from outside
@@ -21,11 +27,11 @@ The scripts live in `scripts/` next to this SKILL.md. Set
 
 ## When not to use this
 
-- Discord gateway side-requests: the in-process subagent coordinators own
-  those. Do not spawn herdr workers for them.
+- Simple Discord side-requests that do not need watching: answer them in the
+  foreground agent. Do not spawn herdr workers for them.
 - A single quick task you could do inline: just do it.
-- One shell command, server, or test in a sibling pane: use the plain herdr
-  CLI (`herdr pane split` + `herdr pane run`), no run machinery needed.
+- One shell command, server, or test in a sibling pane: use the vanilla `herdr`
+  skill directly, no Clanky run machinery needed.
 
 ## Model
 
@@ -74,16 +80,25 @@ $OP/spawn.sh --run "$RUN_ID" --slug update-readme --task "Update README" \
   --cwd ~/dev/someproject --prompt-file /tmp/readme-brief.md
 ```
 
+For the eve host `herdr_spawn` tool, omit `cwd` to use Clanky's current host
+repo, or pass a real host path for another checkout. Never use sandbox paths
+like `/workspace`. Use `performer: "claude"` or `"codex"` and omit `command`
+for normal workers; `command` is only a full custom argv override, never
+`command: []`.
+
+Workers spawned by either path receive a short bootstrap that tells them to
+read `skills/clanky-herdr-worker/SKILL.md`. Keep worker-side coordination
+details in that skill rather than inlining them into every spawn prompt.
+
 Write real briefs: context, exact scope, what result.md must contain. The
 script appends the completion protocol (result.md, DONE/BLOCKED, autonomy)
 to every prompt — do not restate it.
 
 ### Worker command
 
-The default worker is `clanky` (PATH first, falling back to this repo's bin
-via pnpm), so workers inherit Clanky's profile and persona. Spawn always sets
-`CLANKY_CHAT_GATEWAY_OWNER=off` for default workers — exactly one Clanky may
-own the Discord gateway, and it is not a worker.
+The default worker is `claude --dangerously-skip-permissions` when `claude` is on
+PATH, falling back to `codex --dangerously-bypass-approvals-and-sandbox` when
+available. There is no Pi-era `clanky` binary fallback in this repo.
 
 Override with `--` for a different agent. The `{KICKOFF}` token is replaced
 with the kickoff message; without it, the kickoff is appended as the last
@@ -97,11 +112,11 @@ $OP/spawn.sh --run "$RUN_ID" --slug audit-deps --task "Audit dependencies" \
 
 # Arbitrary worker with an explicit kickoff slot
 $OP/spawn.sh --run "$RUN_ID" --slug triage --task "Triage open issues" \
-  --prompt "..." -- pi {KICKOFF}
+  --prompt "..." -- codex --dangerously-bypass-approvals-and-sandbox {KICKOFF}
 ```
 
-`claude --dangerously-skip-permissions` only for throwaway work in disposable
-checkouts. Pi and clanky workers have no approval gates; nothing extra needed.
+This setup intentionally gives workers autonomy inside their panes. Pick an
+explicit command after `--` when a task needs a different permission mode.
 
 ## 2. Monitor and wait
 
@@ -116,14 +131,15 @@ Exit 0 means every worker is done. Peek at a live worker anytime:
 herdr agent read clanky:fix-auth-tests --source recent --lines 60
 ```
 
-`herdr agent list` shows all workers; `agent_status` there is heuristic (the
-`clanky` binary is not a recognized process, so expect `unknown`) — trust the
+`herdr agent list` shows all workers; `agent_status` is heuristic. Trust the
 harvest states, not `agent_status`, for completion.
 
 ## 3. Unblock or steer
 
 A `blocked` worker wrote what it needs to its `result.md` and is waiting.
-Read it, then answer into the worker's pane (text first, then Enter):
+Read it, then answer into the worker's pane. From the eve host tools, prefer
+`herdr_send` with the worker `agent`; submit in one call by passing both `text`
+and `keys: ["Enter"]`. With the pane CLI, send text first, then Enter:
 
 ```bash
 cat "$RUN_DIR/workers/fix-auth-tests/result.md"
@@ -132,6 +148,9 @@ herdr pane run "$PANE" "Use the staging database, credentials are in .env.stagin
 ```
 
 Mid-flight course corrections work the same way on a `running` worker.
+Workers can also message each other with the Herdr CLI. For a submitted prompt,
+they should resolve the target pane and use `herdr pane run`; `herdr agent send`
+writes literal text only.
 
 ## 4. Harvest and synthesize
 
