@@ -236,6 +236,26 @@ function resolveWebCaptureFramesInput(input: WebCaptureFramesInput): ResolvedWeb
 	};
 }
 
+// Revalidate every navigation/subresource request against the SSRF guard. A
+// single pre-goto check cannot cover redirects: Chromium follows 30x hops
+// internally, so a public URL could redirect to a private/metadata address.
+// Routing every request through assertPublicHttpUrl closes that hole (and blocks
+// private subresource fetches too).
+async function installNetGuard(page: Page): Promise<void> {
+	await page.route("**/*", async (route) => {
+		const requestUrl = route.request().url();
+		if (requestUrl.startsWith("http:") || requestUrl.startsWith("https:")) {
+			try {
+				await assertPublicHttpUrl(requestUrl);
+			} catch {
+				await route.abort("blockedbyclient");
+				return;
+			}
+		}
+		await route.continue();
+	});
+}
+
 async function loadPageWithPlaywright(input: ResolvedWebRenderInput): Promise<LoadedRenderedPage> {
 	let browser: Browser | undefined;
 	try {
@@ -245,6 +265,7 @@ async function loadPageWithPlaywright(input: ResolvedWebRenderInput): Promise<Lo
 			userAgent: "Clanky/0.1 HeadlessBrowser (+https://github.com/Volpestyle/clanky)",
 		});
 		const page = await context.newPage();
+		await installNetGuard(page);
 		await assertPublicHttpUrl(input.url);
 		await page.goto(input.url, { waitUntil: input.waitUntil, timeout: input.timeoutMs });
 		if (input.waitMs > 0) await page.waitForTimeout(input.waitMs);
@@ -339,6 +360,7 @@ async function captureFramesWithPlaywright(input: ResolvedWebCaptureFramesInput)
 			userAgent: "Clanky/0.1 HeadlessBrowser (+https://github.com/Volpestyle/clanky)",
 		});
 		const page = await context.newPage();
+		await installNetGuard(page);
 		if (input.navigationUrl.startsWith("http:") || input.navigationUrl.startsWith("https:")) {
 			await assertPublicHttpUrl(input.navigationUrl);
 		}
