@@ -70,11 +70,16 @@ type ClankyPromptCommandSpec = Omit<PromptCommandSpec, "build"> & {
 	readonly build: (argument: string) => ClankyPromptCommand;
 };
 
+type SubscriptionProvider = "codex" | "claude";
+const DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:11434/v1";
+
 type ClankyConfig = {
-	provider: "codex" | "claude";
+	provider: "codex" | "claude" | "local";
 	codexModel?: string;
 	claudeModel?: string;
 	codexEffort?: string;
+	localModel?: string;
+	localBaseUrl?: string;
 	imageModel?: string;
 	voiceRealtimeProvider?: string;
 	voiceRealtimeModel?: string;
@@ -111,7 +116,7 @@ type VoiceSettingUpdate = {
 	updates: Record<string, string>;
 	message: string;
 };
-const MODEL_OPTIONS: Record<ClankyConfig["provider"], readonly MenuOption[]> = {
+const MODEL_OPTIONS: Record<SubscriptionProvider, readonly MenuOption[]> = {
 	codex: [
 		{ value: "gpt-5.5", label: "gpt-5.5" },
 		{ value: "gpt-5.4", label: "gpt-5.4" },
@@ -220,7 +225,7 @@ function installClankyPromptCommands(): void {
 			name: "model",
 			aliases: [],
 			description: "Configure Codex or Claude subscription-backed model",
-			argumentHint: "[codex|claude] [id] [effort]",
+			argumentHint: "[codex|claude|local] [id] [effort]",
 			takesArgument: true,
 			build: (argument) => ({ type: "extension", name: "model", argument }),
 		},
@@ -419,7 +424,7 @@ async function configureLogin(argument: string, flow: SetupFlowRenderer | undefi
 	const args = splitArgs(argument);
 	const first = args[0]?.toLowerCase();
 	if (first === "status") return await loginStatusText();
-	let provider = parseProvider(first);
+	let provider = parseSubscriptionProvider(first);
 	if (first !== undefined && provider === undefined) {
 		return `Unknown login target "${args[0]}". Use claude, codex, or status.`;
 	}
@@ -434,7 +439,7 @@ async function configureLogin(argument: string, flow: SetupFlowRenderer | undefi
 	return await runLogin(provider, flow);
 }
 
-async function selectLoginProvider(flow: SetupFlowRenderer): Promise<ClankyConfig["provider"] | undefined> {
+async function selectLoginProvider(flow: SetupFlowRenderer): Promise<SubscriptionProvider | undefined> {
 	flow.begin("Authorize a subscription provider");
 	try {
 		const selected = await selectOne(
@@ -446,13 +451,13 @@ async function selectLoginProvider(flow: SetupFlowRenderer): Promise<ClankyConfi
 			],
 			undefined,
 		);
-		return parseProvider(selected);
+		return parseSubscriptionProvider(selected);
 	} finally {
 		flow.end({ preserveDiagnostics: false });
 	}
 }
 
-async function runLogin(provider: ClankyConfig["provider"], flow: SetupFlowRenderer): Promise<string> {
+async function runLogin(provider: SubscriptionProvider, flow: SetupFlowRenderer): Promise<string> {
 	const label = provider === "claude" ? "Claude" : "Codex";
 	const abort = new AbortController();
 	// Print the authorize URL to scrollback (static) and wait under a single-line
@@ -493,7 +498,7 @@ async function runLogin(provider: ClankyConfig["provider"], flow: SetupFlowRende
 	}
 }
 
-async function loginSuccessMessage(provider: ClankyConfig["provider"], expiresMs: number): Promise<string> {
+async function loginSuccessMessage(provider: SubscriptionProvider, expiresMs: number): Promise<string> {
 	const config = await readConfig();
 	const lines = [`${provider === "claude" ? "Claude" : "Codex"} login complete. Token stored (expires ${new Date(expiresMs).toISOString()}).`];
 	if (config.provider !== provider) {
@@ -509,6 +514,14 @@ async function loginStatusText(): Promise<string> {
 	return ["Subscription auth:", `  claude: ${formatCredStatus(claude)}`, `  codex:  ${formatCredStatus(codex)}`].join("\n");
 }
 
+function formatProviderSummary(config: ClankyConfig): string {
+	if (config.provider === "codex") return `codex${config.codexEffort ? ` (${config.codexEffort})` : ""}`;
+	if (config.provider === "local") {
+		return `local (${config.localModel ?? "default"} @ ${config.localBaseUrl ?? DEFAULT_LOCAL_BASE_URL})`;
+	}
+	return config.provider;
+}
+
 function formatCredStatus(status: { present: boolean; expiresMs?: number }): string {
 	if (!status.present) return "not logged in";
 	if (status.expiresMs === undefined) return "logged in";
@@ -522,13 +535,14 @@ async function configureModel(argument: string, flow: SetupFlowRenderer | undefi
 	let provider = parseProvider(args[0]);
 	let modelId = provider === undefined ? undefined : args[1];
 	let effort = provider === undefined ? undefined : args[2];
+	const baseUrl = provider === "local" ? args[2] : undefined;
 
 	if (provider === undefined && args.length > 0) {
-		return `Unknown model provider "${args[0]}". Use codex or claude.`;
+		return `Unknown model provider "${args[0]}". Use codex, claude, or local.`;
 	}
 
 	if (provider === undefined) {
-		if (flow === undefined) return "Usage: /model [codex|claude] [id] [effort]";
+		if (flow === undefined) return "Usage: /model [codex|claude|local] [id] [effort|baseUrl]";
 		provider = await selectProvider(flow, existing.provider);
 		if (provider === undefined) return "/model cancelled.";
 		modelId = await selectModel(flow, provider, existing);
@@ -542,12 +556,17 @@ async function configureModel(argument: string, flow: SetupFlowRenderer | undefi
 	}
 
 	const updates: Record<string, string> = { CLANKY_MODEL_PROVIDER: provider };
-	if (modelId !== undefined && modelId.length > 0) {
-		updates[provider === "claude" ? "CLANKY_CLAUDE_MODEL" : "CLANKY_CODEX_MODEL"] = modelId;
-	}
-	if (provider === "codex" && effort !== undefined && effort.length > 0) {
-		if (!isEffortLevel(effort)) return `Unknown Codex effort "${effort}".`;
-		updates.CLANKY_CODEX_EFFORT = effort;
+	if (provider === "local") {
+		updates.CLANKY_LOCAL_BASE_URL = baseUrl ?? existing.localBaseUrl ?? DEFAULT_LOCAL_BASE_URL;
+		if (modelId !== undefined && modelId.length > 0) updates.CLANKY_LOCAL_MODEL = modelId;
+	} else {
+		if (modelId !== undefined && modelId.length > 0) {
+			updates[provider === "claude" ? "CLANKY_CLAUDE_MODEL" : "CLANKY_CODEX_MODEL"] = modelId;
+		}
+		if (provider === "codex" && effort !== undefined && effort.length > 0) {
+			if (!isEffortLevel(effort)) return `Unknown Codex effort "${effort}".`;
+			updates.CLANKY_CODEX_EFFORT = effort;
+		}
 	}
 
 	await writeEnv(updates);
@@ -845,7 +864,7 @@ async function statusText(): Promise<string> {
 	const model = info?.agent?.model?.id ?? "(model unknown)";
 	const lines = [
 		`model: ${model}`,
-		`provider: ${config.provider}${config.provider === "codex" && config.codexEffort ? ` (${config.codexEffort})` : ""}`,
+		`provider: ${formatProviderSummary(config)}`,
 		`auth: claude=${formatCredStatus(claudeAuth)}; codex=${formatCredStatus(codexAuth)}`,
 		`image model: ${config.imageModel ?? "gpt-image-2"}`,
 		...formatVoiceStatusLines(config),
@@ -876,6 +895,11 @@ async function selectProvider(
 					label: "claude",
 					hint: "Claude Pro/Max subscription",
 				},
+				{
+					value: "local",
+					label: "local",
+					hint: "local OpenAI-compatible server (Ollama, LM Studio, llama.cpp)",
+				},
 			],
 			initialValue,
 		);
@@ -892,10 +916,35 @@ async function selectModel(
 ): Promise<string | undefined> {
 	flow.begin(`Configure ${provider} model`);
 	try {
+		if (provider === "local") {
+			const baseUrl = config.localBaseUrl ?? DEFAULT_LOCAL_BASE_URL;
+			const options = await localModelOptions(baseUrl);
+			return await selectOne(flow, `Choose the local model served at ${baseUrl}.`, options, config.localModel);
+		}
 		const current = provider === "codex" ? config.codexModel : config.claudeModel;
 		return await selectOne(flow, "Choose the model Clanky should use.", MODEL_OPTIONS[provider], current);
 	} finally {
 		flow.end({ preserveDiagnostics: false });
+	}
+}
+
+// Discover models from the local server's OpenAI-compatible /v1/models endpoint,
+// so the picker works for any backend (Ollama, LM Studio, llama.cpp). Falls back
+// to keep-current when the server is unreachable; models can still be set via
+// `/model local <id>`.
+async function localModelOptions(baseUrl: string): Promise<readonly MenuOption[]> {
+	const keep: MenuOption = { value: "keep-current", label: "keep current" };
+	try {
+		const response = await fetch(`${baseUrl.replace(/\/+$/, "")}/models`, { signal: AbortSignal.timeout(3000) });
+		if (!response.ok) return [keep];
+		const body = (await response.json()) as { data?: ReadonlyArray<{ id?: unknown }> };
+		const models = (body.data ?? [])
+			.map((entry) => entry.id)
+			.filter((id): id is string => typeof id === "string" && id.length > 0)
+			.map((id) => ({ value: id, label: id }));
+		return models.length > 0 ? [...models, keep] : [keep];
+	} catch {
+		return [keep];
 	}
 }
 
@@ -1079,6 +1128,8 @@ async function readConfig(): Promise<ClankyConfig> {
 	const codexModel = get("CLANKY_CODEX_MODEL");
 	const claudeModel = get("CLANKY_CLAUDE_MODEL");
 	const codexEffort = get("CLANKY_CODEX_EFFORT");
+	const localModel = get("CLANKY_LOCAL_MODEL");
+	const localBaseUrl = get("CLANKY_LOCAL_BASE_URL");
 	const imageModel = get("CLANKY_OPENAI_IMAGE_MODEL");
 	const voiceRealtimeProvider = get("CLANKY_VOICE_REALTIME_PROVIDER");
 	const voiceRealtimeModel = get("CLANKY_VOICE_REALTIME_MODEL");
@@ -1091,6 +1142,8 @@ async function readConfig(): Promise<ClankyConfig> {
 	if (codexModel !== undefined) config.codexModel = codexModel;
 	if (claudeModel !== undefined) config.claudeModel = claudeModel;
 	if (codexEffort !== undefined) config.codexEffort = codexEffort;
+	if (localModel !== undefined) config.localModel = localModel;
+	if (localBaseUrl !== undefined) config.localBaseUrl = localBaseUrl;
 	if (imageModel !== undefined) config.imageModel = imageModel;
 	if (voiceRealtimeProvider !== undefined) config.voiceRealtimeProvider = voiceRealtimeProvider;
 	if (voiceRealtimeModel !== undefined) config.voiceRealtimeModel = voiceRealtimeModel;
@@ -1216,6 +1269,10 @@ async function stopServer(): Promise<void> {
 }
 
 function parseProvider(value: string | undefined): ClankyConfig["provider"] | undefined {
+	return value === "codex" || value === "claude" || value === "local" ? value : undefined;
+}
+
+function parseSubscriptionProvider(value: string | undefined): SubscriptionProvider | undefined {
 	return value === "codex" || value === "claude" ? value : undefined;
 }
 
