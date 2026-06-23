@@ -13,9 +13,14 @@
  * Credentials come from the eve agent's environment / connection config; nothing
  * is committed.
  */
-import { Client, Events, GatewayIntentBits, type Message, Partials } from "discord.js";
+import { Client, Events, GatewayIntentBits, type Attachment, type Embed, type Message, Partials } from "discord.js";
 import type { DiscordRawGatewayClient } from "../voice/discordStreamDiscovery.ts";
-import type { DiscordConversationKind, DiscordInboundMessage } from "./acceptance.ts";
+import type {
+	DiscordConversationKind,
+	DiscordInboundAttachment,
+	DiscordInboundEmbed,
+	DiscordInboundMessage,
+} from "./acceptance.ts";
 import { applyDiscordUserTokenPatches } from "./user-token-patches.ts";
 
 const DISCORD_MAX_MESSAGE_CHARS = 2000;
@@ -26,6 +31,15 @@ export type DiscordCredentialKind = "bot-token" | "user-token";
 
 export function resolveDiscordCredentialKind(env: NodeJS.ProcessEnv): DiscordCredentialKind {
 	return env.CLANKY_DISCORD_CREDENTIAL_KIND === "user-token" ? "user-token" : "bot-token";
+}
+
+/**
+ * The agent-owned Discord token, shared by the presence gateway, REST tools, and
+ * media downloads so they never disagree on which credential to use.
+ */
+export function resolveDiscordToken(env: NodeJS.ProcessEnv = process.env): string | undefined {
+	const token = env.CLANKY_DISCORD_TOKEN?.trim() || env.DISCORD_BOT_TOKEN?.trim();
+	return token !== undefined && token.length > 0 ? token : undefined;
 }
 
 export interface DiscordGatewayOptions {
@@ -135,6 +149,8 @@ export class DiscordGateway {
 			kind: conversationKind(message),
 			mentionsSelf: this.client.user !== null && message.mentions.users.has(this.client.user.id),
 			replyToExternalMessageId: message.reference?.messageId ?? undefined,
+			attachments: [...message.attachments.values()].map(normalizeAttachment),
+			embeds: message.embeds.map(normalizeEmbed),
 		};
 	}
 
@@ -187,4 +203,30 @@ export class DiscordGateway {
 		await this.client.destroy();
 		this.ready = false;
 	}
+}
+
+function normalizeAttachment(attachment: Attachment): DiscordInboundAttachment {
+	return {
+		id: attachment.id,
+		url: attachment.url,
+		filename: attachment.name,
+		...(attachment.contentType === null ? {} : { contentType: attachment.contentType }),
+		size: attachment.size,
+		...(attachment.width === null ? {} : { width: attachment.width }),
+		...(attachment.height === null ? {} : { height: attachment.height }),
+		...(attachment.description === null ? {} : { description: attachment.description }),
+	};
+}
+
+function normalizeEmbed(embed: Embed): DiscordInboundEmbed {
+	return {
+		...(embed.data.type === undefined ? {} : { type: embed.data.type }),
+		...(embed.url === null ? {} : { url: embed.url }),
+		...(embed.title === null ? {} : { title: embed.title }),
+		...(embed.description === null ? {} : { description: embed.description }),
+		...(embed.provider?.name === undefined ? {} : { provider: embed.provider.name }),
+		...(embed.image?.url === undefined ? {} : { imageUrl: embed.image.url }),
+		...(embed.thumbnail?.url === undefined ? {} : { thumbnailUrl: embed.thumbnail.url }),
+		...(embed.video?.url === undefined ? {} : { videoUrl: embed.video.url }),
+	};
 }

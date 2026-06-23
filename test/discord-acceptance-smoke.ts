@@ -9,6 +9,9 @@ import {
 	isSkipReplyText,
 } from "../agent/lib/discord/acceptance.ts";
 import { parseBridgeCommand } from "../agent/lib/discord/host.ts";
+import { extractDiscordMemoryCandidates } from "../agent/lib/discord/memory.ts";
+import { buildPresenceSessionMessage } from "../agent/lib/discord/presence-payload.ts";
+import { formatPresencePrompt } from "../agent/lib/discord/prompt.ts";
 import { applyEnvUpserts } from "../agent/lib/discord/env-file.ts";
 import { resolveDiscordCredentialKind } from "../agent/lib/discord/gateway.ts";
 import { detectVoiceIntent } from "../agent/lib/discord/voice-intent.ts";
@@ -119,6 +122,79 @@ check(
 check("[SKIP] detected", isSkipReplyText("[SKIP]"));
 check("[skip] case-insensitive + trimmed", isSkipReplyText("  [skip]  "));
 check("normal reply is not skip", !isSkipReplyText("sure, on it"));
+
+// --- Discord media prompt/payload ---------------------------------------
+{
+	const mediaMessage = msg({
+		text: "clanky what is this?",
+		attachments: [
+			{
+				id: "a1",
+				url: "https://cdn.discordapp.com/attachments/c1/m1/photo.png",
+				filename: "photo.png",
+				contentType: "image/png",
+				size: 24,
+				width: 3,
+				height: 5,
+			},
+		],
+		embeds: [
+			{
+				provider: "YouTube",
+				title: "Preview title",
+				url: "https://youtube.com/watch?v=1",
+				thumbnailUrl: "https://i.ytimg.com/vi/1/hqdefault.jpg",
+			},
+		],
+	});
+	const prompt = formatPresencePrompt(mediaMessage, "platform_mention", "Paul");
+	check("presence prompt includes attachment metadata", prompt.includes("photo.png") && prompt.includes("3x5"));
+	check("presence prompt includes embed metadata", prompt.includes("YouTube") && prompt.includes("Preview title"));
+	check("presence prompt includes author id for scoped memory", prompt.includes("- authorId: u1"));
+
+	const png = Buffer.alloc(24);
+	Buffer.from("89504e470d0a1a0a", "hex").copy(png, 0);
+	const payload = await buildPresenceSessionMessage(mediaMessage, "platform_mention", "Paul", {
+		env: { DISCORD_BOT_TOKEN: "test-token" },
+		fetchImpl: async (_url, init) => {
+			check(
+				"presence payload uses Discord auth for CDN attachment",
+				new Headers(init?.headers).get("authorization") === "Bot test-token",
+			);
+			return new Response(png, {
+				headers: { "content-type": "image/png", "content-length": String(png.length) },
+			});
+		},
+	});
+	check("presence payload uses structured user content for images", Array.isArray(payload));
+	const parts = Array.isArray(payload) ? payload : [];
+	check("presence payload keeps text prompt first", parts[0]?.type === "text");
+	check("presence payload includes file part", parts.some((part) => part.type === "file"));
+	check(
+		"presence payload records inline transfer note",
+		parts[0]?.type === "text" && parts[0].text.includes("inlined photo.png"),
+	);
+}
+
+// --- explicit Discord memory capture ------------------------------------
+{
+	const callMe = extractDiscordMemoryCandidates(
+		msg({ authorName: "James", text: "hey clanky, call me Paul from now on" }),
+	);
+	check("'call me Paul' captures preferred name", callMe[0]?.fact === "This user wants to be called Paul.");
+	check("'call me Paul' is a discord_user memory", callMe[0]?.subjectKind === "discord_user");
+
+	const preference = extractDiscordMemoryCandidates(msg({ authorName: "Paul", text: "clanky please remember I like pie" }));
+	check("'remember I like pie' captures preference", preference[0]?.fact === "Paul likes pie.");
+
+	const server = extractDiscordMemoryCandidates(
+		msg({ guildId: "g1", text: "clanky remember this server uses Linear for work tracking" }),
+	);
+	check("'remember this server ...' captures server fact", server[0]?.subjectKind === "discord_server");
+	check("server memory keeps guild id", server[0]?.subjectId === "g1");
+
+	check("ordinary chat does not create memory", extractDiscordMemoryCandidates(msg({ text: "I like pie today" })).length === 0);
+}
 
 // --- bridge commands (escape to main Clanky) -----------------------------
 {
