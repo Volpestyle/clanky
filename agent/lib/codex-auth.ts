@@ -1,22 +1,28 @@
 /**
  * OpenAI Codex (ChatGPT subscription) OAuth credential store for Clanky.
  *
- * Ported from ~/dev/pi/packages/ai/src/utils/oauth/openai-codex.ts, trimmed to
- * what the eve runtime needs: read the stored credential, refresh it before
- * expiry, and persist the result. The interactive login flow (browser /
- * device-code) is not reproduced here; the credential is minted once by the
- * Codex CLI and lives in the auth store this module reads.
+ * Ported from ~/dev/pi/packages/ai/src/utils/oauth/openai-codex.ts: the browser
+ * login flow (mint once, via the face's /login or `pnpm codex:login`), refresh
+ * before expiry, and a valid-credential accessor. The device-code variant is
+ * not ported; the browser callback flow matches the laptop face.
  *
  * See SPEC.md §4.6.
  */
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { generatePkce } from "./oauth-pkce.ts";
 
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
+const AUTHORIZE_URL = "https://auth.openai.com/oauth/authorize";
 const TOKEN_URL = "https://auth.openai.com/oauth/token";
 const JWT_CLAIM_PATH = "https://api.openai.com/auth";
 const STORE_KEY = "openai-codex";
+const CALLBACK_HOST = "127.0.0.1";
+const CALLBACK_PORT = 1455;
+const REDIRECT_URI = `http://localhost:${CALLBACK_PORT}/auth/callback`;
+const SCOPE = "openid profile email offline_access";
 // Refresh a few minutes before the token actually expires.
 const REFRESH_SKEW_MS = 5 * 60_000;
 
@@ -69,7 +75,9 @@ async function readStore(): Promise<Record<string, CodexCredentials | undefined>
 async function persist(creds: CodexCredentials): Promise<void> {
 	const store = await readStore();
 	store[STORE_KEY] = creds;
-	await writeFile(authPath(), `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 });
+	const path = authPath();
+	await mkdir(dirname(path), { recursive: true });
+	await writeFile(path, `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 });
 }
 
 async function refresh(refreshToken: string): Promise<CodexCredentials> {
@@ -100,6 +108,110 @@ async function refresh(refreshToken: string): Promise<CodexCredentials> {
 	};
 }
 
+function randomState(): string {
+	const bytes = new Uint8Array(16);
+	crypto.getRandomValues(bytes);
+	return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function exchangeCode(code: string, verifier: string): Promise<CodexCredentials> {
+	const res = await fetch(TOKEN_URL, {
+		method: "POST",
+		headers: { "Content-Type": "application/x-www-form-urlencoded" },
+		body: new URLSearchParams({
+			grant_type: "authorization_code",
+			client_id: CLIENT_ID,
+			code,
+			code_verifier: verifier,
+			redirect_uri: REDIRECT_URI,
+		}),
+	});
+	if (!res.ok) {
+		const text = await res.text().catch(() => "");
+		throw new Error(`Codex token exchange failed (${res.status}): ${text || res.statusText}`);
+	}
+	const json = (await res.json()) as RefreshResponse;
+	const accountId = decodeAccountId(json.access_token);
+	if (!accountId) {
+		throw new Error("Codex token exchange: access token carried no chatgpt_account_id");
+	}
+	return {
+		type: "oauth",
+		access: json.access_token,
+		refresh: json.refresh_token,
+		expires: Date.now() + json.expires_in * 1000,
+		accountId,
+	};
+}
+
+/**
+ * Browser login (Codex CLI simplified flow): print the authorize URL, catch the
+ * localhost callback, exchange the code, and persist. Mirrors loginClaude;
+ * driven by the face's `/login` command or `pnpm codex:login`. Pass a signal to
+ * close the callback server on cancel.
+ */
+export async function loginCodex(
+	onUrl: (url: string) => void,
+	signal?: AbortSignal,
+): Promise<CodexCredentials> {
+	const { verifier, challenge } = await generatePkce();
+	const state = randomState();
+	const code = await new Promise<string>((resolve, reject) => {
+		const server = createServer((req, res) => {
+			const url = new URL(req.url ?? "", "http://localhost");
+			if (url.pathname !== "/auth/callback") {
+				res.writeHead(404).end("not found");
+				return;
+			}
+			if (url.searchParams.get("state") !== state) {
+				res.writeHead(400).end("state mismatch");
+				return;
+			}
+			const authCode = url.searchParams.get("code");
+			if (!authCode) {
+				res.writeHead(400).end("missing code");
+				return;
+			}
+			res.writeHead(200, { "Content-Type": "text/html" }).end("<h2>Clanky: Codex login complete. You can close this tab.</h2>");
+			server.close();
+			resolve(authCode);
+		});
+		server.on("error", reject);
+		if (signal !== undefined) {
+			if (signal.aborted) {
+				reject(new Error("Login cancelled"));
+				return;
+			}
+			signal.addEventListener(
+				"abort",
+				() => {
+					server.close();
+					reject(new Error("Login cancelled"));
+				},
+				{ once: true },
+			);
+		}
+		server.listen(CALLBACK_PORT, CALLBACK_HOST, () => {
+			const params = new URLSearchParams({
+				response_type: "code",
+				client_id: CLIENT_ID,
+				redirect_uri: REDIRECT_URI,
+				scope: SCOPE,
+				code_challenge: challenge,
+				code_challenge_method: "S256",
+				state,
+				id_token_add_organizations: "true",
+				codex_cli_simplified_flow: "true",
+				originator: "clanky",
+			});
+			onUrl(`${AUTHORIZE_URL}?${params.toString()}`);
+		});
+	});
+	const creds = await exchangeCode(code, verifier);
+	await persist(creds);
+	return creds;
+}
+
 /**
  * Return currently-valid Codex credentials, refreshing and persisting when the
  * stored token is within the refresh skew of expiry. Safe to call on every
@@ -124,4 +236,11 @@ export async function getValidCodexCredentials(): Promise<CodexCredentials> {
 	const refreshed = await refresh(stored.refresh);
 	await persist(refreshed);
 	return refreshed;
+}
+
+/** Stored-credential presence and expiry without refreshing. For status display. */
+export async function codexCredentialStatus(): Promise<{ present: boolean; expiresMs?: number }> {
+	const stored = (await readStore())[STORE_KEY];
+	if (!stored?.access || !stored.refresh) return { present: false };
+	return { present: true, expiresMs: stored.expires > 1e12 ? stored.expires : stored.expires * 1000 };
 }
