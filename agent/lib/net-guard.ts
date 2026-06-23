@@ -88,13 +88,57 @@ function isBlockedIpv4(address: string): boolean {
 }
 
 function isBlockedIpv6(address: string): boolean {
-	const lower = address.toLowerCase();
-	const mapped = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(lower);
-	if (mapped !== null) return isBlockedIpv4(mapped[1] ?? "");
-	if (lower === "::1" || lower === "::") return true; // loopback, unspecified
-	if (lower.startsWith("fe80")) return true; // link-local
-	const head = lower.split(":")[0] ?? "";
-	if (head.length === 0) return false;
-	const highByte = Number.parseInt(head.padStart(4, "0").slice(0, 2), 16);
-	return (highByte & 0xfe) === 0xfc; // fc00::/7 unique-local
+	// Expand to eight 16-bit groups so compressed/canonicalized forms cannot
+	// hide a blocked target. The WHATWG URL parser rewrites IPv4-mapped
+	// addresses to hex (::ffff:7f00:1), so a textual dotted-form check is not
+	// enough — every mapped/compatible address must be decoded and re-checked.
+	const groups = expandIpv6(address);
+	if (groups === null) return true; // unparseable -> refuse
+	if (groups.every((group) => group === 0)) return true; // :: unspecified
+	if (groups.slice(0, 7).every((group) => group === 0) && groups[7] === 1) return true; // ::1 loopback
+	const firstFiveZero = groups.slice(0, 5).every((group) => group === 0);
+	const embeddedIpv4 = `${(groups[6] ?? 0) >> 8}.${(groups[6] ?? 0) & 0xff}.${(groups[7] ?? 0) >> 8}.${(groups[7] ?? 0) & 0xff}`;
+	if (firstFiveZero && groups[5] === 0xffff) return isBlockedIpv4(embeddedIpv4); // ::ffff:a.b.c.d mapped
+	if (firstFiveZero && groups[5] === 0 && (groups[6] !== 0 || groups[7] !== 0)) return isBlockedIpv4(embeddedIpv4); // ::a.b.c.d compatible
+	const high = groups[0] ?? 0;
+	if ((high & 0xffc0) === 0xfe80) return true; // fe80::/10 link-local
+	if ((high & 0xfe00) === 0xfc00) return true; // fc00::/7 unique-local
+	if ((high & 0xff00) === 0xff00) return true; // ff00::/8 multicast
+	return false;
+}
+
+// Parse an IPv6 literal into eight 16-bit groups, handling "::" compression, a
+// trailing embedded IPv4, and zone ids. Returns null if the input is not a
+// valid IPv6 address.
+function expandIpv6(address: string): number[] | null {
+	let text = address.toLowerCase();
+	const zone = text.indexOf("%");
+	if (zone !== -1) text = text.slice(0, zone);
+	const v4 = /(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(text);
+	if (v4 !== null) {
+		const octets = [v4[1], v4[2], v4[3], v4[4]].map((part) => Number.parseInt(part ?? "", 10));
+		if (octets.some((octet) => octet > 255)) return null;
+		const hi = (((octets[0] ?? 0) << 8) | (octets[1] ?? 0)).toString(16);
+		const lo = (((octets[2] ?? 0) << 8) | (octets[3] ?? 0)).toString(16);
+		text = `${text.slice(0, v4.index)}${hi}:${lo}`;
+	}
+	const halves = text.split("::");
+	if (halves.length > 2) return null;
+	const parseGroups = (segment: string): number[] | null => {
+		if (segment.length === 0) return [];
+		const out: number[] = [];
+		for (const group of segment.split(":")) {
+			if (group.length === 0 || group.length > 4 || !/^[0-9a-f]+$/.test(group)) return null;
+			out.push(Number.parseInt(group, 16));
+		}
+		return out;
+	};
+	const head = parseGroups(halves[0] ?? "");
+	if (head === null) return null;
+	if (halves.length === 1) return head.length === 8 ? head : null;
+	const tail = parseGroups(halves[1] ?? "");
+	if (tail === null) return null;
+	const missing = 8 - head.length - tail.length;
+	if (missing < 1) return null; // "::" must stand in for at least one group
+	return [...head, ...new Array<number>(missing).fill(0), ...tail];
 }
