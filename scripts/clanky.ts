@@ -80,6 +80,7 @@ type ClankyConfig = {
 	codexEffort?: string;
 	localModel?: string;
 	localBaseUrl?: string;
+	localEffort?: string;
 	imageModel?: string;
 	voiceRealtimeProvider?: string;
 	voiceRealtimeModel?: string;
@@ -99,6 +100,7 @@ type MenuOption = {
 };
 
 const EFFORT_LEVELS = ["minimal", "low", "medium", "high", "xhigh"] as const;
+const LOCAL_EFFORT_LEVELS = ["low", "medium", "high"] as const;
 const VOICE_SETTINGS = [
 	"realtime-provider",
 	"realtime-model",
@@ -135,6 +137,12 @@ const EFFORT_OPTIONS: readonly MenuOption[] = [
 	{ value: "medium", label: "medium" },
 	{ value: "high", label: "high" },
 	{ value: "xhigh", label: "xhigh", hint: "deepest" },
+	{ value: "keep-current", label: "keep current" },
+];
+const LOCAL_EFFORT_OPTIONS: readonly MenuOption[] = [
+	{ value: "low", label: "low" },
+	{ value: "medium", label: "medium" },
+	{ value: "high", label: "high", hint: "deepest" },
 	{ value: "keep-current", label: "keep current" },
 ];
 const VOICE_SETTING_OPTIONS: readonly MenuOption[] = [
@@ -240,8 +248,8 @@ function installClankyPromptCommands(): void {
 		{
 			name: "effort",
 			aliases: [],
-			description: "Set Codex reasoning effort",
-			argumentHint: "[minimal|low|medium|high|xhigh]",
+			description: "Set reasoning effort for the active provider",
+			argumentHint: "[codex: minimal|low|medium|high|xhigh] [local: low|medium|high]",
 			takesArgument: true,
 			build: (argument) => ({ type: "extension", name: "effort", argument }),
 		},
@@ -517,7 +525,8 @@ async function loginStatusText(): Promise<string> {
 function formatProviderSummary(config: ClankyConfig): string {
 	if (config.provider === "codex") return `codex${config.codexEffort ? ` (${config.codexEffort})` : ""}`;
 	if (config.provider === "local") {
-		return `local (${config.localModel ?? "default"} @ ${config.localBaseUrl ?? DEFAULT_LOCAL_BASE_URL})`;
+		const effort = config.localEffort ? ` (${config.localEffort})` : "";
+		return `local (${config.localModel ?? "default"} @ ${config.localBaseUrl ?? DEFAULT_LOCAL_BASE_URL})${effort}`;
 	}
 	return config.provider;
 }
@@ -574,11 +583,26 @@ async function configureModel(argument: string, flow: SetupFlowRenderer | undefi
 }
 
 async function configureEffort(argument: string, flow: SetupFlowRenderer | undefined): Promise<string> {
+	const existing = await readConfig();
+	if (existing.provider === "claude") {
+		return "Reasoning effort is not configurable for the claude provider (it uses a different thinking mechanism).";
+	}
+	if (existing.provider === "local") {
+		let effort: string | undefined = splitArgs(argument)[0];
+		if (effort === undefined || !isLocalEffortLevel(effort)) {
+			if (argument.trim().length > 0) return `Unknown local effort "${argument.trim()}". Use low, medium, or high.`;
+			if (flow === undefined) return "Usage: /effort [low|medium|high]";
+			effort = await selectLocalEffort(flow, existing.localEffort);
+			if (effort === undefined || effort === "keep-current") return "/effort cancelled.";
+		}
+		await writeEnv({ CLANKY_LOCAL_EFFORT: effort });
+		return await restartBrainMessage(`Local reasoning effort set to ${effort}`);
+	}
+
 	let effort: string | undefined = splitArgs(argument)[0];
 	if (effort === undefined || !isEffortLevel(effort)) {
 		if (argument.trim().length > 0) return `Unknown Codex effort "${argument.trim()}".`;
 		if (flow === undefined) return "Usage: /effort [minimal|low|medium|high|xhigh]";
-		const existing = await readConfig();
 		effort = await selectEffort(flow, existing.codexEffort);
 		if (effort === undefined || effort === "keep-current") return "/effort cancelled.";
 	}
@@ -960,6 +984,18 @@ async function selectEffort(
 	}
 }
 
+async function selectLocalEffort(
+	flow: SetupFlowRenderer,
+	currentEffort: string | undefined,
+): Promise<string | undefined> {
+	flow.begin("Configure local reasoning effort");
+	try {
+		return await selectOne(flow, "Choose the local reasoning effort.", LOCAL_EFFORT_OPTIONS, currentEffort);
+	} finally {
+		flow.end({ preserveDiagnostics: false });
+	}
+}
+
 async function selectOne(
 	flow: SetupFlowRenderer,
 	message: string,
@@ -1130,6 +1166,7 @@ async function readConfig(): Promise<ClankyConfig> {
 	const codexEffort = get("CLANKY_CODEX_EFFORT");
 	const localModel = get("CLANKY_LOCAL_MODEL");
 	const localBaseUrl = get("CLANKY_LOCAL_BASE_URL");
+	const localEffort = get("CLANKY_LOCAL_EFFORT");
 	const imageModel = get("CLANKY_OPENAI_IMAGE_MODEL");
 	const voiceRealtimeProvider = get("CLANKY_VOICE_REALTIME_PROVIDER");
 	const voiceRealtimeModel = get("CLANKY_VOICE_REALTIME_MODEL");
@@ -1144,6 +1181,7 @@ async function readConfig(): Promise<ClankyConfig> {
 	if (codexEffort !== undefined) config.codexEffort = codexEffort;
 	if (localModel !== undefined) config.localModel = localModel;
 	if (localBaseUrl !== undefined) config.localBaseUrl = localBaseUrl;
+	if (localEffort !== undefined) config.localEffort = localEffort;
 	if (imageModel !== undefined) config.imageModel = imageModel;
 	if (voiceRealtimeProvider !== undefined) config.voiceRealtimeProvider = voiceRealtimeProvider;
 	if (voiceRealtimeModel !== undefined) config.voiceRealtimeModel = voiceRealtimeModel;
@@ -1278,6 +1316,10 @@ function parseSubscriptionProvider(value: string | undefined): SubscriptionProvi
 
 function isEffortLevel(value: string): value is (typeof EFFORT_LEVELS)[number] {
 	return EFFORT_LEVELS.includes(value as (typeof EFFORT_LEVELS)[number]);
+}
+
+function isLocalEffortLevel(value: string): value is (typeof LOCAL_EFFORT_LEVELS)[number] {
+	return LOCAL_EFFORT_LEVELS.includes(value as (typeof LOCAL_EFFORT_LEVELS)[number]);
 }
 
 function parseIntegrationRole(value: string | undefined): IntegrationRole | undefined {
