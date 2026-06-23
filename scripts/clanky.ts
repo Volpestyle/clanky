@@ -30,6 +30,8 @@ import {
 import type { SetupFlowRenderer } from "../node_modules/eve/dist/src/cli/dev/tui/setup-flow.js";
 import { applyEnvUpserts } from "../agent/lib/discord/env-file.ts";
 import { browserBridgeStatus } from "../agent/lib/browser-bridge.ts";
+import { type ClaudeCredentials, claudeCredentialStatus, loginClaude } from "../agent/lib/claude-auth.ts";
+import { type CodexCredentials, codexCredentialStatus, loginCodex } from "../agent/lib/codex-auth.ts";
 import {
 	INTEGRATION_ROLES,
 	type IntegrationRole,
@@ -50,6 +52,7 @@ const runHostCommand = promisify(execFile);
 
 type ClankyExtensionCommandName =
 	| "discord-token"
+	| "login"
 	| "model"
 	| "effort"
 	| "image-model"
@@ -222,6 +225,14 @@ function installClankyPromptCommands(): void {
 			build: (argument) => ({ type: "extension", name: "model", argument }),
 		},
 		{
+			name: "login",
+			aliases: ["auth"],
+			description: "Authorize a subscription provider (Claude or Codex)",
+			argumentHint: "[claude|codex|status]",
+			takesArgument: true,
+			build: (argument) => ({ type: "extension", name: "login", argument }),
+		},
+		{
 			name: "effort",
 			aliases: [],
 			description: "Set Codex reasoning effort",
@@ -364,6 +375,8 @@ function createClankyCommandHandler(): PromptCommandHandler {
 			switch (command.name) {
 				case "discord-token":
 					return { message: await setDiscordToken(command.argument) };
+				case "login":
+					return { message: await configureLogin(command.argument, context.renderer.setupFlow) };
 				case "model":
 					return { message: await configureModel(command.argument, context.renderer.setupFlow) };
 				case "effort":
@@ -400,6 +413,107 @@ async function setDiscordToken(argument: string): Promise<string> {
 
 	await writeEnv(updates);
 	return await restartBrainMessage("Discord credential saved");
+}
+
+async function configureLogin(argument: string, flow: SetupFlowRenderer | undefined): Promise<string> {
+	const args = splitArgs(argument);
+	const first = args[0]?.toLowerCase();
+	if (first === "status") return await loginStatusText();
+	let provider = parseProvider(first);
+	if (first !== undefined && provider === undefined) {
+		return `Unknown login target "${args[0]}". Use claude, codex, or status.`;
+	}
+	if (provider === undefined) {
+		if (flow === undefined) return `${await loginStatusText()}\n\nUsage: /login [claude|codex|status]`;
+		provider = await selectLoginProvider(flow);
+		if (provider === undefined) return "/login cancelled.";
+	}
+	if (flow === undefined) {
+		return `/login ${provider} needs an interactive terminal. Run pnpm ${provider}:login instead.`;
+	}
+	return await runLogin(provider, flow);
+}
+
+async function selectLoginProvider(flow: SetupFlowRenderer): Promise<ClankyConfig["provider"] | undefined> {
+	flow.begin("Authorize a subscription provider");
+	try {
+		const selected = await selectOne(
+			flow,
+			"Choose the subscription provider to authorize.",
+			[
+				{ value: "codex", label: "codex", hint: "OpenAI ChatGPT subscription" },
+				{ value: "claude", label: "claude", hint: "Claude Pro/Max subscription" },
+			],
+			undefined,
+		);
+		return parseProvider(selected);
+	} finally {
+		flow.end({ preserveDiagnostics: false });
+	}
+}
+
+async function runLogin(provider: ClankyConfig["provider"], flow: SetupFlowRenderer): Promise<string> {
+	const label = provider === "claude" ? "Claude" : "Codex";
+	const abort = new AbortController();
+	// Print the authorize URL to scrollback (static) and wait under a single-line
+	// spinner, never a tall live panel: a long-lived flow panel holding the
+	// wrapping OAuth URL overflows the live region and strands its border rule on
+	// every repaint. See SPEC.md face notes.
+	const interrupt = flow.waitForInterrupt();
+	try {
+		const onUrl = (url: string): void => {
+			flow.renderLine(
+				[
+					`Authorize Clanky on your ${label} subscription (opening your browser):`,
+					url,
+					"If it does not open, paste the URL above. Press Esc to cancel.",
+				].join("\n"),
+				"info",
+			);
+			flow.setStatus(`Waiting for ${label} authorization...`);
+			void runHostCommand("open", [url]).catch(() => {});
+		};
+		const login: Promise<ClaudeCredentials | CodexCredentials> =
+			provider === "claude" ? loginClaude(onUrl, abort.signal) : loginCodex(onUrl, abort.signal);
+		const result = await Promise.race([
+			login.then((creds) => ({ creds })),
+			interrupt.promise.then(() => ({ cancelled: true as const })),
+		]);
+		if ("cancelled" in result) {
+			abort.abort();
+			return `/login ${provider} cancelled.`;
+		}
+		return await loginSuccessMessage(provider, result.creds.expires);
+	} catch (error) {
+		return `${label} login failed: ${error instanceof Error ? error.message : String(error)}`;
+	} finally {
+		abort.abort();
+		interrupt.dispose();
+		flow.setStatus(undefined);
+	}
+}
+
+async function loginSuccessMessage(provider: ClankyConfig["provider"], expiresMs: number): Promise<string> {
+	const config = await readConfig();
+	const lines = [`${provider === "claude" ? "Claude" : "Codex"} login complete. Token stored (expires ${new Date(expiresMs).toISOString()}).`];
+	if (config.provider !== provider) {
+		lines.push(`Active provider is ${config.provider}; run /model ${provider} to switch Clanky to it.`);
+	} else {
+		lines.push("New turns will use the refreshed credential.");
+	}
+	return lines.join("\n");
+}
+
+async function loginStatusText(): Promise<string> {
+	const [claude, codex] = await Promise.all([claudeCredentialStatus(), codexCredentialStatus()]);
+	return ["Subscription auth:", `  claude: ${formatCredStatus(claude)}`, `  codex:  ${formatCredStatus(codex)}`].join("\n");
+}
+
+function formatCredStatus(status: { present: boolean; expiresMs?: number }): string {
+	if (!status.present) return "not logged in";
+	if (status.expiresMs === undefined) return "logged in";
+	const state = status.expiresMs <= Date.now() ? "expired" : "valid";
+	return `${state} (expires ${new Date(status.expiresMs).toISOString()})`;
 }
 
 async function configureModel(argument: string, flow: SetupFlowRenderer | undefined): Promise<string> {
@@ -718,7 +832,13 @@ async function configureBrowserBridge(argument: string): Promise<string> {
 }
 
 async function statusText(): Promise<string> {
-	const [info, gateway, browser] = await Promise.all([fetchInfo(), fetchDiscordGatewayHealth(), browserBridgeStatus()]);
+	const [info, gateway, browser, claudeAuth, codexAuth] = await Promise.all([
+		fetchInfo(),
+		fetchDiscordGatewayHealth(),
+		browserBridgeStatus(),
+		claudeCredentialStatus(),
+		codexCredentialStatus(),
+	]);
 	const config = await readConfig();
 	const bindings = await resolveRoleBindings();
 	const connections = await listAvailableConnections();
@@ -726,6 +846,7 @@ async function statusText(): Promise<string> {
 	const lines = [
 		`model: ${model}`,
 		`provider: ${config.provider}${config.provider === "codex" && config.codexEffort ? ` (${config.codexEffort})` : ""}`,
+		`auth: claude=${formatCredStatus(claudeAuth)}; codex=${formatCredStatus(codexAuth)}`,
 		`image model: ${config.imageModel ?? "gpt-image-2"}`,
 		...formatVoiceStatusLines(config),
 		`integrations: ${formatIntegrationSummary(bindings, connections)}`,
