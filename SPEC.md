@@ -595,7 +595,8 @@ clanky/
       discord-gateway.ts     # free-will presence boot seam (Gateway WS owner)
       voice.ts               # voice channel (ClankVox-backed) + join/leave seam
       relay.ts               # raw WS relay to herdr.sock (the iOS window)
-    tools/                   # typed tools (herdr spawn seam, media, web, etc.)
+    connections/             # curated third-party servers (Linear, Figma): MCP/OpenAPI + brokered auth
+    tools/                   # typed first-party tools (spawn seam, browser-bridge, web, discord, media, dynamic-MCP bridge)
     schedules/               # cron jobs
     skills/                  # agent-local skills (or symlinked)
     lib/
@@ -645,6 +646,52 @@ absorbed here:
   `docs/troubleshooting.md` — written against Pi profiles/TUI flows.
 - `docs/ROADMAP.md` — the AgentRoom retirement plan is complete/superseded.
 - `docs/qa/*` — Pi-runtime live runbooks.
+
+### 9.4 Integration model: connections vs. tools vs. dynamic MCP
+
+Three tiers, separated by trust and auth shape. Pick by the rule below; do not
+blur them.
+
+1. **Connections (`agent/connections/<name>.ts`)** — the canonical path for
+   curated third-party SaaS Clanky depends on: **Linear and Figma first**, then
+   any other credentialed service (work trackers, design, finance). One file per
+   server via `defineMcpClientConnection` (or `defineOpenAPIConnection`). eve
+   brokers auth, keeps the URL and credentials out of the model's reach, exposes
+   each remote tool as a typed tool through `connection__search`, and supports
+   per-connection approval and tool allow/block. OAuth servers (Linear's hosted
+   MCP, etc.) use `auth: defineInteractiveAuthorization` — self-hosted, not the
+   Vercel `connect()` helper, since Clanky does not adopt Vercel surfaces. Adding
+   one is a small committed code change plus a dev-server reload; the model cannot
+   add a connection at runtime, which is the point for credentialed services.
+
+2. **First-party tools (`agent/tools/`)** — capabilities we author and own: the
+   herdr spawn seam, `browser_control` (the custom browser-extension bridge),
+   `web_*`, `discord_*`, `memory_*`, media. Not third-party servers, just our
+   code.
+
+3. **Dynamic MCP bridge (`mcp_list_tools` / `mcp_call` / `mcp_configure`,
+   `agent/lib/mcp.ts`)** — runtime-added, no-auth or static-token MCP servers
+   only: local tools, automations, a Minecraft MCP. Clanky or the user can add
+   one on the fly via `mcp_configure` with no code change. Do **not** route OAuth
+   or credentialed SaaS (Linear, Figma, finance) through this layer: its
+   transports carry no OAuth provider, and storing long-lived tokens here is
+   weaker than a connection's brokered auth. The spawned child-process env must be
+   allowlisted, never the full `process.env`.
+
+Decision rule: **OAuth or a shared first-party credential → a connection. No-auth
+/ runtime-throwaway / local → the dynamic MCP bridge. Something we wrote ourselves
+→ a first-party tool.**
+
+**Role bindings.** Clanky's behavioral routing names logical roles, not vendors.
+Roles (work tracker, design tool, and future ones like finance) map to concrete
+connections through a runtime binding — `~/.clanky/integration-roles.json` with
+env overrides (`CLANKY_WORK_TRACKER`, `CLANKY_DESIGN_TOOL`) — surfaced to the model
+by a dynamic instruction (`agent/instructions/integrations.ts`, resolved on
+`turn.started`, read/written via `agent/lib/integration-roles.ts`). The custom face
+sets bindings with `/integrations` (lists roles, current bindings, and available
+connections); the agent picks up the change on the next turn. `instructions.md`
+describes roles, so swapping Linear for another tracker, or Figma for another design
+tool, is a binding change, not an edit to the persona.
 
 ## 10. Build phases
 
