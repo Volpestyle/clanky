@@ -29,6 +29,17 @@ import {
 } from "../node_modules/eve/dist/src/cli/dev/tui/prompt-commands.js";
 import type { SetupFlowRenderer } from "../node_modules/eve/dist/src/cli/dev/tui/setup-flow.js";
 import { applyEnvUpserts } from "../agent/lib/discord/env-file.ts";
+import { browserBridgeStatus } from "../agent/lib/browser-bridge.ts";
+import {
+	INTEGRATION_ROLES,
+	type IntegrationRole,
+	type IntegrationRoleBindings,
+	listAvailableConnections,
+	resolveRoleBindings,
+	roleLabel,
+	setRoleBinding,
+} from "../agent/lib/integration-roles.ts";
+import { installBrowserBridge } from "../packages/clanky-browser-bridge/src/install.ts";
 
 const REPO = process.env.CLANKY_REPO_DIR ?? process.cwd();
 const PORT = Number.parseInt(process.env.CLANKY_EVE_PORT ?? "2000", 10);
@@ -37,7 +48,15 @@ const ENV_PATH = join(REPO, ".env.local");
 const CLANKY_HEADER_NOTE = "Clanky face on eve/client. Type /help for commands.";
 const runHostCommand = promisify(execFile);
 
-type ClankyExtensionCommandName = "discord-token" | "model" | "effort" | "status";
+type ClankyExtensionCommandName =
+	| "discord-token"
+	| "model"
+	| "effort"
+	| "image-model"
+	| "voice"
+	| "integrations"
+	| "browser"
+	| "status";
 type ClankyExtensionCommand = {
 	type: "extension";
 	name: ClankyExtensionCommandName;
@@ -53,6 +72,15 @@ type ClankyConfig = {
 	codexModel?: string;
 	claudeModel?: string;
 	codexEffort?: string;
+	imageModel?: string;
+	voiceRealtimeProvider?: string;
+	voiceRealtimeModel?: string;
+	voiceRealtimeVoice?: string;
+	voiceTtsProvider?: string;
+	elevenLabsVoiceId?: string;
+	elevenLabsTtsModel?: string;
+	voiceMemoryContextLimit?: string;
+	voiceEveSession?: string;
 };
 
 type MenuOption = {
@@ -63,6 +91,23 @@ type MenuOption = {
 };
 
 const EFFORT_LEVELS = ["minimal", "low", "medium", "high", "xhigh"] as const;
+const VOICE_SETTINGS = [
+	"realtime-provider",
+	"realtime-model",
+	"realtime-voice",
+	"tts-provider",
+	"elevenlabs-voice",
+	"elevenlabs-model",
+	"memory-limit",
+	"eve-session",
+] as const;
+type VoiceSetting = (typeof VOICE_SETTINGS)[number];
+type VoiceRealtimeProvider = "openai" | "xai";
+type VoiceTtsProvider = "realtime" | "elevenlabs";
+type VoiceSettingUpdate = {
+	updates: Record<string, string>;
+	message: string;
+};
 const MODEL_OPTIONS: Record<ClankyConfig["provider"], readonly MenuOption[]> = {
 	codex: [
 		{ value: "gpt-5.5", label: "gpt-5.5" },
@@ -83,6 +128,28 @@ const EFFORT_OPTIONS: readonly MenuOption[] = [
 	{ value: "high", label: "high" },
 	{ value: "xhigh", label: "xhigh", hint: "deepest" },
 	{ value: "keep-current", label: "keep current" },
+];
+const VOICE_SETTING_OPTIONS: readonly MenuOption[] = [
+	{ value: "realtime-provider", label: "realtime provider", hint: "OpenAI or xAI" },
+	{ value: "realtime-model", label: "realtime model", hint: "gpt-realtime / grok-voice-2" },
+	{ value: "realtime-voice", label: "realtime voice", hint: "native provider voice" },
+	{ value: "tts-provider", label: "tts provider", hint: "realtime or ElevenLabs" },
+	{ value: "elevenlabs-voice", label: "ElevenLabs voice id" },
+	{ value: "elevenlabs-model", label: "ElevenLabs TTS model" },
+	{ value: "memory-limit", label: "voice memory context", hint: "0-50 facts" },
+	{ value: "eve-session", label: "Eve voice session", hint: "voice continuity turn" },
+];
+const VOICE_REALTIME_PROVIDER_OPTIONS: readonly MenuOption[] = [
+	{ value: "openai", label: "openai", hint: "default" },
+	{ value: "xai", label: "xai", hint: "Grok realtime" },
+];
+const VOICE_TTS_PROVIDER_OPTIONS: readonly MenuOption[] = [
+	{ value: "realtime", label: "realtime", hint: "provider-native audio" },
+	{ value: "elevenlabs", label: "elevenlabs", hint: "external ElevenLabs TTS" },
+];
+const VOICE_EVE_SESSION_OPTIONS: readonly MenuOption[] = [
+	{ value: "on", label: "on", hint: "default" },
+	{ value: "off", label: "off" },
 ];
 
 let server: ChildProcess | null = null;
@@ -161,6 +228,38 @@ function installClankyPromptCommands(): void {
 			argumentHint: "[minimal|low|medium|high|xhigh]",
 			takesArgument: true,
 			build: (argument) => ({ type: "extension", name: "effort", argument }),
+		},
+		{
+			name: "image-model",
+			aliases: ["images"],
+			description: "Set OpenAI image generation model",
+			argumentHint: "[model-id]",
+			takesArgument: true,
+			build: (argument) => ({ type: "extension", name: "image-model", argument }),
+		},
+		{
+			name: "voice",
+			aliases: [],
+			description: "Configure Discord voice runtime",
+			argumentHint: "[provider|model|realtime-voice|tts|elevenlabs|memory|eve-session] [value]",
+			takesArgument: true,
+			build: (argument) => ({ type: "extension", name: "voice", argument }),
+		},
+		{
+			name: "integrations",
+			aliases: [],
+			description: "Bind integration roles to connections",
+			argumentHint: "[role] [connection|unset]",
+			takesArgument: true,
+			build: (argument) => ({ type: "extension", name: "integrations", argument }),
+		},
+		{
+			name: "browser",
+			aliases: ["bridge"],
+			description: "Install or inspect the browser-control extension bridge",
+			argumentHint: "[status|install]",
+			takesArgument: true,
+			build: (argument) => ({ type: "extension", name: "browser", argument }),
 		},
 		{
 			name: "status",
@@ -269,6 +368,14 @@ function createClankyCommandHandler(): PromptCommandHandler {
 					return { message: await configureModel(command.argument, context.renderer.setupFlow) };
 				case "effort":
 					return { message: await configureEffort(command.argument, context.renderer.setupFlow) };
+					case "image-model":
+						return { message: await configureImageModel(command.argument) };
+					case "voice":
+						return { message: await configureVoice(command.argument, context.renderer.setupFlow) };
+				case "integrations":
+					return { message: await configureIntegrations(command.argument, context.renderer.setupFlow) };
+				case "browser":
+					return { message: await configureBrowserBridge(command.argument) };
 				case "status":
 					return { message: await statusText() };
 			}
@@ -347,13 +454,282 @@ async function configureEffort(argument: string, flow: SetupFlowRenderer | undef
 	return await restartBrainMessage(`Codex reasoning effort set to ${effort}`);
 }
 
-async function statusText(): Promise<string> {
-	const [info, gateway] = await Promise.all([fetchInfo(), fetchDiscordGatewayHealth()]);
+async function configureImageModel(argument: string): Promise<string> {
+	const model = argument.trim() || "gpt-image-2";
+	await writeEnv({ CLANKY_OPENAI_IMAGE_MODEL: model });
+	return await restartBrainMessage(`OpenAI image model set to ${model}`);
+}
+
+async function configureVoice(argument: string, flow: SetupFlowRenderer | undefined): Promise<string> {
+	const args = splitArgs(argument);
 	const config = await readConfig();
+	if (args.length === 0) {
+		if (flow === undefined) return `${formatVoiceConfig(config)}\n\n${voiceUsage()}`;
+		return await configureVoiceInteractive(flow, config, undefined);
+	}
+
+	const setting = parseVoiceSetting(args[0]);
+	if (setting === "status") return formatVoiceConfig(config);
+	if (setting !== undefined) {
+		const value = args.slice(1).join(" ").trim();
+		if (value.length > 0) return await saveVoiceSetting(setting, value);
+		if (flow === undefined) return voiceSettingUsage(setting);
+		return await configureVoiceInteractive(flow, config, setting);
+	}
+
+	const provider = parseVoiceRealtimeProvider(args[0]);
+	if (provider !== undefined && args.length === 1) return await saveVoiceSetting("realtime-provider", provider);
+	const ttsProvider = parseVoiceTtsProvider(args[0]);
+	if (ttsProvider !== undefined && args.length === 1) return await saveVoiceSetting("tts-provider", ttsProvider);
+	if (args.length === 1) return await saveVoiceSetting("elevenlabs-voice", args[0]);
+	return voiceUsage();
+}
+
+async function configureVoiceInteractive(
+	flow: SetupFlowRenderer,
+	config: ClankyConfig,
+	initialSetting: VoiceSetting | undefined,
+): Promise<string> {
+	let update: VoiceSettingUpdate | undefined;
+	flow.begin("Configure Discord voice");
+	try {
+		flow.renderOutput(formatVoiceConfig(config));
+		const selectedSetting = initialSetting ?? parseVoiceSetting(
+			await selectOne(flow, "Choose the voice setting to change.", VOICE_SETTING_OPTIONS, initialSetting),
+		);
+		if (selectedSetting === undefined) return "/voice cancelled.";
+		if (selectedSetting === "status") return formatVoiceConfig(config);
+		const value = await promptVoiceSettingValue(flow, selectedSetting, config);
+		if (value === undefined) return "/voice cancelled.";
+		const result = buildVoiceSettingUpdate(selectedSetting, value);
+		if (typeof result === "string") return result;
+		update = result;
+	} finally {
+		flow.end({ preserveDiagnostics: false });
+	}
+	await writeEnv(update.updates);
+	return await restartBrainMessage(update.message);
+}
+
+async function promptVoiceSettingValue(
+	flow: SetupFlowRenderer,
+	setting: VoiceSetting,
+	config: ClankyConfig,
+): Promise<string | undefined> {
+	switch (setting) {
+		case "realtime-provider":
+			return await selectOne(
+				flow,
+				"Choose the realtime provider.",
+				VOICE_REALTIME_PROVIDER_OPTIONS,
+				parseVoiceRealtimeProvider(config.voiceRealtimeProvider) ?? "openai",
+			);
+		case "tts-provider":
+			return await selectOne(
+				flow,
+				"Choose the TTS provider.",
+				VOICE_TTS_PROVIDER_OPTIONS,
+				inferredVoiceTtsProvider(config),
+			);
+		case "eve-session": {
+			const enabled = parseVoiceToggle(config.voiceEveSession) ?? true;
+			return await selectOne(flow, "Enable the Eve continuity session for voice turns.", VOICE_EVE_SESSION_OPTIONS, enabled ? "on" : "off");
+		}
+		case "memory-limit":
+			return await flow.readText({
+				message: "Set the voice memory context limit.",
+				defaultValue: config.voiceMemoryContextLimit ?? "16",
+				placeholder: "0-50",
+				validate: (value) => (parseVoiceMemoryLimit(value) === undefined ? "Enter a number from 0 to 50." : undefined),
+			});
+		case "realtime-model":
+			return await flow.readText({
+				message: "Set the realtime model.",
+				defaultValue: config.voiceRealtimeModel ?? "",
+				placeholder: defaultRealtimeModel(config),
+				validate: requiredVoiceText,
+			});
+		case "realtime-voice":
+			return await flow.readText({
+				message: "Set the realtime voice.",
+				defaultValue: config.voiceRealtimeVoice ?? "marin",
+				placeholder: "marin",
+				validate: requiredVoiceText,
+			});
+		case "elevenlabs-voice":
+			return await flow.readText({
+				message: "Set the ElevenLabs voice id.",
+				defaultValue: config.elevenLabsVoiceId ?? "",
+				placeholder: "voice id",
+				validate: requiredVoiceText,
+			});
+		case "elevenlabs-model":
+			return await flow.readText({
+				message: "Set the ElevenLabs TTS model.",
+				defaultValue: config.elevenLabsTtsModel ?? "",
+				placeholder: "eleven_flash_v2_5",
+				validate: requiredVoiceText,
+			});
+	}
+}
+
+async function saveVoiceSetting(setting: VoiceSetting, value: string): Promise<string> {
+	const update = buildVoiceSettingUpdate(setting, value);
+	if (typeof update === "string") return update;
+	await writeEnv(update.updates);
+	return await restartBrainMessage(update.message);
+}
+
+function buildVoiceSettingUpdate(setting: VoiceSetting, rawValue: string): VoiceSettingUpdate | string {
+	const value = rawValue.trim();
+	if (value.length === 0) return voiceSettingUsage(setting);
+	switch (setting) {
+		case "realtime-provider": {
+			const provider = parseVoiceRealtimeProvider(value);
+			if (provider === undefined) return `Unknown voice realtime provider "${value}". Use openai or xai.`;
+			return {
+				updates: { CLANKY_VOICE_REALTIME_PROVIDER: provider },
+				message: `Voice realtime provider set to ${provider}`,
+			};
+		}
+		case "realtime-model":
+			return {
+				updates: { CLANKY_VOICE_REALTIME_MODEL: value },
+				message: `Voice realtime model set to ${value}`,
+			};
+		case "realtime-voice":
+			return {
+				updates: { CLANKY_VOICE_REALTIME_VOICE: value },
+				message: `Voice realtime voice set to ${value}`,
+			};
+		case "tts-provider": {
+			const provider = parseVoiceTtsProvider(value);
+			if (provider === undefined) return `Unknown voice TTS provider "${value}". Use realtime or elevenlabs.`;
+			return {
+				updates: { CLANKY_VOICE_TTS_PROVIDER: provider },
+				message: `Voice TTS provider set to ${provider}`,
+			};
+		}
+		case "elevenlabs-voice":
+			return {
+				updates: { CLANKY_ELEVENLABS_VOICE_ID: value },
+				message: `ElevenLabs voice id set to ${value}`,
+			};
+		case "elevenlabs-model":
+			return {
+				updates: { CLANKY_ELEVENLABS_TTS_MODEL: value },
+				message: `ElevenLabs TTS model set to ${value}`,
+			};
+		case "memory-limit": {
+			const limit = parseVoiceMemoryLimit(value);
+			if (limit === undefined) return "Voice memory context limit must be a number from 0 to 50.";
+			return {
+				updates: { CLANKY_VOICE_MEMORY_CONTEXT_LIMIT: String(limit) },
+				message: `Voice memory context limit set to ${limit}`,
+			};
+		}
+		case "eve-session": {
+			const enabled = parseVoiceToggle(value);
+			if (enabled === undefined) return `Unknown Eve voice session value "${value}". Use on or off.`;
+			return {
+				updates: { CLANKY_VOICE_EVE_SESSION: enabled ? "1" : "off" },
+				message: `Voice Eve session ${enabled ? "enabled" : "disabled"}`,
+			};
+		}
+	}
+}
+
+async function configureIntegrations(argument: string, flow: SetupFlowRenderer | undefined): Promise<string> {
+	const available = await listAvailableConnections();
+	const current = await resolveRoleBindings();
+	const args = splitArgs(argument);
+	const role = parseIntegrationRole(args[0]);
+	if (args[0] !== undefined && role === undefined) {
+		return `Unknown integration role "${args[0]}". Available roles: ${INTEGRATION_ROLES.map((entry) => entry.label).join(", ")}.`;
+	}
+	if (role !== undefined && args[1] !== undefined) {
+		const binding = parseIntegrationBinding(args[1], available);
+		if (binding === "invalid") return `Unknown connection "${args[1]}". Available connections: ${formatAvailableConnections(available)}.`;
+		await setRoleBinding(role, binding);
+		return integrationSavedMessage(role, binding);
+	}
+	if (flow === undefined) {
+		return `${formatIntegrationTable(current, available)}\n\nUsage: /integrations [role] [connection|unset]`;
+	}
+
+	flow.begin("Configure integration roles");
+	try {
+		flow.renderOutput(formatIntegrationTable(current, available));
+		const selectedRole = parseIntegrationRole(
+			await selectOne(
+				flow,
+				"Choose the integration role to bind.",
+				INTEGRATION_ROLES.map((entry) => ({
+					value: entry.key,
+					label: entry.label,
+					hint: current[entry.key] ?? "unset",
+				})),
+				role,
+			),
+		);
+		if (selectedRole === undefined) return "/integrations cancelled.";
+		const selectedBinding = await selectOne(
+			flow,
+			`Bind ${roleLabel(selectedRole)} to a connection.`,
+			[
+				{ value: "unset", label: "unset", hint: "no configured connection" },
+				...available.map((connection) => ({
+					value: connection,
+					label: connection,
+					hint: current[selectedRole] === connection ? "current" : undefined,
+				})),
+			],
+			current[selectedRole] ?? "unset",
+		);
+		if (selectedBinding === undefined) return "/integrations cancelled.";
+		const binding = selectedBinding === "unset" ? undefined : selectedBinding;
+		await setRoleBinding(selectedRole, binding);
+		return integrationSavedMessage(selectedRole, binding);
+	} finally {
+		flow.end({ preserveDiagnostics: false });
+	}
+}
+
+async function configureBrowserBridge(argument: string): Promise<string> {
+	const command = splitArgs(argument)[0] ?? "status";
+	if (command === "status") return formatBrowserBridgeStatus(await browserBridgeStatus());
+	if (command !== "install") return "Usage: /browser [status|install]";
+	const result = await installBrowserBridge();
+	const status = await browserBridgeStatus();
+	return [
+		"Browser bridge installed.",
+		`extension: ${result.extensionDir}`,
+		`extension id: ${result.extensionId}`,
+		`daemon config: ${result.configFile}`,
+		`port: ${result.port}`,
+		"",
+		"Next steps:",
+		"1. Run pnpm browser-bridge:serve in this repo.",
+		"2. Open chrome://extensions in Helium, Chrome, or Brave.",
+		`3. Load unpacked extension: ${result.extensionDir}`,
+		"",
+		formatBrowserBridgeStatus(status),
+	].join("\n");
+}
+
+async function statusText(): Promise<string> {
+	const [info, gateway, browser] = await Promise.all([fetchInfo(), fetchDiscordGatewayHealth(), browserBridgeStatus()]);
+	const config = await readConfig();
+	const bindings = await resolveRoleBindings();
+	const connections = await listAvailableConnections();
 	const model = info?.agent?.model?.id ?? "(model unknown)";
 	const lines = [
 		`model: ${model}`,
 		`provider: ${config.provider}${config.provider === "codex" && config.codexEffort ? ` (${config.codexEffort})` : ""}`,
+		`image model: ${config.imageModel ?? "gpt-image-2"}`,
+		...formatVoiceStatusLines(config),
+		`integrations: ${formatIntegrationSummary(bindings, connections)}`,
+		`browser bridge: ${formatBrowserBridgeSummary(browser)}`,
 		`discord gateway: ${formatJson(gateway)}`,
 	];
 	return lines.join("\n");
@@ -429,6 +805,145 @@ async function selectOne(
 	return selected?.[0];
 }
 
+function formatVoiceConfig(config: ClankyConfig): string {
+	return ["Current voice config:", ...formatVoiceStatusLines(config)].join("\n");
+}
+
+function formatVoiceStatusLines(config: ClankyConfig): string[] {
+	const realtimeProvider = parseVoiceRealtimeProvider(config.voiceRealtimeProvider) ?? "openai";
+	const memoryLimit = parseVoiceMemoryLimit(config.voiceMemoryContextLimit ?? "16") ?? 16;
+	const eveSessionEnabled = parseVoiceToggle(config.voiceEveSession) ?? true;
+	return [
+		`voice realtime: ${realtimeProvider} / ${config.voiceRealtimeModel ?? defaultRealtimeModel(config)} / voice ${config.voiceRealtimeVoice ?? "marin"}`,
+		`voice tts: ${inferredVoiceTtsProvider(config)}`,
+		`elevenlabs voice id: ${config.elevenLabsVoiceId ?? "(unset)"}`,
+		`elevenlabs tts model: ${config.elevenLabsTtsModel ?? "(default)"}`,
+		`voice memory context limit: ${memoryLimit}`,
+		`voice eve session: ${eveSessionEnabled ? "on" : "off"}`,
+	];
+}
+
+function voiceUsage(): string {
+	return [
+		"Usage:",
+		"/voice",
+		"/voice status",
+		"/voice <elevenlabs-voice-id>",
+		"/voice [provider|model|realtime-voice|tts|elevenlabs|elevenlabs-model|memory|eve-session] [value]",
+	].join("\n");
+}
+
+function voiceSettingUsage(setting: VoiceSetting): string {
+	switch (setting) {
+		case "realtime-provider":
+			return "Usage: /voice provider <openai|xai>";
+		case "realtime-model":
+			return "Usage: /voice model <model-id>";
+		case "realtime-voice":
+			return "Usage: /voice realtime-voice <voice>";
+		case "tts-provider":
+			return "Usage: /voice tts <realtime|elevenlabs>";
+		case "elevenlabs-voice":
+			return "Usage: /voice elevenlabs <voice-id>";
+		case "elevenlabs-model":
+			return "Usage: /voice elevenlabs-model <model-id>";
+		case "memory-limit":
+			return "Usage: /voice memory <0-50>";
+		case "eve-session":
+			return "Usage: /voice eve-session <on|off>";
+	}
+}
+
+function parseVoiceSetting(value: string | undefined): VoiceSetting | "status" | undefined {
+	if (value === undefined) return undefined;
+	const normalized = normalizeCommandToken(value);
+	const direct = VOICE_SETTINGS.find((setting) => normalizeCommandToken(setting) === normalized);
+	if (direct !== undefined) return direct;
+	switch (normalized) {
+		case "status":
+		case "show":
+			return "status";
+		case "provider":
+		case "realtime":
+		case "realtimeprovider":
+			return "realtime-provider";
+		case "model":
+		case "realtimemodel":
+			return "realtime-model";
+		case "voice":
+		case "nativevoice":
+		case "providervoice":
+			return "realtime-voice";
+		case "tts":
+		case "ttsprovider":
+			return "tts-provider";
+		case "11labs":
+		case "elevenlabs":
+		case "elevenlabsvoice":
+		case "voiceid":
+			return "elevenlabs-voice";
+		case "elevenlabstts":
+		case "elevenlabsttsmodel":
+		case "ttsmodel":
+			return "elevenlabs-model";
+		case "memory":
+		case "memorycontext":
+		case "memorycontextlimit":
+			return "memory-limit";
+		case "eve":
+		case "evesession":
+		case "continuity":
+			return "eve-session";
+	}
+	return undefined;
+}
+
+function parseVoiceRealtimeProvider(value: string | undefined): VoiceRealtimeProvider | undefined {
+	const normalized = value?.trim().toLowerCase();
+	if (normalized === "openai") return "openai";
+	if (normalized === "xai" || normalized === "grok") return "xai";
+	return undefined;
+}
+
+function parseVoiceTtsProvider(value: string | undefined): VoiceTtsProvider | undefined {
+	const normalized = value?.trim().toLowerCase();
+	if (normalized === "realtime" || normalized === "native") return "realtime";
+	if (normalized === "elevenlabs" || normalized === "11labs") return "elevenlabs";
+	return undefined;
+}
+
+function parseVoiceToggle(value: string | undefined): boolean | undefined {
+	const normalized = value?.trim().toLowerCase();
+	if (normalized === undefined || normalized.length === 0) return undefined;
+	if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on" || normalized === "enable" || normalized === "enabled") {
+		return true;
+	}
+	if (normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off" || normalized === "disable" || normalized === "disabled") {
+		return false;
+	}
+	return undefined;
+}
+
+function parseVoiceMemoryLimit(value: string | undefined): number | undefined {
+	const trimmed = value?.trim();
+	if (trimmed === undefined || trimmed.length === 0 || !/^-?\d+$/.test(trimmed)) return undefined;
+	const parsed = Number.parseInt(trimmed, 10);
+	if (!Number.isFinite(parsed)) return undefined;
+	return Math.max(0, Math.min(50, parsed));
+}
+
+function defaultRealtimeModel(config: ClankyConfig): string {
+	return (parseVoiceRealtimeProvider(config.voiceRealtimeProvider) ?? "openai") === "xai" ? "grok-voice-2" : "gpt-realtime";
+}
+
+function inferredVoiceTtsProvider(config: ClankyConfig): VoiceTtsProvider {
+	return parseVoiceTtsProvider(config.voiceTtsProvider) ?? (config.elevenLabsVoiceId?.trim() ? "elevenlabs" : "realtime");
+}
+
+function requiredVoiceText(value: string): string | undefined {
+	return value.trim().length === 0 ? "Enter a value." : undefined;
+}
+
 async function readConfig(): Promise<ClankyConfig> {
 	const content = await readFile(ENV_PATH, "utf8").catch(() => "");
 	const get = (key: string): string | undefined => {
@@ -443,9 +958,27 @@ async function readConfig(): Promise<ClankyConfig> {
 	const codexModel = get("CLANKY_CODEX_MODEL");
 	const claudeModel = get("CLANKY_CLAUDE_MODEL");
 	const codexEffort = get("CLANKY_CODEX_EFFORT");
+	const imageModel = get("CLANKY_OPENAI_IMAGE_MODEL");
+	const voiceRealtimeProvider = get("CLANKY_VOICE_REALTIME_PROVIDER");
+	const voiceRealtimeModel = get("CLANKY_VOICE_REALTIME_MODEL");
+	const voiceRealtimeVoice = get("CLANKY_VOICE_REALTIME_VOICE");
+	const voiceTtsProvider = get("CLANKY_VOICE_TTS_PROVIDER");
+	const elevenLabsVoiceId = get("CLANKY_ELEVENLABS_VOICE_ID");
+	const elevenLabsTtsModel = get("CLANKY_ELEVENLABS_TTS_MODEL");
+	const voiceMemoryContextLimit = get("CLANKY_VOICE_MEMORY_CONTEXT_LIMIT");
+	const voiceEveSession = get("CLANKY_VOICE_EVE_SESSION");
 	if (codexModel !== undefined) config.codexModel = codexModel;
 	if (claudeModel !== undefined) config.claudeModel = claudeModel;
 	if (codexEffort !== undefined) config.codexEffort = codexEffort;
+	if (imageModel !== undefined) config.imageModel = imageModel;
+	if (voiceRealtimeProvider !== undefined) config.voiceRealtimeProvider = voiceRealtimeProvider;
+	if (voiceRealtimeModel !== undefined) config.voiceRealtimeModel = voiceRealtimeModel;
+	if (voiceRealtimeVoice !== undefined) config.voiceRealtimeVoice = voiceRealtimeVoice;
+	if (voiceTtsProvider !== undefined) config.voiceTtsProvider = voiceTtsProvider;
+	if (elevenLabsVoiceId !== undefined) config.elevenLabsVoiceId = elevenLabsVoiceId;
+	if (elevenLabsTtsModel !== undefined) config.elevenLabsTtsModel = elevenLabsTtsModel;
+	if (voiceMemoryContextLimit !== undefined) config.voiceMemoryContextLimit = voiceMemoryContextLimit;
+	if (voiceEveSession !== undefined) config.voiceEveSession = voiceEveSession;
 	return config;
 }
 
@@ -569,6 +1102,82 @@ function isEffortLevel(value: string): value is (typeof EFFORT_LEVELS)[number] {
 	return EFFORT_LEVELS.includes(value as (typeof EFFORT_LEVELS)[number]);
 }
 
+function parseIntegrationRole(value: string | undefined): IntegrationRole | undefined {
+	if (value === undefined) return undefined;
+	const normalized = normalizeIntegrationToken(value);
+	return INTEGRATION_ROLES.find((role) => normalizeIntegrationToken(role.key) === normalized || normalizeIntegrationToken(role.label) === normalized)
+		?.key;
+}
+
+function parseIntegrationBinding(value: string, available: readonly string[]): string | undefined | "invalid" {
+	if (value === "unset" || value === "none" || value === "off") return undefined;
+	return available.includes(value) ? value : "invalid";
+}
+
+function normalizeIntegrationToken(value: string): string {
+	return normalizeCommandToken(value);
+}
+
+function normalizeCommandToken(value: string): string {
+	return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function integrationSavedMessage(role: IntegrationRole, binding: string | undefined): string {
+	return `${roleLabel(role)} ${binding === undefined ? "unset" : `bound to ${binding}`}. New turns will use the updated role binding.`;
+}
+
+function formatIntegrationTable(bindings: IntegrationRoleBindings, available: readonly string[]): string {
+	const roleWidth = Math.max(...INTEGRATION_ROLES.map((role) => role.label.length), "role".length);
+	const bindingWidth = Math.max(
+		"binding".length,
+		...INTEGRATION_ROLES.map((role) => (bindings[role.key] ?? "(unset)").length),
+	);
+	const lines = [
+		`${"role".padEnd(roleWidth)}  ${"binding".padEnd(bindingWidth)}`,
+		`${"-".repeat(roleWidth)}  ${"-".repeat(bindingWidth)}`,
+		...INTEGRATION_ROLES.map((role) => `${role.label.padEnd(roleWidth)}  ${(bindings[role.key] ?? "(unset)").padEnd(bindingWidth)}`),
+		"",
+		`available connections: ${formatAvailableConnections(available)}`,
+	];
+	return lines.join("\n");
+}
+
+function formatIntegrationSummary(bindings: IntegrationRoleBindings, available: readonly string[]): string {
+	const bound = INTEGRATION_ROLES.map((role) => `${role.label}=${bindings[role.key] ?? "unset"}`).join(", ");
+	return `${bound}; available=${formatAvailableConnections(available)}`;
+}
+
+function formatAvailableConnections(available: readonly string[]): string {
+	return available.length === 0 ? "(none)" : available.join(", ");
+}
+
+function formatBrowserBridgeStatus(status: Record<string, unknown>): string {
+	const paths = isRecord(status.paths) ? status.paths : {};
+	const extension = isRecord(status.extension) ? status.extension : {};
+	const nextSteps = Array.isArray(status.nextSteps) ? status.nextSteps.map(String) : [];
+	return [
+		`available: ${status.available === true ? "yes" : "no"}`,
+		`daemon running: ${status.daemonRunning === true ? "yes" : "no"}`,
+		`extension connected: ${status.extensionConnected === true ? "yes" : "no"}`,
+		`extension dir: ${typeof extension.extensionDir === "string" ? extension.extensionDir : stringOrFallback(paths.extensionDir, "(missing)")}`,
+		`config: ${formatJson(status.config)}`,
+		`state: ${formatJson(status.state)}`,
+		...(nextSteps.length === 0 ? [] : ["next steps:", ...nextSteps.map((step) => `- ${step}`)]),
+	].join("\n");
+}
+
+function formatBrowserBridgeSummary(status: Record<string, unknown>): string {
+	const nextSteps = Array.isArray(status.nextSteps) ? status.nextSteps.map(String) : [];
+	const state = isRecord(status.state) ? status.state : {};
+	const port = typeof state.port === "number" ? ` port=${state.port}` : "";
+	const next = nextSteps.length === 0 ? "" : ` next=${nextSteps.join(" | ")}`;
+	return `available=${status.available === true} daemon=${status.daemonRunning === true} extension=${status.extensionConnected === true}${port}${next}`;
+}
+
+function stringOrFallback(value: unknown, fallback: string): string {
+	return typeof value === "string" && value.length > 0 ? value : fallback;
+}
+
 function splitArgs(argument: string): string[] {
 	return argument.trim().length === 0 ? [] : argument.trim().split(/\s+/);
 }
@@ -579,4 +1188,8 @@ function formatJson(value: unknown): string {
 	} catch {
 		return String(value);
 	}
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
