@@ -25,6 +25,12 @@ export interface LocalModelOptions {
 	 *   http://127.0.0.1:1234/v1  (LM Studio)
 	 */
 	baseURL: string;
+	/**
+	 * Provider tag surfaced in model ids (e.g. the TUI status line shows
+	 * "<providerName>/<model>"). Defaults to "ollama"; set to match the actual
+	 * backend (e.g. "lmstudio", "llamacpp") when not using Ollama.
+	 */
+	providerName?: string;
 }
 
 /**
@@ -38,8 +44,9 @@ export function createLocalModel(options: LocalModelOptions): LanguageModel {
 		// Local servers ignore the key; the AI SDK requires a non-empty string.
 		apiKey: "local",
 		// Override the default "openai" provider tag so the model id surfaces as
-		// "local/<model>" (e.g. in the TUI status line), not a misleading "openai/".
-		name: "local",
+		// "<providerName>/<model>" (e.g. in the TUI status line), not a misleading
+		// "openai/". Defaults to "ollama" (the default backend).
+		name: options.providerName ?? "ollama",
 	});
 	// .chat() — local endpoints speak Chat Completions, not the Responses API.
 	return provider.chat(options.modelId);
