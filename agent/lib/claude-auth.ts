@@ -9,10 +9,11 @@
  * (claude-model.ts) authenticates by presenting Claude Code's identity. Use is a
  * ToS-gray area — see SPEC.md §4.6.
  */
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { generatePkce } from "./oauth-pkce.ts";
 
 const CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
@@ -46,22 +47,6 @@ function authPath(): string {
 	);
 }
 
-// --- PKCE (Web Crypto, ported from pi pkce.ts) ---
-
-function base64url(bytes: Uint8Array): string {
-	let binary = "";
-	for (const byte of bytes) binary += String.fromCharCode(byte);
-	return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
-}
-
-async function generatePkce(): Promise<{ verifier: string; challenge: string }> {
-	const verifierBytes = new Uint8Array(32);
-	crypto.getRandomValues(verifierBytes);
-	const verifier = base64url(verifierBytes);
-	const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
-	return { verifier, challenge: base64url(new Uint8Array(digest)) };
-}
-
 // --- credential store ---
 
 async function readStore(): Promise<Record<string, ClaudeCredentials | undefined>> {
@@ -76,7 +61,9 @@ async function readStore(): Promise<Record<string, ClaudeCredentials | undefined
 async function persist(creds: ClaudeCredentials): Promise<void> {
 	const store = await readStore();
 	store[STORE_KEY] = creds;
-	await writeFile(authPath(), `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 });
+	const path = authPath();
+	await mkdir(dirname(path), { recursive: true });
+	await writeFile(path, `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 });
 }
 
 async function postToken(body: Record<string, string>): Promise<ClaudeCredentials> {
@@ -104,9 +91,13 @@ async function refresh(refreshToken: string): Promise<ClaudeCredentials> {
 
 /**
  * Browser login: print the authorize URL, catch the localhost callback, exchange
- * the code, and persist. Run once via `pnpm claude:login`.
+ * the code, and persist. Driven by the face's `/login` command or
+ * `pnpm claude:login`. Pass a signal to close the callback server on cancel.
  */
-export async function loginClaude(onUrl: (url: string) => void): Promise<ClaudeCredentials> {
+export async function loginClaude(
+	onUrl: (url: string) => void,
+	signal?: AbortSignal,
+): Promise<ClaudeCredentials> {
 	const { verifier, challenge } = await generatePkce();
 	const code = await new Promise<{ code: string; state: string }>((resolve, reject) => {
 		const server = createServer((req, res) => {
@@ -126,6 +117,20 @@ export async function loginClaude(onUrl: (url: string) => void): Promise<ClaudeC
 			resolve({ code, state });
 		});
 		server.on("error", reject);
+		if (signal !== undefined) {
+			if (signal.aborted) {
+				reject(new Error("Login cancelled"));
+				return;
+			}
+			signal.addEventListener(
+				"abort",
+				() => {
+					server.close();
+					reject(new Error("Login cancelled"));
+				},
+				{ once: true },
+			);
+		}
 		server.listen(CALLBACK_PORT, CALLBACK_HOST, () => {
 			const params = new URLSearchParams({
 				code: "true",
@@ -166,4 +171,11 @@ export async function getValidClaudeCredentials(): Promise<ClaudeCredentials> {
 	const refreshed = await refresh(stored.refresh);
 	await persist(refreshed);
 	return refreshed;
+}
+
+/** Stored-credential presence and expiry without refreshing. For status display. */
+export async function claudeCredentialStatus(): Promise<{ present: boolean; expiresMs?: number }> {
+	const stored = (await readStore())[STORE_KEY];
+	if (!stored?.access || !stored.refresh) return { present: false };
+	return { present: true, expiresMs: stored.expires > 1e12 ? stored.expires : stored.expires * 1000 };
 }
