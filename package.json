@@ -25,6 +25,7 @@
 		"smoke:mcp": "node test/mcp-stdio-smoke.ts",
 		"smoke:voice:config": "node test/voice-config-smoke.ts",
 		"claude:login": "node scripts/claude-login.ts",
+		"codex:login": "node scripts/codex-login.ts",
 		"face": "node scripts/clanky.ts",
 		"clanky:up": "node scripts/clanky-up.ts",
 		"clanky:status": "node scripts/clanky-up.ts status",
