@@ -27,7 +27,7 @@ function selectModel(): LanguageModel {
 		case "local":
 			return createLocalModel({
 				modelId: process.env.CLANKY_LOCAL_MODEL ?? "qwen3-coder-next",
-				baseURL: process.env.CLANKY_LOCAL_BASE_URL ?? "http://127.0.0.1:8080/v1",
+				baseURL: process.env.CLANKY_LOCAL_BASE_URL ?? "http://127.0.0.1:11434/v1",
 			});
 
 		default:
