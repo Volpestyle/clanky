@@ -27,7 +27,8 @@ function selectModel(): LanguageModel {
 		case "local":
 			return createLocalModel({
 				modelId: process.env.CLANKY_LOCAL_MODEL ?? "qwen3-coder-next",
-				baseURL: process.env.CLANKY_LOCAL_BASE_URL ?? "http://127.0.0.1:8080/v1",
+				baseURL: process.env.CLANKY_LOCAL_BASE_URL ?? "http://127.0.0.1:11434/v1",
+				providerName: process.env.CLANKY_LOCAL_PROVIDER_NAME,
 			});
 
 		default:
@@ -40,4 +41,21 @@ function selectModel(): LanguageModel {
 	}
 }
 
-export default defineAgent({ model: selectModel() });
+// Local models aren't in eve's AI Gateway catalog, so eve can't resolve their
+// context window to compile compaction and refuses to start. Supply it via the
+// modelContextWindowTokens escape hatch. Default 32768; override with
+// CLANKY_LOCAL_CONTEXT_TOKENS to match the server's configured context (e.g.
+// Ollama num_ctx). Codex/claude resolve via the gateway, so leave it unset.
+function localContextWindowTokens(): number | undefined {
+	if ((process.env.CLANKY_MODEL_PROVIDER ?? "codex") !== "local") return undefined;
+	const parsed = Number.parseInt(process.env.CLANKY_LOCAL_CONTEXT_TOKENS ?? "", 10);
+	return Number.isInteger(parsed) && parsed > 0 ? parsed : 32768;
+}
+
+const modelContextWindowTokens = localContextWindowTokens();
+
+export default defineAgent(
+	modelContextWindowTokens === undefined
+		? { model: selectModel() }
+		: { model: selectModel(), modelContextWindowTokens },
+);
