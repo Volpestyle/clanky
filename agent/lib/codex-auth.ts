@@ -39,6 +39,7 @@ interface RefreshResponse {
 	access_token: string;
 	refresh_token: string;
 	expires_in: number;
+	id_token?: string;
 }
 
 function authPath(): string {
@@ -48,15 +49,21 @@ function authPath(): string {
 	);
 }
 
-/** Pull the ChatGPT account id out of the access-token JWT. */
-function decodeAccountId(accessToken: string): string | null {
+/**
+ * Pull the ChatGPT account id out of a JWT. The Codex login derives account_id
+ * from the id_token (see persist_tokens_async in openai/codex); access tokens
+ * usually carry it too, under the same auth claim. Checks the auth claim first,
+ * then a top-level chatgpt_account_id (id_token shape). Accepts undefined so
+ * callers can chain access-token then id_token.
+ */
+function decodeAccountId(token: string | undefined): string | null {
+	if (token === undefined) return null;
 	try {
-		const segment = accessToken.split(".")[1] ?? "";
-		const payload = JSON.parse(Buffer.from(segment, "base64").toString("utf8")) as {
-			[k: string]: { chatgpt_account_id?: string } | unknown;
-		};
-		const claim = payload[JWT_CLAIM_PATH] as { chatgpt_account_id?: string } | undefined;
-		const id = claim?.chatgpt_account_id;
+		const segment = token.split(".")[1] ?? "";
+		const payload = JSON.parse(Buffer.from(segment, "base64").toString("utf8")) as Record<string, unknown>;
+		const claim = payload[JWT_CLAIM_PATH];
+		const fromClaim = typeof claim === "object" && claim !== null ? (claim as { chatgpt_account_id?: unknown }).chatgpt_account_id : undefined;
+		const id = typeof fromClaim === "string" && fromClaim.length > 0 ? fromClaim : (payload as { chatgpt_account_id?: unknown }).chatgpt_account_id;
 		return typeof id === "string" && id.length > 0 ? id : null;
 	} catch {
 		return null;
@@ -95,9 +102,9 @@ async function refresh(refreshToken: string): Promise<CodexCredentials> {
 		throw new Error(`Codex token refresh failed (${res.status}): ${text || res.statusText}`);
 	}
 	const json = (await res.json()) as RefreshResponse;
-	const accountId = decodeAccountId(json.access_token);
+	const accountId = decodeAccountId(json.access_token) ?? decodeAccountId(json.id_token);
 	if (!accountId) {
-		throw new Error("Codex token refresh: access token carried no chatgpt_account_id");
+		throw new Error("Codex token refresh: no chatgpt_account_id in access or id token");
 	}
 	return {
 		type: "oauth",
@@ -131,9 +138,9 @@ async function exchangeCode(code: string, verifier: string): Promise<CodexCreden
 		throw new Error(`Codex token exchange failed (${res.status}): ${text || res.statusText}`);
 	}
 	const json = (await res.json()) as RefreshResponse;
-	const accountId = decodeAccountId(json.access_token);
+	const accountId = decodeAccountId(json.access_token) ?? decodeAccountId(json.id_token);
 	if (!accountId) {
-		throw new Error("Codex token exchange: access token carried no chatgpt_account_id");
+		throw new Error("Codex token exchange: no chatgpt_account_id in access or id token");
 	}
 	return {
 		type: "oauth",

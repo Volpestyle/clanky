@@ -179,7 +179,20 @@ export async function startVoiceSession(config: VoiceSessionConfig): Promise<Voi
 			stats.decodedVideoFrameCount += 1;
 		},
 	});
-	await realtime.connect(await buildVoiceConnectOptions(config));
+	try {
+		await realtime.connect(await buildVoiceConnectOptions(config));
+	} catch (error) {
+		// Realtime connect failed (expired key, network, etc.) after ClankVox and
+		// the bindings were already spawned; tear them down so no ClankVox process
+		// or Discord voice adapter is left running with no session to stop it.
+		eveSessionBinding.dispose();
+		memoryBinding.dispose();
+		ttsBinding.dispose();
+		turnBuffer.dispose();
+		await realtime.close().catch(() => {});
+		await vox.destroy().catch(() => {});
+		throw error;
+	}
 
 	return {
 		vox,
