@@ -47,8 +47,12 @@ export function isVoiceInputTranscript(transcript: OpenAiRealtimeTranscript): bo
 
 export function extractVoiceMemoryCandidates(transcript: OpenAiRealtimeTranscript, context: VoiceMemoryContext) {
 	if (!isVoiceInputTranscript(transcript)) return [];
-	if (transcript.text.trim().length === 0) return [];
+	// Resolve (and thereby consume) the speaker context for every input transcript
+	// completion, including blank ones, so the speaker FIFO stays 1:1 with input
+	// transcripts. Dropping a blank turn before resolving would leave the queue
+	// unshifted and misattribute the next transcript to a stale speaker.
 	const speakerContext = resolveVoiceTranscriptSpeakerContext(transcript, context);
+	if (transcript.text.trim().length === 0) return [];
 	const message = voiceTranscriptAsDiscordMessage(transcript, context, speakerContext.speaker);
 	const candidates = extractDiscordMemoryCandidates(message);
 	if (speakerContext.speaker !== undefined) return candidates;

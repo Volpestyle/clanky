@@ -218,11 +218,16 @@ class PersistentMcpOAuthProvider implements OAuthClientProvider {
 	}
 
 	async saveTokens(tokens: OAuthTokens): Promise<void> {
-		await updateStoredEntry(this.config.connectionName, this.principalKey, (entry) => ({
-			...entry,
-			tokens,
-			tokenExpiresAt: expiresAtForTokens(tokens),
-		}));
+		await updateStoredEntry(this.config.connectionName, this.principalKey, (entry) => {
+			// Many OAuth servers omit refresh_token on refresh unless they rotate it.
+			// Keep the prior refresh token so the next expiry can refresh again
+			// instead of forcing a full reauthorization.
+			const merged: OAuthTokens =
+				tokens.refresh_token === undefined && entry.tokens?.refresh_token !== undefined
+					? { ...tokens, refresh_token: entry.tokens.refresh_token }
+					: tokens;
+			return { ...entry, tokens: merged, tokenExpiresAt: expiresAtForTokens(merged) };
+		});
 	}
 
 	async redirectToAuthorization(authorizationUrl: URL): Promise<void> {

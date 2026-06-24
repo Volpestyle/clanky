@@ -312,6 +312,13 @@ function normalizeMcpServerConfig(name: string, config: McpServerConfig | Record
 	if (type === undefined) throw new Error(`${source}.${name}.type must be stdio, http, streamable-http, or sse`);
 	if (type === "stdio" && command === undefined) throw new Error(`${source}.${name}.command is required for stdio MCP`);
 	if (type !== "stdio" && url === undefined) throw new Error(`${source}.${name}.url is required for HTTP/SSE MCP`);
+	// Preserve an explicit empty allowedTools (deny-all) distinct from an omitted
+	// one (unrestricted): listServerTools/callMcpTool treat undefined as no limit,
+	// so dropping `[]` would silently turn a deny-all into allow-all.
+	const allowedToolsRaw = (config as Record<string, unknown>).allowedTools;
+	const allowedTools = Array.isArray(allowedToolsRaw)
+		? allowedToolsRaw.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+		: undefined;
 	return {
 		type,
 		...(command === undefined ? {} : { command }),
@@ -320,7 +327,7 @@ function normalizeMcpServerConfig(name: string, config: McpServerConfig | Record
 		...stringRecordProp(config, "env"),
 		...(url === undefined ? {} : { url }),
 		...stringProp(config, "description"),
-		...stringArrayProp(config, "allowedTools"),
+		...(allowedTools === undefined ? {} : { allowedTools }),
 		...booleanProp(config, "disabled"),
 	};
 }

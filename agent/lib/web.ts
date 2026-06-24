@@ -56,9 +56,8 @@ export async function fetchWebPage(input: WebFetchInput, fetchImpl: typeof fetch
 		},
 	});
 	const contentType = response.headers.get("content-type") ?? undefined;
-	const bytes = Buffer.from(await response.arrayBuffer());
-	const sliced = bytes.subarray(0, maxBytes);
-	const raw = sliced.toString("utf8");
+	const { bytes, overflowed } = await readBodyUpTo(response, maxBytes);
+	const raw = bytes.toString("utf8");
 	const parsed = parseWebContent(raw, response.url || url, maxTextChars);
 	return {
 		url,
@@ -66,8 +65,41 @@ export async function fetchWebPage(input: WebFetchInput, fetchImpl: typeof fetch
 		status: response.status,
 		...(contentType === undefined ? {} : { contentType }),
 		...parsed,
-		truncated: bytes.byteLength > maxBytes || parsed.truncated,
+		truncated: overflowed || parsed.truncated,
 	};
+}
+
+/**
+ * Read the response body, stopping (and aborting the download) once maxBytes is
+ * exceeded, so a hostile or huge public endpoint cannot OOM the process. Returns
+ * the bytes capped at maxBytes plus whether more data was available.
+ */
+async function readBodyUpTo(response: Response, maxBytes: number): Promise<{ bytes: Buffer; overflowed: boolean }> {
+	const body = response.body;
+	if (body === null) {
+		const all = Buffer.from(await response.arrayBuffer());
+		return { bytes: all.subarray(0, maxBytes), overflowed: all.byteLength > maxBytes };
+	}
+	const reader = body.getReader();
+	const chunks: Buffer[] = [];
+	let total = 0;
+	let overflowed = false;
+	try {
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			if (value === undefined || value.byteLength === 0) continue;
+			chunks.push(Buffer.from(value.buffer, value.byteOffset, value.byteLength));
+			total += value.byteLength;
+			if (total > maxBytes) {
+				overflowed = true;
+				break;
+			}
+		}
+	} finally {
+		await reader.cancel().catch(() => {});
+	}
+	return { bytes: Buffer.concat(chunks).subarray(0, maxBytes), overflowed };
 }
 
 export async function searchWeb(input: WebSearchInput, fetchImpl: typeof fetch = fetch): Promise<WebSearchResult> {

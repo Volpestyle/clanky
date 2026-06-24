@@ -21,6 +21,22 @@ export function applyEnvUpserts(content: string, updates: Record<string, string>
 	return `${out.join("\n")}\n`;
 }
 
+/**
+ * Pure .env removal: drop the lines defining any of `keys`, preserving comments,
+ * blanks, and the order of remaining lines. Used to clear a setting (e.g. reset
+ * reasoning effort to the server default) rather than writing a sentinel value.
+ */
+export function applyEnvRemovals(content: string, keys: readonly string[]): string {
+	const drop = new Set(keys);
+	const lines = content.length === 0 ? [] : content.split("\n");
+	const out = lines.filter((line) => {
+		const key = envKeyOf(line);
+		return key === null || !drop.has(key);
+	});
+	if (out.length > 0 && out[out.length - 1] === "") out.pop();
+	return out.length === 0 ? "" : `${out.join("\n")}\n`;
+}
+
 /** The KEY of an `export KEY=...` / `KEY=...` line, or null for blanks/comments. */
 function envKeyOf(line: string): string | null {
 	const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/);

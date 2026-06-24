@@ -29,7 +29,7 @@ import {
 	type PromptCommandSpec,
 } from "../node_modules/eve/dist/src/cli/dev/tui/prompt-commands.js";
 import type { SetupFlowRenderer } from "../node_modules/eve/dist/src/cli/dev/tui/setup-flow.js";
-import { applyEnvUpserts } from "../agent/lib/discord/env-file.ts";
+import { applyEnvRemovals, applyEnvUpserts } from "../agent/lib/discord/env-file.ts";
 import { browserBridgeStatus } from "../agent/lib/browser-bridge.ts";
 import {
 	ALL_CODING_HARNESSES,
@@ -200,6 +200,7 @@ const LOCAL_EFFORT_OPTIONS: readonly MenuOption[] = [
 	{ value: "low", label: "low" },
 	{ value: "medium", label: "medium" },
 	{ value: "high", label: "high", hint: "deepest" },
+	{ value: "unset", label: "unset", hint: "no reasoning_effort / server default" },
 	{ value: "keep-current", label: "keep current" },
 ];
 const VOICE_SETTING_OPTIONS: readonly MenuOption[] = [
@@ -1101,11 +1102,16 @@ async function configureEffort(argument: string, flow: SetupFlowRenderer | undef
 	}
 	if (existing.provider === "local") {
 		let effort: string | undefined = splitArgs(argument)[0];
-		if (effort === undefined || !isLocalEffortLevel(effort)) {
-			if (argument.trim().length > 0) return `Unknown local effort "${argument.trim()}". Use low, medium, or high.`;
-			if (flow === undefined) return "Usage: /effort [low|medium|high]";
+		const isClear = (value: string | undefined): boolean => value === "unset" || value === "none" || value === "off";
+		if (effort === undefined || (!isLocalEffortLevel(effort) && !isClear(effort))) {
+			if (argument.trim().length > 0) return `Unknown local effort "${argument.trim()}". Use low, medium, high, or unset.`;
+			if (flow === undefined) return "Usage: /effort [low|medium|high|unset]";
 			effort = await selectLocalEffort(flow, existing.localEffort);
 			if (effort === undefined || effort === "keep-current") return "/effort cancelled.";
+		}
+		if (isClear(effort)) {
+			await removeEnv(["CLANKY_LOCAL_EFFORT"]);
+			return await restartBrainMessage("Local reasoning effort cleared (uses the server default)");
 		}
 		await writeEnv({ CLANKY_LOCAL_EFFORT: effort });
 		return await restartBrainMessage(`Local reasoning effort set to ${effort}`);
@@ -2490,6 +2496,11 @@ async function readConfig(): Promise<ClankyConfig> {
 async function writeEnv(updates: Record<string, string>): Promise<void> {
 	const existing = await readFile(ENV_PATH, "utf8").catch(() => "");
 	await writeFile(ENV_PATH, applyEnvUpserts(existing, updates), "utf8");
+}
+
+async function removeEnv(keys: string[]): Promise<void> {
+	const existing = await readFile(ENV_PATH, "utf8").catch(() => "");
+	await writeFile(ENV_PATH, applyEnvRemovals(existing, keys), "utf8");
 }
 
 async function restartBrainMessage(prefix: string): Promise<string> {
