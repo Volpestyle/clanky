@@ -83,7 +83,8 @@ The daemon advertises the connected extension's `version` and an `expectedExtens
 1. Add the op to `extension/background.js` `dispatch()` (and bump `extension/manifest.template.json` `version`).
 2. Add a route in `src/server.ts` (HTTP side) and forward through `dispatch()` (WS side).
 3. Add a typed client helper in `src/client.ts` and re-export it from `src/index.ts`.
-4. Register the tool in `packages/clanky-core/src/agent-tools.ts` and wire the handler in `agents/clanky/src/handlers.ts`.
+4. Register or update the eve tool in `agent/tools/browser_control.ts` and keep
+   any shared bridge helpers in `agent/lib/browser-bridge.ts`.
 
 Keep ops idempotent and avoid blocking work in the service worker; MV3 SWs can be suspended at any time, and the alarm watchdog will reconnect rather than queue dropped work.
 

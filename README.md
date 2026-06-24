@@ -19,8 +19,7 @@ He is built on three off-the-shelf systems plus a thin layer of glue:
 
 When Clanky needs more than himself, he spawns **performers** — `clanky`,
 `claude`, `codex`, or `opencode` agents — as visible herdr panes, and
-orchestrates them through the herdr swarm CLI. (The prior Pi runtime is fully
-removed; see SPEC.md.)
+orchestrates them through the herdr swarm CLI.
 
 > **Architecture:** see [SPEC.md](SPEC.md) for the complete, authoritative
 > design. This README is a short orientation; the spec is the source of truth.
@@ -127,8 +126,7 @@ Repo-local alternatives:
 
 ## Status
 
-This is the rebuild on the eve + herdr architecture. It replaces the previous
-Pi-runtime build. See [SPEC.md](SPEC.md) §10 for build phases and §9 for the
-migration map from the old model. The free-will presence (phase 7) is wired and
-verified offline (`pnpm check`, `pnpm smoke:discord`); the live voice loop is
-gated on the bot token + ClankVox + Realtime credentials.
+Clanky runs on the eve + herdr architecture described in [SPEC.md](SPEC.md).
+The free-will presence is wired and verified offline (`pnpm check`,
+`pnpm smoke:discord`); the live voice loop is gated on the bot token +
+ClankVox + Realtime credentials.

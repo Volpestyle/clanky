@@ -3,8 +3,7 @@
  *
  * Stage one of two: a cheap, credential-free decision about whether an inbound
  * message is worth a model turn at all. Stage two is the model itself, which may
- * answer or emit [SKIP] (see isSkipReplyText). Ported from the Pi-era
- * evaluateDiscordMessageAcceptance + engagement window.
+ * answer or emit [SKIP] (see isSkipReplyText).
  */
 import { DEFAULT_DISCORD_WAKE_NAMES, resolveWakeNameMatch } from "./wake-names.ts";
 

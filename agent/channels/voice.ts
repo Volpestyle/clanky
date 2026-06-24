@@ -3,7 +3,7 @@
  *
  * A bearer-authenticated WS control surface for live voice. The media session
  * (ClankVox transport + OpenAI Realtime + turn-buffer bridge) is wired by the
- * ported control plane in agent/lib/voice; a Discord-connected host attaches the
+ * control plane in agent/lib/voice; a Discord-connected host attaches the
  * live runtime via attachVoiceRuntime(). Watchable voice work is handed to a
  * herdr pane (clanky:voice-<slug>) through the spawn seam.
  *

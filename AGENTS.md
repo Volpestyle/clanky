@@ -23,10 +23,10 @@
 - `SPEC.md` is the canonical architecture. Clanky is an eve agent (conductor) on a vanilla herdr stage. Before working on runtime behavior, channels, schedules, sessions, tools, or skills, read the bundled eve docs in `node_modules/eve/docs/` (start at `README.md`) and prefer published eve APIs over guesses.
 - Keep package boundaries clean (target layout, SPEC.md §9):
   - `agent/` is the eve Clanky agent: `instructions.md`, `agent.ts`, `channels/`, `tools/`, `schedules/`, `skills/`, `lib/`.
-  - `agent/lib/` owns ported memory, persona, and the herdr spawn-seam helpers.
+  - `agent/lib/` owns memory, persona, and the herdr spawn-seam helpers.
   - `skills/` holds bundled Clanky operator/worker skills loaded from disk; `clanky-herdr-operator` is the coordinator-only fan-out protocol, and `clanky-herdr-worker` is the worker-side coordination protocol.
 - The Discord chat gateway is agent-owned via `agent/channels/discord.ts`: Clanky holds the credential and the conversation. Inbound work that should be watched is surfaced as a herdr pane through the spawn seam, never as a hidden in-process subagent.
-- Do not fork herdr. Use the vanilla `herdr` CLI/skill; if a herdr-side feature is needed, upstream it to `ogulcancelik/herdr`. Pi is fully removed from Clanky (not a dependency, runtime, or performer); the only use of the local Pi checkout (`~/dev/pi`) is the one-time Codex OAuth code port (SPEC.md §4.6).
+- Do not fork herdr. Use the vanilla `herdr` CLI/skill; if a herdr-side feature is needed, upstream it to `ogulcancelik/herdr`. Pi is not part of Clanky (not a dependency, runtime, or performer); use the local Pi checkout (`~/dev/pi`) only as a source reference for the Codex OAuth implementation (SPEC.md §4.6).
 
 ## Custom Face / TUI
 

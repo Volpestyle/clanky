@@ -2,8 +2,8 @@
  * User-token (selfbot) support for Clanky's Discord gateway (SPEC.md §5.3).
  *
  * discord.js targets bot tokens. Discord only exposes Go Live publish/watch to
- * user-token behavior, which was a core Clanky feature, so this ports the Pi-era
- * patches (clanky/packages/clanky-chat-discord/src/discordUserTokenPatches.ts):
+ * user-token behavior, so this module applies the compatibility patches needed
+ * for Discord user-token mode:
  *   - strip the "Bot " REST auth prefix (user tokens carry no prefix),
  *   - identify as a desktop Discord client and use /gateway (not /gateway/bot),
  *   - synthesize the `application` field a user READY payload omits.

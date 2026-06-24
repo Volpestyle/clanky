@@ -1,8 +1,7 @@
 /**
  * Wake-name matching for Clanky's free-will Discord presence (SPEC.md §5.2).
  *
- * Pure, credential-free logic ported from the Pi-era agentDiscordGateway. It
- * answers two questions about a message's text:
+ * Pure, credential-free logic that answers two questions about a message's text:
  *   - addressed: is Clanky being talked *to* ("hey clanky", "clank, ...")?
  *   - mentioned: is his name merely present ("did clanky ship it")?
  * The acceptance gate (acceptance.ts) turns those into a respond/ignore call.

@@ -1,7 +1,5 @@
 /**
  * Value-coercion and guard helpers used across the voice control plane.
- * Ported from @clanky/core (packages/clanky-core/src/util/values.ts) so the
- * voice stack carries no dependency on the retired Pi-era packages.
  */
 
 export type JsonRecord = Record<string, unknown>;

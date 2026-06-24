@@ -1,7 +1,6 @@
 /**
- * Voice control plane (ported from agents/clanky/src/voice/*). Barrel export so
- * the whole stack is part of the compile graph and the eve voice channel can
- * pull in exactly what it needs.
+ * Voice control plane barrel export. Keeps the whole stack in the compile graph
+ * and lets the eve voice channel pull in exactly what it needs.
  */
 export * from "./clankvoxIpcClient.ts";
 export * from "./clankvoxRealtimeBridge.ts";

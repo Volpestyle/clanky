@@ -11,9 +11,8 @@
  *   DISCORD_APPLICATION_ID   edits the deferred response + followups
  *   DISCORD_BOT_TOKEN        proactive messages, fallback, typing
  *
- * NOTE: this is the interactions baseline. DM/mention gateway parity (a
- * persistent Discord Gateway WebSocket reading raw DMs, mentions, and replies)
- * is tracked as a follow-up; see SPEC.md §9.2.
+ * NOTE: this is the interactions baseline. Gateway-owned free-will presence is
+ * documented in SPEC.md §5.2 and booted separately by discord-gateway.ts.
  */
 import { discordChannel } from "eve/channels/discord";
 

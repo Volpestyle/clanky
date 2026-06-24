@@ -1,7 +1,7 @@
 ---
 name: clanky-log-dive
-description: Inspect recent Clanky local sessions, Discord text subagent state, Discord voice chat sessions, voice-worker handoffs, duplicate voice replies, and performance/cost signals with the clanky logs CLI.
-when_to_use: Use when debugging recent Clanky sessions, Discord voice chat, Discord text subagents, voice-worker handoffs, repeated voice responses, duplicate ask_pi calls, stuck Discord inbox items, or Clanky performance/cost regressions.
+description: Inspect Clanky's local eve/herdr runtime status, Discord presence panes, voice runtime symptoms, and performance/cost signals.
+when_to_use: Use when debugging recent Clanky sessions, Discord text or voice presence, repeated voice responses, stuck herdr panes, missing Discord replies, or Clanky performance/cost regressions.
 allowed_tools:
   - Bash
 deps: []
@@ -9,67 +9,77 @@ deps: []
 
 # Clanky Log Dive
 
-Use this skill for Clanky's own local logs and subagent state, covering Clanky Discord text/voice subagents.
+Use this skill for Clanky's own local runtime state, covering the eve brain,
+herdr panes, and Discord text/voice presence mirrors.
 
 ## Boundaries
 
-- Work from `/Users/jamesvolpe/dev/clanky-pi` unless the user gives another checkout.
-- Use the default profile at `/Users/jamesvolpe/.clanky/profiles/default` unless the user asks for another profile.
+- Work from `/Users/james/dev/clanky` unless the user gives another checkout.
+- Use the configured `CLANKY_HOME` when set; otherwise inspect `~/.clanky`.
 - Do not delete or rewrite skills under `~/.claude` or `~/.agents` while debugging logs.
-- Prefer the CLI output first; only open raw JSONL, SQLite, or log files when the CLI output is insufficient.
+- Prefer lifecycle status and herdr pane output first; only open raw JSONL,
+  SQLite, or state files when the command output is insufficient.
 
 ## Primary Commands
 
-Recent overview:
+Lifecycle overview:
 
 ```bash
-pnpm exec tsx agents/clanky/src/bin.ts logs --limit 8 --tail 80
+pnpm clanky status
 ```
 
-Latest Discord voice session:
+Herdr stage overview:
 
 ```bash
-pnpm exec tsx agents/clanky/src/bin.ts logs --session discord-voice --limit 8 --tail 80
+herdr --session clankies agent list
 ```
 
-Voice-worker handoff details:
+Read the active panes, choosing exact names from `agent list`:
 
 ```bash
-pnpm exec tsx agents/clanky/src/bin.ts logs --session voice-worker --limit 8 --tail 40
+herdr --session clankies agent read <agent-name>
 ```
 
-Machine-readable report:
+Common panes to inspect when present:
 
 ```bash
-pnpm exec tsx agents/clanky/src/bin.ts logs --session discord-voice --json
+herdr --session clankies agent read clanky:discord-chat
+herdr --session clankies agent read clanky:voice
 ```
 
-Alternate profile or home:
+Start the runtime if status shows no brain:
 
 ```bash
-pnpm exec tsx agents/clanky/src/bin.ts logs --profile default
-pnpm exec tsx agents/clanky/src/bin.ts logs --home /path/to/.clanky
+pnpm clanky up
 ```
 
 ## What To Check First
 
-1. Read `Subagents` for active `discord-voice`, `voice-worker`, and `discord-guild` state.
-2. Read `Recent Discord Inbox` for stuck `queued` or `claimed` text messages.
-3. In `Selected Session`, check:
-   - `Duplicate tool calls`, especially repeated `ask_pi`.
-   - `Duplicate assistant messages`, especially repeated spoken replies.
-   - timeline ordering between user speech, tool calls, tool results, and assistant messages.
-4. For a selected `discord-voice` session, inspect `Linked Voice Worker` for delegated work, token count, cost, and repeated worker requests.
-5. Read `Discord Voice Log Tail` for realtime errors such as `conversation_already_has_active_response`, TTS buffering, media playback, and clankvox transport state.
-6. Read `Discord Bridge Log Tail` for Discord text gateway acceptance, queueing, and reply send timings.
+1. Check `pnpm clanky status` for the herdr session, brain pane, and serving
+   state.
+2. Read `herdr agent list` for the face pane, Discord presence mirrors, voice
+   mirror, and delegated worker panes.
+3. Read the relevant pane tail and check ordering between user input, tool calls,
+   tool results, and assistant messages.
+4. For Discord text, inspect the gateway/presence pane for acceptance decisions,
+   `[SKIP]`, REST reply failures, and bridge commands.
+5. For voice, inspect the voice pane for realtime errors such as
+   `conversation_already_has_active_response`, TTS buffering, media playback, and
+   ClankVox transport state.
+6. If panes are silent, inspect `.env.local` and `~/.clanky` state paths for
+   missing credentials or stale runtime state without printing secret values.
 
 ## Interpreting Common Findings
 
-- Repeated `ask_pi x3` with matching args means Realtime emitted duplicate tool calls. Confirm whether only one Pi/worker request should have run.
-- Duplicate assistant messages after tool results usually mean each duplicate tool result created another spoken follow-up.
+- Missing brain pane or `serving: false` usually means the eve service is down;
+  run `pnpm clanky up` and re-check status.
+- Duplicate assistant messages after tool results usually mean each duplicate
+  tool result created another spoken follow-up.
 - `conversation_already_has_active_response` means the voice bridge attempted a new Realtime response while another response was active.
-- A `discord-guild` subagent with queue depth and a `claimed` inbox row can indicate a stuck text-chat worker.
-- High linked `voice-worker` tokens/cost usually means duplicate delegations or long tool-heavy work.
+- Missing Discord mirror panes can mean the gateway is not running, no message
+  has been accepted into a presence session yet, or pane spawning failed.
+- High token/cost signals usually mean duplicate delegations or long tool-heavy
+  work.
 
 ## Reporting
 

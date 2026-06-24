@@ -1,8 +1,6 @@
 # Clanky Architecture Spec
 
-Status: target architecture. This document is the source of truth for the
-rebuilt Clanky. It supersedes the previous "Pi is the foundation, Clanky is not
-a daemon" model and every doc written against it.
+Status: target architecture. This document is the source of truth for Clanky.
 
 ## 1. Summary
 
@@ -22,15 +20,10 @@ glue:
 - The **window** is the Clanky iOS app, which reaches the stage over the tailnet
   through an eve relay channel.
 
-The previous build was a Pi runtime with personal resources injected and the
-gateways, turn queue, and subagent coordination hand-rolled in-process. The
-rebuild keeps nothing load-bearing from that model: eve provides the durable
-backend primitives Clanky used to hand-roll, herdr provides visibility and swarm
-coordination, and **Pi is removed entirely** — it is not a dependency, not a
-runtime, and not a performer. The only remaining use of the local Pi checkout
-(`~/dev/pi`) is a **one-time code donation**: the OpenAI Codex OAuth flow is
-ported out of it into `agent/lib` (§4.6). After that port, deleting `~/dev/pi`
-changes nothing about how Clanky runs.
+Pi is outside this architecture: it is not a dependency, runtime, or performer.
+A local `~/dev/pi` checkout may be used only as a source reference for the Codex
+OAuth implementation in `agent/lib` (§4.6); deleting it must not affect how
+Clanky runs.
 
 ## 2. Goals and non-goals
 
@@ -54,8 +47,7 @@ changes nothing about how Clanky runs.
 
 - No custom multiplexer, scheduler, or chat server. herdr and eve own those.
 - No hidden background agents. If it runs, it is a pane.
-- No backwards-compatibility shims for the old Pi-runtime model. Old surfaces
-  are removed, not migrated behind flags.
+- No legacy compatibility shims or alternate runtime surfaces.
 - Cloud (Mac-off) availability is out of scope for v1. The Mac mini is the host.
 
 ## 3. Mental model
@@ -104,8 +96,8 @@ Read it as:
   answer headlessly — it spawns or routes to a herdr pane so the work is
   visible.
 - **Performers are panes.** `clanky`, `claude`, `codex`, or `opencode` agents
-  started with `herdr agent start`. (herdr can start any binary in a pane, but Pi
-  is not a Clanky-blessed performer — see §4.3.)
+  started with `herdr agent start`. (herdr can start any binary in a pane, but
+  the supported performer set is defined in §4.3.)
 - **The window is the iOS app.** It reaches the stage through an eve relay
   channel over the tailnet. One front door (eve) serves both chat with Clanky and
   visibility into every pane.
@@ -139,16 +131,16 @@ Clanky *is* an eve agent: a directory of files (`agent/instructions.md`,
 `agent/tools/`, `agent/channels/`, `agent/schedules/`, `agent/skills/`,
 `agent/lib/`) that eve compiles and runs as a durable local service.
 
-eve provides, off the shelf, everything Clanky used to hand-roll on Pi:
+eve provides Clanky's durable runtime primitives:
 
-| Clanky need | eve primitive | Replaces (old in-process code) |
-| --- | --- | --- |
-| Discord text in/out | `agent/channels/discord.ts` | `agentDiscordGateway`, `discordGatewayController` |
-| Voice in/out | `agent/channels/voice.ts` + ClankVox media | `agentVoiceGateway`, voice supervisor wiring |
-| Durable session state | eve sessions + `continuationToken` | `runtimeTurnQueue`, `mainSessionContext`, `stores` |
-| Scheduled/autonomous runs | `agent/schedules/*.ts` (cron) | (none existed) |
-| Visible face | custom face on `eve/client` (`pnpm face`); `eve dev` for debugging | the Pi `InteractiveMode` TUI |
-| Memory | eve session context + Clanky memory lib | `@clanky/core` memory (ported) |
+| Clanky need | eve primitive |
+| --- | --- |
+| Discord text in/out | `agent/channels/discord.ts` |
+| Voice in/out | `agent/channels/voice.ts` + ClankVox media |
+| Durable session state | eve sessions + `continuationToken` |
+| Scheduled/autonomous runs | `agent/schedules/*.ts` (cron) |
+| Visible face | custom face on `eve/client` (`pnpm face`); `eve dev` for debugging |
+| Memory | eve session context + Clanky memory lib |
 
 **Clanky's face is a custom client on `eve/client`.** `eve dev`'s slash-command
 set is fixed and non-extensible, so Clanky's visible face (`scripts/clanky.ts`,
@@ -206,7 +198,7 @@ adapters can be added later, but the base protocol is always a visible pane.
 
 Pi is **not** a performer. herdr can technically start any binary in a pane, so
 nothing stops a one-off `pi` pane, but Pi is not part of Clanky, not installed,
-and not maintained as a performer. The `pi-tui-coder` skill is removed.
+and not maintained as a performer.
 
 All performers coordinate through the vanilla `herdr` skill (4.5). Whoever is
 orchestrating loads `clanky-herdr-operator` for the harvestable fan-out
@@ -248,8 +240,7 @@ flowchart LR
 - The brain is just another herdr pane — the lead pane — which is why lifecycle
   (SSH) sits below it and interaction (relay) sits inside it.
 - herdr stays vanilla; the glue is TypeScript inside the Clanky eve app.
-- The iOS app's `Services/` layer targets this relay + SSH contract (replacing
-  the earlier herdr-bridge contract, which is gone from the herdr CLI).
+- The iOS app's `Services/` layer targets this relay + SSH contract.
 
 ### 4.5 Skills model
 
@@ -274,32 +265,30 @@ Two skills, split on capability vs protocol — see also
 
 **Requirement (hard):** Clanky's conductor model is backed by the user's
 ChatGPT/Codex **subscription via OpenAI OAuth**, not a per-token OpenAI API key.
-The old build got this from Pi's `/login` (Pi owned the OAuth flow and the
-subscription-backed model). Dropping Pi drops that, so eve must provide it.
+Eve owns the OAuth-backed provider used by the conductor.
 
 **How eve allows it.** eve's `model:` accepts either a Vercel AI Gateway id
 string (key-billed) **or a provider-authored AI SDK `LanguageModel` passed in
 code**. Clanky uses the second form: a custom `LanguageModel` that authenticates
 with the Codex subscription.
 
-**Port shape (versions resolved):** eve is on the Vercel AI SDK
+**Implementation shape (versions resolved):** eve is on the Vercel AI SDK
 (`ai@7.0.0-beta.178`, `@ai-sdk/openai@4.0.0-beta.74`,
-`@ai-sdk/provider@4.0.0-beta.19` — modern `LanguageModelV2`-era spec). Pi does
-**not** use the Vercel AI SDK; its `packages/ai` is a bespoke LLM library on the
-official `openai@6.26.0` SDK, and its Codex provider is Pi's own
-`StreamFunction`, **not** an AI SDK `LanguageModel`. So the port splits in two —
-the OAuth half lifts, the provider half is rebuilt against eve's AI SDK:
+`@ai-sdk/provider@4.0.0-beta.19` — modern `LanguageModelV2`-era spec). The
+`~/dev/pi/packages/ai` implementation is a source reference only: its OAuth
+utility is plain HTTP + PKCE, while its Codex provider is a bespoke
+`StreamFunction` on the official `openai@6.26.0` SDK rather than an AI SDK
+`LanguageModel`.
 
-- **OAuth flow — lift ~verbatim** (plain HTTP + PKCE + token mint/**refresh**,
+- **OAuth flow source** (plain HTTP + PKCE + token mint/**refresh**,
   SDK-independent): `~/dev/pi/packages/ai/src/utils/oauth/openai-codex.ts`,
   `utils/oauth/pkce.ts`, `utils/oauth/device-code.ts`.
-- **Subscription provider — reference only, rebuild** (it is Pi's
-  `StreamFunction` on the `openai` SDK, not portable as code):
+- **Subscription provider source**:
   `~/dev/pi/packages/ai/src/providers/openai-codex-responses.ts`. Reuse it as the
   spec for endpoint/headers/request shape — base URL
   `https://chatgpt.com/backend-api`, path `/codex/responses`, headers
   `chatgpt-account-id` and `OpenAI-Beta: responses=experimental`, OpenAI
-  **Responses API** shape (note Pi also carries ~1400 lines of WebSocket
+  **Responses API** shape. The reference also carries ~1400 lines of WebSocket
   transport and header handling for backend quirks).
 
 **Implementation in eve (`agent/lib/`) — route (a), spike-verified:**
@@ -309,10 +298,11 @@ confirmed **route (a) works** — the stock `@ai-sdk/openai` Responses model tal
 to the Codex backend; no custom `LanguageModelV2` (route b) is needed. The
 working recipe:
 
-1. Port the OAuth util to mint and refresh the Codex token (lift from
-   `~/dev/pi/.../utils/oauth/openai-codex.ts`). Refresh runs inside the always-on
-   eve service; credentials live in the eve secret store / env, never in version
-   control. Token shape is `{ access, refresh, expires, accountId }`.
+1. Implement the OAuth util to mint and refresh the Codex token using
+   `~/dev/pi/.../utils/oauth/openai-codex.ts` as the source reference. Refresh
+   runs inside the always-on eve service; credentials live in the eve secret
+   store / env, never in version control. Token shape is
+   `{ access, refresh, expires, accountId }`.
 2. Build the model on eve's `@ai-sdk/openai@4.0.0-beta.74`:
    ```ts
    const provider = createOpenAI({
@@ -331,8 +321,9 @@ working recipe:
    Wire these as model defaults (a thin wrapper / middleware that always injects
    `instructions` + `store:false`), so callers can't omit them.
 
-Route (b) (hand-write a `LanguageModelV2` from Pi's `openai-codex-responses.ts`)
-stays documented as the **fallback only** if the backend later breaks route (a).
+Route (b) (hand-write a `LanguageModelV2` from the
+`openai-codex-responses.ts` reference) stays documented as the **fallback only**
+if the backend later breaks route (a).
 
 **Caveats / to verify:**
 
@@ -343,11 +334,11 @@ stays documented as the **fallback only** if the backend later breaks route (a).
   (`responses=experimental`); it is the same path the official Codex CLI uses
   with your own subscription, not a scrape, but expect drift.
 - Token **refresh lifecycle** must be owned by the daemon, not a TUI session.
-- Keep the existing **API-key** path (ported from `openAiAuth.ts`) as a fallback
-  provider, and the AI Gateway / Anthropic options available for performers.
+- Keep the **API-key** path as a fallback provider, and the AI Gateway /
+  Anthropic options available for performers.
 
 **Optional second provider — Claude Pro/Max subscription.** `agent/lib/claude-*`
-ports Pi's Anthropic OAuth the same way: `claude-auth.ts` (browser login via
+uses Anthropic OAuth the same way: `claude-auth.ts` (browser login via
 `pnpm claude:login`, refresh, store under `anthropic-oauth`) and `claude-model.ts`
 (`createClaudeModel` on `@ai-sdk/anthropic`). Select it with
 `CLANKY_MODEL_PROVIDER=claude`. Unlike Codex, Anthropic has **no sanctioned
@@ -377,8 +368,8 @@ then shows him.
 
 Clanky is *present* in Discord, not merely callable. He listens to whole
 channels, decides for himself when a message is for him, replies in natural
-conversation, and can jump in or stay quiet. This is the eve+herdr port of the
-Pi-era `agentDiscordGateway` + `discordSubagentCoordinator`.
+conversation, and can jump in or stay quiet. This is the eve+herdr Discord
+presence model.
 
 **The gateway (the always-on ear).** eve's stock `discord.ts` is HTTP
 Interactions only — slash commands, request/response. Presence needs to read
@@ -393,8 +384,8 @@ HTTP-interactions `discord.ts` stays for slash commands; the gateway is the
 free-will surface.
 
 **Addressing + free will.** Every inbound message runs the pure
-`decideDiscordInbound` (`agent/lib/discord/acceptance.ts`, ported from
-`evaluateDiscordMessageAcceptance`). It *accepts* — i.e. spends a model turn —
+`decideDiscordInbound` (`agent/lib/discord/acceptance.ts`). It *accepts* — i.e.
+spends a model turn —
 on any of: a DM, a platform `@mention`, a reply to one of Clanky's own messages,
 a **wake-name address** ("hey clanky", "yo clank", "clanker, …" — matched by
 `agent/lib/discord/wake-names.ts`), a bare wake-name **mention**, or a message
@@ -465,8 +456,8 @@ performers are the visibility.
 Voice is the same presence model with a live media plane. The conductor's
 gateway already holds `GUILD_VOICE_STATES`, so "hop in vc" (a wake-addressed
 chat message, a voice op, or the existing `discord_voice_join` intent) makes
-Clanky join the caller's voice channel. The media path is the ported control
-plane in `agent/lib/voice/*` (ClankVox Rust transport for Discord RTP/Opus,
+Clanky join the caller's voice channel. The media path is the control plane in
+`agent/lib/voice/*` (ClankVox Rust transport for Discord RTP/Opus,
 per-speaker OpenAI Realtime transcription, Realtime or ElevenLabs TTS), attached
 to the gateway's Discord client via `attachVoiceRuntime()` on
 `agent/channels/voice.ts`.
@@ -501,7 +492,7 @@ for a personal account, and off by default.
 
 **Go Live.** With a user token, the gateway exposes a raw opcode seam
 (`rawGatewayClient()`) that drives Discord's screen-share opcodes through the
-already-ported `discordStreamDiscovery` (watch op 20, publish op 18, stop 19,
+`discordStreamDiscovery` control layer (watch op 20, publish op 18, stop 19,
 pause 22). `agent/lib/discord/golive.ts` wraps this as a `GoLiveController`
 (list / watch / go-live / stop / pause), registered active when Clanky is in a
 vc, and surfaced to him as the `discord_golive` tool. Discovered stream
@@ -533,8 +524,8 @@ conversations with full awareness of that work.
 Clanky (or any agent) acting as orchestrator loads `clanky-herdr-operator`,
 spawns one pane per task (`clanky:<slug>`), monitors via sentinel files +
 `herdr agent read`, unblocks by injecting into panes, and harvests results.
-Unchanged from today's operator skill, now driven by an eve conductor instead of
-a Pi runtime.
+The operator skill owns run directories, manifest files, sentinels, and cleanup;
+eve decides when to invoke it.
 
 ### 5.6 Self-subagents and pane mirrors
 
@@ -609,7 +600,7 @@ attach to whichever session you point him at. You may run multiple sessions.
 
 ```
 clanky/
-  agent/                     # the eve Clanky agent (NEW — the conductor)
+  agent/                     # the eve Clanky agent (the conductor)
     instructions.md
     agent.ts
     channels/
@@ -623,16 +614,16 @@ clanky/
     skills/                  # agent-local skills (or symlinked)
     lib/
       discord/               # gateway, acceptance/free-will, wake-names, host
-      voice/                 # ported Realtime/ClankVox control plane
-      ...                    # ported memory, persona, herdr seam helpers
+      voice/                 # Realtime/ClankVox control plane
+      ...                    # memory, persona, herdr seam helpers
   scripts/
     clanky.ts                # custom face on eve/client (pnpm face)
     discord-pane-mirror.ts   # tails a presence session into a herdr pane
   bin/
     clanky.ts                # installed as ~/.local/bin/clanky
   skills/
-    clanky-herdr-operator/   # coordinator fan-out protocol (kept)
-    clanky-*-operator/       # web/media/figma/work-tracker/etc. (kept, audited)
+    clanky-herdr-operator/   # coordinator fan-out protocol
+    clanky-*-operator/       # web/media/figma/work-tracker/etc.
   branding/
   SPEC.md                    # this document
   README.md
@@ -640,38 +631,7 @@ clanky/
 
 ClankVox stays a sibling Rust repo (`../clankvox`) feeding the voice channel.
 
-### 9.2 Migration map (old Pi runtime → new eve agent)
-
-| Old (current) | Disposition |
-| --- | --- |
-| `agents/clanky/` (Pi runtime, 38 `pi-coding-agent` imports) | **Removed.** Replaced by `agent/` (eve). |
-| `agentDiscordGateway`, `agentChatGateway`, `discordGatewayController`, `discordSubagentCoordinator`, `discordWakeNames` | **Ported** to `agent/lib/discord/*` (gateway, acceptance/free-will, wake-names, host) + `agent/channels/discord-gateway.ts`; the "Discord subagent" is a per-channel eve presence session mirrored to a pane. |
-| `agentVoiceGateway`, `agentDiscordVoice`, `voiceSupervisorExtension`, voice coordinators | **Ported.** Control plane → `agent/lib/voice/*`; join/leave + runtime attach → `agent/channels/voice.ts`; "hop in vc" intent + runtime build → `agent/lib/discord/`. |
-| `agents/clanky/src/voice/*` (Realtime, transcription, ClankVox IPC) | **Ported** into the voice channel + `agent/lib`. |
-| `runtimeTurnQueue`, `mainSessionContext`, `mainWorkerDelegation`, `stores` | **Removed.** Replaced by eve durable sessions + `continuationToken` + the spawn seam. |
-| `@clanky/core` (memory, agent tools, subagent store) | **Ported** to `agent/lib` + eve tools; drop the Pi-specific subagent store. |
-| `@clanky/chat-discord` | **Folded** into `agent/channels/discord.ts`. |
-| `@clanky/browser-bridge`, `discord-mcp` | **Removed** in teardown (recoverable on `master`); re-integrate as eve tools/connections when their capabilities are wired back in. |
-| `persona/`, profile/auth commands (`*Auth.ts`, `setupWizard`, `secretPrompt`) | **Re-expressed** as eve instructions + connections/env; drop Pi slash-command wiring. |
-| OpenAI **OAuth** model (was Pi's `/login`) | **Ported** into `agent/lib` as a custom AI SDK `LanguageModel` (§4.6); source: `~/dev/pi/packages/ai` oauth util + codex-responses provider. |
-| `openAiAuth.ts` (OpenAI **API-key** flow) | **Ported** as the fallback provider; the OAuth subscription path is primary. |
-| `skills/pi-tui-coder` | **Removed.** Pi is not a performer. |
-| All `docs/*` written against the Pi-foundation model | **Removed** (this spec replaces them). |
-
-### 9.3 Removed docs
-
-The following are deleted as part of this rebuild; their accurate content is
-absorbed here:
-
-- `docs/pi-foundation.md` — Pi is no longer the foundation.
-- `docs/discord-voice-architecture.md` — voice is an eve channel now.
-- `docs/configuration.md`, `docs/getting-started.md`,
-  `docs/command-reference.md`, `docs/memory-and-privacy.md`,
-  `docs/troubleshooting.md` — written against Pi profiles/TUI flows.
-- `docs/ROADMAP.md` — the AgentRoom retirement plan is complete/superseded.
-- `docs/qa/*` — Pi-runtime live runbooks.
-
-### 9.4 Integration model: connections vs. tools vs. dynamic MCP
+### 9.2 Integration model: connections vs. tools vs. dynamic MCP
 
 Three tiers, separated by trust and auth shape. Pick by the rule below; do not
 blur them.
@@ -717,54 +677,22 @@ connections); the agent picks up the change on the next turn. `instructions.md`
 describes roles, so swapping Linear for another tracker, or Figma for another design
 tool, is a binding change, not an edit to the persona.
 
-## 10. Build phases
+## 10. Implementation status
 
-1. **Skeleton + model auth** — scaffold the eve Clanky agent (`npx eve init`),
-   port persona + instructions, and wire the **OpenAI Codex-subscription OAuth
-   model** (§4.6) so the conductor runs on the subscription from day one. Get
-   `eve dev` running in a herdr pane as the face.
-2. **Spawn seam** — implement the eve tool that does `herdr agent start` and
-   tracks the pane; prove "background work becomes a visible pane." Add the
-   presence self-report to the `herdr` skill.
-3. **Discord channel** — stock `agent/channels/discord.ts` (HTTP Interactions /
-   slash commands) for request/response use.
-4. **Relay channel** — raw WS relay to `herdr.sock`; repoint the iOS app; verify
-   pane visibility/steering from the phone.
-5. **Voice channel** — port the voice control plane + ClankVox into
-   `agent/channels/voice.ts`.
-6. **Schedules + cleanup** — add cron jobs; delete the old `agents/clanky` Pi
-   runtime, dead packages, and superseded docs.
-7. **Free-will Discord presence** (§5.2/§5.3) — the Gateway-owned text + voice
-   presence. **Done (verified offline):** wake-name + acceptance/free-will gate
-   (`agent/lib/discord/acceptance.ts`, `wake-names.ts`) with a pure smoke
-   (`pnpm smoke:discord`); the Gateway WS client (`gateway.ts`, discord.js);
-   the host/router to per-channel presence sessions with `[SKIP]`, engagement
-   window, and bridge commands (`host.ts`); the pane mirror
-   (`scripts/discord-pane-mirror.ts`) + boot seam (`discord-gateway.ts`);
-   awareness/delegation via the shared tool surface + instructions; and the
-   "hop in vc" intent + voice join seam (`voice-intent.ts`, `voice-runtime.ts`).
-   **Also done (verified offline):** user/self-token login for selfbot use
-   (`user-token-patches.ts`, `CLANKY_DISCORD_CREDENTIAL_KIND`); the Go Live
-   control layer (`golive.ts` + `discord_golive` tool) over the raw-gateway
-   opcode seam + `discordStreamDiscovery`; and the **custom face**
-   (`scripts/clanky.ts`, `pnpm face`) on eve/client that mirrors eve's TUI and
-   adds the slash commands eve can't — `/discord-token`, `/model`, `/harness`
-   (rewrite `.env.local` via the pure `env-file.ts` merge + restart the brain),
-   `/new`, `/status`.
-   **Live-gated remainder** (needs the token, ClankVox, and OpenAI
-   Realtime creds, so not verifiable offline): the realtime voice loop routing
-   substantive turns into a shared voice **eve session** (for unified memory)
-   rather than only the realtime brain; the `clanky:voice` transcript pane; and
-   the ClankVox Go Live decode/publish forwarding (the sink is wired, the media
-   path is unexercised offline).
-
-Each phase keeps the system runnable; the old Pi runtime is removed only in
-phase 6, once the eve agent covers its surface.
+- **Core runtime:** eve agent, custom face, model selection, harness profiles,
+  herdr spawn seam, relay channel, schedules, and dynamic MCP bridge are active
+  surfaces.
+- **Discord presence:** Gateway-owned text presence, wake-name/free-will gate,
+  per-channel presence sessions, pane mirror, bridge commands, voice join intent,
+  user-token mode, and Go Live control layer are wired and verified offline.
+- **Live-gated voice:** the realtime voice loop, `clanky:voice` transcript pane,
+  and ClankVox Go Live media forwarding require a Discord token, ClankVox, and
+  OpenAI Realtime credentials for full live verification.
 
 ## 11. Open decisions
 
 - **Relay transport fit** — confirm a raw eve WS channel carries live terminal
-  scrollback cleanly (spike before phase 4). Fallback: upstream the herdr bridge
+  scrollback cleanly before relying on it. Fallback: upstream the herdr bridge
   subcommand and let eve be a client of it.
 - **Face surface — RESOLVED: custom face.** eve's stock TUI has a fixed,
   non-extensible slash-command set, so the face is `scripts/clanky.ts` (`pnpm

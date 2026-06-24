@@ -1,7 +1,6 @@
 /**
- * Voice session supervisor — wires the ported control plane together:
- * ClankVox media transport + OpenAI Realtime + the turn-buffer bridge. This is
- * the eve-era replacement for the old voiceSupervisorExtension.
+ * Voice session supervisor — wires the voice control plane together:
+ * ClankVox media transport + OpenAI Realtime + the turn-buffer bridge.
  *
  * The Discord voice adapter (`guild`) and provider credentials are injected at
  * runtime by whatever owns the Discord connection; this module owns the wiring,

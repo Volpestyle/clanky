@@ -1,12 +1,12 @@
 /**
  * OpenAI Codex (ChatGPT subscription) OAuth credential store for Clanky.
  *
- * Ported from ~/dev/pi/packages/ai/src/utils/oauth/openai-codex.ts: the browser
- * login flow (mint once, via the face's /login or `pnpm codex:login`), refresh
- * before expiry, and a valid-credential accessor. The device-code variant is
- * not ported; the browser callback flow matches the laptop face.
+ * Browser login flow for minting once via the face's /login or
+ * `pnpm codex:login`, refreshing before expiry, and reading valid credentials.
+ * The source reference is documented in SPEC.md §4.6.
  *
- * See SPEC.md §4.6.
+ * This module intentionally uses the browser callback flow that matches the
+ * laptop face.
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
