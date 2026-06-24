@@ -52,7 +52,7 @@ export interface VoiceRuntimeSettings {
 
 export function buildVoiceRuntimeSettings(env: NodeJS.ProcessEnv, memorySpeaker?: VoiceMemorySpeaker): VoiceRuntimeSettings {
 	const realtimeProvider = parseRealtimeProvider(env.CLANKY_VOICE_REALTIME_PROVIDER);
-	const ttsProvider = parseTtsProvider(env.CLANKY_VOICE_TTS_PROVIDER, env.CLANKY_ELEVENLABS_VOICE_ID);
+	const ttsProvider = parseTtsProvider(env.CLANKY_VOICE_TTS_PROVIDER, env.CLANKY_ELEVENLABS_VOICE_ID?.trim() || env.ELEVENLABS_VOICE_ID);
 	const realtime = buildRealtimeConfig(realtimeProvider, env);
 	const outputModality: OpenAiRealtimeOutputModality = ttsProvider === "elevenlabs" ? "text" : "audio";
 	const connect: OpenAiRealtimeConnectOptions = {

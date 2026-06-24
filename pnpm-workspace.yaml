@@ -1,7 +1,14 @@
 packages:
   - packages/*
+# Supply-chain guards (AGENTS.md / CLAUDE.md): keep these enabled.
+minimumReleaseAge: 1440
+minimumReleaseAgeExclude:
+  - eve@0.11.4
+strictPeerDependencies: true
+verifyStoreIntegrity: true
+# Explicit build-script allowlist. Empty = no dependency may run install/build
+# scripts. zstd/liblzma are optional native addons we never build.
+onlyBuiltDependencies: []
 allowBuilds:
   '@mongodb-js/zstd': false
   node-liblzma: false
-minimumReleaseAgeExclude:
-  - eve@0.11.4
