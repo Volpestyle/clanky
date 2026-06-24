@@ -1,8 +1,12 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
+
 export const CLANKY_CODING_HARNESS_ENV = {
 	id: "CLANKY_CODING_HARNESS",
 	allowed: "CLANKY_CODING_HARNESSES",
 	command: "CLANKY_CODING_HARNESS_COMMAND",
 	runtime: "CLANKY_CODING_HARNESS_RUNTIME",
+	codexOllamaHome: "CLANKY_CODEX_OLLAMA_HOME",
 } as const;
 
 export const CODING_HARNESS_IDS = ["clanky", "claude", "codex", "opencode", "custom"] as const;
@@ -278,7 +282,7 @@ function resolveHarnessById(
 			? undefined
 			: parseCodingHarnessLauncher(env?.[codingHarnessLauncherEnvKey(launchable)]) ?? profile.launcher ?? "default";
 		const model = launchable === undefined ? undefined : nonEmpty(env?.[codingHarnessModelEnvKey(launchable)]);
-		const command = launchable !== undefined && launcher === "ollama" ? ollamaHarnessCommand(launchable, model) : undefined;
+		const command = launchable !== undefined && launcher === "ollama" ? ollamaHarnessCommand(launchable, model, env) : undefined;
 		return { ...profile, runtime: runtime ?? profile.runtime, launcher, model, command };
 	}
 	const command = parseHarnessCommand(env?.[CLANKY_CODING_HARNESS_ENV.command]);
@@ -329,17 +333,43 @@ function executableBasename(executable: string): string {
 	return executable.split(/[\\/]/).pop()?.toLowerCase() ?? executable.toLowerCase();
 }
 
-function ollamaHarnessCommand(id: LaunchableCodingHarnessId, model: string | undefined): readonly string[] {
-	const command = ["ollama", "launch", id, "--yes"];
+// `ollama launch codex` rewrites the codex config dir (CODEX_HOME, default
+// ~/.codex) to route codex at the local Ollama server. Give Ollama-launched codex
+// workers an isolated CODEX_HOME so they never clobber the user's subscription
+// config, letting a local codex worker and a gpt-5.x subscription codex worker run
+// side by side. Override the location with CLANKY_CODEX_OLLAMA_HOME. The home is
+// shared across concurrent Ollama codex workers; the per-worker model is pinned by
+// the `--model` flag, so the routing config they share is identical.
+export function ollamaCodexHome(env: CodingHarnessEnv = process.env): string {
+	const configured = nonEmpty(env[CLANKY_CODING_HARNESS_ENV.codexOllamaHome]);
+	if (configured !== undefined) return configured;
+	return join(nonEmpty(env.HOME) ?? homedir(), ".clanky", "codex-ollama-home");
+}
+
+function ollamaHarnessCommand(
+	id: LaunchableCodingHarnessId,
+	model: string | undefined,
+	env: CodingHarnessEnv | undefined,
+): readonly string[] {
+	// Only codex persists routing into its config dir; isolate just that home.
+	const command = id === "codex" ? ["env", `CODEX_HOME=${ollamaCodexHome(env)}`] : [];
+	command.push("ollama", "launch", id, "--yes");
 	if (model !== undefined) command.push("--model", model);
 	command.push("--", ...OLLAMA_HARNESS_EXTRA_ARGS[id]);
 	return command;
 }
 
 function ollamaLaunchIntegration(command: readonly string[] | undefined): LaunchableCodingHarnessId | undefined {
-	if (command === undefined || executableBasename(command[0] ?? "") !== "ollama") return undefined;
-	if (command[1] !== "launch") return undefined;
-	return parseLaunchableCodingHarnessId(command[2]);
+	if (command === undefined) return undefined;
+	// Skip a leading `env VAR=VAL ...` prefix (used to isolate codex's CODEX_HOME).
+	let i = 0;
+	if (executableBasename(command[i] ?? "") === "env") {
+		i++;
+		while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(command[i] ?? "")) i++;
+	}
+	if (executableBasename(command[i] ?? "") !== "ollama") return undefined;
+	if (command[i + 1] !== "launch") return undefined;
+	return parseLaunchableCodingHarnessId(command[i + 2]);
 }
 
 function nonEmptyCommand(command: readonly string[] | undefined): string[] | undefined {

@@ -206,7 +206,9 @@ class PersistentMcpOAuthProvider implements OAuthClientProvider {
 	}
 
 	async clientInformation(): Promise<OAuthClientInformationMixed | undefined> {
-		return (await this.entry())?.clientInformation;
+		const entry = await this.entry();
+		if (entry?.redirectUrl !== undefined && entry.redirectUrl !== this.redirect) return undefined;
+		return entry?.clientInformation;
 	}
 
 	async saveClientInformation(clientInformation: OAuthClientInformationMixed): Promise<void> {

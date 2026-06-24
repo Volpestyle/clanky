@@ -1,10 +1,11 @@
 import { defineTool } from "eve/tools";
 import { always } from "eve/tools/approval";
 import { z } from "zod";
+import { gated } from "../lib/approvals.ts";
 import { discordSendMessage } from "../lib/discord/rest.ts";
 
 export default defineTool({
-	needsApproval: always(),
+	needsApproval: gated(always()),
 	description:
 		"Send a Discord channel message and optionally upload local files such as generated images. Requires user approval because it posts externally.",
 	inputSchema: z.object({

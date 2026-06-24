@@ -35,6 +35,10 @@ function expectThrows(fn: () => unknown, label: string): void {
 
 const task = "TASK";
 
+// Ollama-launched codex isolates its CODEX_HOME so it can't clobber ~/.codex.
+const CODEX_OLLAMA_HOME = "/tmp/clanky-test-codex-home";
+const CODEX_HOME_PREFIX = ["env", `CODEX_HOME=${CODEX_OLLAMA_HOME}`];
+
 expectEqual(resolvePerformerArgv({ performer: "clanky", task }), {
 	argv: ["clanky", "worker", task],
 	performer: "clanky",
@@ -70,6 +74,7 @@ const ollamaCodex = resolveCodingHarness({
 	env: {
 		[codingHarnessLauncherEnvKey("codex")]: "ollama",
 		[codingHarnessModelEnvKey("codex")]: "qwen3-coder:latest",
+		CLANKY_CODEX_OLLAMA_HOME: CODEX_OLLAMA_HOME,
 	},
 });
 expectEqual({
@@ -85,11 +90,11 @@ expectEqual({
 	runtime: "native",
 	launcher: "ollama",
 	model: "qwen3-coder:latest",
-	command: ["ollama", "launch", "codex", "--yes", "--model", "qwen3-coder:latest", "--", "--dangerously-bypass-approvals-and-sandbox", "{KICKOFF}"],
+	command: [...CODEX_HOME_PREFIX, "ollama", "launch", "codex", "--yes", "--model", "qwen3-coder:latest", "--", "--dangerously-bypass-approvals-and-sandbox", "{KICKOFF}"],
 }, "codex Ollama harness uses the CLI integration");
 if (ollamaCodex.command?.includes("codex-app")) throw new Error("codex Ollama harness must not launch codex-app");
 expectEqual(resolvePerformerArgv({ performer: ollamaCodex.performer, task, command: ollamaCodex.command }), {
-	argv: ["ollama", "launch", "codex", "--yes", "--model", "qwen3-coder:latest", "--", "--dangerously-bypass-approvals-and-sandbox", task],
+	argv: [...CODEX_HOME_PREFIX, "ollama", "launch", "codex", "--yes", "--model", "qwen3-coder:latest", "--", "--dangerously-bypass-approvals-and-sandbox", task],
 	performer: "custom",
 }, "codex Ollama harness replaces kickoff token");
 
@@ -130,6 +135,7 @@ const performerCodex = resolveCodingHarness({
 	env: {
 		[codingHarnessLauncherEnvKey("codex")]: "ollama",
 		[codingHarnessModelEnvKey("codex")]: "qwen3-coder:latest",
+		CLANKY_CODEX_OLLAMA_HOME: CODEX_OLLAMA_HOME,
 	},
 });
 expectEqual(performerCodex.command, ollamaCodex.command, "explicit codex performer carries launcher config");
@@ -192,7 +198,7 @@ expectEqual(resolveCodingHarness({ performer: "claude", env: {} }), {
 	launcher: "default",
 }, "explicit claude performer resolves the claude harness profile");
 
-expectEqual(resolveCodingHarness({ env: { CLANKY_CODING_HARNESS: "codex", CLANKY_CODING_HARNESS_CODEX_LAUNCHER: "ollama", CLANKY_CODING_HARNESS_CODEX_MODEL: "qwen3-coder:latest" } }), {
+expectEqual(resolveCodingHarness({ env: { CLANKY_CODING_HARNESS: "codex", CLANKY_CODING_HARNESS_CODEX_LAUNCHER: "ollama", CLANKY_CODING_HARNESS_CODEX_MODEL: "qwen3-coder:latest", CLANKY_CODEX_OLLAMA_HOME: CODEX_OLLAMA_HOME } }), {
 	id: "codex",
 	label: "Codex",
 	description: "Codex CLI pane using Codex's native coding harness",
@@ -200,7 +206,7 @@ expectEqual(resolveCodingHarness({ env: { CLANKY_CODING_HARNESS: "codex", CLANKY
 	runtime: "native",
 	launcher: "ollama",
 	model: "qwen3-coder:latest",
-	command: ["ollama", "launch", "codex", "--yes", "--model", "qwen3-coder:latest", "--", "--dangerously-bypass-approvals-and-sandbox", "{KICKOFF}"],
+	command: [...CODEX_HOME_PREFIX, "ollama", "launch", "codex", "--yes", "--model", "qwen3-coder:latest", "--", "--dangerously-bypass-approvals-and-sandbox", "{KICKOFF}"],
 }, "codex ollama launcher builds an ollama launch command");
 
 expectEqual(resolveCodingHarness({ command: ["opencode", "run", "{KICKOFF}"] }), {
@@ -211,6 +217,16 @@ expectEqual(resolveCodingHarness({ command: ["opencode", "run", "{KICKOFF}"] }),
 	runtime: "opencode",
 	command: ["opencode", "run", "{KICKOFF}"],
 }, "custom opencode command infers opencode runtime");
+
+const envPrefixedCodex = [...CODEX_HOME_PREFIX, "ollama", "launch", "codex", "--yes", "--", "--dangerously-bypass-approvals-and-sandbox", "{KICKOFF}"];
+expectEqual(resolveCodingHarness({ command: envPrefixedCodex }), {
+	id: "custom",
+	label: "Custom",
+	description: "Explicit coding harness command",
+	performer: "codex",
+	runtime: "native",
+	command: envPrefixedCodex,
+}, "env-prefixed ollama codex command still infers codex performer and native runtime");
 
 expectEqual(parseHarnessCommand("codex --flag 'two words'"), ["codex", "--flag", "two words"], "harness command parses quoted args");
 expectEqual(splitCommandLine(serializeCommandLine(["cmd", "two words", "it's ok"])), ["cmd", "two words", "it's ok"], "harness command serialization round-trips");

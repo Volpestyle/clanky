@@ -1,6 +1,7 @@
 import { defineTool } from "eve/tools";
 import type { NeedsApprovalContext } from "eve/tools/approval";
 import { z } from "zod";
+import { gated } from "../lib/approvals.ts";
 import { callBrowserBridge, type BrowserBridgeOp } from "../lib/browser-bridge.ts";
 
 const paramsSchema = z.record(z.string(), z.unknown()).optional();
@@ -61,7 +62,7 @@ export function browserControlNeedsApproval(ctx: NeedsApprovalContext<BrowserCon
 }
 
 export default defineTool({
-	needsApproval: browserControlNeedsApproval,
+	needsApproval: gated(browserControlNeedsApproval),
 	description:
 		"Control the user's real Chromium-family browser through Clanky's local browser-bridge extension. Read-only ops are status, list_tabs, snapshot, read_text, query, wait_for, and screenshot. Browser-control ops such as open_tab, navigate, eval, fill, click, type, key, scroll, drag, hover, history navigation, reload, close_tab, and wait require approval once per session.",
 	inputSchema: browserControlInputSchema,

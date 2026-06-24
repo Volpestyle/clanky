@@ -118,7 +118,11 @@ unset it is `clanky` (`clanky worker {KICKOFF}`). Built-in harnesses are
 `clanky`, `claude`, `codex`, and `opencode`. `custom` uses
 `CLANKY_CODING_HARNESS_COMMAND`. The `claude`, `codex`, and `opencode` harnesses
 can use the default CLI launcher or `ollama launch <harness>` with a configured
-model. Codex Ollama mode uses `ollama launch codex`, not the Codex app.
+model. Codex Ollama mode uses `ollama launch codex`, not the Codex app, and runs
+in an isolated `CODEX_HOME` (`CLANKY_CODEX_OLLAMA_HOME`, default
+`~/.clanky/codex-ollama-home`) so it never clobbers a subscription codex worker's
+`~/.codex`. This lets a local Ollama codex worker and a subscription codex worker
+run side by side.
 
 Override with `--` for a different agent. The `{KICKOFF}` token is replaced
 with the kickoff message; without it, the kickoff is appended as the last

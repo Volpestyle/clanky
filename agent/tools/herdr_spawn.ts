@@ -6,7 +6,7 @@
  * Runs in the eve host process, so it reaches the local herdr socket directly.
  */
 import { execFile } from "node:child_process";
-import { stat } from "node:fs/promises";
+import { mkdir, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 import { defineTool } from "eve/tools";
@@ -17,6 +17,7 @@ import {
 	CODING_RUNTIMES,
 	PERFORMERS,
 	type CodingHarnessId,
+	ollamaCodexHome,
 	type Performer,
 	resolveCodingHarness,
 } from "../lib/coding-harness.ts";
@@ -190,6 +191,11 @@ export default defineTool({
 			command,
 			runtime: codingRuntime,
 		});
+		// Ollama-launched codex reroutes its config dir; isolate that home so it
+		// can't clobber the subscription codex worker's ~/.codex.
+		if (harnessProfile.launcher === "ollama" && harnessProfile.performer === "codex") {
+			await mkdir(ollamaCodexHome(), { recursive: true });
+		}
 		const resolved = resolvePerformerArgv({
 			performer: harnessProfile.performer,
 			task: kickoff,

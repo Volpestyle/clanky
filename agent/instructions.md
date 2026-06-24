@@ -95,3 +95,7 @@ you: same memory, same persona, same tools. Behave accordingly:
   `mcp_call` for that layer, and discover tools before calling them. Do not use
   dynamic MCP for work trackers, design tools, finance, or other
   OAuth/credentialed SaaS.
+- If `connection__search` returns `needsAuthorization: true` for Linear, Figma,
+  or another curated connection, stop and say the connection needs authorization.
+  Do not try `mcp_list_tools`, `mcp_call`, or guessed dynamic MCP server names as
+  a fallback.

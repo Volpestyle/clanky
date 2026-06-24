@@ -160,13 +160,18 @@ streamed events (`message.appended`, `reasoning.completed`, `actions.requested`,
 `action.result`, `turn.failed`, …) closely mirroring `eve dev`'s look — gutter
 glyphs, a yellow phase-aware working spinner, and a persistent bottom status
 line (model · effort · tokens · endpoint). On top it adds the config slash
-commands `eve dev` can't: `/discord-token`, `/model`, `/harness`, `/effort`
-(they rewrite `.env.local` and restart the brain). The stock `eve dev` TUI stays
-available as a local dev/debug interface against the same runtime.
+commands `eve dev` can't: `/discord-token`, `/model`, `/harness`, `/effort`,
+`/approvals` (they rewrite `.env.local` and restart the brain). The stock
+`eve dev` TUI stays available as a local dev/debug interface against the same
+runtime.
 
 Known gap: the face does not yet surface `input.requested` (tool-approval /
 human-input prompts) or `session.waiting`; only the streaming render path above
-is wired.
+is wired. Until it does, approval-gated tools would park a turn the face can't
+resume, so `/approvals auto` (env `CLANKY_AUTO_APPROVE=1`, read by
+`agent/lib/approvals.ts`) globally bypasses every tool/connection approval gate
+so Clanky never asks; `/approvals prompt` restores per-tool gating. This only
+affects approval gates, not the model's own `ask_question` clarifications.
 
 The same HTTP routes back the iOS chat surface. For any non-local client, eve's
 default dev auth is not sufficient — public surfaces need their own route auth

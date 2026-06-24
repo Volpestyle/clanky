@@ -3,13 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import figmaConnection from "../agent/connections/figma.ts";
 import linearConnection from "../agent/connections/linear.ts";
+import { authoredMcpConnectionHasApproval, authoredMcpConnectionHasAuthorization } from "../agent/lib/curated-mcp-connections.ts";
 import { listAvailableConnections, resolveRoleBindings, setRoleBinding } from "../agent/lib/integration-roles.ts";
 
 function assert(condition: boolean, message: string): asserts condition {
 	if (!condition) throw new Error(message);
 }
 
-const expectedLinearUrl = process.env.CLANKY_LINEAR_MCP_URL?.trim() || "https://mcp.linear.app/sse";
+const expectedLinearUrl = process.env.CLANKY_LINEAR_MCP_URL?.trim() || "https://mcp.linear.app/mcp";
 const expectedFigmaUrl = process.env.CLANKY_FIGMA_MCP_URL?.trim() || "https://mcp.figma.com/mcp";
 
 assert(linearConnection.url === expectedLinearUrl, "Linear connection URL drifted");
@@ -19,6 +20,8 @@ assert(linearConnection.auth.startAuthorization !== undefined, "Linear connectio
 assert(linearConnection.auth.completeAuthorization !== undefined, "Linear connection cannot complete OAuth");
 assert(linearConnection.auth.vercelConnect === undefined, "Linear connection must not use Vercel Connect");
 assert(linearConnection.approval !== undefined, "Linear connection should be approval-gated");
+assert(authoredMcpConnectionHasAuthorization("linear"), "Linear authored metadata should report auth");
+assert(authoredMcpConnectionHasApproval("linear"), "Linear authored metadata should report approval");
 
 assert(figmaConnection.url === expectedFigmaUrl, "Figma connection URL drifted");
 assert(figmaConnection.description.includes("Figma workspace"), "Figma connection description missing routing context");
@@ -27,6 +30,9 @@ assert(figmaConnection.auth.startAuthorization !== undefined, "Figma connection 
 assert(figmaConnection.auth.completeAuthorization !== undefined, "Figma connection cannot complete OAuth");
 assert(figmaConnection.auth.vercelConnect === undefined, "Figma connection must not use Vercel Connect");
 assert(figmaConnection.approval !== undefined, "Figma connection should be approval-gated");
+assert(authoredMcpConnectionHasAuthorization("figma"), "Figma authored metadata should report auth");
+assert(authoredMcpConnectionHasApproval("figma"), "Figma authored metadata should report approval");
+assert(!authoredMcpConnectionHasAuthorization("missing"), "Unknown authored metadata should not report auth");
 
 const previousHome = process.env.CLANKY_HOME;
 const previousWorkTracker = process.env.CLANKY_WORK_TRACKER;

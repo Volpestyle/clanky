@@ -1,10 +1,11 @@
 import { defineTool } from "eve/tools";
 import { always } from "eve/tools/approval";
 import { z } from "zod";
+import { gated } from "../lib/approvals.ts";
 import { discordAddReaction } from "../lib/discord/rest.ts";
 
 export default defineTool({
-	needsApproval: always(),
+	needsApproval: gated(always()),
 	description:
 		"Add a reaction to a Discord message. Use a Unicode emoji or a custom emoji reaction string from discord_list_emojis. Requires approval because it mutates Discord.",
 	inputSchema: z.object({

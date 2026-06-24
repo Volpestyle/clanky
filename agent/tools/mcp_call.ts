@@ -1,10 +1,11 @@
 import { defineTool } from "eve/tools";
 import { always } from "eve/tools/approval";
 import { z } from "zod";
+import { gated } from "../lib/approvals.ts";
 import { callMcpTool } from "../lib/mcp.ts";
 
 export default defineTool({
-	needsApproval: always(),
+	needsApproval: gated(always()),
 	description:
 		"Call a configured no-auth/static-token dynamic MCP server tool by server and tool name. Use mcp_list_tools first unless the exact server, tool, and schema are already known. Do not use for OAuth SaaS such as Linear or Figma.",
 	inputSchema: z.object({

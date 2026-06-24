@@ -192,7 +192,18 @@ use_ollama_launcher() {
 		echo "spawn.sh: harness $id is configured for Ollama, but ollama is not on PATH" >&2
 		exit 1
 	fi
-	ARGV=(ollama launch "$id" --yes)
+	ARGV=()
+	# `ollama launch codex` rewrites the codex config dir (CODEX_HOME) to route at
+	# the local Ollama server; isolate it so it never clobbers the user's
+	# subscription config at ~/.codex. Override with CLANKY_CODEX_OLLAMA_HOME.
+	if [ "$id" = codex ]; then
+		local codex_home
+		codex_home="$(config_value CLANKY_CODEX_OLLAMA_HOME)"
+		[ -n "$codex_home" ] || codex_home="$HOME/.clanky/codex-ollama-home"
+		mkdir -p "$codex_home"
+		ARGV+=(env "CODEX_HOME=$codex_home")
+	fi
+	ARGV+=(ollama launch "$id" --yes)
 	if [ -n "$model" ]; then ARGV+=(--model "$model"); fi
 	case "$id" in
 		claude) ARGV+=(-- --dangerously-skip-permissions "{KICKOFF}") ;;

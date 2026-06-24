@@ -9,11 +9,13 @@
  */
 import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
+import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { Client, type AgentInfoConnectionEntry, type AgentInfoResult, type HandleMessageStreamEvent } from "eve/client";
 import {
 	EveTUIRunner,
+	type AgentTUIStreamResult,
 	type PromptCommandHandler,
 	type PromptCommandHandlerContext,
 	type PromptCommandOutcome,
@@ -31,6 +33,14 @@ import {
 import type { SetupFlowRenderer } from "../node_modules/eve/dist/src/cli/dev/tui/setup-flow.js";
 import { applyEnvRemovals, applyEnvUpserts } from "../agent/lib/discord/env-file.ts";
 import { browserBridgeStatus } from "../agent/lib/browser-bridge.ts";
+import { buildEveDevServerEnv } from "../agent/lib/eve-dev-env.ts";
+import {
+	authoredMcpConnectionHasApproval,
+	authoredMcpConnectionHasAuthorization,
+} from "../agent/lib/curated-mcp-connections.ts";
+import { inspectConnectionSearchOutput } from "../agent/lib/mcp-auth-probe.ts";
+import { monitorNoReplyEvents, NO_ASSISTANT_REPLY_NOTICE } from "../agent/lib/tui-no-reply.ts";
+import { isAutoApproveValue } from "../agent/lib/approvals.ts";
 import {
 	ALL_CODING_HARNESSES,
 	BUILTIN_CODING_HARNESSES,
@@ -80,6 +90,7 @@ import {
 const REPO = process.env.CLANKY_REPO_DIR ?? process.cwd();
 const PORT = resolvePort(process.env.CLANKY_EVE_PORT, 2000);
 const HOST = `http://127.0.0.1:${PORT}`;
+const CALLBACK_PROXY_PORT = resolvePort(process.env.CLANKY_EVE_CALLBACK_PROXY_PORT, 3000);
 const ENV_PATH = join(REPO, ".env.local");
 const CLANKY_HEADER_NOTE = "Clanky face on eve/client. Type /help for commands.";
 const runHostCommand = promisify(execFile);
@@ -100,6 +111,7 @@ type ClankyExtensionCommandName =
 	| "model"
 	| "harness"
 	| "effort"
+	| "approvals"
 	| "image-model"
 	| "voice"
 	| "integrations"
@@ -127,6 +139,7 @@ type ClankyConfig = {
 	localModel?: string;
 	localBaseUrl?: string;
 	localEffort?: string;
+	autoApprove?: string;
 	codingHarness?: string;
 	codingHarnesses?: string;
 	codingHarnessCommand?: string;
@@ -259,6 +272,7 @@ const MCP_TRANSPORT_OPTIONS: readonly MenuOption[] = [
 const MCP_DYNAMIC_NAME_RE = /^[a-z0-9][a-z0-9_-]*$/i;
 
 let server: ChildProcess | null = null;
+let callbackProxyServer: HttpServer | null = null;
 let ownsServer = false;
 let terminalReady = false;
 let forwardServerOutput = false;
@@ -269,6 +283,7 @@ installClankyPromptCommands();
 process.stdout.write("\x1b[2mstarting Clanky...\x1b[22m\n");
 await reportClankyFaceToHerdr("working", "starting Clanky face");
 ownsServer = await ensureServer();
+await startCallbackProxy();
 await reportClankyFaceToHerdr("idle", "Clanky face ready");
 
 const client = new Client({ host: HOST });
@@ -277,6 +292,7 @@ const renderer = new TerminalRenderer({
 	captureForeignOutput: true,
 });
 gateServerOutputUntilHeader(renderer);
+renderNoticeForEmptyAssistantReply(renderer);
 const runner = new EveTUIRunner({
 	name: "Clanky",
 	session: client.session(),
@@ -292,6 +308,7 @@ try {
 	await runner.run();
 } finally {
 	await reportClankyFaceToHerdr("unknown", "Clanky face stopped");
+	await stopCallbackProxy();
 	if (ownsServer) await stopServer();
 }
 
@@ -353,6 +370,14 @@ function installClankyPromptCommands(): void {
 			argumentHint: "[codex: minimal|low|medium|high|xhigh] [local: low|medium|high]",
 			takesArgument: true,
 			build: (argument) => ({ type: "extension", name: "effort", argument }),
+		},
+		{
+			name: "approvals",
+			aliases: ["yolo"],
+			description: "Auto-approve all tool calls or restore per-tool prompting",
+			argumentHint: "[auto|prompt|status]",
+			takesArgument: true,
+			build: (argument) => ({ type: "extension", name: "approvals", argument }),
 		},
 		{
 			name: "image-model",
@@ -461,6 +486,15 @@ function gateServerOutputUntilHeader(renderer: TerminalRenderer): void {
 	};
 }
 
+function renderNoticeForEmptyAssistantReply(renderer: TerminalRenderer): void {
+	const renderStream = renderer.renderStream.bind(renderer);
+	renderer.renderStream = async (result: AgentTUIStreamResult, options) => {
+		const monitor = monitorNoReplyEvents(result.events);
+		await renderStream({ ...result, events: monitor.events }, options);
+		if (monitor.shouldRenderNotice()) renderer.renderNotice(NO_ASSISTANT_REPLY_NOTICE);
+	};
+}
+
 // eve renders the resolved model id on the persistent status line (not the
 // header). Append the active provider's reasoning effort to that id so the
 // face surfaces effort the way /status reports it. claude has no effort knob,
@@ -531,6 +565,8 @@ function createClankyCommandHandler(): PromptCommandHandler {
 					return { message: await configureHarness(command.argument, context.renderer.setupFlow) };
 				case "effort":
 					return { message: await configureEffort(command.argument, context.renderer.setupFlow) };
+				case "approvals":
+					return { message: await configureApprovals(command.argument) };
 				case "image-model":
 					return { message: await configureImageModel(command.argument) };
 				case "voice":
@@ -1091,6 +1127,8 @@ function harnessUsage(): string {
 		"/harness custom <command...>",
 		"/harness custom --runtime <clanky|native|opencode> <command...>",
 		"Ollama codex workers use 'ollama launch codex', not the Codex desktop app.",
+		"Ollama codex runs in an isolated CODEX_HOME (CLANKY_CODEX_OLLAMA_HOME) so it",
+		"does not clobber a subscription codex worker's ~/.codex.",
 		"Use {KICKOFF} where the task brief should be inserted; otherwise it is appended.",
 	].join("\n");
 }
@@ -1127,6 +1165,26 @@ async function configureEffort(argument: string, flow: SetupFlowRenderer | undef
 
 	await writeEnv({ CLANKY_CODEX_EFFORT: effort });
 	return await restartBrainMessage(`Codex reasoning effort set to ${effort}`);
+}
+
+async function configureApprovals(argument: string): Promise<string> {
+	const mode = splitArgs(argument)[0]?.toLowerCase();
+	if (mode === undefined || mode === "status") {
+		const config = await readConfig();
+		const state = isAutoApproveValue(config.autoApprove)
+			? "auto (Clanky runs every tool without asking)"
+			: "prompt (per-tool approval policy applies)";
+		return `Approvals: ${state}. Usage: /approvals [auto|prompt]`;
+	}
+	if (mode !== "auto" && mode !== "prompt") {
+		return `Unknown approvals mode "${mode}". Use auto, prompt, or status.`;
+	}
+	await writeEnv({ CLANKY_AUTO_APPROVE: mode === "auto" ? "1" : "0" });
+	return await restartBrainMessage(
+		mode === "auto"
+			? "Auto-approve enabled; Clanky will run all tool calls without asking"
+			: "Auto-approve disabled; per-tool approval policy restored",
+	);
 }
 
 async function configureImageModel(argument: string): Promise<string> {
@@ -1526,7 +1584,9 @@ async function runMcpConnectionAuth(
 	flow: SetupFlowRenderer,
 	renderer: PromptCommandHandlerContext["renderer"],
 ): Promise<string> {
-	if (!connection.hasAuthorization) return `${connection.connectionName} is installed and does not require authorization.`;
+	if (!mcpConnectionHasAuthorization(connection)) {
+		return `${connection.connectionName} is installed and does not require authorization.`;
+	}
 	const abort = new AbortController();
 	const interrupt = flow.waitForInterrupt();
 	let pendingAuthCount = 0;
@@ -1547,7 +1607,15 @@ async function runMcpConnectionAuth(
 			const reason = result.authReason === undefined ? "" : ` (${result.authReason})`;
 			return `${connection.connectionName} authorization ${result.authOutcome}${reason}.`;
 		}
-		if (result.sawConnectionSearch) return `${connection.connectionName} is installed and authorization is ready.`;
+		if (result.needsAuthorization) {
+			const detail = result.connectionErrors.length === 0 ? "" : `\n${result.connectionErrors.join("\n")}`;
+			return `${connection.connectionName} still needs authorization, but Eve did not emit an OAuth challenge. Restart Clanky's Eve server and run /mcp auth ${connection.connectionName} again.${detail}`;
+		}
+		if (result.connectionErrors.length > 0) return `${connection.connectionName} auth probe failed: ${result.connectionErrors.join("\n")}`;
+		if (result.sawUsableTool) return `${connection.connectionName} is installed and authorization is ready.`;
+		if (result.sawConnectionSearch) {
+			return `${connection.connectionName} auth probe finished, but it did not discover authorized tools for that connection. Run /mcp auth ${connection.connectionName} again.`;
+		}
 		return `${connection.connectionName} auth probe finished, but Clanky did not call connection__search. Try asking Clanky to use ${connection.connectionName}.`;
 	} catch (error) {
 		return `${connection.connectionName} auth probe failed: ${error instanceof Error ? error.message : String(error)}`;
@@ -1561,6 +1629,9 @@ async function runMcpConnectionAuth(
 
 type McpAuthProbeResult = {
 	sawConnectionSearch: boolean;
+	sawUsableTool: boolean;
+	needsAuthorization: boolean;
+	connectionErrors: string[];
 	authOutcome?: "authorized" | "declined" | "failed" | "timed-out";
 	authReason?: string;
 	failure?: string;
@@ -1577,7 +1648,12 @@ async function probeMcpConnection(
 	flow.setStatus(`Checking ${connection.connectionName} authorization...`);
 	const session = client.session();
 	const response = await session.send({ message: mcpAuthProbePrompt(connection.connectionName), signal });
-	const result: McpAuthProbeResult = { sawConnectionSearch: false };
+	const result: McpAuthProbeResult = {
+		sawConnectionSearch: false,
+		sawUsableTool: false,
+		needsAuthorization: false,
+		connectionErrors: [],
+	};
 	for await (const event of response) {
 		applyMcpAuthProbeEvent(event, connection, flow, renderer, updatePendingAuth, result);
 	}
@@ -1601,6 +1677,20 @@ function applyMcpAuthProbeEvent(
 				}
 			}
 			break;
+		case "action.result": {
+			const action = event.data.result;
+			if (action.kind !== "tool-result" || action.toolName !== "connection__search") break;
+			result.sawConnectionSearch = true;
+			const inspection = inspectConnectionSearchOutput(action.output, connection.connectionName);
+			if (!inspection.matchedConnection) break;
+			if (inspection.needsAuthorization) {
+				result.needsAuthorization = true;
+				flow.renderLine(`${connection.connectionName} still needs authorization; no OAuth challenge was emitted.`, "warning");
+			}
+			if (inspection.sawUsableTool) result.sawUsableTool = true;
+			result.connectionErrors.push(...inspection.errors);
+			break;
+		}
 		case "authorization.required": {
 			const challenge = event.data.authorization;
 			const displayName = challenge?.displayName ?? titleCaseConnection(event.data.name);
@@ -1918,10 +2008,18 @@ function formatMcpConnectionLines(info: AgentInfoResult | undefined): string[] {
 	const connections = mcpConnections(info);
 	if (connections.length === 0) return ["(none)"];
 	return connections.map((connection) => {
-		const auth = connection.hasAuthorization ? "auth" : "no auth";
-		const approval = connection.hasApproval ? "approval" : "no approval";
+		const auth = mcpConnectionHasAuthorization(connection) ? "auth" : "no auth";
+		const approval = mcpConnectionHasApproval(connection) ? "approval" : "no approval";
 		return `- ${connection.connectionName}: ${connection.protocol}, ${auth}, ${approval} - ${connection.description}`;
 	});
+}
+
+function mcpConnectionHasAuthorization(connection: AgentInfoConnectionEntry): boolean {
+	return connection.hasAuthorization || authoredMcpConnectionHasAuthorization(connection.connectionName);
+}
+
+function mcpConnectionHasApproval(connection: AgentInfoConnectionEntry): boolean {
+	return connection.hasApproval || authoredMcpConnectionHasApproval(connection.connectionName);
 }
 
 function formatDynamicMcpLines(store: Awaited<ReturnType<typeof listMcpServerConfigs>>): string[] {
@@ -2167,6 +2265,7 @@ async function statusText(): Promise<string> {
 		`model: ${model}`,
 		`provider: ${formatProviderSummary(config)}`,
 		`auth: claude=${formatCredStatus(claudeAuth)}; codex=${formatCredStatus(codexAuth)}`,
+		`approvals: ${isAutoApproveValue(config.autoApprove) ? "auto (no prompts)" : "prompt"}`,
 		`coding harness: ${formatCodingHarnessSummary(config)}`,
 		`image model: ${config.imageModel ?? "gpt-image-2"}`,
 		...formatVoiceStatusLines(config),
@@ -2446,6 +2545,7 @@ async function readConfig(): Promise<ClankyConfig> {
 	const localModel = get("CLANKY_LOCAL_MODEL");
 	const localBaseUrl = get("CLANKY_LOCAL_BASE_URL");
 	const localEffort = get("CLANKY_LOCAL_EFFORT");
+	const autoApprove = get("CLANKY_AUTO_APPROVE");
 	const codingHarness = get(CLANKY_CODING_HARNESS_ENV.id);
 	const codingHarnesses = get(CLANKY_CODING_HARNESS_ENV.allowed);
 	const codingHarnessCommand = get(CLANKY_CODING_HARNESS_ENV.command);
@@ -2471,6 +2571,7 @@ async function readConfig(): Promise<ClankyConfig> {
 	if (localModel !== undefined) config.localModel = localModel;
 	if (localBaseUrl !== undefined) config.localBaseUrl = localBaseUrl;
 	if (localEffort !== undefined) config.localEffort = localEffort;
+	if (autoApprove !== undefined) config.autoApprove = autoApprove;
 	if (codingHarness !== undefined) config.codingHarness = codingHarness;
 	if (codingHarnesses !== undefined) config.codingHarnesses = codingHarnesses;
 	if (codingHarnessCommand !== undefined) config.codingHarnessCommand = codingHarnessCommand;
@@ -2547,7 +2648,7 @@ function startServer(): void {
 	forwardServerOutput = false;
 	server = spawn(join(REPO, "node_modules", ".bin", "eve"), ["dev", "--no-ui", "--port", String(PORT)], {
 		cwd: REPO,
-		env: process.env,
+		env: buildEveDevServerEnv(process.env, HOST, PORT),
 		stdio: ["ignore", "pipe", "pipe"],
 	});
 	server.stdout?.on("data", (chunk: Buffer) => forwardOwnedServerOutput("stdout", chunk));
@@ -2586,6 +2687,87 @@ async function ensureServer(): Promise<boolean> {
 	startServer();
 	await waitForHealth();
 	return true;
+}
+
+async function startCallbackProxy(): Promise<void> {
+	if (process.env.CLANKY_EVE_CALLBACK_PROXY === "0") return;
+	if (CALLBACK_PROXY_PORT === PORT) return;
+	if (callbackProxyServer !== null) return;
+
+	const proxy = createServer((request, response) => {
+		void proxyCallbackRequest(request, response);
+	});
+
+	try {
+		await new Promise<void>((resolve, reject) => {
+			proxy.once("error", reject);
+			proxy.listen(CALLBACK_PROXY_PORT, "127.0.0.1", () => {
+				proxy.off("error", reject);
+				resolve();
+			});
+		});
+		callbackProxyServer = proxy;
+	} catch (error) {
+		const code = typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
+		const message =
+			code === "EADDRINUSE"
+				? `Port ${CALLBACK_PROXY_PORT} is already in use; Linear/Figma OAuth callbacks may fail if Eve emits localhost:${CALLBACK_PROXY_PORT} redirect URLs.`
+				: `Failed to start Eve callback proxy on ${CALLBACK_PROXY_PORT}: ${error instanceof Error ? error.message : String(error)}`;
+		process.stderr.write(`  \x1b[33m${message}\x1b[39m\n`);
+		await new Promise<void>((resolve) => proxy.close(() => resolve())).catch(() => undefined);
+	}
+}
+
+async function proxyCallbackRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
+	try {
+		const path = request.url ?? "/";
+		const sourceUrl = new URL(path, `http://127.0.0.1:${CALLBACK_PROXY_PORT}`);
+		if (!sourceUrl.pathname.startsWith("/eve/v1/connections/")) {
+			response.writeHead(404, { "content-type": "text/plain" });
+			response.end("not found");
+			return;
+		}
+
+		const targetUrl = new URL(`${sourceUrl.pathname}${sourceUrl.search}`, HOST);
+		const method = request.method ?? "GET";
+		const headers = requestHeadersForProxy(request);
+		const body = method === "GET" || method === "HEAD" ? undefined : await readRequestBody(request);
+		const upstream = await fetch(targetUrl, { method, headers, body });
+		response.writeHead(upstream.status, Object.fromEntries(upstream.headers));
+		response.end(Buffer.from(await upstream.arrayBuffer()));
+	} catch (error) {
+		response.writeHead(502, { "content-type": "text/plain" });
+		response.end(error instanceof Error ? error.message : String(error));
+	}
+}
+
+function requestHeadersForProxy(request: IncomingMessage): Headers {
+	const headers = new Headers();
+	for (const [name, value] of Object.entries(request.headers)) {
+		if (value === undefined || name.toLowerCase() === "host") continue;
+		if (Array.isArray(value)) {
+			for (const entry of value) headers.append(name, entry);
+		} else {
+			headers.set(name, value);
+		}
+	}
+	return headers;
+}
+
+async function readRequestBody(request: IncomingMessage): Promise<ArrayBuffer> {
+	const chunks: Buffer[] = [];
+	for await (const chunk of request) {
+		chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+	}
+	const buffer = Buffer.concat(chunks);
+	return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
+}
+
+async function stopCallbackProxy(): Promise<void> {
+	const proxy = callbackProxyServer;
+	callbackProxyServer = null;
+	if (proxy === null) return;
+	await new Promise<void>((resolve) => proxy.close(() => resolve()));
 }
 
 async function waitForHealth(timeoutMs = 45_000): Promise<void> {
