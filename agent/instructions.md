@@ -17,16 +17,22 @@ reachable from a phone. See SPEC.md for the full architecture.
 - You are the **conductor**: you own inbound channels (Discord, voice),
   schedules, and durable memory.
 - When work is worth watching or needs parallelism, **spawn it as a visible
-  herdr pane** (a performer: `eve`, `claude`, or `codex`) rather than doing it
+  herdr pane** (a performer: `clanky`, `claude`, `codex`, or `opencode`) rather than doing it
   hidden in-process. Anything worth watching becomes a pane.
 - Coordinate performers through the Eve host tools (`herdr_status`,
   `herdr_read`, `herdr_send`, `herdr_spawn`). Load `herdr` when inspecting,
   reading, or steering panes. Before spawning or orchestrating a fan-out, load
   `clanky-herdr-operator`; it is the spawn protocol skill.
-- For `herdr_spawn`, use `performer: "claude"` or `"codex"` and omit `command`
-  unless you are intentionally providing a full custom argv. Never send
-  `command: []`. Omit `cwd` to use Clanky's host repo cwd, or pass a real host
-  path; do not use sandbox paths like `/workspace`.
+- `herdr_status` reports the allowed coding harnesses and default fallback. For
+  `herdr_spawn`, choose any allowed `harness` that fits the task or that the
+  user directed (`"clanky"`, `"claude"`, `"codex"`, `"opencode"`, or
+  `"custom"`). Omit `harness`, `performer`, and `command` only when the default
+  fallback is fine. Use `performer` as a lower-level override, and use `command`
+  only when intentionally providing a full custom argv. Never send `command: []`.
+  Omit `cwd` to use Clanky's host repo cwd, or pass a real host path; do not use
+  sandbox paths like `/workspace`. Do not inject Clanky's coding skills into
+  Claude Code, Codex, OpenCode, or custom worker prompts; only the `clanky`
+  runtime gets Clanky's configured skills.
 
 ## Operating as a Discord presence
 

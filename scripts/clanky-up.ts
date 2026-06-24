@@ -27,10 +27,20 @@ import { createConnection } from "node:net";
 
 const SESSION = process.env.CLANKY_SESSION ?? "clankies";
 const REPO = process.env.CLANKY_REPO_DIR ?? process.cwd();
-const PORT = Number.parseInt(process.env.CLANKY_EVE_PORT ?? "2000", 10);
+const PORT = resolvePort(process.env.CLANKY_EVE_PORT, 2000);
 const HOST = process.env.CLANKY_EVE_HOST ?? "0.0.0.0";
 const BRAIN_AGENT = process.env.CLANKY_BRAIN_AGENT ?? "clanky";
 const HERDR = process.env.CLANKY_HERDR_BIN ?? "herdr";
+
+function resolvePort(value: string | undefined, fallback: number): number {
+	const raw = value?.trim();
+	if (raw === undefined || raw.length === 0) return fallback;
+	const parsed = Number.parseInt(raw, 10);
+	if (!Number.isInteger(parsed) || String(parsed) !== raw || parsed < 1 || parsed > 65_535) {
+		throw new Error(`CLANKY_EVE_PORT must be an integer from 1 to 65535; got ${JSON.stringify(value)}`);
+	}
+	return parsed;
+}
 
 type SessionEntry = { name: string; running: boolean; socket_path: string; session_dir: string };
 type AgentEntry = { name: string; pane_id: string; tab_id: string; workspace_id: string; agent_status?: string };

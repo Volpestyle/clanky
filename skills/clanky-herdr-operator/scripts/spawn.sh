@@ -5,13 +5,15 @@ set -euo pipefail
 usage() {
 	cat >&2 <<'EOF'
 Usage: spawn.sh --slug <task-slug> --task "<one-line summary>" \
-                (--prompt "<text>" | --prompt-file <path>) \
-                [--run <run-id>] [--cwd <dir>] [-- <worker argv...>]
+				(--prompt "<text>" | --prompt-file <path>) \
+				[--run <run-id>] [--cwd <dir>] [--harness clanky|claude|codex|opencode|custom] \
+				[-- <worker argv...>]
 
 Spawns one worker agent named clanky:<slug> into the run's herdr tab.
-Default worker is claude --dangerously-skip-permissions when available,
-falling back to codex --dangerously-bypass-approvals-and-sandbox. In a
-custom argv, the token {KICKOFF} is replaced with the kickoff message;
+CLANKY_CODING_HARNESSES allowlists usable harnesses. Default worker uses
+CLANKY_CODING_HARNESS from the environment or .env.local, or clanky when unset.
+Claude/Codex/OpenCode can launch through native CLIs or Ollama CLI integrations.
+In a custom argv, the token {KICKOFF} is replaced with the kickoff message;
 without the token the kickoff is appended as the final argument.
 
 Prints RUN_ID, RUN_DIR, AGENT, PANE_ID lines on success. Pass the same
@@ -28,10 +30,38 @@ fi
 # -P: resolve symlinks so the repo-root fallback works when the skill is
 # invoked through a symlinked skills dir (e.g. ~/.claude/skills)
 SKILL_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+REPO_ROOT="$(cd -P "$SKILL_DIR/../.." && pwd -P)"
+ENV_FILE="$REPO_ROOT/.env.local"
 WORKER_SKILL_PATH="$(cd -P "$SKILL_DIR/../clanky-herdr-worker" && pwd -P)/SKILL.md"
 RUN_ROOT="${CLANKY_HERDR_RUN_ROOT:-$HOME/.clanky/herdr-runs}"
 
-RUN_ID="" SLUG="" TASK="" PROMPT="" PROMPT_FILE="" WORKER_CWD="$PWD"
+config_value() {
+	local key="$1"
+	local existing="${!key-}"
+	if [ -n "$existing" ]; then
+		printf '%s' "$existing"
+		return
+	fi
+	[ -f "$ENV_FILE" ] || return 0
+	python3 - "$ENV_FILE" "$key" <<'PY'
+import re, sys
+path, key = sys.argv[1:3]
+with open(path) as f:
+    for raw in f:
+        match = re.match(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$", raw.rstrip("\n"))
+        if not match or match.group(1) != key:
+            continue
+        value = match.group(2).strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+            value = value[1:-1]
+            if raw.strip().split("=", 1)[1].strip().startswith('"'):
+                value = value.replace('\\"', '"')
+        print(value, end="")
+        break
+PY
+}
+
+RUN_ID="" SLUG="" TASK="" PROMPT="" PROMPT_FILE="" WORKER_CWD="$PWD" HARNESS=""
 ARGV=()
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -41,6 +71,7 @@ while [ $# -gt 0 ]; do
 		--prompt) PROMPT="$2"; shift 2 ;;
 		--prompt-file) PROMPT_FILE="$2"; shift 2 ;;
 		--cwd) WORKER_CWD="$2"; shift 2 ;;
+		--harness) HARNESS="$2"; shift 2 ;;
 		--) shift; ARGV=("$@"); break ;;
 		*) usage ;;
 	esac
@@ -48,9 +79,41 @@ done
 
 [ -n "$SLUG" ] && [ -n "$TASK" ] || usage
 if [ -z "$PROMPT" ] && [ -z "$PROMPT_FILE" ]; then usage; fi
+if [ -z "$HARNESS" ]; then HARNESS="$(config_value CLANKY_CODING_HARNESS)"; fi
+[ -n "$HARNESS" ] || HARNESS="clanky"
 if ! printf '%s' "$SLUG" | grep -Eq '^[a-z0-9][a-z0-9-]*$'; then
 	echo "spawn.sh: slug must be lowercase kebab-case ([a-z0-9-])" >&2
 	exit 2
+fi
+case "$HARNESS" in
+	clanky | claude | codex | opencode | custom) ;;
+	*)
+		echo "spawn.sh: unknown --harness '$HARNESS' (expected clanky, claude, codex, opencode, or custom)" >&2
+		exit 2
+		;;
+esac
+ALLOWED_HARNESSES="$(config_value CLANKY_CODING_HARNESSES)"
+if [ -n "$ALLOWED_HARNESSES" ]; then
+	if ! python3 - "$HARNESS" "$ALLOWED_HARNESSES" <<'PY'
+import re, sys
+harness, raw = sys.argv[1:3]
+if re.sub(r"[^a-z0-9]+", "", raw.lower()) == "all":
+    raise SystemExit(0)
+allowed = []
+valid = {"clanky", "claude", "codex", "opencode", "custom"}
+for token in re.split(r"[\s,]+", raw.strip()):
+    if not token:
+        continue
+    normalized = re.sub(r"[^a-z0-9]+", "", token.lower())
+    if normalized not in valid:
+        raise SystemExit(f"unknown coding harness '{token}' in allowlist")
+    allowed.append(normalized)
+if harness not in allowed:
+    raise SystemExit(f"coding harness '{harness}' is not allowed; allowed harnesses: {', '.join(allowed)}")
+PY
+	then
+		exit 2
+	fi
 fi
 
 AGENT_NAME="clanky:$SLUG"
@@ -93,21 +156,114 @@ and note them in your result.
 Before doing the task, read and follow this Clanky Herdr worker skill:
 $WORKER_SKILL_PATH
 
+Do not load Clanky coding skill package paths from this prompt. If this process
+is the Clanky runtime, use Clanky's configured skills; otherwise use your own
+agent/runtime's native coding behavior.
+EOF
+cat >> "$WORKER_DIR/prompt.md" <<EOF
 If the skill file is unavailable, say so in result.md and continue with best
 judgment.
 EOF
 
-KICKOFF="You are Clanky's worker $AGENT_NAME in a visible Herdr pane. Read $WORKER_DIR/prompt.md and do the task it describes, including the referenced worker skill and completion protocol. Work autonomously."
+KICKOFF="You are Clanky's worker $AGENT_NAME in a visible Herdr pane. Read $WORKER_DIR/prompt.md and do the task it describes, including the referenced worker/runtime instructions and completion protocol. Work autonomously."
 
-if [ ${#ARGV[@]} -eq 0 ]; then
-	if command -v claude >/dev/null 2>&1; then
-		ARGV=(claude --dangerously-skip-permissions "{KICKOFF}")
-	elif command -v codex >/dev/null 2>&1; then
-		ARGV=(codex --dangerously-bypass-approvals-and-sandbox "{KICKOFF}")
-	else
-		echo "spawn.sh: no default worker found on PATH (expected claude or codex); pass an explicit argv after --" >&2
+use_ollama_launcher() {
+	local id="$1" prefix launcher_var model_var launcher model
+	case "$id" in
+		claude) prefix="CLAUDE" ;;
+		codex) prefix="CODEX" ;;
+		opencode) prefix="OPENCODE" ;;
+		*) return 1 ;;
+	esac
+	launcher_var="CLANKY_CODING_HARNESS_${prefix}_LAUNCHER"
+	model_var="CLANKY_CODING_HARNESS_${prefix}_MODEL"
+	launcher="$(config_value "$launcher_var")"
+	model="$(config_value "$model_var")"
+	[ -n "$launcher" ] || launcher="default"
+	case "$launcher" in
+		"" | default | native) return 1 ;;
+		ollama | local) ;;
+		*)
+			echo "spawn.sh: unknown ${launcher_var}='$launcher' (expected default or ollama)" >&2
+			exit 2
+			;;
+	esac
+	if ! command -v ollama >/dev/null 2>&1; then
+		echo "spawn.sh: harness $id is configured for Ollama, but ollama is not on PATH" >&2
 		exit 1
 	fi
+	ARGV=(ollama launch "$id" --yes)
+	if [ -n "$model" ]; then ARGV+=(--model "$model"); fi
+	case "$id" in
+		claude) ARGV+=(-- --dangerously-skip-permissions "{KICKOFF}") ;;
+		codex) ARGV+=(-- --dangerously-bypass-approvals-and-sandbox "{KICKOFF}") ;;
+		opencode) ARGV+=(-- run "{KICKOFF}") ;;
+	esac
+	return 0
+}
+
+if [ ${#ARGV[@]} -eq 0 ]; then
+	case "$HARNESS" in
+		clanky)
+			if command -v clanky >/dev/null 2>&1; then
+				ARGV=(clanky worker "{KICKOFF}")
+			else
+				echo "spawn.sh: harness clanky requires clanky on PATH or an explicit argv after --" >&2
+				exit 1
+			fi
+			;;
+		claude)
+			if use_ollama_launcher claude; then
+				:
+			elif command -v claude >/dev/null 2>&1; then
+				ARGV=(claude --dangerously-skip-permissions "{KICKOFF}")
+			else
+				echo "spawn.sh: harness claude requires claude on PATH, an Ollama launcher config, or an explicit argv after --" >&2
+				exit 1
+			fi
+			;;
+		codex)
+			if use_ollama_launcher codex; then
+				:
+			elif command -v codex >/dev/null 2>&1; then
+				ARGV=(codex --dangerously-bypass-approvals-and-sandbox "{KICKOFF}")
+			else
+				echo "spawn.sh: harness codex requires codex on PATH, an Ollama launcher config, or an explicit argv after --" >&2
+				exit 1
+			fi
+			;;
+		opencode)
+			if use_ollama_launcher opencode; then
+				:
+			elif command -v opencode >/dev/null 2>&1; then
+				ARGV=(opencode run "{KICKOFF}")
+			else
+				echo "spawn.sh: harness opencode requires opencode on PATH, an Ollama launcher config, or an explicit argv after --" >&2
+				exit 1
+			fi
+			;;
+		custom)
+			CUSTOM_COMMAND="$(config_value CLANKY_CODING_HARNESS_COMMAND)"
+			if [ -z "$CUSTOM_COMMAND" ]; then
+				echo "spawn.sh: harness custom requires CLANKY_CODING_HARNESS_COMMAND or an explicit argv after --" >&2
+				exit 1
+			fi
+			while IFS= read -r arg; do ARGV+=("$arg"); done < <(python3 - "$CUSTOM_COMMAND" <<'EOF'
+import json, shlex, sys
+value = sys.argv[1].strip()
+args = json.loads(value) if value.startswith("[") else shlex.split(value)
+if not isinstance(args, list) or not all(isinstance(arg, str) for arg in args):
+    raise SystemExit("custom harness command JSON must be an array of strings")
+for arg in args:
+    print(arg)
+EOF
+)
+			;;
+		esac
+fi
+if [ ${#ARGV[@]} -eq 0 ]; then
+	echo "spawn.sh: worker argv is empty" >&2
+	exit 1
 fi
 HAS_TOKEN=0
 for i in "${!ARGV[@]}"; do

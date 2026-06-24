@@ -17,8 +17,8 @@ glue:
   *and* his visible face. eve owns inbound channels (Discord, voice), cron
   schedules, durable sessions, and memory. Its interactive TUI runs in a herdr
   pane and *is* what you see as "Clanky."
-- **Performers** are panes — `eve`, `claude`, or `codex` agents that Clanky
-  spawns into herdr for parallel or specialized work, all visible.
+- **Performers** are panes — `clanky`, `claude`, `codex`, or `opencode` agents
+  that Clanky spawns into herdr for parallel or specialized work, all visible.
 - The **window** is the Clanky iOS app, which reaches the stage over the tailnet
   through an eve relay channel.
 
@@ -42,8 +42,8 @@ changes nothing about how Clanky runs.
   TUI pane** in herdr.
 - Inbound Discord and voice work surfaces **as panes**, not as hidden in-process
   subagents.
-- Clanky can spawn other agents — `claude`, `codex`, more `eve` agents, or
-  subagents of himself — all visible.
+- Clanky can spawn other agents — `clanky`, `claude`, `codex`, `opencode`, or
+  custom commands — all visible.
 - **herdr stays vanilla.** No maintained fork. Remote access is solved without
   patching herdr.
 - The swarm is **decoupled from Clanky**: a herdr session is a swarm-ready
@@ -103,9 +103,9 @@ Read it as:
   talk to as "Clanky." When eve has inbound or background work, it does not
   answer headlessly — it spawns or routes to a herdr pane so the work is
   visible.
-- **Performers are panes.** `eve`, `claude`, or `codex` agents started with
-  `herdr agent start`. (herdr can start any binary in a pane, but Pi is not a
-  Clanky-blessed performer — see §4.3.)
+- **Performers are panes.** `clanky`, `claude`, `codex`, or `opencode` agents
+  started with `herdr agent start`. (herdr can start any binary in a pane, but Pi
+  is not a Clanky-blessed performer — see §4.3.)
 - **The window is the iOS app.** It reaches the stage through an eve relay
   channel over the tailnet. One front door (eve) serves both chat with Clanky and
   visibility into every pane.
@@ -160,9 +160,9 @@ streamed events (`message.appended`, `reasoning.completed`, `actions.requested`,
 `action.result`, `turn.failed`, …) closely mirroring `eve dev`'s look — gutter
 glyphs, a yellow phase-aware working spinner, and a persistent bottom status
 line (model · effort · tokens · endpoint). On top it adds the config slash
-commands `eve dev` can't: `/discord-token`, `/model`, `/effort` (they rewrite
-`.env.local` and restart the brain). The stock `eve dev` TUI stays available as
-a local dev/debug interface against the same runtime.
+commands `eve dev` can't: `/discord-token`, `/model`, `/harness`, `/effort`
+(they rewrite `.env.local` and restart the brain). The stock `eve dev` TUI stays
+available as a local dev/debug interface against the same runtime.
 
 Known gap: the face does not yet surface `input.requested` (tool-approval /
 human-input prompts) or `session.waiting`; only the streaming render path above
@@ -179,10 +179,25 @@ When Clanky needs parallel or specialized work, he spawns it as a pane via
 `herdr agent start`, never as an eve in-process subagent (which would render
 only inside eve's own transcript). Performer types:
 
-- `eve` — another eve agent (e.g. a subagent of Clanky with a narrower brief).
+- `clanky` — Clanky's own CLI runtime (`clanky worker <prompt>`), backed by the
+  running Eve brain and Clanky's configured skills.
 - `claude` — a Claude Code worker for coding tasks.
 - `codex` — a Codex worker (and the way to use the OpenAI subscription for
   delegated coding, distinct from Clanky's own model in §4.6).
+- `opencode` — an OpenCode worker that uses OpenCode's native internals.
+
+Allowed coding performers are selected through **coding harness profiles**, not
+by importing another agent's internals. `/harness allow` writes
+`CLANKY_CODING_HARNESSES` (`clanky`, `claude`, `codex`, `opencode`, `custom`, or
+`all`) as the policy allowlist. `/harness` also writes `CLANKY_CODING_HARNESS`
+as the default fallback plus per-harness launcher/model env for `claude`,
+`codex`, and `opencode`, or `CLANKY_CODING_HARNESS_COMMAND` for custom harnesses.
+The launcher is either the native CLI default model or an Ollama CLI integration
+with a local model; Codex Ollama mode uses `ollama launch codex`, not
+`codex-app`. `herdr_spawn` rejects disallowed harnesses, resolves the selected
+profile, and starts the command as a visible herdr pane. Clanky then supervises
+by reading and steering the pane with `herdr_read` / `herdr_send`. Richer
+adapters can be added later, but the base protocol is always a visible pane.
 
 Pi is **not** a performer. herdr can technically start any binary in a pane, so
 nothing stops a one-off `pi` pane, but Pi is not part of Clanky, not installed,
@@ -520,10 +535,11 @@ a Pi runtime.
 
 There are two distinct things called "subagents" here; keep them apart:
 
-- **Performer panes** — another `eve`, `claude`, or `codex` process started with
-  `herdr agent start` (via `herdr_spawn`). Its own process, its own pane, fully
-  interactive and watchable, coordinating through the `herdr` skill. This is how
-  Clanky (or a presence session) does parallel/specialized work.
+- **Performer panes** — another `clanky`, `claude`, `codex`, or `opencode`
+  process started with `herdr agent start` (via `herdr_spawn`). Its own process,
+  its own pane, fully interactive and watchable, coordinating through the
+  `herdr` skill. This is how Clanky (or a presence session) does
+  parallel/specialized work.
 - **eve child sessions** — eve's native `agent` tool / declared subagents spin up
   a *child session* in the same service. They share the memory store but render
   only inside eve's own transcript, with no pane. Clanky's **presence sessions**
@@ -565,7 +581,8 @@ attach to whichever session you point him at. You may run multiple sessions.
 
 - herdr — stage, persistent session, swarm CLI.
 - eve — brain, `eve dev` TUI, channels, schedules, durable sessions.
-- `claude` / `codex` — performer agents (Pi is not used).
+- `clanky` / `claude` / `codex` / `opencode` — performer agents (Pi is not
+  used).
 - the vanilla `herdr` skill.
 
 **We build (all TypeScript, no fork):**
@@ -606,6 +623,8 @@ clanky/
   scripts/
     clanky.ts                # custom face on eve/client (pnpm face)
     discord-pane-mirror.ts   # tails a presence session into a herdr pane
+  bin/
+    clanky.ts                # installed as ~/.local/bin/clanky
   skills/
     clanky-herdr-operator/   # coordinator fan-out protocol (kept)
     clanky-*-operator/       # web/media/figma/work-tracker/etc. (kept, audited)
@@ -724,8 +743,9 @@ tool, is a binding change, not an edit to the persona.
    control layer (`golive.ts` + `discord_golive` tool) over the raw-gateway
    opcode seam + `discordStreamDiscovery`; and the **custom face**
    (`scripts/clanky.ts`, `pnpm face`) on eve/client that mirrors eve's TUI and
-   adds the slash commands eve can't — `/discord-token`, `/model` (rewrite `.env.local`
-   via the pure `env-file.ts` merge + restart the brain), `/new`, `/status`.
+   adds the slash commands eve can't — `/discord-token`, `/model`, `/harness`
+   (rewrite `.env.local` via the pure `env-file.ts` merge + restart the brain),
+   `/new`, `/status`.
    **Live-gated remainder** (needs the token, ClankVox, and OpenAI
    Realtime creds, so not verifiable offline): the realtime voice loop routing
    substantive turns into a shared voice **eve session** (for unified memory)
@@ -744,12 +764,15 @@ phase 6, once the eve agent covers its surface.
 - **Face surface — RESOLVED: custom face.** eve's stock TUI has a fixed,
   non-extensible slash-command set, so the face is `scripts/clanky.ts` (`pnpm
   face`) on the public eve/client: it mirrors eve dev's look and adds the slash
-  commands eve can't (`/discord-token`, `/model`, …). It attaches to a running eve
-  server or spawns/owns a headless one (eve allows one dev server per agent).
+  commands eve can't (`/discord-token`, `/model`, `/harness`, …). It attaches to
+  a running eve server or spawns/owns a headless one (eve allows one dev server
+  per agent).
 - **Memory store** — reuse `@clanky/core` memory verbatim in `agent/lib` vs.
   adopt eve session context as the primary store.
-- **Performer default** — which agent type is the default subagent (`eve` vs
-  `claude`) for Clanky's generic fan-out.
+- **Performer default — RESOLVED: coding harness profiles.** `/harness allow`
+  selects the allowed coding pane profiles; `/harness` selects the default
+  fallback and each launchable profile's native-vs-Ollama model preference
+  without importing those runtimes as core dependencies.
 - **Codex provider route (§4.6) — RESOLVED: route (a).** A live spike confirmed
   the stock `@ai-sdk/openai` `.responses()` model works against the Codex backend
   with the subscription OAuth token, given `instructions` + `store:false` +

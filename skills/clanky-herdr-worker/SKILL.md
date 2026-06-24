@@ -59,6 +59,14 @@ If your task prompt includes a `result.md`, `DONE`, or `BLOCKED` completion
 protocol, follow it exactly. Otherwise, leave a concise final report in your
 pane.
 
+## Shared files
+
+If you notice a sibling worker is creating or editing files your task depends on,
+do not silently analyze or edit a moving target. Say so explicitly: block for the
+operator (state which files and which sibling), or send a short submitted prompt
+to `clanky:main` to coordinate. Reporting against half-written files produces
+stale conclusions — flag the race instead of caveating around it.
+
 ## Scope
 
 Do not spawn more workers unless Clanky asked you to coordinate a sub-run. Do

@@ -4,6 +4,9 @@
 	"private": true,
 	"type": "module",
 	"packageManager": "pnpm@11.4.0",
+	"bin": {
+		"clanky": "./bin/clanky.ts"
+	},
 	"scripts": {
 		"info": "eve info",
 		"build": "eve build",
@@ -23,9 +26,12 @@
 		"smoke:browser-bridge": "node test/browser-bridge-smoke.ts",
 		"smoke:connections": "node test/connections-smoke.ts",
 		"smoke:mcp": "node test/mcp-stdio-smoke.ts",
+		"smoke:port": "node test/port-config-smoke.ts",
 		"smoke:voice:config": "node test/voice-config-smoke.ts",
 		"claude:login": "node scripts/claude-login.ts",
 		"codex:login": "node scripts/codex-login.ts",
+		"clanky": "node bin/clanky.ts",
+		"clanky:install": "node bin/clanky.ts install",
 		"face": "node scripts/clanky.ts",
 		"clanky:up": "node scripts/clanky-up.ts",
 		"clanky:status": "node scripts/clanky-up.ts status",

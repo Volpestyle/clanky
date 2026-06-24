@@ -82,23 +82,43 @@ $OP/spawn.sh --run "$RUN_ID" --slug update-readme --task "Update README" \
 
 For the eve host `herdr_spawn` tool, omit `cwd` to use Clanky's current host
 repo, or pass a real host path for another checkout. Never use sandbox paths
-like `/workspace`. Use `performer: "claude"` or `"codex"` and omit `command`
-for normal workers; `command` is only a full custom argv override, never
-`command: []`.
+like `/workspace`. Check `herdr_status.codingHarnesses` before choosing worker
+runtimes; it shows the allowed harnesses and default fallback. Use `harness:
+"clanky"`, `"claude"`, `"codex"`, `"opencode"`, or `"custom"` when a specific
+allowed runner fits the task; omit `harness`, `performer`, and `command` only
+when the default fallback is fine. `performer` is a lower-level override.
+`command` is only a full custom argv override, never `command: []`.
 
 Workers spawned by either path receive a short bootstrap that tells them to
-read `skills/clanky-herdr-worker/SKILL.md`. Keep worker-side coordination
-details in that skill rather than inlining them into every spawn prompt.
+read `skills/clanky-herdr-worker/SKILL.md` for coordination and completion
+only. Do not inject Clanky's coding skills into Claude Code, Codex, OpenCode,
+or custom worker prompts. Those runtimes should use their own native coding,
+planning, exploration, review, and subagent behavior. Use `performer:
+"clanky"` only when the worker should be Clanky himself, via the installed
+`clanky worker` CLI.
 
-Write real briefs: context, exact scope, what result.md must contain. The
-script appends the completion protocol (result.md, DONE/BLOCKED, autonomy)
-to every prompt — do not restate it.
+Independent means **write-disjoint**. Workers fanned out concurrently must not
+write the same files, and a read-only worker must never audit files another
+worker in the same run is creating — its analysis reads a moving target and
+reports stale or half-written state. If two tasks share mutable paths (one reads
+what another writes, or both edit the same files), do not fan them out together:
+sequence them (separate runs, or a `blocked` handoff), or isolate each writer in
+its own git worktree. When unsure whether scopes overlap, assume they do.
+
+Write real briefs: context, exact scope, whether the worker may edit or should
+only explore/plan/review, the verification command, and what result.md must
+contain. The script appends the completion protocol (result.md, DONE/BLOCKED,
+autonomy) to every prompt — do not restate it.
 
 ### Worker command
 
-The default worker is `claude --dangerously-skip-permissions` when `claude` is on
-PATH, falling back to `codex --dangerously-bypass-approvals-and-sandbox` when
-available. There is no Pi-era `clanky` binary fallback in this repo.
+The allowed worker set uses `CLANKY_CODING_HARNESSES`, configured from the face
+with `/harness allow`. The default fallback uses `CLANKY_CODING_HARNESS`; when
+unset it is `clanky` (`clanky worker {KICKOFF}`). Built-in harnesses are
+`clanky`, `claude`, `codex`, and `opencode`. `custom` uses
+`CLANKY_CODING_HARNESS_COMMAND`. The `claude`, `codex`, and `opencode` harnesses
+can use the default CLI launcher or `ollama launch <harness>` with a configured
+model. Codex Ollama mode uses `ollama launch codex`, not the Codex app.
 
 Override with `--` for a different agent. The `{KICKOFF}` token is replaced
 with the kickoff message; without it, the kickoff is appended as the last
@@ -113,6 +133,14 @@ $OP/spawn.sh --run "$RUN_ID" --slug audit-deps --task "Audit dependencies" \
 # Arbitrary worker with an explicit kickoff slot
 $OP/spawn.sh --run "$RUN_ID" --slug triage --task "Triage open issues" \
   --prompt "..." -- codex --dangerously-bypass-approvals-and-sandbox {KICKOFF}
+
+# Clanky worker: uses Clanky's Eve runtime and configured skills
+$OP/spawn.sh --run "$RUN_ID" --slug clanky-fix --task "Fix flaky tests" \
+	--harness clanky --prompt "..."
+
+# OpenCode worker: uses OpenCode native internals
+$OP/spawn.sh --run "$RUN_ID" --slug opencode-fix --task "Fix flaky tests" \
+	--harness opencode --prompt "..."
 ```
 
 This setup intentionally gives workers autonomy inside their panes. Pick an
@@ -147,7 +175,12 @@ PANE=$(herdr agent get clanky:fix-auth-tests | python3 -c 'import sys,json; prin
 herdr pane run "$PANE" "Use the staging database, credentials are in .env.staging. Delete the BLOCKED file and continue."
 ```
 
-Mid-flight course corrections work the same way on a `running` worker.
+Mid-flight course corrections work the same way on a `running` worker. Before
+sending any steer, confirm the worker is still `running` (re-run `harvest.sh` or
+check its `DONE` file): a worker that already wrote `DONE` is finished, and
+re-prompting it to "write result.md / print CLANKY_WORKER_DONE" only wastes a
+turn on work it has done. Pane reads and `agent_status` lag the sentinel — let
+the sentinel decide whether a steer is needed at all.
 Workers can also message each other with the Herdr CLI. For a submitted prompt,
 they should resolve the target pane and use `herdr pane run`; `herdr agent send`
 writes literal text only.
@@ -162,6 +195,12 @@ prints every worker's state and `result.md`. Read them yourself from
 `$RUN_DIR/workers/*/result.md` when synthesizing — combine, reconcile
 conflicts, and report per-worker attribution (slug + what it did). The
 synthesis is your job, not a script's.
+
+When several workers analyzed overlapping scope (the same files, the same
+change), fold their results into **one** implementation task here and spawn that
+as a single edit-capable worker. Do not tell each analyzer to go implement its
+own plan: their edits collide in the shared tree. Synthesis is the point where N
+overlapping plans become one ordered change set.
 
 ## 5. Clean up
 

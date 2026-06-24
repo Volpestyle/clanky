@@ -6,39 +6,56 @@ import { promisify } from "node:util";
 import tool from "../agent/tools/herdr_spawn.ts";
 
 const run = promisify(execFile);
-const SLUG = "spawn-smoke";
-const AGENT = `clanky:${SLUG}`;
 
-// Best-effort pre-clean in case a prior run left it.
-await closeAgentPane(AGENT);
+const cases = [
+	{
+		slug: "spawn-smoke",
+		task: "Smoke task",
+		command:
+			"set -e; printf '%s\\n' \"$1\" | grep -q 'skills/clanky-herdr-worker/SKILL.md'; printf '%s\\n' \"$1\" | grep -q 'Do not load Clanky coding skill package paths'; ! printf '%s\\n' \"$1\" | grep -q 'skills/clanky-coding-worker/SKILL.md'; ! printf '%s\\n' \"$1\" | grep -q 'skills/clanky-coding-reviewer/SKILL.md'; echo SPAWN_OK; read line; echo GOT:$line; sleep 20",
+	},
+	{
+		slug: "spawn-smoke-opencode-custom",
+		task: "OpenCode custom smoke task",
+		command:
+			"set -e; printf '%s\\n' \"$1\" | grep -q 'skills/clanky-herdr-worker/SKILL.md'; ! printf '%s\\n' \"$1\" | grep -q 'skills/clanky-coding-worker/SKILL.md'; ! printf '%s\\n' \"$1\" | grep -q 'skills/clanky-coding-reviewer/SKILL.md'; echo SPAWN_OK; read line; echo GOT:$line; sleep 20",
+	},
+];
 
-let paneId: string | null = null;
 let ok = false;
 try {
-	const res = (await tool.execute(
-		{
-			slug: SLUG,
-			task: "Smoke task",
-			performer: "claude",
-			command: [
-				"bash",
-				"-lc",
-				"printf '%s\\n' \"$1\" | grep -q 'skills/clanky-herdr-worker/SKILL.md'; echo SPAWN_OK; read line; echo GOT:$line; sleep 20",
-				"bash",
-				"{KICKOFF}",
-			],
-		},
-		undefined as never,
-	)) as { agent: string; paneId: string | null; started: boolean };
-	paneId = res.paneId;
-	console.log("spawn result:", JSON.stringify(res));
+	for (const item of cases) {
+		const agent = `clanky:${item.slug}`;
+		await closeAgentPane(agent);
+		let paneId: string | null = null;
+		try {
+			const res = (await tool.execute(
+				{
+					slug: item.slug,
+					task: item.task,
+					performer: "claude",
+					command: ["bash", "-lc", item.command, "bash", "{KICKOFF}"],
+				},
+				undefined as never,
+			)) as { agent: string; paneId: string | null; started: boolean };
+			paneId = res.paneId;
+			console.log("spawn result:", JSON.stringify(res));
 
-	const got = await run("herdr", ["agent", "get", AGENT], { encoding: "utf8" }).then((r) => r.stdout.trim());
-	ok = got.includes(AGENT);
-	console.log(ok ? "PANE VISIBLE OK" : "FAIL: pane not found");
+			const got = await run("herdr", ["agent", "get", agent], { encoding: "utf8" }).then((r) => r.stdout.trim());
+			if (!got.includes(agent)) {
+				console.log(`FAIL: pane not found for ${agent}`);
+				ok = false;
+				break;
+			}
+			ok = true;
+			console.log(`PANE VISIBLE OK ${agent}`);
+		} finally {
+			if (paneId !== null) await run("herdr", ["pane", "close", paneId]).catch(() => {});
+			await closeAgentPane(agent);
+		}
+	}
 } finally {
-	if (paneId !== null) await run("herdr", ["pane", "close", paneId]).catch(() => {});
-	await closeAgentPane(AGENT);
+	for (const item of cases) await closeAgentPane(`clanky:${item.slug}`);
 }
 
 process.exit(ok ? 0 : 1);

@@ -20,13 +20,22 @@ If the task involves spawning, fan-out, or creating a performer, load
 `clanky-herdr-operator` before calling `herdr_spawn`. This skill is enough for
 status/read/send operations, but the operator skill owns Clanky's spawn protocol.
 
-When calling `herdr_spawn`, use `performer: "claude"` or `"codex"` and omit
-`command` for normal workers. `command` is only a raw argv override for custom
-commands; never pass `command: []`. Omit `cwd` to use Clanky's host repo cwd, or
-pass a real host path. Do not use sandbox paths like `/workspace`.
+`herdr_status` includes `codingHarnesses`: the allowed harness set and default
+fallback. When calling `herdr_spawn`, choose any allowed `harness` that fits the
+task or that the user directed. Omit `harness`, `performer`, and `command` only
+when the default fallback is fine. `/harness` controls the allowlist and
+native-vs-Ollama launch models for Claude, Codex, and OpenCode workers.
+`performer` is a lower-level override. `command` is only a raw argv override for
+custom commands; never pass `command: []`. Omit `cwd` to use Clanky's host repo
+cwd, or pass a real host path. Do not use sandbox paths like `/workspace`.
+
 Spawned workers receive a compact bootstrap pointing them to
-`skills/clanky-herdr-worker/SKILL.md`; put worker-side coordination changes
-there, not in one-off task prompts.
+`skills/clanky-herdr-worker/SKILL.md` for coordination and completion only.
+Do not inject Clanky's coding skills into Claude Code, Codex, OpenCode, or
+custom worker prompts. Those runtimes should use their own native coding,
+planning, exploration, review, and subagent behavior. Use `performer:
+"clanky"` only when the worker should be Clanky himself, via the installed
+`clanky worker` CLI.
 
 When calling `herdr_send`, address workers by `agent` when possible. To submit a
 prompt in one call, pass both `text` and `keys: ["Enter"]`. Keys-only sends such

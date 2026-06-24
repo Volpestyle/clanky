@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { callMcpTool, listMcpTools, upsertMcpServer } from "../agent/lib/mcp.ts";
+import { callMcpTool, listMcpServerConfigs, listMcpTools, removeMcpServer, setMcpServerDisabled, upsertMcpServer } from "../agent/lib/mcp.ts";
 
 function assert(condition: boolean, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -93,6 +93,14 @@ async function runSmoke(): Promise<void> {
 			allowedTools: ["echo", "inspect_env"],
 		});
 		assert(configured.servers.minecraft?.command === process.execPath, "mcp_configure did not persist command");
+		const store = await listMcpServerConfigs();
+		assert(store.fileServers.minecraft?.command === process.execPath, "mcp server store did not list file-backed server");
+
+		await setMcpServerDisabled("minecraft", true);
+		const disabledStatus = (await listMcpTools({ server: "minecraft", timeoutMs: 10_000 }))[0];
+		assert(disabledStatus?.disabled === true, "mcp disable did not persist disabled state");
+		assert(disabledStatus.tools === undefined, "disabled mcp server should not list tools");
+		await setMcpServerDisabled("minecraft", false);
 
 		const statuses = await listMcpTools({ server: "minecraft", timeoutMs: 10_000 });
 		const status = statuses[0];
@@ -129,6 +137,10 @@ async function runSmoke(): Promise<void> {
 			blocked = error instanceof Error && error.message.includes("not allowed");
 		}
 		assert(blocked, "mcp_call allowed a blocked tool");
+
+		const removed = await removeMcpServer("minecraft");
+		assert(removed.removed, "mcp remove did not report removed server");
+		assert((await listMcpServerConfigs()).fileServers.minecraft === undefined, "mcp remove did not delete file-backed server");
 	} finally {
 		if (previousHome === undefined) delete process.env.CLANKY_HOME;
 		else process.env.CLANKY_HOME = previousHome;

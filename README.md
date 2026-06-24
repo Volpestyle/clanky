@@ -17,9 +17,10 @@ He is built on three off-the-shelf systems plus a thin layer of glue:
 - The **iOS app** is the *window* — it reaches the stage over the tailnet
   through an eve relay channel.
 
-When Clanky needs more than himself, he spawns **performers** — `eve`, `claude`,
-or `codex` agents — as visible herdr panes, and orchestrates them through the
-herdr swarm CLI. (The prior Pi runtime is fully removed; see SPEC.md.)
+When Clanky needs more than himself, he spawns **performers** — `clanky`,
+`claude`, `codex`, or `opencode` agents — as visible herdr panes, and
+orchestrates them through the herdr swarm CLI. (The prior Pi runtime is fully
+removed; see SPEC.md.)
 
 > **Architecture:** see [SPEC.md](SPEC.md) for the complete, authoritative
 > design. This README is a short orientation; the spec is the source of truth.
@@ -30,8 +31,8 @@ herdr swarm CLI. (The prior Pi runtime is fully removed; see SPEC.md.)
 - shows up in the Clanky iOS app the moment he is on, with every pane visible
 - handles inbound Discord text and voice — surfacing the work **as visible
   panes**, not hidden background processes
-- spawns other agents (`claude`, `codex`, more `eve` agents, or subagents of
-  himself), all visible as TUIs in herdr
+- spawns other agents (`clanky`, `claude`, `codex`, `opencode`, or custom
+  commands), all visible as TUIs in herdr
 - coordinates a swarm through the vanilla herdr CLI, and orchestrates harvestable
   fan-out runs through the `clanky-herdr-operator` skill
 - remembers durable preferences, project facts, and recurring context
@@ -47,7 +48,7 @@ flowchart TB
     subgraph herdr["herdr (vanilla) — STAGE: persistent session 'clankies'"]
       face["pane: eve dev<br/>Clanky's face"]
       disc["pane: clanky:discord"]
-      w1["pane: claude / codex / eve<br/>performers"]
+      w1["pane: clanky / claude / codex / opencode<br/>performers"]
     end
     eve["eve service — CONDUCTOR<br/>channels · schedules · memory"]
     relay["eve relay channel (WS)"]
@@ -94,15 +95,35 @@ instead of hand-editing `.env.local`. See [SPEC.md](SPEC.md) §5.2–§5.6.
 
 ## Running Clanky
 
-Clanky's brain is the eve server; his face is a client of it. Two ways to run:
+Clanky's brain is the eve server; his face is a client of it. Install the local
+CLI once:
+
+```bash
+pnpm clanky:install
+```
+
+Then use `clanky` from anywhere:
+
+- **`clanky face`** — Clanky's custom face (`scripts/clanky.ts`) on
+  `eve/client`: mirrors eve's look, owns/attaches the headless brain, and adds
+  the slash commands eve can't — `/token <token> [--user-token] [--voice]`,
+  `/model <codex|claude> [id]`, `/harness allow ...`,
+  `/harness <clanky|claude|codex|opencode|custom> [default|ollama] [model]`,
+  `/new`, `/status`, `/help`, `/exit`. Config commands rewrite `.env.local`
+  and restart the brain. Default port 2000
+  (`CLANKY_EVE_PORT`).
+- **`clanky up` / `clanky status` / `clanky down`** — manage the persistent
+  Herdr session and headless Eve brain.
+- **`clanky worker <prompt>`** — send one task to the running Clanky Eve brain
+  and stream text output.
+- **`clanky update`** — fast-forward this checkout, install dependencies, and
+  refresh the `~/.local/bin/clanky` symlink. Use `clanky update --check` to run
+  `pnpm check` after updating.
+
+Repo-local alternatives:
 
 - **`pnpm dev`** — eve's stock dev TUI (fixed slash-command set).
-- **`pnpm face`** — Clanky's custom face (`scripts/clanky.ts`) on `eve/client`:
-  mirrors eve's look, owns/attaches the headless brain, and adds the slash
-  commands eve can't — `/token <token> [--user-token] [--voice]`,
-  `/model <codex|claude> [id]`, `/new`, `/status`, `/help`, `/exit`. Config
-  commands rewrite `.env.local` and restart the brain. Default port 2000
-  (`CLANKY_EVE_PORT`).
+- **`pnpm face`** — repo-local equivalent of `clanky face`.
 
 ## Status
 

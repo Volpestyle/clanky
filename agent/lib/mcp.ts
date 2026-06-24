@@ -43,6 +43,13 @@ export interface McpServerStatus {
 	tools?: McpToolSummary[];
 }
 
+export interface McpServerConfigStore {
+	path: string;
+	fileServers: Record<string, McpServerConfig>;
+	envServers: Record<string, McpServerConfig>;
+	servers: Record<string, McpServerConfig>;
+}
+
 interface ResolvedMcpServerConfig extends Omit<McpServerConfig, "type"> {
 	type: McpTransportKind;
 	args: string[];
@@ -135,6 +142,40 @@ export async function upsertMcpServer(name: string, config: McpServerConfig): Pr
 	return { path, servers };
 }
 
+export async function listMcpServerConfigs(env: NodeJS.ProcessEnv = process.env): Promise<McpServerConfigStore> {
+	const fileServers = await readMcpServerStore();
+	const envServers = parseEnvMcpServers(env.CLANKY_MCP_SERVERS);
+	return {
+		path: resolveMcpServersPath(),
+		fileServers,
+		envServers,
+		servers: { ...fileServers, ...envServers },
+	};
+}
+
+export async function removeMcpServer(name: string): Promise<{ path: string; removed: boolean; servers: Record<string, McpServerConfig> }> {
+	const path = resolveMcpServersPath();
+	const servers = await readMcpServerStore();
+	const removed = servers[name] !== undefined;
+	delete servers[name];
+	await writeMcpServerStore(path, servers);
+	return { path, removed, servers };
+}
+
+export async function setMcpServerDisabled(
+	name: string,
+	disabled: boolean,
+): Promise<{ path: string; server: McpServerConfig; servers: Record<string, McpServerConfig> }> {
+	const path = resolveMcpServersPath();
+	const servers = await readMcpServerStore();
+	const server = servers[name];
+	if (server === undefined) throw new Error(`Unknown file-backed MCP server: ${name}`);
+	const next = normalizeMcpServerConfig(name, { ...server, disabled }, "mcp_configure");
+	servers[name] = next;
+	await writeMcpServerStore(path, servers);
+	return { path, server: next, servers };
+}
+
 async function resolveMcpServerConfigs(): Promise<Record<string, ResolvedMcpServerConfig>> {
 	const configs: Record<string, McpServerConfig> = {
 		...(await readMcpServerStore()),
@@ -157,6 +198,11 @@ async function readMcpServerStore(): Promise<Record<string, McpServerConfig>> {
 
 function resolveMcpServersPath(): string {
 	return resolveClankyDataPath("mcp-servers.json");
+}
+
+async function writeMcpServerStore(path: string, servers: Record<string, McpServerConfig>): Promise<void> {
+	await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+	await writeFile(path, `${JSON.stringify({ mcpServers: servers }, null, "\t")}\n`, { mode: 0o600 });
 }
 
 async function listServerTools(

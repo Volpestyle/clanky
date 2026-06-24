@@ -11,7 +11,7 @@ import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { Client } from "eve/client";
+import { Client, type AgentInfoConnectionEntry, type AgentInfoResult, type HandleMessageStreamEvent } from "eve/client";
 import {
 	EveTUIRunner,
 	type PromptCommandHandler,
@@ -19,6 +19,7 @@ import {
 	type PromptCommandOutcome,
 } from "../node_modules/eve/dist/src/cli/dev/tui/runner.js";
 import {
+	type AgentHeaderOptions,
 	TerminalRenderer,
 	type TerminalOutput,
 } from "../node_modules/eve/dist/src/cli/dev/tui/terminal-renderer.js";
@@ -30,6 +31,30 @@ import {
 import type { SetupFlowRenderer } from "../node_modules/eve/dist/src/cli/dev/tui/setup-flow.js";
 import { applyEnvUpserts } from "../agent/lib/discord/env-file.ts";
 import { browserBridgeStatus } from "../agent/lib/browser-bridge.ts";
+import {
+	ALL_CODING_HARNESSES,
+	BUILTIN_CODING_HARNESSES,
+	CLANKY_CODING_HARNESS_ENV,
+	DEFAULT_CODING_HARNESS,
+	LAUNCHABLE_CODING_HARNESS_IDS,
+	type CodingHarnessEnv,
+	type CodingHarnessId,
+	type CodingHarnessLauncher,
+	type CodingRuntime,
+	type LaunchableCodingHarnessId,
+	codingHarnessLauncherEnvKey,
+	codingHarnessModelEnvKey,
+	defaultCodingRuntimeForHarness,
+	parseAllowedCodingHarnesses,
+	parseCodingHarnessLauncher,
+	parseCodingHarnessId,
+	parseCodingRuntime,
+	parseHarnessCommand,
+	parseLaunchableCodingHarnessId,
+	resolveCodingHarness,
+	serializeCommandLine,
+	splitCommandLine,
+} from "../agent/lib/coding-harness.ts";
 import { type ClaudeCredentials, claudeCredentialStatus, loginClaude } from "../agent/lib/claude-auth.ts";
 import { type CodexCredentials, codexCredentialStatus, loginCodex } from "../agent/lib/codex-auth.ts";
 import {
@@ -42,22 +67,43 @@ import {
 	setRoleBinding,
 } from "../agent/lib/integration-roles.ts";
 import { installBrowserBridge } from "../packages/clanky-browser-bridge/src/install.ts";
+import {
+	listMcpServerConfigs,
+	listMcpTools,
+	removeMcpServer,
+	setMcpServerDisabled,
+	type McpServerConfig,
+	type McpServerStatus,
+	upsertMcpServer,
+} from "../agent/lib/mcp.ts";
 
 const REPO = process.env.CLANKY_REPO_DIR ?? process.cwd();
-const PORT = Number.parseInt(process.env.CLANKY_EVE_PORT ?? "2000", 10);
+const PORT = resolvePort(process.env.CLANKY_EVE_PORT, 2000);
 const HOST = `http://127.0.0.1:${PORT}`;
 const ENV_PATH = join(REPO, ".env.local");
 const CLANKY_HEADER_NOTE = "Clanky face on eve/client. Type /help for commands.";
 const runHostCommand = promisify(execFile);
 
+function resolvePort(value: string | undefined, fallback: number): number {
+	const raw = value?.trim();
+	if (raw === undefined || raw.length === 0) return fallback;
+	const parsed = Number.parseInt(raw, 10);
+	if (!Number.isInteger(parsed) || String(parsed) !== raw || parsed < 1 || parsed > 65_535) {
+		throw new Error(`CLANKY_EVE_PORT must be an integer from 1 to 65535; got ${JSON.stringify(value)}`);
+	}
+	return parsed;
+}
+
 type ClankyExtensionCommandName =
 	| "discord-token"
 	| "login"
 	| "model"
+	| "harness"
 	| "effort"
 	| "image-model"
 	| "voice"
 	| "integrations"
+	| "mcp"
 	| "browser"
 	| "status";
 type ClankyExtensionCommand = {
@@ -81,6 +127,16 @@ type ClankyConfig = {
 	localModel?: string;
 	localBaseUrl?: string;
 	localEffort?: string;
+	codingHarness?: string;
+	codingHarnesses?: string;
+	codingHarnessCommand?: string;
+	codingHarnessRuntime?: string;
+	codingHarnessClaudeLauncher?: string;
+	codingHarnessClaudeModel?: string;
+	codingHarnessCodexLauncher?: string;
+	codingHarnessCodexModel?: string;
+	codingHarnessOpencodeLauncher?: string;
+	codingHarnessOpencodeModel?: string;
 	imageModel?: string;
 	voiceRealtimeProvider?: string;
 	voiceRealtimeModel?: string;
@@ -118,6 +174,7 @@ type VoiceSettingUpdate = {
 	updates: Record<string, string>;
 	message: string;
 };
+type McpCommandAction = "status" | "list" | "add" | "remove" | "enable" | "disable" | "auth" | "install" | "connections" | "help";
 const MODEL_OPTIONS: Record<SubscriptionProvider, readonly MenuOption[]> = {
 	codex: [
 		{ value: "gpt-5.5", label: "gpt-5.5" },
@@ -167,11 +224,44 @@ const VOICE_EVE_SESSION_OPTIONS: readonly MenuOption[] = [
 	{ value: "on", label: "on", hint: "default" },
 	{ value: "off", label: "off" },
 ];
+const CODING_HARNESS_OPTIONS: readonly MenuOption[] = [
+	{ value: "clanky", label: "clanky", hint: BUILTIN_CODING_HARNESSES.clanky.description },
+	{ value: "claude", label: "claude", hint: BUILTIN_CODING_HARNESSES.claude.description },
+	{ value: "codex", label: "codex", hint: BUILTIN_CODING_HARNESSES.codex.description },
+	{ value: "opencode", label: "opencode", hint: BUILTIN_CODING_HARNESSES.opencode.description },
+	{ value: "custom", label: "custom", hint: "user-supplied command run in a Herdr pane" },
+];
+const CODING_HARNESS_LAUNCHER_OPTIONS: readonly MenuOption[] = [
+	{ value: "default", label: "default", hint: "native CLI default model" },
+	{ value: "ollama", label: "ollama", hint: "Ollama CLI integration with a local model" },
+];
+const CODING_RUNTIME_OPTIONS: readonly MenuOption[] = [
+	{ value: "clanky", label: "clanky", hint: "allow Clanky's coding skills" },
+	{ value: "native", label: "native", hint: "use the harness internals" },
+	{ value: "opencode", label: "opencode", hint: "OpenCode-native alias" },
+];
+const MCP_ACTION_OPTIONS: readonly MenuOption[] = [
+	{ value: "status", label: "status", hint: "connections + dynamic server config" },
+	{ value: "list", label: "list tools", hint: "probe dynamic MCP servers" },
+	{ value: "add", label: "add dynamic", hint: "stdio/http/sse no-auth or static-token MCP" },
+	{ value: "auth", label: "auth connection", hint: "Linear, Figma, or another curated MCP connection" },
+	{ value: "disable", label: "disable dynamic", hint: "file-backed dynamic MCP" },
+	{ value: "enable", label: "enable dynamic", hint: "file-backed dynamic MCP" },
+	{ value: "remove", label: "remove dynamic", hint: "delete from the file-backed store" },
+	{ value: "connections", label: "connections", hint: "curated eve connection inventory" },
+];
+const MCP_TRANSPORT_OPTIONS: readonly MenuOption[] = [
+	{ value: "stdio", label: "stdio", hint: "local command" },
+	{ value: "streamable-http", label: "streamable-http", hint: "HTTP MCP endpoint" },
+	{ value: "sse", label: "sse", hint: "SSE MCP endpoint" },
+];
+const MCP_DYNAMIC_NAME_RE = /^[a-z0-9][a-z0-9_-]*$/i;
 
 let server: ChildProcess | null = null;
 let ownsServer = false;
 let terminalReady = false;
 let forwardServerOutput = false;
+let effortStatusSuffix = "";
 
 installClankyPromptCommands();
 
@@ -194,6 +284,8 @@ const runner = new EveTUIRunner({
 	serverUrl: HOST,
 	promptCommandHandler: createClankyCommandHandler(),
 });
+
+await refreshEffortStatusSuffix();
 
 try {
 	await runner.run();
@@ -238,6 +330,14 @@ function installClankyPromptCommands(): void {
 			build: (argument) => ({ type: "extension", name: "model", argument }),
 		},
 		{
+			name: "harness",
+			aliases: ["coding-harness"],
+			description: "Configure allowed worker harnesses and launch models",
+			argumentHint: "[allow|clanky|claude|codex|opencode|custom|status] [default|ollama] [model]",
+			takesArgument: true,
+			build: (argument) => ({ type: "extension", name: "harness", argument }),
+		},
+		{
 			name: "login",
 			aliases: ["auth"],
 			description: "Authorize a subscription provider (Claude or Codex)",
@@ -276,6 +376,14 @@ function installClankyPromptCommands(): void {
 			argumentHint: "[role] [connection|unset]",
 			takesArgument: true,
 			build: (argument) => ({ type: "extension", name: "integrations", argument }),
+		},
+		{
+			name: "mcp",
+			aliases: [],
+			description: "Manage dynamic MCPs and curated MCP connection auth",
+			argumentHint: "[status|list|add|remove|enable|disable|auth|install]",
+			takesArgument: true,
+			build: (argument) => ({ type: "extension", name: "mcp", argument }),
 		},
 		{
 			name: "browser",
@@ -346,10 +454,36 @@ function createClankyOutput(output: NodeJS.WriteStream): TerminalOutput {
 function gateServerOutputUntilHeader(renderer: TerminalRenderer): void {
 	const renderAgentHeader = renderer.renderAgentHeader.bind(renderer);
 	renderer.renderAgentHeader = (options) => {
-		renderAgentHeader(options);
+		renderAgentHeader(withEffortInModelId(options));
 		terminalReady = true;
 		forwardServerOutput = server !== null;
 	};
+}
+
+// eve renders the resolved model id on the persistent status line (not the
+// header). Append the active provider's reasoning effort to that id so the
+// face surfaces effort the way /status reports it. claude has no effort knob,
+// so the suffix stays empty there.
+function withEffortInModelId(options: AgentHeaderOptions): AgentHeaderOptions {
+	const info = options.info;
+	if (info === undefined || effortStatusSuffix.length === 0) return options;
+	return {
+		...options,
+		info: {
+			...info,
+			agent: {
+				...info.agent,
+				model: { ...info.agent.model, id: `${info.agent.model.id}${effortStatusSuffix}` },
+			},
+		},
+	};
+}
+
+async function refreshEffortStatusSuffix(): Promise<void> {
+	const config = await readConfig();
+	const effort =
+		config.provider === "codex" ? config.codexEffort : config.provider === "local" ? config.localEffort : undefined;
+	effortStatusSuffix = effort !== undefined && effort.length > 0 ? ` (${effort} effort)` : "";
 }
 
 async function reportClankyFaceToHerdr(state: "idle" | "working" | "blocked" | "unknown", message: string): Promise<void> {
@@ -392,14 +526,18 @@ function createClankyCommandHandler(): PromptCommandHandler {
 					return { message: await configureLogin(command.argument, context.renderer.setupFlow) };
 				case "model":
 					return { message: await configureModel(command.argument, context.renderer.setupFlow) };
+				case "harness":
+					return { message: await configureHarness(command.argument, context.renderer.setupFlow) };
 				case "effort":
 					return { message: await configureEffort(command.argument, context.renderer.setupFlow) };
-					case "image-model":
-						return { message: await configureImageModel(command.argument) };
-					case "voice":
-						return { message: await configureVoice(command.argument, context.renderer.setupFlow) };
+				case "image-model":
+					return { message: await configureImageModel(command.argument) };
+				case "voice":
+					return { message: await configureVoice(command.argument, context.renderer.setupFlow) };
 				case "integrations":
 					return { message: await configureIntegrations(command.argument, context.renderer.setupFlow) };
+				case "mcp":
+					return { message: await configureMcp(command.argument, context.renderer.setupFlow, context.renderer) };
 				case "browser":
 					return { message: await configureBrowserBridge(command.argument) };
 				case "status":
@@ -580,6 +718,380 @@ async function configureModel(argument: string, flow: SetupFlowRenderer | undefi
 
 	await writeEnv(updates);
 	return await restartBrainMessage(`Model provider set to ${provider}${modelId ? ` (${modelId})` : ""}`);
+}
+
+type HarnessUpdate = {
+	updates: Record<string, string>;
+	summary: string;
+};
+
+async function configureHarness(argument: string, flow: SetupFlowRenderer | undefined): Promise<string> {
+	let args: string[];
+	try {
+		args = splitCommandLine(argument);
+	} catch (error) {
+		return `Invalid /harness command: ${error instanceof Error ? error.message : String(error)}`;
+	}
+	const config = await readConfig();
+	const first = args[0]?.toLowerCase();
+	if (first === "status" || first === "show") return formatCodingHarnessConfig(config);
+	if (first === "allow" || first === "allowed" || first === "allowlist") {
+		return await configureHarnessAllowlist(args.slice(1), config, flow);
+	}
+
+	let harness = parseCodingHarnessId(args[0]);
+	if (args[0] !== undefined && harness === undefined) {
+		return `Unknown coding harness "${args[0]}". Use clanky, claude, codex, opencode, custom, or status.`;
+	}
+
+	if (harness === undefined) {
+		if (flow === undefined) return `${formatCodingHarnessConfig(config)}\n\n${harnessUsage()}`;
+		return await configureHarnessInteractive(flow, config);
+	}
+
+	const update = buildHarnessUpdate(harness, args.slice(1), config);
+	if (typeof update === "string") return update;
+	await writeEnv(update.updates);
+	return await restartBrainMessage(`Coding harness set to ${update.summary}`);
+}
+
+async function configureHarnessAllowlist(
+	args: readonly string[],
+	config: ClankyConfig,
+	flow: SetupFlowRenderer | undefined,
+): Promise<string> {
+	let allowed: readonly CodingHarnessId[] | undefined;
+	if (args.length > 0) {
+		try {
+			allowed = parseAllowedCodingHarnesses(args.join(","));
+		} catch (error) {
+			return `Invalid harness allowlist: ${error instanceof Error ? error.message : String(error)}`;
+		}
+	} else {
+		if (flow === undefined) return `${formatCodingHarnessConfig(config)}\n\nUsage: /harness allow <all|clanky claude codex opencode custom>`;
+		flow.begin("Configure allowed coding harnesses");
+		try {
+			flow.renderOutput(formatCodingHarnessConfig(config));
+			const selected = await flow.readSelect({
+				kind: "multi",
+				message: "Choose which coding harnesses Clanky may use for worker panes.",
+				options: CODING_HARNESS_OPTIONS,
+				initialValues: configuredAllowedHarnesses(config),
+				required: true,
+			});
+			if (selected === undefined) return "/harness allow cancelled.";
+			allowed = selected.map((value) => parseCodingHarnessId(value)).filter((value): value is CodingHarnessId => value !== undefined);
+		} finally {
+			flow.end({ preserveDiagnostics: false });
+		}
+	}
+
+	if (allowed === undefined || allowed.length === 0) return "Harness allowlist must include at least one harness.";
+	const updates: Record<string, string> = { [CLANKY_CODING_HARNESS_ENV.allowed]: allowed.join(",") };
+	const currentDefault = parseCodingHarnessId(config.codingHarness) ?? DEFAULT_CODING_HARNESS;
+	let defaultMessage = "";
+	if (!allowed.includes(currentDefault)) {
+		updates[CLANKY_CODING_HARNESS_ENV.id] = allowed[0] ?? DEFAULT_CODING_HARNESS;
+		defaultMessage = ` Default changed to ${updates[CLANKY_CODING_HARNESS_ENV.id]}.`;
+	}
+	await writeEnv(updates);
+	return await restartBrainMessage(`Allowed coding harnesses set to ${allowed.join(", ")}.${defaultMessage}`);
+}
+
+async function configureHarnessInteractive(flow: SetupFlowRenderer, config: ClankyConfig): Promise<string> {
+	let update: HarnessUpdate | string | undefined;
+	flow.begin("Configure coding harness");
+	try {
+		flow.renderOutput(formatCodingHarnessConfig(config));
+		const allowed = configuredAllowedHarnesses(config);
+		const options = CODING_HARNESS_OPTIONS.filter((option) => allowed.includes(option.value as CodingHarnessId));
+		const configured = parseCodingHarnessId(config.codingHarness) ?? DEFAULT_CODING_HARNESS;
+		const current = allowed.includes(configured) ? configured : allowed[0];
+		const selected = parseCodingHarnessId(
+			await selectOne(flow, "Choose the default coding harness for new worker panes.", options, current),
+		);
+		if (selected === undefined) return "/harness cancelled.";
+		let command: string[] = [];
+		let launcher: CodingHarnessLauncher | undefined;
+		let model: string | undefined;
+		if (selected === "custom") {
+			const existingCommand = config.codingHarnessCommand ?? "";
+			const value = await flow.readText({
+				message: "Set the custom harness command.",
+				defaultValue: existingCommand,
+				placeholder: "opencode run {KICKOFF}",
+				validate: validateHarnessCommandText,
+			});
+			if (value === undefined) return "/harness cancelled.";
+			command = splitCommandLine(value);
+		} else if (selected !== "clanky") {
+			const launchable = parseLaunchableCodingHarnessId(selected);
+			if (launchable !== undefined) {
+				const currentProfile = resolveCodingHarness({ harness: selected, env: codingHarnessEnv(config) });
+				launcher = parseCodingHarnessLauncher(
+					await selectOne(
+						flow,
+						`Choose how ${selected} worker panes should launch.`,
+						CODING_HARNESS_LAUNCHER_OPTIONS,
+						currentProfile.launcher ?? "default",
+					),
+				);
+				if (launcher === undefined) return "/harness cancelled.";
+				if (launcher === "ollama") {
+					const value = await flow.readText({
+						message: `Set the Ollama model for ${selected} worker panes.`,
+						defaultValue: currentProfile.model ?? "",
+						placeholder: "qwen3-coder:latest",
+					});
+					if (value === undefined) return "/harness cancelled.";
+					model = value.trim();
+				}
+			}
+		}
+		update = buildHarnessUpdate(selected, [...launcherAndModelArgs(launcher, model), ...command], config);
+	} finally {
+		flow.end({ preserveDiagnostics: false });
+	}
+	if (update === undefined) return "/harness cancelled.";
+	if (typeof update === "string") return update;
+	await writeEnv(update.updates);
+	return await restartBrainMessage(`Coding harness set to ${update.summary}`);
+}
+
+function buildHarnessUpdate(harness: CodingHarnessId, args: readonly string[], config: ClankyConfig): HarnessUpdate | string {
+	const allowed = configuredAllowedHarnesses(config);
+	if (!allowed.includes(harness)) {
+		return `Coding harness '${harness}' is not allowed. Run /harness allow ${[...allowed, harness].join(" ")} to allow it.`;
+	}
+	const parsed = parseHarnessTail(args, harness !== "custom");
+	if (typeof parsed === "string") return parsed;
+	if (harness !== "custom" && parsed.command.length > 0) return harnessUsage();
+
+	if (harness === "custom") {
+		let command = parsed.command;
+		if (command.length === 0) {
+			try {
+				command = parseHarnessCommand(config.codingHarnessCommand) ?? [];
+			} catch (error) {
+				return `Existing custom harness command is invalid: ${error instanceof Error ? error.message : String(error)}`;
+			}
+		}
+		if (command.length === 0) return "Usage: /harness custom <command...>";
+		const resolved = resolveCodingHarness({ harness, command, runtime: parsed.runtime });
+		return {
+			updates: {
+				[CLANKY_CODING_HARNESS_ENV.id]: harness,
+				[CLANKY_CODING_HARNESS_ENV.command]: serializeCommandLine(command),
+				[CLANKY_CODING_HARNESS_ENV.runtime]: resolved.runtime,
+			},
+			summary: formatCodingHarnessSummaryFromProfile(resolved),
+		};
+	}
+
+	const runtime = parsed.runtime ?? defaultCodingRuntimeForHarness(harness);
+	const updates: Record<string, string> = {
+		[CLANKY_CODING_HARNESS_ENV.id]: harness,
+		[CLANKY_CODING_HARNESS_ENV.runtime]: runtime,
+	};
+	const launchable = parseLaunchableCodingHarnessId(harness);
+	if (launchable !== undefined) {
+		if (parsed.launcher !== undefined) updates[codingHarnessLauncherEnvKey(launchable)] = parsed.launcher;
+		if (parsed.model !== undefined) updates[codingHarnessModelEnvKey(launchable)] = parsed.model;
+	}
+	const resolved = resolveCodingHarness({ harness, runtime, env: { ...codingHarnessEnv(config), ...updates } });
+	return {
+		updates,
+		summary: formatCodingHarnessSummaryFromProfile(resolved),
+	};
+}
+
+function parseHarnessTail(args: readonly string[], allowLauncher: boolean): {
+	runtime?: CodingRuntime;
+	launcher?: CodingHarnessLauncher;
+	model?: string;
+	command: string[];
+} | string {
+	let runtime: CodingRuntime | undefined;
+	let launcher: CodingHarnessLauncher | undefined;
+	let model: string | undefined;
+	const command: string[] = [];
+	for (let index = 0; index < args.length; index += 1) {
+		const arg = args[index] ?? "";
+		if (arg === "--runtime") {
+			const next = args[index + 1];
+			const parsed = parseCodingRuntime(next);
+			if (parsed === undefined) return "Usage: /harness <harness> --runtime <clanky|native|opencode>";
+			runtime = parsed;
+			index += 1;
+			continue;
+		}
+		if (allowLauncher && arg === "--launcher") {
+			const parsed = parseCodingHarnessLauncher(args[index + 1]);
+			if (parsed === undefined) return "Usage: /harness <harness> --launcher <default|ollama>";
+			launcher = parsed;
+			index += 1;
+			continue;
+		}
+		if (allowLauncher && arg.startsWith("--launcher=")) {
+			const parsed = parseCodingHarnessLauncher(arg.slice("--launcher=".length));
+			if (parsed === undefined) return "Usage: /harness <harness> --launcher <default|ollama>";
+			launcher = parsed;
+			continue;
+		}
+		if (allowLauncher && arg === "--model") {
+			const next = args[index + 1];
+			if (next === undefined || next.length === 0) return "Usage: /harness <harness> --model <ollama-model>";
+			launcher = launcher ?? "ollama";
+			model = next;
+			index += 1;
+			continue;
+		}
+		if (allowLauncher && arg.startsWith("--model=")) {
+			const next = arg.slice("--model=".length);
+			if (next.length === 0) return "Usage: /harness <harness> --model <ollama-model>";
+			launcher = launcher ?? "ollama";
+			model = next;
+			continue;
+		}
+		const parsedLauncher = allowLauncher ? parseCodingHarnessLauncher(arg) : undefined;
+		if (parsedLauncher !== undefined) {
+			launcher = parsedLauncher;
+			const next = args[index + 1];
+			if (launcher === "ollama" && next !== undefined && !next.startsWith("--")) {
+				model = next;
+				index += 1;
+			}
+			continue;
+		}
+		if (arg.startsWith("--runtime=")) {
+			const parsed = parseCodingRuntime(arg.slice("--runtime=".length));
+			if (parsed === undefined) return "Usage: /harness <harness> --runtime <clanky|native|opencode>";
+			runtime = parsed;
+			continue;
+		}
+		command.push(arg);
+	}
+	return { runtime, launcher, model, command };
+}
+
+function launcherAndModelArgs(launcher: CodingHarnessLauncher | undefined, model: string | undefined): string[] {
+	if (launcher === undefined) return [];
+	const args: string[] = [launcher];
+	if (model !== undefined && model.length > 0) args.push(model);
+	return args;
+}
+
+function validateHarnessCommandText(value: string): string | undefined {
+	try {
+		return splitCommandLine(value).length === 0 ? "Enter a command." : undefined;
+	} catch (error) {
+		return error instanceof Error ? error.message : String(error);
+	}
+}
+
+function formatCodingHarnessConfig(config: ClankyConfig): string {
+	const allowed = formatAllowedHarnesses(config);
+	try {
+		const profile = resolveCodingHarness({ env: codingHarnessEnv(config) });
+		return [
+			"Current coding harness:",
+			`allowed: ${allowed}`,
+			`harness: ${profile.id} (${profile.label})`,
+			`runtime: ${profile.runtime}`,
+			`performer: ${profile.performer}`,
+			`launcher: ${formatCodingHarnessLauncher(profile)}`,
+			`command: ${profile.command === undefined ? "(built-in)" : serializeCommandLine(profile.command)}`,
+			`description: ${profile.description}`,
+			"",
+			"Configured worker launchers:",
+			...formatCodingHarnessLauncherLines(config),
+		].join("\n");
+	} catch (error) {
+		return [`Current coding harness: invalid (${error instanceof Error ? error.message : String(error)})`, `allowed: ${allowed}`].join("\n");
+	}
+}
+
+function formatCodingHarnessSummary(config: ClankyConfig): string {
+	try {
+		return formatCodingHarnessSummaryFromProfile(resolveCodingHarness({ env: codingHarnessEnv(config) }));
+	} catch (error) {
+		return `invalid (${error instanceof Error ? error.message : String(error)})`;
+	}
+}
+
+function formatCodingHarnessSummaryFromProfile(profile: ReturnType<typeof resolveCodingHarness>): string {
+	const command = profile.command === undefined ? "built-in" : serializeCommandLine(profile.command);
+	return `${profile.id} (${profile.label}, runtime=${profile.runtime}, performer=${profile.performer}, launcher=${formatCodingHarnessLauncher(profile)}, command=${command})`;
+}
+
+function formatCodingHarnessLauncher(profile: ReturnType<typeof resolveCodingHarness>): string {
+	if (profile.id === "custom") return "custom command";
+	if (profile.id === "clanky") return "clanky worker (uses Clanky's /model provider)";
+	if (profile.launcher === "ollama") {
+		const model = profile.model === undefined ? "integration default" : profile.model;
+		return `ollama launch ${profile.performer} (model=${model})`;
+	}
+	return "default CLI model";
+}
+
+function formatCodingHarnessLauncherLines(config: ClankyConfig): string[] {
+	return LAUNCHABLE_CODING_HARNESS_IDS.map((id) => {
+		const profile = resolveCodingHarness({ harness: id, env: codingHarnessEnv(config) });
+		return `${id}: ${formatCodingHarnessLauncher(profile)}`;
+	});
+}
+
+function configuredAllowedHarnesses(config: ClankyConfig): readonly CodingHarnessId[] {
+	try {
+		return parseAllowedCodingHarnesses(config.codingHarnesses) ?? ALL_CODING_HARNESSES;
+	} catch {
+		return ALL_CODING_HARNESSES;
+	}
+}
+
+function formatAllowedHarnesses(config: ClankyConfig): string {
+	try {
+		const parsed = parseAllowedCodingHarnesses(config.codingHarnesses);
+		return parsed === undefined ? `all (${ALL_CODING_HARNESSES.join(", ")})` : parsed.join(", ");
+	} catch (error) {
+		return `invalid (${error instanceof Error ? error.message : String(error)})`;
+	}
+}
+
+function codingHarnessEnv(config: ClankyConfig): CodingHarnessEnv {
+	return {
+		[CLANKY_CODING_HARNESS_ENV.id]: config.codingHarness,
+		[CLANKY_CODING_HARNESS_ENV.allowed]: config.codingHarnesses,
+		[CLANKY_CODING_HARNESS_ENV.command]: config.codingHarnessCommand,
+		[CLANKY_CODING_HARNESS_ENV.runtime]: config.codingHarnessRuntime,
+		[codingHarnessLauncherEnvKey("claude")]: config.codingHarnessClaudeLauncher,
+		[codingHarnessModelEnvKey("claude")]: config.codingHarnessClaudeModel,
+		[codingHarnessLauncherEnvKey("codex")]: config.codingHarnessCodexLauncher,
+		[codingHarnessModelEnvKey("codex")]: config.codingHarnessCodexModel,
+		[codingHarnessLauncherEnvKey("opencode")]: config.codingHarnessOpencodeLauncher,
+		[codingHarnessModelEnvKey("opencode")]: config.codingHarnessOpencodeModel,
+	};
+}
+
+function harnessUsage(): string {
+	return [
+		"Usage:",
+		"/harness",
+		"/harness status",
+		"/harness allow all",
+		"/harness allow clanky claude codex opencode custom",
+		"/harness clanky",
+		"/harness claude [default|ollama] [ollama-model]",
+		"/harness codex",
+		"/harness codex [default|ollama] [ollama-model]",
+		"/harness opencode",
+		"/harness opencode [default|ollama] [ollama-model]",
+		"/harness <claude|codex|opencode> --launcher <default|ollama> --model <ollama-model>",
+		"/harness custom <command...>",
+		"/harness custom --runtime <clanky|native|opencode> <command...>",
+		"Ollama codex workers use 'ollama launch codex', not the Codex desktop app.",
+		"Use {KICKOFF} where the task brief should be inserted; otherwise it is appended.",
+	].join("\n");
 }
 
 async function configureEffort(argument: string, flow: SetupFlowRenderer | undefined): Promise<string> {
@@ -852,6 +1364,764 @@ async function configureIntegrations(argument: string, flow: SetupFlowRenderer |
 	}
 }
 
+async function configureMcp(
+	argument: string,
+	flow: SetupFlowRenderer | undefined,
+	renderer: PromptCommandHandlerContext["renderer"],
+): Promise<string> {
+	const args = splitArgs(argument);
+	const action = parseMcpAction(args[0]);
+	if (args[0] !== undefined && action === undefined) return `Unknown /mcp action "${args[0]}".\n\n${mcpUsage()}`;
+	if (action === undefined) {
+		if (flow === undefined) return `${await mcpStatusText()}\n\n${mcpUsage()}`;
+		return await configureMcpInteractive(flow, renderer);
+	}
+
+	switch (action) {
+		case "help":
+			return mcpUsage();
+		case "status":
+			return await mcpStatusText();
+		case "connections":
+			return await mcpConnectionsText();
+		case "list":
+			return await mcpToolListText(args[1]);
+		case "add":
+			if (args.length > 1) return await addMcpServerFromArgs(args.slice(1));
+			if (flow === undefined) return mcpAddUsage();
+			flow.begin("Add dynamic MCP server");
+			try {
+				return await promptAndSaveMcpServer(flow);
+			} finally {
+				flow.end({ preserveDiagnostics: false });
+			}
+		case "remove":
+			if (args[1] !== undefined) return await removeDynamicMcpServer(args[1]);
+			if (flow === undefined) return "Usage: /mcp remove <name>";
+			flow.begin("Remove dynamic MCP server");
+			try {
+				return await promptAndRemoveMcpServer(flow);
+			} finally {
+				flow.end({ preserveDiagnostics: false });
+			}
+		case "enable":
+		case "disable":
+			if (args[1] !== undefined) return await setDynamicMcpServerEnabled(args[1], action === "enable");
+			if (flow === undefined) return `Usage: /mcp ${action} <name>`;
+			flow.begin(`${action === "enable" ? "Enable" : "Disable"} dynamic MCP server`);
+			try {
+				return await promptAndSetMcpServerEnabled(flow, action === "enable");
+			} finally {
+				flow.end({ preserveDiagnostics: false });
+			}
+		case "auth":
+			if (flow === undefined) return "Usage: /mcp auth <connection>";
+			return await runMcpAuthCommand(args[1], flow, renderer);
+		case "install":
+			if (flow === undefined) return "Usage: /mcp install <linear|figma|connection>";
+			return await runMcpInstallCommand(args[1], flow, renderer);
+	}
+}
+
+async function configureMcpInteractive(
+	flow: SetupFlowRenderer,
+	renderer: PromptCommandHandlerContext["renderer"],
+): Promise<string> {
+	flow.begin("Manage MCPs");
+	try {
+		flow.renderOutput(await mcpStatusText());
+		const action = parseMcpAction(await selectOne(flow, "Choose an MCP action.", MCP_ACTION_OPTIONS, "status"));
+		if (action === undefined) return "/mcp cancelled.";
+		switch (action) {
+			case "status":
+				return await mcpStatusText();
+			case "connections":
+				return await mcpConnectionsText();
+			case "list": {
+				const server = await selectDynamicMcpServer(flow, "Choose a dynamic MCP server to probe.", true);
+				if (server === undefined) return "/mcp cancelled.";
+				return await mcpToolListText(server === "all" ? undefined : server);
+			}
+			case "add":
+				return await promptAndSaveMcpServer(flow);
+			case "remove":
+				return await promptAndRemoveMcpServer(flow);
+			case "enable":
+			case "disable":
+				return await promptAndSetMcpServerEnabled(flow, action === "enable");
+			case "auth": {
+				const connection = await selectMcpConnectionName(flow, undefined);
+				if (connection === undefined) return "/mcp cancelled.";
+				return await runMcpConnectionAuthByName(connection, flow, renderer);
+			}
+			case "install":
+			case "help":
+				return mcpUsage();
+		}
+	} finally {
+		flow.end({ preserveDiagnostics: false });
+	}
+}
+
+async function runMcpInstallCommand(
+	connectionName: string | undefined,
+	flow: SetupFlowRenderer,
+	renderer: PromptCommandHandlerContext["renderer"],
+): Promise<string> {
+	if (connectionName === undefined) {
+		flow.begin("Install/auth MCP connection");
+		try {
+			const selected = await selectMcpConnectionName(flow, "linear");
+			if (selected === undefined) return "/mcp install cancelled.";
+			return await runMcpConnectionAuthByName(selected, flow, renderer);
+		} finally {
+			flow.end({ preserveDiagnostics: false });
+		}
+	}
+	const connection = await findMcpConnection(connectionName);
+	if (connection === undefined) {
+		return `No curated MCP connection named "${connectionName}" is installed. Use /mcp add for dynamic no-auth/static-token MCP servers.`;
+	}
+	flow.begin(`Install/auth ${connection.connectionName}`);
+	try {
+		return await runMcpConnectionAuth(connection, flow, renderer);
+	} finally {
+		flow.end({ preserveDiagnostics: false });
+	}
+}
+
+async function runMcpAuthCommand(
+	connectionName: string | undefined,
+	flow: SetupFlowRenderer,
+	renderer: PromptCommandHandlerContext["renderer"],
+): Promise<string> {
+	flow.begin("Authorize MCP connection");
+	try {
+		const selected = connectionName ?? (await selectMcpConnectionName(flow, "linear"));
+		if (selected === undefined) return "/mcp auth cancelled.";
+		return await runMcpConnectionAuthByName(selected, flow, renderer);
+	} finally {
+		flow.end({ preserveDiagnostics: false });
+	}
+}
+
+async function runMcpConnectionAuthByName(
+	connectionName: string,
+	flow: SetupFlowRenderer,
+	renderer: PromptCommandHandlerContext["renderer"],
+): Promise<string> {
+	const connection = await findMcpConnection(connectionName);
+	if (connection === undefined) return `Unknown curated MCP connection "${connectionName}".\n\n${await mcpConnectionsText()}`;
+	return await runMcpConnectionAuth(connection, flow, renderer);
+}
+
+async function runMcpConnectionAuth(
+	connection: AgentInfoConnectionEntry,
+	flow: SetupFlowRenderer,
+	renderer: PromptCommandHandlerContext["renderer"],
+): Promise<string> {
+	if (!connection.hasAuthorization) return `${connection.connectionName} is installed and does not require authorization.`;
+	const abort = new AbortController();
+	const interrupt = flow.waitForInterrupt();
+	let pendingAuthCount = 0;
+	const probe = probeMcpConnection(connection, flow, renderer, abort.signal, (count) => {
+		pendingAuthCount = Math.max(0, pendingAuthCount + count);
+		renderer.setConnectionAuthPendingCount?.(pendingAuthCount);
+	});
+	try {
+		const result = await Promise.race([probe, interrupt.promise.then(() => ({ cancelled: true as const }))]);
+		if ("cancelled" in result) {
+			abort.abort();
+			await probe.catch(() => undefined);
+			return `/mcp auth ${connection.connectionName} cancelled.`;
+		}
+		if (result.failure !== undefined) return `${connection.connectionName} auth probe failed: ${result.failure}`;
+		if (result.authOutcome === "authorized") return `${connection.connectionName} authorization complete.`;
+		if (result.authOutcome !== undefined) {
+			const reason = result.authReason === undefined ? "" : ` (${result.authReason})`;
+			return `${connection.connectionName} authorization ${result.authOutcome}${reason}.`;
+		}
+		if (result.sawConnectionSearch) return `${connection.connectionName} is installed and authorization is ready.`;
+		return `${connection.connectionName} auth probe finished, but Clanky did not call connection__search. Try asking Clanky to use ${connection.connectionName}.`;
+	} catch (error) {
+		return `${connection.connectionName} auth probe failed: ${error instanceof Error ? error.message : String(error)}`;
+	} finally {
+		abort.abort();
+		interrupt.dispose();
+		renderer.setConnectionAuthPendingCount?.(0);
+		flow.setStatus(undefined);
+	}
+}
+
+type McpAuthProbeResult = {
+	sawConnectionSearch: boolean;
+	authOutcome?: "authorized" | "declined" | "failed" | "timed-out";
+	authReason?: string;
+	failure?: string;
+};
+
+async function probeMcpConnection(
+	connection: AgentInfoConnectionEntry,
+	flow: SetupFlowRenderer,
+	renderer: PromptCommandHandlerContext["renderer"],
+	signal: AbortSignal,
+	updatePendingAuth: (countDelta: number) => void,
+): Promise<McpAuthProbeResult> {
+	flow.renderLine(`Checking ${connection.connectionName} with connection__search. OAuth prompts will open in your browser when needed.`, "info");
+	flow.setStatus(`Checking ${connection.connectionName} authorization...`);
+	const session = client.session();
+	const response = await session.send({ message: mcpAuthProbePrompt(connection.connectionName), signal });
+	const result: McpAuthProbeResult = { sawConnectionSearch: false };
+	for await (const event of response) {
+		applyMcpAuthProbeEvent(event, connection, flow, renderer, updatePendingAuth, result);
+	}
+	return result;
+}
+
+function applyMcpAuthProbeEvent(
+	event: HandleMessageStreamEvent,
+	connection: AgentInfoConnectionEntry,
+	flow: SetupFlowRenderer,
+	renderer: PromptCommandHandlerContext["renderer"],
+	updatePendingAuth: (countDelta: number) => void,
+	result: McpAuthProbeResult,
+): void {
+	switch (event.type) {
+		case "actions.requested":
+			for (const action of event.data.actions) {
+				if (action.kind === "tool-call" && action.toolName === "connection__search") {
+					result.sawConnectionSearch = true;
+					flow.setStatus(`Discovering ${connection.connectionName} connection tools...`);
+				}
+			}
+			break;
+		case "authorization.required": {
+			const challenge = event.data.authorization;
+			const displayName = challenge?.displayName ?? titleCaseConnection(event.data.name);
+			const lines = [`Authorize ${displayName} for Clanky.`];
+			if (challenge?.url !== undefined) lines.push(challenge.url);
+			if (challenge?.userCode !== undefined) lines.push(`code: ${challenge.userCode}`);
+			if (challenge?.instructions !== undefined) lines.push(challenge.instructions);
+			lines.push("Press Esc to cancel this wait.");
+			flow.renderLine(lines.join("\n"), "info");
+			flow.setStatus(`Waiting for ${displayName} authorization...`);
+			if (challenge?.url !== undefined) void runHostCommand("open", [challenge.url]).catch(() => undefined);
+			renderer.upsertConnectionAuth?.({
+				name: event.data.name,
+				description: event.data.description,
+				state: "required",
+				challenge: challengeForRenderer(challenge),
+			});
+			updatePendingAuth(1);
+			break;
+		}
+		case "authorization.completed": {
+			const displayName = event.data.authorization?.displayName ?? titleCaseConnection(event.data.name);
+			const reason = event.data.reason === undefined ? "" : ` (${event.data.reason})`;
+			const tone = event.data.outcome === "authorized" ? "success" : "warning";
+			flow.renderLine(`${displayName} authorization ${event.data.outcome}${reason}.`, tone);
+			result.authOutcome = event.data.outcome;
+			result.authReason = event.data.reason;
+			renderer.upsertConnectionAuth?.({
+				name: event.data.name,
+				description: connection.description,
+				state: event.data.outcome,
+				challenge: challengeForRenderer(event.data.authorization),
+				...(event.data.reason === undefined ? {} : { reason: event.data.reason }),
+			});
+			updatePendingAuth(-1);
+			break;
+		}
+		case "step.failed":
+		case "turn.failed":
+		case "session.failed":
+			result.failure = event.data.message;
+			break;
+	}
+}
+
+type MappedConnectionAuthChallenge = {
+	readonly url?: string;
+	readonly userCode?: string;
+	readonly expiresAt?: string;
+	readonly instructions?: string;
+};
+
+function challengeForRenderer(challenge: MappedConnectionAuthChallenge | undefined) {
+	if (challenge === undefined) return undefined;
+	return {
+		...(challenge.url === undefined ? {} : { url: challenge.url }),
+		...(challenge.userCode === undefined ? {} : { userCode: challenge.userCode }),
+		...(challenge.expiresAt === undefined ? {} : { expiresAt: challenge.expiresAt }),
+		...(challenge.instructions === undefined ? {} : { instructions: challenge.instructions }),
+	};
+}
+
+function mcpAuthProbePrompt(connectionName: string): string {
+	return [
+		"TUI MCP connection auth probe.",
+		`Use connection__search to discover tools for only the curated MCP connection named "${connectionName}".`,
+		"Do not call any connection tool other than connection__search. Do not create, update, delete, post, or mutate anything.",
+		"If authorization is required, wait for the authorization flow to complete. Then reply with one short status sentence.",
+	].join("\n");
+}
+
+async function promptAndSaveMcpServer(flow: SetupFlowRenderer): Promise<string> {
+	const configured = await promptMcpServerConfig(flow);
+	if (configured === undefined) return "/mcp add cancelled.";
+	const result = await upsertMcpServer(configured.name, configured.config);
+	return `Dynamic MCP server "${configured.name}" saved to ${result.path}. Run /mcp list ${configured.name} to verify tools.`;
+}
+
+async function promptMcpServerConfig(flow: SetupFlowRenderer): Promise<{ name: string; config: McpServerConfig } | undefined> {
+	const name = await flow.readText({
+		message: "Name this dynamic MCP server.",
+		placeholder: "minecraft",
+		validate: validateMcpServerName,
+	});
+	if (name === undefined) return undefined;
+	const transport = parseMcpTransport(
+		await selectOne(flow, "Choose the dynamic MCP transport.", MCP_TRANSPORT_OPTIONS, "stdio"),
+	);
+	if (transport === undefined) return undefined;
+
+	const config: McpServerConfig = { type: transport };
+	if (transport === "stdio") {
+		const command = await flow.readText({
+			message: "Command to start the MCP server.",
+			placeholder: "node /path/to/server.js",
+			validate: requiredMcpText,
+		});
+		if (command === undefined) return undefined;
+		config.command = command.trim();
+		const rawArgs = await flow.readText({
+			message: "Command arguments, if any.",
+			placeholder: "--stdio",
+		});
+		const args = parseMcpStringList(rawArgs);
+		if (args.length > 0) config.args = args;
+		const cwd = await flow.readText({
+			message: "Working directory, if needed.",
+			placeholder: process.cwd(),
+		});
+		if (cwd !== undefined && cwd.trim().length > 0) config.cwd = cwd.trim();
+		const env = await flow.readText({
+			message: "Explicit environment for the MCP subprocess, if needed.",
+			placeholder: "KEY=value OTHER=value or JSON object",
+			validate: validateMcpEnvText,
+		});
+		const parsedEnv = parseMcpEnvText(env);
+		if (typeof parsedEnv === "string") {
+			flow.renderLine(parsedEnv, "error");
+			return undefined;
+		}
+		if (parsedEnv !== undefined) config.env = parsedEnv;
+	} else {
+		const url = await flow.readText({
+			message: "MCP server URL.",
+			placeholder: transport === "sse" ? "http://127.0.0.1:3000/sse" : "http://127.0.0.1:3000/mcp",
+			validate: validateMcpUrl,
+		});
+		if (url === undefined) return undefined;
+		config.url = url.trim();
+	}
+
+	const description = await flow.readText({
+		message: "Description for Clanky, if useful.",
+		placeholder: "Local automation MCP server",
+	});
+	if (description !== undefined && description.trim().length > 0) config.description = description.trim();
+	const allowedTools = await flow.readText({
+		message: "Allowed tools, if you want to restrict exposure.",
+		placeholder: "tool_one, tool_two",
+	});
+	const tools = parseMcpStringList(allowedTools);
+	if (tools.length > 0) config.allowedTools = tools;
+	const enabled = await selectOne(
+		flow,
+		"Enable this dynamic MCP server now?",
+		[
+			{ value: "enabled", label: "enabled", hint: "default" },
+			{ value: "disabled", label: "disabled" },
+		],
+		"enabled",
+	);
+	if (enabled === undefined) return undefined;
+	if (enabled === "disabled") config.disabled = true;
+	return { name: name.trim(), config };
+}
+
+async function addMcpServerFromArgs(args: string[]): Promise<string> {
+	const parsed = parseMcpServerArgs(args);
+	if (typeof parsed === "string") return `${parsed}\n\n${mcpAddUsage()}`;
+	const result = await upsertMcpServer(parsed.name, parsed.config);
+	return `Dynamic MCP server "${parsed.name}" saved to ${result.path}. Run /mcp list ${parsed.name} to verify tools.`;
+}
+
+function parseMcpServerArgs(args: string[]): { name: string; config: McpServerConfig } | string {
+	const name = args[0];
+	if (name === undefined || name.trim().length === 0) return "Missing MCP server name.";
+	const nameError = validateMcpServerName(name);
+	if (nameError !== undefined) return nameError;
+	const transport = parseMcpTransport(args[1]);
+	if (transport === undefined) return "Missing or invalid MCP transport.";
+	if (transport === "stdio") {
+		const command = args[2];
+		if (command === undefined || command.length === 0) return "stdio MCP servers require a command.";
+		const commandArgs = args.slice(3);
+		return {
+			name,
+			config: {
+				type: "stdio",
+				command,
+				...(commandArgs.length === 0 ? {} : { args: commandArgs }),
+			},
+		};
+	}
+	const url = args[2];
+	if (url === undefined) return `${transport} MCP servers require a URL.`;
+	const urlError = validateMcpUrl(url);
+	if (urlError !== undefined) return urlError;
+	return { name, config: { type: transport, url } };
+}
+
+async function promptAndRemoveMcpServer(flow: SetupFlowRenderer): Promise<string> {
+	const name = await selectDynamicMcpServer(flow, "Choose the file-backed dynamic MCP server to remove.", false);
+	if (name === undefined) return "/mcp remove cancelled.";
+	const confirmed = await selectOne(
+		flow,
+		`Remove dynamic MCP server "${name}" from the file-backed store?`,
+		[
+			{ value: "cancel", label: "cancel" },
+			{ value: "remove", label: "remove", hint: "delete from ~/.clanky/mcp-servers.json" },
+		],
+		"cancel",
+	);
+	if (confirmed !== "remove") return "/mcp remove cancelled.";
+	return await removeDynamicMcpServer(name);
+}
+
+async function removeDynamicMcpServer(name: string): Promise<string> {
+	const store = await listMcpServerConfigs();
+	if (store.fileServers[name] === undefined) {
+		if (store.envServers[name] !== undefined) return `Dynamic MCP server "${name}" comes from CLANKY_MCP_SERVERS; edit that environment variable to remove it.`;
+		return `Unknown file-backed dynamic MCP server "${name}".`;
+	}
+	const result = await removeMcpServer(name);
+	const stillActive = store.envServers[name] !== undefined;
+	return `Dynamic MCP server "${name}" ${result.removed ? "removed" : "was not present"} from ${result.path}.${stillActive ? " It is still active from CLANKY_MCP_SERVERS." : ""}`;
+}
+
+async function promptAndSetMcpServerEnabled(flow: SetupFlowRenderer, enabled: boolean): Promise<string> {
+	const name = await selectDynamicMcpServer(flow, `Choose the file-backed dynamic MCP server to ${enabled ? "enable" : "disable"}.`, false);
+	if (name === undefined) return `/mcp ${enabled ? "enable" : "disable"} cancelled.`;
+	return await setDynamicMcpServerEnabled(name, enabled);
+}
+
+async function setDynamicMcpServerEnabled(name: string, enabled: boolean): Promise<string> {
+	const store = await listMcpServerConfigs();
+	if (store.fileServers[name] === undefined) {
+		if (store.envServers[name] !== undefined) return `Dynamic MCP server "${name}" comes from CLANKY_MCP_SERVERS; edit that environment variable to ${enabled ? "enable" : "disable"} it.`;
+		return `Unknown file-backed dynamic MCP server "${name}".`;
+	}
+	const result = await setMcpServerDisabled(name, !enabled);
+	const shadowed = store.envServers[name] !== undefined;
+	return `Dynamic MCP server "${name}" ${enabled ? "enabled" : "disabled"} in ${result.path}.${shadowed ? " CLANKY_MCP_SERVERS still overrides this file-backed config." : ""}`;
+}
+
+async function selectDynamicMcpServer(
+	flow: SetupFlowRenderer,
+	message: string,
+	includeAll: boolean,
+): Promise<string | undefined> {
+	const store = await listMcpServerConfigs();
+	const names = Object.keys(includeAll ? store.servers : store.fileServers).sort((a, b) => a.localeCompare(b));
+	if (names.length === 0) {
+		flow.renderLine(includeAll ? "No dynamic MCP servers are configured." : "No file-backed dynamic MCP servers are configured.", "warning");
+		return undefined;
+	}
+	return await selectOne(
+		flow,
+		message,
+		[
+			...(includeAll ? [{ value: "all", label: "all", hint: "probe every configured dynamic MCP server" }] : []),
+			...names.map((name) => ({
+				value: name,
+				label: name,
+				hint: dynamicMcpSourceHint(name, store),
+			})),
+		],
+		includeAll ? "all" : names[0],
+	);
+}
+
+async function selectMcpConnectionName(flow: SetupFlowRenderer, initialValue: string | undefined): Promise<string | undefined> {
+	const connections = mcpConnections(await fetchInfo());
+	if (connections.length === 0) {
+		flow.renderLine("No curated MCP connections are installed in this eve server.", "warning");
+		return undefined;
+	}
+	return await selectOne(
+		flow,
+		"Choose the curated MCP connection to authorize.",
+		connections.map((connection) => ({
+			value: connection.connectionName,
+			label: connection.connectionName,
+			hint: connection.hasAuthorization ? "auth" : "no auth",
+			description: connection.description,
+		})),
+		initialValue,
+	);
+}
+
+async function findMcpConnection(name: string): Promise<AgentInfoConnectionEntry | undefined> {
+	const normalized = normalizeCommandToken(name);
+	return mcpConnections(await fetchInfo()).find((connection) => normalizeCommandToken(connection.connectionName) === normalized);
+}
+
+function mcpConnections(info: AgentInfoResult | undefined): AgentInfoConnectionEntry[] {
+	return [...(info?.connections ?? [])]
+		.filter((connection) => connection.protocol === "mcp")
+		.sort((a, b) => a.connectionName.localeCompare(b.connectionName));
+}
+
+async function mcpStatusText(): Promise<string> {
+	const [info, store] = await Promise.all([fetchInfo(), listMcpServerConfigs()]);
+	return [
+		"Curated MCP connections (eve connections; OAuth/brokered auth):",
+		...formatMcpConnectionLines(info),
+		"",
+		`Dynamic MCP servers (${store.path} + CLANKY_MCP_SERVERS):`,
+		...formatDynamicMcpLines(store),
+		"",
+		"Use /mcp auth linear or /mcp auth figma for OAuth. Use /mcp add only for no-auth/static-token dynamic MCPs.",
+	].join("\n");
+}
+
+async function mcpConnectionsText(): Promise<string> {
+	return ["Curated MCP connections (installed under agent/connections):", ...formatMcpConnectionLines(await fetchInfo())].join("\n");
+}
+
+async function mcpToolListText(server: string | undefined): Promise<string> {
+	const statuses = await listMcpTools({ server, timeoutMs: 10_000 });
+	if (statuses.length === 0) return "No dynamic MCP servers are configured.";
+	return statuses.map(formatMcpServerStatus).join("\n\n");
+}
+
+function formatMcpConnectionLines(info: AgentInfoResult | undefined): string[] {
+	const connections = mcpConnections(info);
+	if (connections.length === 0) return ["(none)"];
+	return connections.map((connection) => {
+		const auth = connection.hasAuthorization ? "auth" : "no auth";
+		const approval = connection.hasApproval ? "approval" : "no approval";
+		return `- ${connection.connectionName}: ${connection.protocol}, ${auth}, ${approval} - ${connection.description}`;
+	});
+}
+
+function formatDynamicMcpLines(store: Awaited<ReturnType<typeof listMcpServerConfigs>>): string[] {
+	const names = Object.keys(store.servers).sort((a, b) => a.localeCompare(b));
+	if (names.length === 0) return ["(none)"];
+	return names.map((name) => {
+		const config = store.servers[name];
+		const source = dynamicMcpSourceHint(name, store);
+		const state = config?.disabled === true ? "disabled" : "enabled";
+		return `- ${name}: ${formatMcpConfigTarget(config)} (${state}, ${source})`;
+	});
+}
+
+function formatMcpStatusSummary(info: AgentInfoResult | undefined, store: Awaited<ReturnType<typeof listMcpServerConfigs>>): string {
+	const curated = mcpConnections(info).map((connection) => connection.connectionName);
+	const dynamic = Object.keys(store.servers).sort((a, b) => a.localeCompare(b));
+	return `curated=${curated.length === 0 ? "none" : curated.join(",")} dynamic=${dynamic.length === 0 ? "none" : dynamic.join(",")}`;
+}
+
+function formatMcpServerStatus(status: McpServerStatus): string {
+	const lines = [
+		`${status.server} (${status.type}${status.disabled === true ? ", disabled" : ""})`,
+		`target: ${formatMcpStatusTarget(status)}`,
+	];
+	if (status.description !== undefined) lines.push(`description: ${status.description}`);
+	if (status.allowedTools !== undefined) lines.push(`allowed tools: ${status.allowedTools.join(", ")}`);
+	if (status.error !== undefined) {
+		lines.push(`error: ${status.error}`);
+		return lines.join("\n");
+	}
+	if (status.disabled === true) {
+		lines.push("tools: (disabled)");
+		return lines.join("\n");
+	}
+	const tools = status.tools ?? [];
+	if (tools.length === 0) {
+		lines.push("tools: (none returned)");
+		return lines.join("\n");
+	}
+	lines.push("tools:", ...tools.map((tool) => `- ${tool.name}${tool.description === undefined ? "" : `: ${tool.description}`}`));
+	return lines.join("\n");
+}
+
+function formatMcpConfigTarget(config: McpServerConfig | undefined): string {
+	if (config === undefined) return "(invalid config)";
+	if (config.command !== undefined) return [config.command, ...(config.args ?? [])].join(" ");
+	if (config.url !== undefined) return config.url;
+	return "(missing target)";
+}
+
+function formatMcpStatusTarget(status: McpServerStatus): string {
+	if (status.command !== undefined) return [status.command, ...status.args].join(" ");
+	if (status.url !== undefined) return status.url;
+	return "(missing target)";
+}
+
+function dynamicMcpSourceHint(name: string, store: Awaited<ReturnType<typeof listMcpServerConfigs>>): string {
+	const file = store.fileServers[name] !== undefined;
+	const env = store.envServers[name] !== undefined;
+	if (file && env) return "file+env (env wins)";
+	if (env) return "env";
+	return "file";
+}
+
+function mcpUsage(): string {
+	return [
+		"Usage:",
+		"/mcp",
+		"/mcp status",
+		"/mcp connections",
+		"/mcp auth <linear|figma|connection>",
+		"/mcp install <linear|figma|connection>",
+		"/mcp list [server]",
+		"/mcp add <name> stdio <command> [args...]",
+		"/mcp add <name> http <url>",
+		"/mcp add <name> sse <url>",
+		"/mcp enable <name>",
+		"/mcp disable <name>",
+		"/mcp remove <name>",
+		"",
+		"Linear/Figma stay curated eve connections with brokered OAuth. Dynamic MCP is only for no-auth/static-token local or throwaway servers.",
+	].join("\n");
+}
+
+function mcpAddUsage(): string {
+	return [
+		"Usage:",
+		"/mcp add <name> stdio <command> [args...]",
+		"/mcp add <name> http <url>",
+		"/mcp add <name> sse <url>",
+		"",
+		"Run bare /mcp for the interactive add flow with cwd, env, description, and allowed-tool prompts.",
+	].join("\n");
+}
+
+function parseMcpAction(value: string | undefined): McpCommandAction | undefined {
+	if (value === undefined) return undefined;
+	const normalized = normalizeCommandToken(value);
+	switch (normalized) {
+		case "status":
+		case "show":
+			return "status";
+		case "list":
+		case "ls":
+		case "tools":
+			return "list";
+		case "add":
+		case "create":
+			return "add";
+		case "remove":
+		case "rm":
+		case "delete":
+			return "remove";
+		case "enable":
+		case "on":
+			return "enable";
+		case "disable":
+		case "off":
+			return "disable";
+		case "auth":
+		case "authorize":
+		case "login":
+		case "connect":
+			return "auth";
+		case "install":
+		case "setup":
+			return "install";
+		case "connections":
+		case "connection":
+		case "curated":
+			return "connections";
+		case "help":
+		case "usage":
+			return "help";
+	}
+	return undefined;
+}
+
+function parseMcpTransport(value: string | undefined): McpServerConfig["type"] | undefined {
+	const normalized = value === undefined ? undefined : normalizeCommandToken(value);
+	if (normalized === "stdio" || normalized === "command" || normalized === "local") return "stdio";
+	if (normalized === "http" || normalized === "streamablehttp" || normalized === "streamable") return "streamable-http";
+	if (normalized === "sse") return "sse";
+	return undefined;
+}
+
+function validateMcpServerName(value: string): string | undefined {
+	const trimmed = value.trim();
+	if (trimmed.length === 0) return "Enter a name.";
+	return MCP_DYNAMIC_NAME_RE.test(trimmed) ? undefined : "Use letters, numbers, underscores, or dashes; start with a letter or number.";
+}
+
+function requiredMcpText(value: string): string | undefined {
+	return value.trim().length === 0 ? "Enter a value." : undefined;
+}
+
+function validateMcpUrl(value: string): string | undefined {
+	try {
+		const url = new URL(value.trim());
+		return url.protocol === "http:" || url.protocol === "https:" ? undefined : "Use an http:// or https:// URL.";
+	} catch {
+		return "Enter a valid URL.";
+	}
+}
+
+function validateMcpEnvText(value: string): string | undefined {
+	const parsed = parseMcpEnvText(value);
+	return typeof parsed === "string" ? parsed : undefined;
+}
+
+function parseMcpEnvText(raw: string | undefined): Record<string, string> | string | undefined {
+	const trimmed = raw?.trim() ?? "";
+	if (trimmed.length === 0) return undefined;
+	if (trimmed.startsWith("{")) {
+		try {
+			const parsed = JSON.parse(trimmed) as unknown;
+			if (!isRecord(parsed) || !Object.values(parsed).every((value) => typeof value === "string")) {
+				return "JSON env must be an object with string values.";
+			}
+			return parsed as Record<string, string>;
+		} catch (error) {
+			return `Invalid JSON env: ${error instanceof Error ? error.message : String(error)}`;
+		}
+	}
+	const env: Record<string, string> = {};
+	for (const part of trimmed.split(/[\s,]+/)) {
+		const index = part.indexOf("=");
+		if (index <= 0) return "Env entries must be KEY=value pairs or a JSON object.";
+		const key = part.slice(0, index);
+		if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) return `Invalid env key: ${key}`;
+		env[key] = part.slice(index + 1);
+	}
+	return env;
+}
+
+function parseMcpStringList(raw: string | undefined): string[] {
+	return (raw ?? "")
+		.split(/[\s,]+/)
+		.map((entry) => entry.trim())
+		.filter((entry) => entry.length > 0);
+}
+
+function titleCaseConnection(name: string): string {
+	return name.length === 0 ? name : `${name.charAt(0).toUpperCase()}${name.slice(1)}`;
+}
+
 async function configureBrowserBridge(argument: string): Promise<string> {
 	const command = splitArgs(argument)[0] ?? "status";
 	if (command === "status") return formatBrowserBridgeStatus(await browserBridgeStatus());
@@ -875,12 +2145,13 @@ async function configureBrowserBridge(argument: string): Promise<string> {
 }
 
 async function statusText(): Promise<string> {
-	const [info, gateway, browser, claudeAuth, codexAuth] = await Promise.all([
+	const [info, gateway, browser, claudeAuth, codexAuth, mcpStore] = await Promise.all([
 		fetchInfo(),
 		fetchDiscordGatewayHealth(),
 		browserBridgeStatus(),
 		claudeCredentialStatus(),
 		codexCredentialStatus(),
+		listMcpServerConfigs(),
 	]);
 	const config = await readConfig();
 	const bindings = await resolveRoleBindings();
@@ -890,9 +2161,11 @@ async function statusText(): Promise<string> {
 		`model: ${model}`,
 		`provider: ${formatProviderSummary(config)}`,
 		`auth: claude=${formatCredStatus(claudeAuth)}; codex=${formatCredStatus(codexAuth)}`,
+		`coding harness: ${formatCodingHarnessSummary(config)}`,
 		`image model: ${config.imageModel ?? "gpt-image-2"}`,
 		...formatVoiceStatusLines(config),
 		`integrations: ${formatIntegrationSummary(bindings, connections)}`,
+		`mcp: ${formatMcpStatusSummary(info, mcpStore)}`,
 		`browser bridge: ${formatBrowserBridgeSummary(browser)}`,
 		`discord gateway: ${formatJson(gateway)}`,
 	];
@@ -1167,6 +2440,16 @@ async function readConfig(): Promise<ClankyConfig> {
 	const localModel = get("CLANKY_LOCAL_MODEL");
 	const localBaseUrl = get("CLANKY_LOCAL_BASE_URL");
 	const localEffort = get("CLANKY_LOCAL_EFFORT");
+	const codingHarness = get(CLANKY_CODING_HARNESS_ENV.id);
+	const codingHarnesses = get(CLANKY_CODING_HARNESS_ENV.allowed);
+	const codingHarnessCommand = get(CLANKY_CODING_HARNESS_ENV.command);
+	const codingHarnessRuntime = get(CLANKY_CODING_HARNESS_ENV.runtime);
+	const codingHarnessClaudeLauncher = get(codingHarnessLauncherEnvKey("claude"));
+	const codingHarnessClaudeModel = get(codingHarnessModelEnvKey("claude"));
+	const codingHarnessCodexLauncher = get(codingHarnessLauncherEnvKey("codex"));
+	const codingHarnessCodexModel = get(codingHarnessModelEnvKey("codex"));
+	const codingHarnessOpencodeLauncher = get(codingHarnessLauncherEnvKey("opencode"));
+	const codingHarnessOpencodeModel = get(codingHarnessModelEnvKey("opencode"));
 	const imageModel = get("CLANKY_OPENAI_IMAGE_MODEL");
 	const voiceRealtimeProvider = get("CLANKY_VOICE_REALTIME_PROVIDER");
 	const voiceRealtimeModel = get("CLANKY_VOICE_REALTIME_MODEL");
@@ -1182,6 +2465,16 @@ async function readConfig(): Promise<ClankyConfig> {
 	if (localModel !== undefined) config.localModel = localModel;
 	if (localBaseUrl !== undefined) config.localBaseUrl = localBaseUrl;
 	if (localEffort !== undefined) config.localEffort = localEffort;
+	if (codingHarness !== undefined) config.codingHarness = codingHarness;
+	if (codingHarnesses !== undefined) config.codingHarnesses = codingHarnesses;
+	if (codingHarnessCommand !== undefined) config.codingHarnessCommand = codingHarnessCommand;
+	if (codingHarnessRuntime !== undefined) config.codingHarnessRuntime = codingHarnessRuntime;
+	if (codingHarnessClaudeLauncher !== undefined) config.codingHarnessClaudeLauncher = codingHarnessClaudeLauncher;
+	if (codingHarnessClaudeModel !== undefined) config.codingHarnessClaudeModel = codingHarnessClaudeModel;
+	if (codingHarnessCodexLauncher !== undefined) config.codingHarnessCodexLauncher = codingHarnessCodexLauncher;
+	if (codingHarnessCodexModel !== undefined) config.codingHarnessCodexModel = codingHarnessCodexModel;
+	if (codingHarnessOpencodeLauncher !== undefined) config.codingHarnessOpencodeLauncher = codingHarnessOpencodeLauncher;
+	if (codingHarnessOpencodeModel !== undefined) config.codingHarnessOpencodeModel = codingHarnessOpencodeModel;
 	if (imageModel !== undefined) config.imageModel = imageModel;
 	if (voiceRealtimeProvider !== undefined) config.voiceRealtimeProvider = voiceRealtimeProvider;
 	if (voiceRealtimeModel !== undefined) config.voiceRealtimeModel = voiceRealtimeModel;
@@ -1200,6 +2493,7 @@ async function writeEnv(updates: Record<string, string>): Promise<void> {
 }
 
 async function restartBrainMessage(prefix: string): Promise<string> {
+	await refreshEffortStatusSuffix();
 	if (!ownsServer) {
 		return `${prefix}. Saved .env.local; attached to an external eve server, so restart it to apply.`;
 	}
@@ -1211,11 +2505,11 @@ async function restartBrainMessage(prefix: string): Promise<string> {
 	return `${prefix}. Restarted Clanky.`;
 }
 
-async function fetchInfo(): Promise<{ agent?: { model?: { id?: string } } } | undefined> {
+async function fetchInfo(): Promise<AgentInfoResult | undefined> {
 	try {
 		const response = await fetch(`${HOST}/eve/v1/info`);
 		if (!response.ok) return undefined;
-		return (await response.json()) as { agent?: { model?: { id?: string } } };
+		return (await response.json()) as AgentInfoResult;
 	} catch {
 		return undefined;
 	}

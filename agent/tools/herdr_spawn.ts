@@ -12,21 +12,30 @@ import { promisify } from "node:util";
 import { defineTool } from "eve/tools";
 import { never } from "eve/tools/approval";
 import { z } from "zod";
+import {
+	CODING_HARNESS_IDS,
+	CODING_RUNTIMES,
+	PERFORMERS,
+	type CodingHarnessId,
+	type Performer,
+	resolveCodingHarness,
+} from "../lib/coding-harness.ts";
 
 const run = promisify(execFile);
 
 const KICKOFF_TOKEN = "{KICKOFF}";
 const WORKER_SKILL_RELATIVE_PATH = "skills/clanky-herdr-worker/SKILL.md";
 const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
-type Performer = "claude" | "codex";
 type ResolvedPerformer = Performer | "custom";
 
 // Default performer command lines. {KICKOFF} is replaced by the task brief.
 // Workers run in visible Herdr panes, so use each CLI's no-approval mode to keep
 // them from stalling on unattended permission prompts.
 const PERFORMER_ARGV: Record<Performer, readonly string[]> = {
+	clanky: ["clanky", "worker", KICKOFF_TOKEN],
 	claude: ["claude", "--dangerously-skip-permissions", KICKOFF_TOKEN],
 	codex: ["codex", "--dangerously-bypass-approvals-and-sandbox", KICKOFF_TOKEN],
+	opencode: ["opencode", "run", KICKOFF_TOKEN],
 };
 
 function applyKickoff(argv: readonly string[], task: string): string[] {
@@ -96,7 +105,12 @@ export function resolveWorkerSkillPath(repoCwd = process.cwd()): string {
 	return resolve(repoCwd, WORKER_SKILL_RELATIVE_PATH);
 }
 
-export function buildWorkerKickoff(input: { agent: string; task: string; cwd: string; workerSkillPath?: string }): string {
+export function buildWorkerKickoff(input: {
+	agent: string;
+	task: string;
+	cwd: string;
+	workerSkillPath?: string;
+}): string {
 	const workerSkillPath = input.workerSkillPath ?? resolveWorkerSkillPath();
 	return [
 		`You are ${input.agent}, a visible Clanky worker running in a Herdr pane.`,
@@ -104,6 +118,8 @@ export function buildWorkerKickoff(input: { agent: string; task: string; cwd: st
 		"",
 		"Before doing the task, read and follow this Clanky Herdr worker skill file:",
 		workerSkillPath,
+		"",
+		"Do not load Clanky coding skill package paths from this prompt. If this process is the Clanky runtime, use Clanky's configured skills; otherwise use your own agent/runtime's native coding behavior.",
 		"",
 		"If the skill file is unavailable, say so in your output and continue with best judgment.",
 		"",
@@ -125,11 +141,22 @@ function parseAgent(stdout: string): HerdrAgent | null {
 export default defineTool({
 	needsApproval: never(),
 	description:
-		"Spawn a performer (claude, codex, or a custom command) as a visible herdr pane named clanky:<slug> and give it a task. Load clanky-herdr-operator before spawn/fan-out work. Use for any parallel or watchable work instead of doing it in-process.",
+		"Spawn an allowed coding harness/performer (clanky, claude, codex, opencode, or custom command) as a visible herdr pane named clanky:<slug> and give it a task. Omit harness/performer to use the TUI-configured default fallback. The /harness TUI command controls the allowlist and default-vs-Ollama worker launch models. Load clanky-herdr-operator before spawn/fan-out work. Spawned workers receive only the Herdr worker coordination skill; Clanky's coding skills are available only when the runtime is clanky.",
 	inputSchema: z.object({
 		slug: z.string().describe("kebab-case worker name; the pane is clanky:<slug>"),
 		task: z.string().describe("the kickoff brief the performer starts with"),
-		performer: z.enum(["claude", "codex"]).default("claude").describe("which agent to run (ignored if command is set)"),
+		harness: z
+			.enum(CODING_HARNESS_IDS)
+			.optional()
+			.describe("allowed coding harness profile to run (clanky, claude, codex, opencode, custom); omit to use the configured default fallback"),
+		performer: z
+			.enum(PERFORMERS)
+			.optional()
+			.describe("lower-level performer override (clanky, claude, codex, or opencode); omit to use harness"),
+		codingRuntime: z
+			.enum(CODING_RUNTIMES)
+			.optional()
+			.describe("runtime instruction mode; clanky allows Clanky coding skills, native/opencode uses the harness internals"),
 		cwd: z
 			.string()
 			.optional()
@@ -140,7 +167,7 @@ export default defineTool({
 			.describe("raw argv override for custom commands only; omit for built-in performers, never pass an empty array"),
 	}),
 	async execute(input) {
-		const { slug, task, performer, cwd, command } = input;
+		const { slug, task, harness, performer, codingRuntime, cwd, command } = input;
 		if (!SLUG_RE.test(slug)) {
 			throw new Error(`invalid slug '${slug}' (use lowercase letters, digits, hyphens)`);
 		}
@@ -157,7 +184,17 @@ export default defineTool({
 
 		const paneCwd = await resolvePaneCwd(cwd);
 		const kickoff = buildWorkerKickoff({ agent, task, cwd: paneCwd });
-		const resolved = resolvePerformerArgv({ performer, task: kickoff, command });
+		const harnessProfile = resolveCodingHarness({
+			harness: harness as CodingHarnessId | undefined,
+			performer,
+			command,
+			runtime: codingRuntime,
+		});
+		const resolved = resolvePerformerArgv({
+			performer: harnessProfile.performer,
+			task: kickoff,
+			command: harnessProfile.command,
+		});
 		const startArgs = ["agent", "start", agent];
 		startArgs.push("--cwd", paneCwd, "--no-focus", "--", ...resolved.argv);
 
@@ -168,6 +205,9 @@ export default defineTool({
 			tabId: started?.tab_id ?? null,
 			workspaceId: started?.workspace_id ?? null,
 			performer: resolved.performer,
+			harness: harnessProfile.id,
+			harnessLabel: harnessProfile.label,
+			codingRuntime: harnessProfile.runtime,
 			started: true,
 		};
 	},
