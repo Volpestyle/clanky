@@ -51,6 +51,8 @@ export function formatPresencePrompt(
 		"If no additional visible Discord response is needed, reply with exactly [SKIP].",
 		"If a tool action you took already satisfies the request, reply with exactly [SKIP] instead of a duplicate confirmation.",
 		"Only send text when it adds something beyond actions already taken.",
+		"The recent chat below came from the live Discord gateway; do not call discord_read_messages just to re-read this channel.",
+		"If a Discord tool is genuinely needed, copy channelId/serverId/message ids exactly as shown; never infer or alter numeric ids.",
 		"For heavy work (web, code, builds, research) delegate with herdr_spawn instead of blocking this reply; use herdr_status/herdr_read to see what main Clanky and other panes are doing.",
 		"",
 		"Discord conversation:",

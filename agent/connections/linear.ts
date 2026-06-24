@@ -8,7 +8,7 @@ const LINEAR_MCP_URL = process.env.CLANKY_LINEAR_MCP_URL?.trim() || "https://mcp
 export default defineMcpClientConnection({
 	url: LINEAR_MCP_URL,
 	description:
-		"Linear workspace connection for issues, projects, cycles, comments, statuses, and work-tracking follow-up. Use this instead of dynamic MCP for Linear.",
+		"Curated Linear MCP connection for issues, projects, cycles, comments, statuses, and work-tracking follow-up. Use this instead of dynamic MCP for Linear.",
 	auth: defineMcpOAuthAuthorization({
 		connectionName: "linear",
 		serverUrl: LINEAR_MCP_URL,

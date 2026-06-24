@@ -30,14 +30,14 @@ function roleInstructionLine(
 	if (role.key === "workTracker") {
 		return connectionName === undefined
 			? "- Your work tracker is not configured."
-			: `- Your work tracker is the ${connectionName} connection; use connection__${connectionName}__* for issues, status, and follow-up.`;
+			: `- Your work tracker is the ${connectionName} connection; use ${connectionName}__* for issues, status, and follow-up.`;
 	}
 	if (role.key === "designTool") {
 		return connectionName === undefined
 			? "- Your design tool is not configured."
-			: `- Your design tool is the ${connectionName} connection; use connection__${connectionName}__* for design, components, specs, and visual references.`;
+			: `- Your design tool is the ${connectionName} connection; use ${connectionName}__* for design, components, specs, and visual references.`;
 	}
 	return connectionName === undefined
 		? `- Your ${label} is not configured.`
-		: `- Your ${label} is the ${connectionName} connection; use connection__${connectionName}__* for role-specific work.`;
+		: `- Your ${label} is the ${connectionName} connection; use ${connectionName}__* for role-specific work.`;
 }

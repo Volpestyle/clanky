@@ -5,12 +5,18 @@ description: Use for generated images and sharing generated media, especially Op
 # Media
 
 Use `media_backend_status` when credential/model availability is unclear.
+Do not tell the user there is no vision model or no visual inspection backend
+unless `media_backend_status` reports no active or fallback backend, or
+`media_inspect` fails with that specific current error. Old failures in the
+conversation may be stale after a model/config restart.
 Use `openai_image_generate` for still-image generation. It defaults to
 `CLANKY_OPENAI_IMAGE_MODEL`, or `gpt-image-2` when unset. The custom face command
 `/image-model <model-id>` updates that default.
 Use `media_inspect` for local image artifacts that need visual understanding. It
-sends bounded image contents to `CLANKY_OPENAI_VISION_MODEL`, or `gpt-5.4-mini`
-when unset.
+prefers Clanky's current brain model when that model is vision-capable. For
+Ollama local models, capability is checked through `/api/show`. If the active
+model cannot inspect images, it falls back to `CLANKY_OPENAI_VISION_MODEL`, or
+`gpt-5.4-mini` when unset.
 
 Generated images are saved to local files under Clanky's data directory unless
 the caller supplies `outputDir`. To share them in Discord, pass those file paths

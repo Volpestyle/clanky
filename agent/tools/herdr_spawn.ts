@@ -142,14 +142,14 @@ function parseAgent(stdout: string): HerdrAgent | null {
 export default defineTool({
 	needsApproval: never(),
 	description:
-		"Spawn an allowed coding harness/performer (clanky, claude, codex, opencode, or custom command) as a visible herdr pane named clanky:<slug> and give it a task. Omit harness/performer to use the TUI-configured default fallback. The /harness TUI command controls the allowlist and default-vs-Ollama worker launch models. Load clanky-herdr-operator before spawn/fan-out work. Spawned workers receive only the Herdr worker coordination skill; Clanky's coding skills are available only when the runtime is clanky.",
+		"Spawn an allowed coding harness/performer (clanky, claude, codex, opencode, or custom command) as a visible herdr pane named clanky:<slug> and give it a task. Omit harness/performer to let Clanky pick from the allowed set. The /harness TUI command controls the allowlist; direct /harness <id> commands configure preferred fallback and default-vs-Ollama worker launch models. Load clanky-herdr-operator before spawn/fan-out work. Spawned workers receive only the Herdr worker coordination skill; Clanky's coding skills are available only when the runtime is clanky.",
 	inputSchema: z.object({
 		slug: z.string().describe("kebab-case worker name; the pane is clanky:<slug>"),
 		task: z.string().describe("the kickoff brief the performer starts with"),
 		harness: z
 			.enum(CODING_HARNESS_IDS)
 			.optional()
-			.describe("allowed coding harness profile to run (clanky, claude, codex, opencode, custom); omit to use the configured default fallback"),
+			.describe("allowed coding harness profile to run (clanky, claude, codex, opencode, custom); omit to use automatic selection from the allowed set"),
 		performer: z
 			.enum(PERFORMERS)
 			.optional()

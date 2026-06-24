@@ -37,6 +37,12 @@ const emptyReply = monitorNoReplyEvents(
 );
 await drain(emptyReply.events);
 assert(emptyReply.shouldRenderNotice(), "completed empty assistant turn should render a no-reply notice");
+assert(
+	emptyReply.formatNoReplyNotice().includes("No assistant reply was produced for that turn."),
+	"no-reply notice should include the user-facing explanation",
+);
+assert(emptyReply.formatNoReplyNotice().includes("usage input 9400, output 131"), "no-reply trace should include usage");
+assert(emptyReply.formatNoReplyNotice().includes("assistant 0 chars"), "no-reply trace should show no assistant text");
 
 const textReply = monitorNoReplyEvents(
 	stream([
@@ -48,9 +54,11 @@ const textReply = monitorNoReplyEvents(
 );
 await drain(textReply.events);
 assert(!textReply.shouldRenderNotice(), "assistant text should suppress the no-reply notice");
+assert(textReply.formatTraceNotice().includes("assistant 4 chars"), "trace should count visible assistant text");
 
 const failedReply = monitorNoReplyEvents(stream([{ type: "error", errorText: "model failed" }, { type: "finish" }]));
 await drain(failedReply.events);
 assert(!failedReply.shouldRenderNotice(), "error turns should use the normal error block only");
+assert(failedReply.formatTraceNotice().includes("errors 1"), "trace should count stream errors");
 
 console.log("tui no-reply smoke OK");

@@ -13,6 +13,7 @@ import { defineChannel, WS } from "eve/channels";
 import type { WebSocketMessage, WebSocketPeer } from "eve/channels";
 import { isFrontdoorAuthorized } from "../lib/frontdoor-auth.ts";
 import { herdrRequest } from "../lib/herdr-socket.ts";
+import { resolveClankyFacePanePlacement } from "../lib/herdr-placement.ts";
 import type { ClankvoxIpcClient } from "../lib/voice/clankvoxIpcClient.ts";
 import {
 	type ClankvoxGuildLike,
@@ -128,9 +129,11 @@ async function dispatch(op: string, args: Record<string, unknown>): Promise<unkn
 			if (!slug || !SLUG_RE.test(slug)) throw new Error("delegate requires a kebab-case slug");
 			if (!task) throw new Error("delegate requires a task");
 			const agent = `clanky:voice-${slug}`;
+			const placement = await resolveClankyFacePanePlacement();
 			const result = await herdrRequest("agent.start", {
 				name: agent,
 				focus: false,
+				...placement,
 				argv: ["claude", "--dangerously-skip-permissions", task],
 			});
 			return { agent, started: true, result };

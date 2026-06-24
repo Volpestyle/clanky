@@ -10,8 +10,9 @@ Usage: spawn.sh --slug <task-slug> --task "<one-line summary>" \
 				[-- <worker argv...>]
 
 Spawns one worker agent named clanky:<slug> into the run's herdr tab.
-CLANKY_CODING_HARNESSES allowlists usable harnesses. Default worker uses
-CLANKY_CODING_HARNESS from the environment or .env.local, or clanky when unset.
+CLANKY_CODING_HARNESSES allowlists usable harnesses. When no harness is passed,
+the worker uses CLANKY_CODING_HARNESS when it is allowed, otherwise it picks
+from the allowed set and prefers clanky when available.
 Claude/Codex/OpenCode can launch through native CLIs or Ollama CLI integrations.
 In a custom argv, the token {KICKOFF} is replaced with the kickoff message;
 without the token the kickoff is appended as the final argument.
@@ -36,29 +37,80 @@ WORKER_SKILL_PATH="$(cd -P "$SKILL_DIR/../clanky-herdr-worker" && pwd -P)/SKILL.
 RUN_ROOT="${CLANKY_HERDR_RUN_ROOT:-$HOME/.clanky/herdr-runs}"
 
 config_value() {
-	local key="$1"
-	local existing="${!key-}"
+	local key="$1" existing="${!key-}" line value first last
 	if [ -n "$existing" ]; then
 		printf '%s' "$existing"
 		return
 	fi
 	[ -f "$ENV_FILE" ] || return 0
-	python3 - "$ENV_FILE" "$key" <<'PY'
-import re, sys
-path, key = sys.argv[1:3]
-with open(path) as f:
-    for raw in f:
-        match = re.match(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$", raw.rstrip("\n"))
-        if not match or match.group(1) != key:
-            continue
-        value = match.group(2).strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
-            value = value[1:-1]
-            if raw.strip().split("=", 1)[1].strip().startswith('"'):
-                value = value.replace('\\"', '"')
-        print(value, end="")
-        break
-PY
+	while IFS= read -r line || [ -n "$line" ]; do
+		if [[ "$line" =~ ^[[:space:]]*(export[[:space:]]+)?$key[[:space:]]*=(.*)$ ]]; then
+			value="$(printf '%s' "${BASH_REMATCH[2]}" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+			if [ "${#value}" -ge 2 ]; then
+				first="${value:0:1}"
+				last="${value:$((${#value} - 1)):1}"
+				if { [ "$first" = "'" ] || [ "$first" = '"' ]; } && [ "$first" = "$last" ]; then
+					value="${value:1:$((${#value} - 2))}"
+					if [ "$first" = '"' ]; then value="${value//\\\"/\"}"; fi
+				fi
+			fi
+			printf '%s' "$value"
+			return
+		fi
+	done < "$ENV_FILE"
+}
+
+VALID_HARNESSES=(clanky claude codex opencode custom)
+ALLOWED_HARNESS_LIST=()
+
+normalize_harness() {
+	printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]'
+}
+
+harness_in_list() {
+	local needle="$1" item
+	shift
+	for item in "$@"; do
+		if [ "$item" = "$needle" ]; then return 0; fi
+	done
+	return 1
+}
+
+parse_allowed_harnesses() {
+	local raw="$1" normalized token id
+	ALLOWED_HARNESS_LIST=()
+	normalized="$(normalize_harness "$raw")"
+	if [ -z "$raw" ] || [ "$normalized" = "all" ]; then
+		ALLOWED_HARNESS_LIST=("${VALID_HARNESSES[@]}")
+		return
+	fi
+	for token in ${raw//,/ }; do
+		id="$(normalize_harness "$token")"
+		[ -n "$id" ] || continue
+		if ! harness_in_list "$id" "${VALID_HARNESSES[@]}"; then
+			echo "spawn.sh: unknown coding harness '$token' in allowlist" >&2
+			exit 2
+		fi
+		if ! harness_in_list "$id" "${ALLOWED_HARNESS_LIST[@]}"; then
+			ALLOWED_HARNESS_LIST+=("$id")
+		fi
+	done
+	if [ "${#ALLOWED_HARNESS_LIST[@]}" -eq 0 ]; then
+		echo "spawn.sh: coding harness allowlist must include at least one harness" >&2
+		exit 2
+	fi
+}
+
+automatic_harness() {
+	local configured
+	configured="$(normalize_harness "$1")"
+	if harness_in_list "$configured" "${ALLOWED_HARNESS_LIST[@]}"; then
+		printf '%s' "$configured"
+	elif harness_in_list "clanky" "${ALLOWED_HARNESS_LIST[@]}"; then
+		printf '%s' "clanky"
+	else
+		printf '%s' "${ALLOWED_HARNESS_LIST[0]}"
+	fi
 }
 
 RUN_ID="" SLUG="" TASK="" PROMPT="" PROMPT_FILE="" WORKER_CWD="$PWD" HARNESS=""
@@ -79,8 +131,12 @@ done
 
 [ -n "$SLUG" ] && [ -n "$TASK" ] || usage
 if [ -z "$PROMPT" ] && [ -z "$PROMPT_FILE" ]; then usage; fi
-if [ -z "$HARNESS" ]; then HARNESS="$(config_value CLANKY_CODING_HARNESS)"; fi
-[ -n "$HARNESS" ] || HARNESS="clanky"
+ALLOWED_HARNESSES="$(config_value CLANKY_CODING_HARNESSES)"
+parse_allowed_harnesses "$ALLOWED_HARNESSES"
+if [ -z "$HARNESS" ]; then
+	CONFIGURED_HARNESS="$(config_value CLANKY_CODING_HARNESS)"
+	HARNESS="$(automatic_harness "$CONFIGURED_HARNESS")"
+fi
 if ! printf '%s' "$SLUG" | grep -Eq '^[a-z0-9][a-z0-9-]*$'; then
 	echo "spawn.sh: slug must be lowercase kebab-case ([a-z0-9-])" >&2
 	exit 2
@@ -92,28 +148,10 @@ case "$HARNESS" in
 		exit 2
 		;;
 esac
-ALLOWED_HARNESSES="$(config_value CLANKY_CODING_HARNESSES)"
-if [ -n "$ALLOWED_HARNESSES" ]; then
-	if ! python3 - "$HARNESS" "$ALLOWED_HARNESSES" <<'PY'
-import re, sys
-harness, raw = sys.argv[1:3]
-if re.sub(r"[^a-z0-9]+", "", raw.lower()) == "all":
-    raise SystemExit(0)
-allowed = []
-valid = {"clanky", "claude", "codex", "opencode", "custom"}
-for token in re.split(r"[\s,]+", raw.strip()):
-    if not token:
-        continue
-    normalized = re.sub(r"[^a-z0-9]+", "", token.lower())
-    if normalized not in valid:
-        raise SystemExit(f"unknown coding harness '{token}' in allowlist")
-    allowed.append(normalized)
-if harness not in allowed:
-    raise SystemExit(f"coding harness '{harness}' is not allowed; allowed harnesses: {', '.join(allowed)}")
-PY
-	then
-		exit 2
-	fi
+if ! harness_in_list "$HARNESS" "${ALLOWED_HARNESS_LIST[@]}"; then
+	allowed_text="${ALLOWED_HARNESS_LIST[*]}"
+	echo "spawn.sh: coding harness '$HARNESS' is not allowed; allowed harnesses: $allowed_text" >&2
+	exit 2
 fi
 
 AGENT_NAME="clanky:$SLUG"

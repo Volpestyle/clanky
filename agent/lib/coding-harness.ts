@@ -257,10 +257,10 @@ export function resolveCodingHarness(input: {
 		return profile;
 	}
 
-	const configured = parseCodingHarnessId(env[CLANKY_CODING_HARNESS_ENV.id]) ?? DEFAULT_CODING_HARNESS;
-	assertCodingHarnessAllowed(configured, env);
-	const configuredRuntime = parseCodingRuntime(env[CLANKY_CODING_HARNESS_ENV.runtime]);
-	return resolveHarnessById(configured, input.runtime ?? configuredRuntime, env);
+	const configured = parseCodingHarnessId(env[CLANKY_CODING_HARNESS_ENV.id]);
+	const selected = automaticCodingHarness(configured, env);
+	const configuredRuntime = configured === selected ? parseCodingRuntime(env[CLANKY_CODING_HARNESS_ENV.runtime]) : undefined;
+	return resolveHarnessById(selected, input.runtime ?? configuredRuntime, env);
 }
 
 function assertCodingHarnessAllowed(id: CodingHarnessId, env: CodingHarnessEnv): void {
@@ -268,6 +268,13 @@ function assertCodingHarnessAllowed(id: CodingHarnessId, env: CodingHarnessEnv):
 	if (!allowed.includes(id)) {
 		throw new Error(`coding harness '${id}' is not allowed; allowed harnesses: ${allowed.join(", ")}`);
 	}
+}
+
+function automaticCodingHarness(configured: CodingHarnessId | undefined, env: CodingHarnessEnv): CodingHarnessId {
+	const allowed = allowedCodingHarnesses(env);
+	if (configured !== undefined && allowed.includes(configured)) return configured;
+	if (allowed.includes(DEFAULT_CODING_HARNESS)) return DEFAULT_CODING_HARNESS;
+	return allowed[0] ?? DEFAULT_CODING_HARNESS;
 }
 
 function resolveHarnessById(

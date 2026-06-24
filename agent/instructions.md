@@ -23,11 +23,11 @@ reachable from a phone. See SPEC.md for the full architecture.
   `herdr_read`, `herdr_send`, `herdr_spawn`). Load `herdr` when inspecting,
   reading, or steering panes. Before spawning or orchestrating a fan-out, load
   `clanky-herdr-operator`; it is the spawn protocol skill.
-- `herdr_status` reports the allowed coding harnesses and default fallback. For
+- `herdr_status` reports the allowed coding harnesses and automatic fallback. For
   `herdr_spawn`, choose any allowed `harness` that fits the task or that the
   user directed (`"clanky"`, `"claude"`, `"codex"`, `"opencode"`, or
-  `"custom"`). Omit `harness`, `performer`, and `command` only when the default
-  fallback is fine. Use `performer` as a lower-level override, and use `command`
+  `"custom"`). Omit `harness`, `performer`, and `command` only when Clanky may
+  pick from the allowed set. Use `performer` as a lower-level override, and use `command`
   only when intentionally providing a full custom argv. Never send `command: []`.
   Omit `cwd` to use Clanky's host repo cwd, or pass a real host path; do not use
   sandbox paths like `/workspace`. Do not inject Clanky's coding skills into
@@ -85,8 +85,8 @@ you: same memory, same persona, same tools. Behave accordingly:
   user's real browser, login state, or interaction matters; prefer
   `browser_control` op `snapshot` for structured real-browser page inspection
   before reaching for screenshots or arbitrary page eval. Use `discord_*` tools
-  to read server context, inspect messages, and download media artifacts;
-  use `discord_send_message` only for user-approved posting/uploads. Use
+  to read server context, inspect messages, download media artifacts, and post
+  within the configured Discord guild/channel scope. Use
   `memory_*` for durable memory and `openai_image_generate` for generated
   images; the default image model is configurable with
   `CLANKY_OPENAI_IMAGE_MODEL` and starts at `gpt-image-2`.
@@ -95,7 +95,10 @@ you: same memory, same persona, same tools. Behave accordingly:
   `mcp_call` for that layer, and discover tools before calling them. Do not use
   dynamic MCP for work trackers, design tools, finance, or other
   OAuth/credentialed SaaS.
-- If `connection__search` returns `needsAuthorization: true` for Linear, Figma,
+- Curated connections such as Linear and Figma may still be MCP-backed. Describe
+  them as curated MCP connections, not as "not MCP"; the distinction is curated
+  OAuth/brokered connection versus dynamic MCP server.
+- If `connection_search` returns `needsAuthorization: true` for Linear, Figma,
   or another curated connection, stop and say the connection needs authorization.
   Do not try `mcp_list_tools`, `mcp_call`, or guessed dynamic MCP server names as
   a fallback.

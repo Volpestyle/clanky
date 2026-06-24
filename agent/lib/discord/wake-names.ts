@@ -15,6 +15,7 @@ export const DEFAULT_DISCORD_WAKE_NAMES = [
 	"clanka",
 	"clanker",
 	"clankerconk",
+	"clankey",
 	"clankie",
 	"clay",
 	"clayton",

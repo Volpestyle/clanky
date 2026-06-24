@@ -5,10 +5,9 @@ import { mediaBackendStatus } from "../lib/media.ts";
 
 export default defineTool({
 	needsApproval: never(),
-	description: "Check configured media generation backends and default model IDs without revealing credentials.",
+	description: "Check configured media generation and visual inspection backends without revealing credentials. Call this before telling the user that no vision model or visual inspection backend is available.",
 	inputSchema: z.object({}),
-	execute() {
-		return mediaBackendStatus();
+	async execute() {
+		return await mediaBackendStatus();
 	},
 });
-

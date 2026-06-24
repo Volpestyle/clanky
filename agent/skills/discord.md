@@ -14,8 +14,8 @@ Use the Discord tools with Clanky's configured Discord credential.
 - `discord_recent_activity`: quick scan of active channels.
 - `discord_whoami`: check which Discord identity Clanky is using.
 - `discord_list_emojis`: list guild custom emojis and reaction strings.
-- `discord_add_reaction`: react to a message with Unicode or custom emoji; this requires approval.
-- `discord_send_message`: post text or upload local files; this requires approval.
+- `discord_add_reaction`: react to a message with Unicode or custom emoji.
+- `discord_send_message`: post text or upload local files.
 
 Accepted live Discord messages can include small image/GIF attachments inline in
 the turn payload, plus attachment and embed metadata in the prompt. Older
@@ -32,9 +32,13 @@ to be saved locally for inspection or re-sharing; then pass the saved local path
 to `media_inspect` for still images, or to `web_capture_frames` and then
 `media_inspect` for GIF/video visual sampling. For generated images, call
 `openai_image_generate` first, then upload the returned file path with
-`discord_send_message` after approval. You can inspect generated image files
-with `media_inspect` before sharing when quality or content needs checking.
+`discord_send_message`. You can inspect generated image files with
+`media_inspect` before sharing when quality or content needs checking.
 
 Do not claim you visually inspected an image, GIF, video, stream, or webpage
 unless you actually loaded it through a tool that returned extracted content or
 ran `media_inspect` on the relevant screenshot/frame/image artifact.
+Do not say no vision model or no visual inspection backend is available based
+only on Discord metadata or old chat context. If availability is unclear, call
+`media_backend_status`; if local image paths are available, call
+`media_inspect`.

@@ -121,13 +121,6 @@ export function defineMcpOAuthAuthorization(config: McpOAuthConnectionConfig) {
 				});
 			}
 		},
-		evict: async ({ principal }) => {
-			await updateStoredEntry(config.connectionName, principalStoreKey(principal), (entry) => ({
-				...entry,
-				tokens: undefined,
-				tokenExpiresAt: undefined,
-			})).catch(() => undefined);
-		},
 	});
 }
 

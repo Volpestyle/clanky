@@ -83,10 +83,10 @@ $OP/spawn.sh --run "$RUN_ID" --slug update-readme --task "Update README" \
 For the eve host `herdr_spawn` tool, omit `cwd` to use Clanky's current host
 repo, or pass a real host path for another checkout. Never use sandbox paths
 like `/workspace`. Check `herdr_status.codingHarnesses` before choosing worker
-runtimes; it shows the allowed harnesses and default fallback. Use `harness:
+runtimes; it shows the allowed harnesses and automatic fallback. Use `harness:
 "clanky"`, `"claude"`, `"codex"`, `"opencode"`, or `"custom"` when a specific
 allowed runner fits the task; omit `harness`, `performer`, and `command` only
-when the default fallback is fine. `performer` is a lower-level override.
+when Clanky may pick from the allowed set. `performer` is a lower-level override.
 `command` is only a full custom argv override, never `command: []`.
 
 Workers spawned by either path receive a short bootstrap that tells them to
@@ -113,8 +113,10 @@ autonomy) to every prompt — do not restate it.
 ### Worker command
 
 The allowed worker set uses `CLANKY_CODING_HARNESSES`, configured from the face
-with `/harness allow`. The default fallback uses `CLANKY_CODING_HARNESS`; when
-unset it is `clanky` (`clanky worker {KICKOFF}`). Built-in harnesses are
+with `/harness allow`. When no harness is specified, Clanky picks automatically
+from the allowed set, preferring `clanky` when it is allowed. Direct
+`/harness <id>` commands can still set `CLANKY_CODING_HARNESS` as an optional
+preferred fallback. Built-in harnesses are
 `clanky`, `claude`, `codex`, and `opencode`. `custom` uses
 `CLANKY_CODING_HARNESS_COMMAND`. The `claude`, `codex`, and `opencode` harnesses
 can use the default CLI launcher or `ollama launch <harness>` with a configured

@@ -6,7 +6,7 @@ function assert(condition: boolean, message: string): asserts condition {
 	if (!condition) throw new Error(message);
 }
 
-const ctx: NeedsApprovalContext = { toolName: "discord_send_message", approvedTools: new Set() };
+const ctx: NeedsApprovalContext = { toolName: "mcp_call", approvedTools: new Set() };
 
 // Truthy parsing accepts the documented forms and rejects everything else.
 for (const value of ["1", "true", "TRUE", "yes", "on", " On "]) {
@@ -20,13 +20,13 @@ for (const value of [undefined, "", "0", "false", "no", "off", "maybe"]) {
 delete process.env.CLANKY_AUTO_APPROVE;
 assert(!autoApproveAll(), "auto-approve should default off when unset");
 assert(gated(always())(ctx), "always() must still require approval when auto-approve is off");
-assert(gated((c) => c.toolName === "discord_send_message")(ctx), "predicate gate must apply when auto-approve is off");
+assert(gated((c) => c.toolName === "mcp_call")(ctx), "predicate gate must apply when auto-approve is off");
 
 // Auto-approve on: every gate resolves to no-approval-needed.
 process.env.CLANKY_AUTO_APPROVE = "1";
 assert(autoApproveAll(), "auto-approve should be on when CLANKY_AUTO_APPROVE=1");
 assert(!gated(always())(ctx), "always() must be bypassed when auto-approve is on");
-assert(!gated((c) => c.toolName === "discord_send_message")(ctx), "predicate gate must be bypassed when auto-approve is on");
+assert(!gated((c) => c.toolName === "mcp_call")(ctx), "predicate gate must be bypassed when auto-approve is on");
 assert(!gated(() => true)(ctx), "a hard always-true predicate must still be bypassed when auto-approve is on");
 
 // Restoring the off value re-enables gating at call time (no module-load caching).

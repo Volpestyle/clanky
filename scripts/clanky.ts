@@ -15,6 +15,7 @@ import { promisify } from "node:util";
 import { Client, type AgentInfoConnectionEntry, type AgentInfoResult, type HandleMessageStreamEvent } from "eve/client";
 import {
 	EveTUIRunner,
+	type AgentTUISessionOptions,
 	type AgentTUIStreamResult,
 	type PromptCommandHandler,
 	type PromptCommandHandlerContext,
@@ -31,9 +32,17 @@ import {
 	type PromptCommandSpec,
 } from "../node_modules/eve/dist/src/cli/dev/tui/prompt-commands.js";
 import type { SetupFlowRenderer } from "../node_modules/eve/dist/src/cli/dev/tui/setup-flow.js";
+import { formatCompactTokenCount } from "../node_modules/eve/dist/src/cli/dev/tui/stream-format.js";
 import { applyEnvRemovals, applyEnvUpserts } from "../agent/lib/discord/env-file.ts";
 import { browserBridgeStatus } from "../agent/lib/browser-bridge.ts";
 import { buildEveDevServerEnv } from "../agent/lib/eve-dev-env.ts";
+import { appendContextUsagePercent } from "../agent/lib/tui-context-status.ts";
+import { detectBannerCapabilities, renderClankyBanner, type BannerFields } from "../agent/lib/clanky-banner.ts";
+import {
+	LOCAL_CONTEXT_TOKENS_ENV,
+	parseLocalContextWindowTokens,
+	resolveOllamaContextWindowTokens,
+} from "../agent/lib/local-context.ts";
 import {
 	authoredMcpConnectionHasApproval,
 	authoredMcpConnectionHasAuthorization,
@@ -45,7 +54,6 @@ import {
 	ALL_CODING_HARNESSES,
 	BUILTIN_CODING_HARNESSES,
 	CLANKY_CODING_HARNESS_ENV,
-	DEFAULT_CODING_HARNESS,
 	LAUNCHABLE_CODING_HARNESS_IDS,
 	type CodingHarnessEnv,
 	type CodingHarnessId,
@@ -91,8 +99,21 @@ const REPO = process.env.CLANKY_REPO_DIR ?? process.cwd();
 const PORT = resolvePort(process.env.CLANKY_EVE_PORT, 2000);
 const HOST = `http://127.0.0.1:${PORT}`;
 const CALLBACK_PROXY_PORT = resolvePort(process.env.CLANKY_EVE_CALLBACK_PROXY_PORT, 3000);
+const HEALTH_TIMEOUT_MS = resolveDurationMs(process.env.CLANKY_EVE_HEALTH_TIMEOUT_MS, 180_000, "CLANKY_EVE_HEALTH_TIMEOUT_MS");
 const ENV_PATH = join(REPO, ".env.local");
-const CLANKY_HEADER_NOTE = "Clanky face on eve/client. Type /help for commands.";
+
+// eve's stock header lines (name, preview, tip). Clanky's banner owns the
+// header identity, so these are stripped from the header chunk before output.
+const EVE_HEADER_NAME = " \x1b[1meve\x1b[22m \x1b[2mClanky\x1b[22m";
+const EVE_HEADER_TIPS = [
+	"Use /channels to add more ways to reach your agent.",
+	"Use /deploy to see your agent go live.",
+	"Type /help to see every command.",
+];
+const DEFAULT_TURN_TRACE_MODE: TurnTraceMode = "no-reply";
+const CLANKY_FACE_HERDR_PANE_ID_ENV = "CLANKY_FACE_HERDR_PANE_ID";
+const CLANKY_FACE_HERDR_TAB_ID_ENV = "CLANKY_FACE_HERDR_TAB_ID";
+const CLANKY_FACE_HERDR_WORKSPACE_ID_ENV = "CLANKY_FACE_HERDR_WORKSPACE_ID";
 const runHostCommand = promisify(execFile);
 
 function resolvePort(value: string | undefined, fallback: number): number {
@@ -105,8 +126,28 @@ function resolvePort(value: string | undefined, fallback: number): number {
 	return parsed;
 }
 
+function resolveDurationMs(value: string | undefined, fallback: number, envName: string): number {
+	const raw = value?.trim();
+	if (raw === undefined || raw.length === 0) return fallback;
+	const parsed = Number.parseInt(raw, 10);
+	if (!Number.isInteger(parsed) || String(parsed) !== raw || parsed < 1) {
+		throw new Error(`${envName} must be a positive integer number of milliseconds; got ${JSON.stringify(value)}`);
+	}
+	return parsed;
+}
+
+function parseTurnTraceMode(value: string | undefined): TurnTraceMode | undefined {
+	const normalized = value?.trim().toLowerCase();
+	if (normalized === undefined || normalized.length === 0) return undefined;
+	if (normalized === "off" || normalized === "none" || normalized === "0" || normalized === "false") return "off";
+	if (normalized === "no-reply" || normalized === "noreply" || normalized === "empty") return "no-reply";
+	if (normalized === "all" || normalized === "on" || normalized === "1" || normalized === "true") return "all";
+	return undefined;
+}
+
 type ClankyExtensionCommandName =
 	| "discord-token"
+	| "discord-scope"
 	| "login"
 	| "model"
 	| "harness"
@@ -117,6 +158,7 @@ type ClankyExtensionCommandName =
 	| "integrations"
 	| "mcp"
 	| "browser"
+	| "trace"
 	| "status";
 type ClankyExtensionCommand = {
 	type: "extension";
@@ -130,6 +172,11 @@ type ClankyPromptCommandSpec = Omit<PromptCommandSpec, "build"> & {
 
 type SubscriptionProvider = "codex" | "claude";
 const DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:11434/v1";
+const DISCORD_SCOPE_ENV = {
+	guilds: "CLANKY_DISCORD_ALLOWED_GUILD_IDS",
+	channels: "CLANKY_DISCORD_ALLOWED_CHANNEL_IDS",
+	dms: "CLANKY_DISCORD_ALLOW_DMS",
+} as const;
 
 type ClankyConfig = {
 	provider: "codex" | "claude" | "local";
@@ -139,6 +186,7 @@ type ClankyConfig = {
 	localModel?: string;
 	localBaseUrl?: string;
 	localEffort?: string;
+	localContextTokens?: string;
 	autoApprove?: string;
 	codingHarness?: string;
 	codingHarnesses?: string;
@@ -159,7 +207,11 @@ type ClankyConfig = {
 	elevenLabsTtsModel?: string;
 	voiceMemoryContextLimit?: string;
 	voiceEveSession?: string;
+	discordAllowedGuildIds?: string;
+	discordAllowedChannelIds?: string;
+	discordAllowDms?: string;
 };
+type TurnTraceMode = "off" | "no-reply" | "all";
 
 type MenuOption = {
 	value: string;
@@ -185,6 +237,11 @@ type VoiceRealtimeProvider = "openai" | "xai";
 type VoiceTtsProvider = "realtime" | "elevenlabs";
 type VoiceSettingUpdate = {
 	updates: Record<string, string>;
+	message: string;
+};
+type DiscordScopeUpdate = {
+	updates: Record<string, string>;
+	removals: string[];
 	message: string;
 };
 type McpCommandAction = "status" | "list" | "add" | "remove" | "enable" | "disable" | "auth" | "install" | "connections" | "help";
@@ -238,16 +295,37 @@ const VOICE_EVE_SESSION_OPTIONS: readonly MenuOption[] = [
 	{ value: "on", label: "on", hint: "default" },
 	{ value: "off", label: "off" },
 ];
+const DISCORD_SCOPE_ACTION_OPTIONS: readonly MenuOption[] = [
+	{ value: "status", label: "view scope", hint: "show current allowlists" },
+	{ value: "set-guilds", label: "set servers", hint: "replace server allowlist" },
+	{ value: "set-channels", label: "set channels", hint: "replace channel/thread allowlist" },
+	{ value: "add-guilds", label: "add servers", hint: "append server ids" },
+	{ value: "add-channels", label: "add channels", hint: "append channel/thread ids" },
+	{ value: "remove-guilds", label: "remove servers", hint: "choose existing server ids" },
+	{ value: "remove-channels", label: "remove channels", hint: "choose existing channel/thread ids" },
+	{ value: "dms", label: "DMs", hint: "allow or block private replies" },
+	{ value: "clear", label: "clear scope", hint: "remove allowlist settings" },
+];
+const DISCORD_SCOPE_CLEAR_OPTIONS: readonly MenuOption[] = [
+	{ value: "all", label: "all", hint: "servers, channels, and DM override" },
+	{ value: "guilds", label: "servers", hint: "server allowlist only" },
+	{ value: "channels", label: "channels", hint: "channel/thread allowlist only" },
+	{ value: "dms", label: "DM override", hint: "return DMs to default allowed" },
+];
+const DISCORD_SCOPE_TARGET_OPTIONS: readonly MenuOption[] = [
+	{ value: "guilds", label: "servers", hint: "Discord guild/server ids" },
+	{ value: "channels", label: "channels", hint: "channel, thread, or parent-channel ids" },
+];
+const DISCORD_DM_OPTIONS: readonly MenuOption[] = [
+	{ value: "on", label: "allow DMs" },
+	{ value: "off", label: "block DMs" },
+];
 const CODING_HARNESS_OPTIONS: readonly MenuOption[] = [
 	{ value: "clanky", label: "clanky", hint: BUILTIN_CODING_HARNESSES.clanky.description },
 	{ value: "claude", label: "claude", hint: BUILTIN_CODING_HARNESSES.claude.description },
 	{ value: "codex", label: "codex", hint: BUILTIN_CODING_HARNESSES.codex.description },
 	{ value: "opencode", label: "opencode", hint: BUILTIN_CODING_HARNESSES.opencode.description },
 	{ value: "custom", label: "custom", hint: "user-supplied command run in a Herdr pane" },
-];
-const CODING_HARNESS_LAUNCHER_OPTIONS: readonly MenuOption[] = [
-	{ value: "default", label: "default", hint: "native CLI default model" },
-	{ value: "ollama", label: "ollama", hint: "Ollama CLI integration with a local model" },
 ];
 const CODING_RUNTIME_OPTIONS: readonly MenuOption[] = [
 	{ value: "clanky", label: "clanky", hint: "allow Clanky's coding skills" },
@@ -276,7 +354,10 @@ let callbackProxyServer: HttpServer | null = null;
 let ownsServer = false;
 let terminalReady = false;
 let forwardServerOutput = false;
+let bannerPrinted = false;
 let effortStatusSuffix = "";
+let currentContextSize: number | undefined;
+let turnTraceMode = parseTurnTraceMode(process.env.CLANKY_TURN_TRACE) ?? DEFAULT_TURN_TRACE_MODE;
 
 installClankyPromptCommands();
 
@@ -292,7 +373,7 @@ const renderer = new TerminalRenderer({
 	captureForeignOutput: true,
 });
 gateServerOutputUntilHeader(renderer);
-renderNoticeForEmptyAssistantReply(renderer);
+installRendererSessionHooks(renderer);
 const runner = new EveTUIRunner({
 	name: "Clanky",
 	session: client.session(),
@@ -338,6 +419,14 @@ function installClankyPromptCommands(): void {
 			argumentHint: "<token> [--user-token] [--voice]",
 			takesArgument: true,
 			build: (argument) => ({ type: "extension", name: "discord-token", argument }),
+		},
+		{
+			name: "discord-scope",
+			aliases: ["discord", "scope"],
+			description: "Open Discord reply-scope configuration",
+			argumentHint: "[interactive|status|guilds|channels|add|remove|clear|dms]",
+			takesArgument: true,
+			build: (argument) => ({ type: "extension", name: "discord-scope", argument }),
 		},
 		{
 			name: "model",
@@ -420,6 +509,14 @@ function installClankyPromptCommands(): void {
 			build: (argument) => ({ type: "extension", name: "browser", argument }),
 		},
 		{
+			name: "trace",
+			aliases: [],
+			description: "Show compact per-turn stream traces",
+			argumentHint: "[status|off|no-reply|all]",
+			takesArgument: true,
+			build: (argument) => ({ type: "extension", name: "trace", argument }),
+		},
+		{
 			name: "status",
 			aliases: [],
 			description: "Show model and Discord gateway status",
@@ -461,7 +558,7 @@ function createClankyOutput(output: NodeJS.WriteStream): TerminalOutput {
 			encodingOrCallback?: BufferEncoding | ((error?: Error | null) => void),
 			callback?: (error?: Error | null) => void,
 		): boolean {
-			const next = typeof chunk === "string" ? rewriteHeader(chunk) : chunk;
+			const next = rewriteOutputChunk(chunk);
 			if (typeof encodingOrCallback === "function") return write(next, encodingOrCallback);
 			if (encodingOrCallback !== undefined) return write(next, encodingOrCallback, callback);
 			return write(next);
@@ -477,38 +574,112 @@ function createClankyOutput(output: NodeJS.WriteStream): TerminalOutput {
 	};
 }
 
+function rewriteOutputChunk(chunk: string | Uint8Array): string {
+	if (typeof chunk === "string") return rewriteOutputText(chunk);
+	return rewriteOutputText(Buffer.from(chunk).toString("utf8"));
+}
+
 function gateServerOutputUntilHeader(renderer: TerminalRenderer): void {
 	const renderAgentHeader = renderer.renderAgentHeader.bind(renderer);
 	renderer.renderAgentHeader = (options) => {
-		renderAgentHeader(withEffortInModelId(options));
+		currentContextSize = contextSizeFromInfo(options.info);
+		emitClankyBanner(options.info);
+		renderAgentHeader(withStatusModelId(options));
 		terminalReady = true;
 		forwardServerOutput = server !== null;
 	};
 }
 
-function renderNoticeForEmptyAssistantReply(renderer: TerminalRenderer): void {
+// Clanky's welcome banner: a hooded-figure mascot with glowing eyes beside an
+// info feed (model + cwd). Printed once, above eve's header, as a title card.
+// eve's own name/preview/tip lines are stripped by rewriteOutputText so the
+// banner owns the header identity.
+function emitClankyBanner(info: AgentInfoResult | undefined): void {
+	if (bannerPrinted) return;
+	bannerPrinted = true;
+	const fields: BannerFields = {
+		title: "Clanky",
+		tagline: "a hooded agent on the eve · herdr stage",
+		hint: "/help for commands · /model to switch brains · ctrl+c to exit",
+	};
+	const modelId = bannerModelId(info);
+	if (modelId !== undefined) fields.model = modelId;
+	fields.cwd = displayHomePath(REPO);
+	const lines = renderClankyBanner(fields, detectBannerCapabilities(process.stdout));
+	process.stdout.write(`${lines.join("\n")}\n\n`);
+}
+
+function bannerModelId(info: AgentInfoResult | undefined): string | undefined {
+	if (info === undefined) return undefined;
+	let modelId = info.agent.model.id;
+	if (info.agent.model.endpoint?.kind === "external" && info.agent.model.endpoint.provider === "ollama") {
+		modelId = modelId.replace(/^ollama\//u, "");
+	}
+	return effortStatusSuffix.length > 0 ? `${modelId}${effortStatusSuffix}` : modelId;
+}
+
+function displayHomePath(path: string): string {
+	const home = process.env.HOME;
+	if (home !== undefined && home.length > 0 && (path === home || path.startsWith(`${home}/`))) {
+		return `~${path.slice(home.length)}`;
+	}
+	return path;
+}
+
+function installRendererSessionHooks(renderer: TerminalRenderer): void {
+	const readPrompt = renderer.readPrompt.bind(renderer);
+	renderer.readPrompt = async (options) => await readPrompt(withCurrentContextSize(options));
+
+	const readToolApproval = renderer.readToolApproval.bind(renderer);
+	renderer.readToolApproval = async (request, options) => await readToolApproval(request, withCurrentContextSize(options));
+
+	const readInputQuestion = renderer.readInputQuestion.bind(renderer);
+	renderer.readInputQuestion = async (question, options) => await readInputQuestion(question, withCurrentContextSize(options));
+
 	const renderStream = renderer.renderStream.bind(renderer);
 	renderer.renderStream = async (result: AgentTUIStreamResult, options) => {
 		const monitor = monitorNoReplyEvents(result.events);
-		await renderStream({ ...result, events: monitor.events }, options);
-		if (monitor.shouldRenderNotice()) renderer.renderNotice(NO_ASSISTANT_REPLY_NOTICE);
+		await renderStream({ ...result, events: monitor.events }, withCurrentContextSize(options));
+		if (monitor.shouldRenderNotice()) {
+			renderer.renderNotice(turnTraceMode === "off" ? NO_ASSISTANT_REPLY_NOTICE : monitor.formatNoReplyNotice());
+		} else if (turnTraceMode === "all") {
+			renderer.renderNotice(monitor.formatTraceNotice());
+		}
 	};
+}
+
+function withCurrentContextSize(options: AgentTUISessionOptions | undefined): AgentTUISessionOptions | undefined {
+	if (currentContextSize === undefined) return options;
+	return { ...(options ?? {}), contextSize: currentContextSize };
+}
+
+function contextSizeFromInfo(info: AgentInfoResult | undefined): number | undefined {
+	const tokens = info?.agent.model.contextWindowTokens;
+	return typeof tokens === "number" && Number.isSafeInteger(tokens) && tokens > 0 ? tokens : undefined;
 }
 
 // eve renders the resolved model id on the persistent status line (not the
 // header). Append the active provider's reasoning effort to that id so the
-// face surfaces effort the way /status reports it. claude has no effort knob,
-// so the suffix stays empty there.
-function withEffortInModelId(options: AgentHeaderOptions): AgentHeaderOptions {
+// face surfaces effort the way /status reports it. Local models also get their
+// effective context window in the model segment.
+function withStatusModelId(options: AgentHeaderOptions): AgentHeaderOptions {
 	const info = options.info;
-	if (info === undefined || effortStatusSuffix.length === 0) return options;
+	if (info === undefined) return options;
+	const contextSize = contextSizeFromInfo(info);
+	let modelId = info.agent.model.id;
+	if (info.agent.model.endpoint?.kind === "external" && info.agent.model.endpoint.provider === "ollama") {
+		modelId = modelId.replace(/^ollama\//u, "");
+	}
+	if (contextSize !== undefined) modelId = `${modelId} ctx ${formatCompactTokenCount(contextSize)}`;
+	if (effortStatusSuffix.length > 0) modelId = `${modelId}${effortStatusSuffix}`;
+	if (modelId === info.agent.model.id) return options;
 	return {
 		...options,
 		info: {
 			...info,
 			agent: {
 				...info.agent,
-				model: { ...info.agent.model, id: `${info.agent.model.id}${effortStatusSuffix}` },
+				model: { ...info.agent.model, id: modelId },
 			},
 		},
 	};
@@ -540,12 +711,26 @@ async function reportClankyFaceToHerdr(state: "idle" | "working" | "blocked" | "
 	]).catch(() => {});
 }
 
-function rewriteHeader(chunk: string): string {
-	return chunk
-		.replace("\x1b[1meve\x1b[22m \x1b[2mClanky\x1b[22m", "\x1b[1mClanky\x1b[22m \x1b[2meve-backed face\x1b[22m")
-		.replace("eve Clanky", "Clanky eve-backed face")
-		.replace(/Public preview: https:\/\/vercel\.com\/docs\/release-phases\/[^\x1b\r\n]*/g, CLANKY_HEADER_NOTE)
-		.replace(/eve is currently in preview: https:\/\/vercel\.com\/docs\/release-phases\/[^\x1b\r\n]*/g, CLANKY_HEADER_NOTE);
+function rewriteOutputText(chunk: string): string {
+	const text = chunk.includes(EVE_HEADER_NAME) ? stripEveHeaderIdentity(chunk) : chunk;
+	return appendContextUsagePercent(text, currentContextSize);
+}
+
+// Remove eve's name, preview, and tip lines from the agent-header chunk so
+// Clanky's banner is the sole header identity. Diagnostics (discovery
+// errors/warnings) and the live-region content are left untouched.
+function stripEveHeaderIdentity(chunk: string): string {
+	const esc = "\x1b";
+	const previewLine = new RegExp(
+		` ${esc}\\[2m(?:eve is currently in preview|Public preview): https://vercel\\.com/docs/release-phases/[^${esc}\\r\\n]*${esc}\\[22m\\n?`,
+		"gu",
+	);
+	let text = chunk.replace(`${EVE_HEADER_NAME}\n`, "").replace(EVE_HEADER_NAME, "");
+	text = text.replace(previewLine, "");
+	for (const tip of EVE_HEADER_TIPS) {
+		text = text.replace(` ${esc}[2m${tip}${esc}[22m\n`, "").replace(` ${esc}[2m${tip}${esc}[22m`, "");
+	}
+	return text;
 }
 
 function createClankyCommandHandler(): PromptCommandHandler {
@@ -557,6 +742,8 @@ function createClankyCommandHandler(): PromptCommandHandler {
 			switch (command.name) {
 				case "discord-token":
 					return { message: await setDiscordToken(command.argument) };
+				case "discord-scope":
+					return { message: await configureDiscordScope(command.argument, context.renderer.setupFlow) };
 				case "login":
 					return { message: await configureLogin(command.argument, context.renderer.setupFlow) };
 				case "model":
@@ -577,6 +764,8 @@ function createClankyCommandHandler(): PromptCommandHandler {
 					return { message: await configureMcp(command.argument, context.renderer.setupFlow, context.renderer) };
 				case "browser":
 					return { message: await configureBrowserBridge(command.argument) };
+				case "trace":
+					return { message: configureTrace(command.argument) };
 				case "status":
 					return { message: await statusText() };
 			}
@@ -601,6 +790,378 @@ async function setDiscordToken(argument: string): Promise<string> {
 
 	await writeEnv(updates);
 	return await restartBrainMessage("Discord credential saved");
+}
+
+async function configureDiscordScope(argument: string, flow: SetupFlowRenderer | undefined): Promise<string> {
+	const args = splitArgs(argument);
+	const command = args[0]?.toLowerCase() ?? "status";
+	const config = await readConfig();
+	if (args.length === 0 || command === "interactive" || command === "edit" || command === "configure") {
+		if (flow === undefined) return discordScopeStatusText(config);
+		return await configureDiscordScopeInteractive(flow, config);
+	}
+	if (command === "status" || command === "show" || command === "view") return discordScopeStatusText(config);
+	if (command === "help") return discordScopeUsage();
+
+	if (command === "dms" || command === "dm" || command === "allow-dms") {
+		const value = parseOnOff(args[1]);
+		if (value === undefined) {
+			if (flow === undefined) return `Usage: /discord-scope dms on|off\n\n${discordScopeStatusText(config)}`;
+			return await configureDiscordScopeFocused(flow, config, "Configure Discord DMs", () => promptDiscordScopeDms(flow, config));
+		}
+		return await saveDiscordScopeUpdate(buildDiscordScopeDmsUpdate(value));
+	}
+
+	if (command === "clear" || command === "reset") {
+		if (args[1] === undefined && flow !== undefined) {
+			return await configureDiscordScopeFocused(flow, config, "Clear Discord reply scope", () => promptDiscordScopeClear(flow));
+		}
+		const target = args[1]?.toLowerCase() ?? "all";
+		const removals = discordScopeRemovalKeys(target);
+		if (removals === undefined) {
+			if (flow === undefined) return `Unknown Discord scope target "${args[1]}". Use guilds, channels, dms, or all.`;
+			return await configureDiscordScopeFocused(flow, config, "Clear Discord reply scope", () => promptDiscordScopeClear(flow));
+		}
+		return await saveDiscordScopeUpdate(buildDiscordScopeClearUpdate(removals));
+	}
+
+	if (command === "add" || command === "remove") {
+		const target = parseDiscordScopeTarget(args[1]);
+		if (target === undefined) {
+			if (flow === undefined) return `Usage: /discord-scope ${command} guilds|channels <id...>`;
+			return await configureDiscordScopeFocused(flow, config, "Update Discord allowlist", async () => {
+				const selectedTarget = parseDiscordScopeTarget(
+					await selectOne(flow, "Choose which allowlist to update.", DISCORD_SCOPE_TARGET_OPTIONS, "channels"),
+				);
+				if (selectedTarget === undefined) return undefined;
+				return command === "add"
+					? await promptDiscordScopeAdd(flow, config, selectedTarget)
+					: await promptDiscordScopeRemove(flow, config, selectedTarget);
+			});
+		}
+		const ids = parseDiscordScopeIds(args.slice(2));
+		if (typeof ids === "string") {
+			if (flow === undefined) return ids;
+			return await configureDiscordScopeFocused(flow, config, `Update Discord ${target}`, () =>
+				command === "add" ? promptDiscordScopeAdd(flow, config, target) : promptDiscordScopeRemove(flow, config, target),
+			);
+		}
+		return await saveDiscordScopeUpdate(buildDiscordScopeAddRemoveUpdate(config, target, ids, command));
+	}
+
+	const target = parseDiscordScopeTarget(command);
+	if (target !== undefined) {
+		const rest = args.slice(1);
+		if (rest[0]?.toLowerCase() === "clear" || rest[0]?.toLowerCase() === "reset") {
+			return await saveDiscordScopeUpdate(buildDiscordScopeClearUpdate([discordScopeEnvForTarget(target)], `Discord ${target} allowlist cleared`));
+		}
+		const ids = parseDiscordScopeIds(rest);
+		if (typeof ids === "string") {
+			if (flow === undefined) return ids;
+			return await configureDiscordScopeFocused(flow, config, `Set Discord ${target}`, () =>
+				promptDiscordScopeReplace(flow, config, target),
+			);
+		}
+		return await saveDiscordScopeUpdate(buildDiscordScopeSetIdsUpdate(target, ids));
+	}
+
+	return `Unknown Discord scope command "${command}".\n\n${discordScopeUsage()}`;
+}
+
+async function configureDiscordScopeFocused(
+	flow: SetupFlowRenderer,
+	config: ClankyConfig,
+	title: string,
+	prompt: () => Promise<DiscordScopeUpdate | string | undefined>,
+): Promise<string> {
+	let update: DiscordScopeUpdate | string | undefined;
+	flow.begin(title);
+	try {
+		flow.renderOutput(formatDiscordScopeConfig(config));
+		update = await prompt();
+	} finally {
+		flow.end({ preserveDiagnostics: false });
+	}
+	if (update === undefined) return "/discord-scope cancelled.";
+	if (typeof update === "string") return update;
+	return await saveDiscordScopeUpdate(update);
+}
+
+async function configureDiscordScopeInteractive(flow: SetupFlowRenderer, config: ClankyConfig): Promise<string> {
+	let update: DiscordScopeUpdate | string | undefined;
+	flow.begin("Configure Discord reply scope");
+	try {
+		flow.renderOutput(formatDiscordScopeConfig(config));
+		const action = await selectOne(flow, "Choose what to change.", DISCORD_SCOPE_ACTION_OPTIONS, "status");
+		switch (action) {
+			case "status":
+				update = discordScopeStatusText(config);
+				break;
+			case "set-guilds":
+				update = await promptDiscordScopeReplace(flow, config, "guilds");
+				break;
+			case "set-channels":
+				update = await promptDiscordScopeReplace(flow, config, "channels");
+				break;
+			case "add-guilds":
+				update = await promptDiscordScopeAdd(flow, config, "guilds");
+				break;
+			case "add-channels":
+				update = await promptDiscordScopeAdd(flow, config, "channels");
+				break;
+			case "remove-guilds":
+				update = await promptDiscordScopeRemove(flow, config, "guilds");
+				break;
+			case "remove-channels":
+				update = await promptDiscordScopeRemove(flow, config, "channels");
+				break;
+			case "dms":
+				update = await promptDiscordScopeDms(flow, config);
+				break;
+			case "clear":
+				update = await promptDiscordScopeClear(flow);
+				break;
+			default:
+				update = undefined;
+				break;
+		}
+	} finally {
+		flow.end({ preserveDiagnostics: false });
+	}
+	if (update === undefined) return "/discord-scope cancelled.";
+	if (typeof update === "string") return update;
+	return await saveDiscordScopeUpdate(update);
+}
+
+async function promptDiscordScopeReplace(
+	flow: SetupFlowRenderer,
+	config: ClankyConfig,
+	target: DiscordScopeTarget,
+): Promise<DiscordScopeUpdate | string | undefined> {
+	const current = discordScopeIdsForTarget(config, target).join(",");
+	const label = target === "guilds" ? "server" : "channel/thread";
+	const value = await flow.readText({
+		message: `Set allowed Discord ${target}.`,
+		defaultValue: current,
+		placeholder: `${label} ids separated by spaces or commas; blank means any`,
+		validate: (raw) => validateDiscordScopeIdText(raw, true),
+	});
+	if (value === undefined) return undefined;
+	const ids = parseDiscordScopeIdText(value, true);
+	if (typeof ids === "string") return ids;
+	return buildDiscordScopeSetIdsUpdate(target, ids);
+}
+
+async function promptDiscordScopeAdd(
+	flow: SetupFlowRenderer,
+	config: ClankyConfig,
+	target: DiscordScopeTarget,
+): Promise<DiscordScopeUpdate | string | undefined> {
+	const label = target === "guilds" ? "server" : "channel/thread";
+	const value = await flow.readText({
+		message: `Add allowed Discord ${target}.`,
+		placeholder: `${label} ids separated by spaces or commas`,
+		validate: (raw) => validateDiscordScopeIdText(raw, false),
+	});
+	if (value === undefined) return undefined;
+	const ids = parseDiscordScopeIdText(value, false);
+	if (typeof ids === "string") return ids;
+	return buildDiscordScopeAddRemoveUpdate(config, target, ids, "add");
+}
+
+async function promptDiscordScopeRemove(
+	flow: SetupFlowRenderer,
+	config: ClankyConfig,
+	target: DiscordScopeTarget,
+): Promise<DiscordScopeUpdate | string | undefined> {
+	const existing = discordScopeIdsForTarget(config, target);
+	if (existing.length === 0) return `Discord ${target} allowlist is already empty.`;
+	const selected = await flow.readSelect({
+		kind: "multi",
+		message: `Choose Discord ${target} to remove.`,
+		options: existing.map((id) => ({ value: id, label: id })),
+		initialValues: [],
+		required: false,
+	});
+	if (selected === undefined) return undefined;
+	if (selected.length === 0) return `No Discord ${target} selected.`;
+	return buildDiscordScopeAddRemoveUpdate(config, target, [...selected], "remove");
+}
+
+async function promptDiscordScopeDms(
+	flow: SetupFlowRenderer,
+	config: ClankyConfig,
+): Promise<DiscordScopeUpdate | undefined> {
+	const selected = await selectOne(
+		flow,
+		"Should Clanky respond in DMs?",
+		DISCORD_DM_OPTIONS,
+		configBooleanDefaultTrue(config.discordAllowDms) ? "on" : "off",
+	);
+	const enabled = parseOnOff(selected);
+	return enabled === undefined ? undefined : buildDiscordScopeDmsUpdate(enabled);
+}
+
+async function promptDiscordScopeClear(flow: SetupFlowRenderer): Promise<DiscordScopeUpdate | undefined> {
+	const target = await selectOne(flow, "Choose Discord scope settings to clear.", DISCORD_SCOPE_CLEAR_OPTIONS, "all");
+	if (target === undefined) return undefined;
+	const removals = discordScopeRemovalKeys(target);
+	return removals === undefined ? undefined : buildDiscordScopeClearUpdate(removals);
+}
+
+async function saveDiscordScopeUpdate(update: DiscordScopeUpdate): Promise<string> {
+	await updateEnv(update.updates, update.removals);
+	return await discordScopeRestartMessage(update.message);
+}
+
+function buildDiscordScopeSetIdsUpdate(target: DiscordScopeTarget, ids: readonly string[]): DiscordScopeUpdate {
+	const key = discordScopeEnvForTarget(target);
+	return ids.length === 0
+		? { updates: {}, removals: [key], message: `Discord ${target} allowlist cleared` }
+		: {
+				updates: { [key]: uniqueStrings(ids).join(",") },
+				removals: [],
+				message: `Discord ${target} allowlist saved`,
+			};
+}
+
+function buildDiscordScopeAddRemoveUpdate(
+	config: ClankyConfig,
+	target: DiscordScopeTarget,
+	ids: readonly string[],
+	action: "add" | "remove",
+): DiscordScopeUpdate {
+	const existing = discordScopeIdsForTarget(config, target);
+	const removeSet = new Set(ids);
+	const next = action === "add" ? uniqueStrings([...existing, ...ids]) : existing.filter((id) => !removeSet.has(id));
+	return {
+		...buildDiscordScopeSetIdsUpdate(target, next),
+		message: `Discord ${target} allowlist updated`,
+	};
+}
+
+function buildDiscordScopeDmsUpdate(enabled: boolean): DiscordScopeUpdate {
+	return {
+		updates: { [DISCORD_SCOPE_ENV.dms]: enabled ? "1" : "0" },
+		removals: [],
+		message: "Discord DM scope saved",
+	};
+}
+
+function buildDiscordScopeClearUpdate(removals: string[], message = "Discord reply scope cleared"): DiscordScopeUpdate {
+	return { updates: {}, removals, message };
+}
+
+function discordScopeStatusText(config: ClankyConfig): string {
+	return [
+		formatDiscordScopeConfig(config),
+		"",
+		"Run /discord-scope for the interactive picker.",
+		"Usage:",
+		"/discord-scope guilds <server_id...>",
+		"/discord-scope channels <channel_or_thread_id...>",
+		"/discord-scope add|remove guilds|channels <id...>",
+		"/discord-scope clear guilds|channels|dms|all",
+		"/discord-scope dms on|off",
+	].join("\n");
+}
+
+function formatDiscordScopeConfig(config: ClankyConfig): string {
+	return [
+		"Discord reply scope:",
+		`guilds: ${formatDiscordScopeList(config.discordAllowedGuildIds, "any server the token can see")}`,
+		`channels: ${formatDiscordScopeList(config.discordAllowedChannelIds, "any channel in allowed servers")}`,
+		`DMs: ${configBooleanDefaultTrue(config.discordAllowDms) ? "allowed" : "blocked"}`,
+	].join("\n");
+}
+
+function discordScopeUsage(): string {
+	return [
+		"Usage: /discord-scope [status|guilds|channels|add|remove|clear|dms]",
+		"Examples:",
+		"/discord-scope guilds 866430493889134672",
+		"/discord-scope channels 866430493889134675",
+		"/discord-scope add channels 123456789012345678",
+		"/discord-scope dms off",
+	].join("\n");
+}
+
+async function discordScopeRestartMessage(prefix: string): Promise<string> {
+	const message = await restartBrainMessage(prefix);
+	return `${message}\n${discordScopeStatusText(await readConfig())}`;
+}
+
+type DiscordScopeTarget = "guilds" | "channels";
+
+function parseDiscordScopeTarget(value: string | undefined): DiscordScopeTarget | undefined {
+	const normalized = value?.toLowerCase();
+	if (normalized === "guild" || normalized === "guilds" || normalized === "server" || normalized === "servers") {
+		return "guilds";
+	}
+	if (normalized === "channel" || normalized === "channels" || normalized === "thread" || normalized === "threads") {
+		return "channels";
+	}
+	return undefined;
+}
+
+function discordScopeEnvForTarget(target: DiscordScopeTarget): string {
+	return target === "guilds" ? DISCORD_SCOPE_ENV.guilds : DISCORD_SCOPE_ENV.channels;
+}
+
+function discordScopeIdsForTarget(config: ClankyConfig, target: DiscordScopeTarget): string[] {
+	return parseMcpStringList(target === "guilds" ? config.discordAllowedGuildIds : config.discordAllowedChannelIds);
+}
+
+function discordScopeRemovalKeys(target: string): string[] | undefined {
+	const parsed = parseDiscordScopeTarget(target);
+	if (parsed !== undefined) return [discordScopeEnvForTarget(parsed)];
+	if (target === "dms" || target === "dm" || target === "allow-dms") return [DISCORD_SCOPE_ENV.dms];
+	if (target === "all" || target === "*") return Object.values(DISCORD_SCOPE_ENV);
+	return undefined;
+}
+
+function parseDiscordScopeIds(args: readonly string[]): string[] | string {
+	return parseDiscordScopeIdText(args.join(" "), false);
+}
+
+function parseDiscordScopeIdText(raw: string, allowEmpty: boolean): string[] | string {
+	const trimmed = raw.trim();
+	if (allowEmpty && (trimmed.length === 0 || ["any", "all", "none", "clear", "reset"].includes(trimmed.toLowerCase()))) {
+		return [];
+	}
+	const ids = parseMcpStringList(trimmed)
+		.map((id) => id.replace(/^<#?/, "").replace(/>$/, ""))
+		.filter((id) => id.length > 0);
+	if (ids.length === 0) return "Provide at least one Discord id, or use clear/reset.";
+	const invalid = ids.find((id) => !/^\d{5,32}$/.test(id));
+	if (invalid !== undefined) return `Invalid Discord id "${invalid}". Use numeric server/channel ids.`;
+	return uniqueStrings(ids);
+}
+
+function validateDiscordScopeIdText(raw: string, allowEmpty: boolean): string | undefined {
+	const parsed = parseDiscordScopeIdText(raw, allowEmpty);
+	return typeof parsed === "string" ? parsed : undefined;
+}
+
+function parseOnOff(value: string | undefined): boolean | undefined {
+	const normalized = value?.trim().toLowerCase();
+	if (normalized === "on" || normalized === "yes" || normalized === "true" || normalized === "1" || normalized === "allow") {
+		return true;
+	}
+	if (
+		normalized === "off" ||
+		normalized === "no" ||
+		normalized === "false" ||
+		normalized === "0" ||
+		normalized === "block"
+	) {
+		return false;
+	}
+	return undefined;
+}
+
+function uniqueStrings(values: readonly string[]): string[] {
+	return [...new Set(values)];
 }
 
 async function configureLogin(argument: string, flow: SetupFlowRenderer | undefined): Promise<string> {
@@ -817,7 +1378,7 @@ async function configureHarnessAllowlist(
 				required: true,
 			});
 			if (selected === undefined) return "/harness allow cancelled.";
-			allowed = selected.map((value) => parseCodingHarnessId(value)).filter((value): value is CodingHarnessId => value !== undefined);
+			allowed = selectedCodingHarnesses(selected);
 		} finally {
 			flow.end({ preserveDiagnostics: false });
 		}
@@ -825,74 +1386,45 @@ async function configureHarnessAllowlist(
 
 	if (allowed === undefined || allowed.length === 0) return "Harness allowlist must include at least one harness.";
 	const updates: Record<string, string> = { [CLANKY_CODING_HARNESS_ENV.allowed]: allowed.join(",") };
-	const currentDefault = parseCodingHarnessId(config.codingHarness) ?? DEFAULT_CODING_HARNESS;
-	let defaultMessage = "";
-	if (!allowed.includes(currentDefault)) {
-		updates[CLANKY_CODING_HARNESS_ENV.id] = allowed[0] ?? DEFAULT_CODING_HARNESS;
-		defaultMessage = ` Default changed to ${updates[CLANKY_CODING_HARNESS_ENV.id]}.`;
-	}
-	await writeEnv(updates);
-	return await restartBrainMessage(`Allowed coding harnesses set to ${allowed.join(", ")}.${defaultMessage}`);
+	const configured = parseCodingHarnessId(config.codingHarness);
+	const removals = configured !== undefined && !allowed.includes(configured)
+		? [CLANKY_CODING_HARNESS_ENV.id, CLANKY_CODING_HARNESS_ENV.runtime]
+		: [];
+	await updateEnv(updates, removals);
+	const autoMessage = removals.length > 0 ? " Cleared the configured fallback; Clanky will pick from the allowed set." : "";
+	return await restartBrainMessage(`Allowed coding harnesses set to ${allowed.join(", ")}.${autoMessage}`);
 }
 
 async function configureHarnessInteractive(flow: SetupFlowRenderer, config: ClankyConfig): Promise<string> {
-	let update: HarnessUpdate | string | undefined;
+	let update: { updates: Record<string, string>; removals: readonly string[]; message: string } | undefined;
 	flow.begin("Configure coding harness");
 	try {
 		flow.renderOutput(formatCodingHarnessConfig(config));
-		const allowed = configuredAllowedHarnesses(config);
-		const options = CODING_HARNESS_OPTIONS.filter((option) => allowed.includes(option.value as CodingHarnessId));
-		const configured = parseCodingHarnessId(config.codingHarness) ?? DEFAULT_CODING_HARNESS;
-		const current = allowed.includes(configured) ? configured : allowed[0];
-		const selected = parseCodingHarnessId(
-			await selectOne(flow, "Choose the default coding harness for new worker panes.", options, current),
-		);
-		if (selected === undefined) return "/harness cancelled.";
-		let command: string[] = [];
-		let launcher: CodingHarnessLauncher | undefined;
-		let model: string | undefined;
-		if (selected === "custom") {
-			const existingCommand = config.codingHarnessCommand ?? "";
-			const value = await flow.readText({
-				message: "Set the custom harness command.",
-				defaultValue: existingCommand,
-				placeholder: "opencode run {KICKOFF}",
-				validate: validateHarnessCommandText,
-			});
-			if (value === undefined) return "/harness cancelled.";
-			command = splitCommandLine(value);
-		} else if (selected !== "clanky") {
-			const launchable = parseLaunchableCodingHarnessId(selected);
-			if (launchable !== undefined) {
-				const currentProfile = resolveCodingHarness({ harness: selected, env: codingHarnessEnv(config) });
-				launcher = parseCodingHarnessLauncher(
-					await selectOne(
-						flow,
-						`Choose how ${selected} worker panes should launch.`,
-						CODING_HARNESS_LAUNCHER_OPTIONS,
-						currentProfile.launcher ?? "default",
-					),
-				);
-				if (launcher === undefined) return "/harness cancelled.";
-				if (launcher === "ollama") {
-					const value = await flow.readText({
-						message: `Set the Ollama model for ${selected} worker panes.`,
-						defaultValue: currentProfile.model ?? "",
-						placeholder: "qwen3-coder:latest",
-					});
-					if (value === undefined) return "/harness cancelled.";
-					model = value.trim();
-				}
-			}
-		}
-		update = buildHarnessUpdate(selected, [...launcherAndModelArgs(launcher, model), ...command], config);
+		const selectedAllowedValues = await flow.readSelect({
+			kind: "multi",
+			message: "Toggle which coding harnesses Clanky may use for worker panes.",
+			options: CODING_HARNESS_OPTIONS,
+			initialValues: configuredAllowedHarnesses(config),
+			required: true,
+		});
+		if (selectedAllowedValues === undefined) return "/harness cancelled.";
+		const allowed = selectedCodingHarnesses(selectedAllowedValues);
+		if (allowed.length === 0) return "Harness allowlist must include at least one harness.";
+		update = {
+			updates: { [CLANKY_CODING_HARNESS_ENV.allowed]: allowed.join(",") },
+			removals: [CLANKY_CODING_HARNESS_ENV.id, CLANKY_CODING_HARNESS_ENV.runtime],
+			message: `Allowed coding harnesses set to ${allowed.join(", ")}. Clanky will pick from the allowed set when no harness is specified.`,
+		};
 	} finally {
 		flow.end({ preserveDiagnostics: false });
 	}
 	if (update === undefined) return "/harness cancelled.";
-	if (typeof update === "string") return update;
-	await writeEnv(update.updates);
-	return await restartBrainMessage(`Coding harness set to ${update.summary}`);
+	await updateEnv(update.updates, update.removals);
+	return await restartBrainMessage(update.message);
+}
+
+function selectedCodingHarnesses(values: readonly string[]): readonly CodingHarnessId[] {
+	return values.map((value) => parseCodingHarnessId(value)).filter((value): value is CodingHarnessId => value !== undefined);
 }
 
 function buildHarnessUpdate(harness: CodingHarnessId, args: readonly string[], config: ClankyConfig): HarnessUpdate | string {
@@ -1011,21 +1543,6 @@ function parseHarnessTail(args: readonly string[], allowLauncher: boolean): {
 	return { runtime, launcher, model, command };
 }
 
-function launcherAndModelArgs(launcher: CodingHarnessLauncher | undefined, model: string | undefined): string[] {
-	if (launcher === undefined) return [];
-	const args: string[] = [launcher];
-	if (model !== undefined && model.length > 0) args.push(model);
-	return args;
-}
-
-function validateHarnessCommandText(value: string): string | undefined {
-	try {
-		return splitCommandLine(value).length === 0 ? "Enter a command." : undefined;
-	} catch (error) {
-		return error instanceof Error ? error.message : String(error);
-	}
-}
-
 function formatCodingHarnessConfig(config: ClankyConfig): string {
 	const allowed = formatAllowedHarnesses(config);
 	try {
@@ -1033,7 +1550,7 @@ function formatCodingHarnessConfig(config: ClankyConfig): string {
 		return [
 			"Current coding harness:",
 			`allowed: ${allowed}`,
-			`harness: ${profile.id} (${profile.label})`,
+			`fallback: ${formatCodingHarnessFallback(config, profile)}`,
 			`runtime: ${profile.runtime}`,
 			`performer: ${profile.performer}`,
 			`launcher: ${formatCodingHarnessLauncher(profile)}`,
@@ -1046,6 +1563,13 @@ function formatCodingHarnessConfig(config: ClankyConfig): string {
 	} catch (error) {
 		return [`Current coding harness: invalid (${error instanceof Error ? error.message : String(error)})`, `allowed: ${allowed}`].join("\n");
 	}
+}
+
+function formatCodingHarnessFallback(config: ClankyConfig, profile: ReturnType<typeof resolveCodingHarness>): string {
+	const configured = parseCodingHarnessId(config.codingHarness);
+	if (configured === profile.id) return `${profile.id} (${profile.label}, configured)`;
+	const suffix = configured === undefined ? "" : `; configured ${configured} is not allowed`;
+	return `auto -> ${profile.id} (${profile.label}${suffix})`;
 }
 
 function formatCodingHarnessSummary(config: ClankyConfig): string {
@@ -1073,7 +1597,7 @@ function formatCodingHarnessLauncher(profile: ReturnType<typeof resolveCodingHar
 
 function formatCodingHarnessLauncherLines(config: ClankyConfig): string[] {
 	return LAUNCHABLE_CODING_HARNESS_IDS.map((id) => {
-		const profile = resolveCodingHarness({ harness: id, env: codingHarnessEnv(config) });
+		const profile = resolveCodingHarness({ harness: id, env: { ...codingHarnessEnv(config), [CLANKY_CODING_HARNESS_ENV.allowed]: "all" } });
 		return `${id}: ${formatCodingHarnessLauncher(profile)}`;
 	});
 }
@@ -1185,6 +1709,18 @@ async function configureApprovals(argument: string): Promise<string> {
 			? "Auto-approve enabled; Clanky will run all tool calls without asking"
 			: "Auto-approve disabled; per-tool approval policy restored",
 	);
+}
+
+function configureTrace(argument: string): string {
+	const raw = argument.trim();
+	const mode = parseTurnTraceMode(raw);
+	const normalized = raw.toLowerCase();
+	if (raw.length === 0 || normalized === "status" || normalized === "show") {
+		return `Turn trace: ${turnTraceMode}. Use /trace off|no-reply|all.`;
+	}
+	if (mode === undefined) return `Unknown trace mode "${argument}". Use /trace off|no-reply|all.`;
+	turnTraceMode = mode;
+	return `Turn trace: ${turnTraceMode}.`;
 }
 
 async function configureImageModel(argument: string): Promise<string> {
@@ -1616,7 +2152,7 @@ async function runMcpConnectionAuth(
 		if (result.sawConnectionSearch) {
 			return `${connection.connectionName} auth probe finished, but it did not discover authorized tools for that connection. Run /mcp auth ${connection.connectionName} again.`;
 		}
-		return `${connection.connectionName} auth probe finished, but Clanky did not call connection__search. Try asking Clanky to use ${connection.connectionName}.`;
+		return `${connection.connectionName} auth probe finished, but Clanky did not call connection_search. Try asking Clanky to use ${connection.connectionName}.`;
 	} catch (error) {
 		return `${connection.connectionName} auth probe failed: ${error instanceof Error ? error.message : String(error)}`;
 	} finally {
@@ -1644,7 +2180,7 @@ async function probeMcpConnection(
 	signal: AbortSignal,
 	updatePendingAuth: (countDelta: number) => void,
 ): Promise<McpAuthProbeResult> {
-	flow.renderLine(`Checking ${connection.connectionName} with connection__search. OAuth prompts will open in your browser when needed.`, "info");
+	flow.renderLine(`Checking ${connection.connectionName} with connection_search. OAuth prompts will open in your browser when needed.`, "info");
 	flow.setStatus(`Checking ${connection.connectionName} authorization...`);
 	const session = client.session();
 	const response = await session.send({ message: mcpAuthProbePrompt(connection.connectionName), signal });
@@ -1671,7 +2207,7 @@ function applyMcpAuthProbeEvent(
 	switch (event.type) {
 		case "actions.requested":
 			for (const action of event.data.actions) {
-				if (action.kind === "tool-call" && action.toolName === "connection__search") {
+				if (action.kind === "tool-call" && action.toolName === "connection_search") {
 					result.sawConnectionSearch = true;
 					flow.setStatus(`Discovering ${connection.connectionName} connection tools...`);
 				}
@@ -1679,7 +2215,7 @@ function applyMcpAuthProbeEvent(
 			break;
 		case "action.result": {
 			const action = event.data.result;
-			if (action.kind !== "tool-result" || action.toolName !== "connection__search") break;
+			if (action.kind !== "tool-result" || action.toolName !== "connection_search") break;
 			result.sawConnectionSearch = true;
 			const inspection = inspectConnectionSearchOutput(action.output, connection.connectionName);
 			if (!inspection.matchedConnection) break;
@@ -1699,7 +2235,7 @@ function applyMcpAuthProbeEvent(
 			if (challenge?.userCode !== undefined) lines.push(`code: ${challenge.userCode}`);
 			if (challenge?.instructions !== undefined) lines.push(challenge.instructions);
 			lines.push("Press Esc to cancel this wait.");
-			flow.renderLine(lines.join("\n"), "info");
+			renderFlowLines(flow, lines, "info");
 			flow.setStatus(`Waiting for ${displayName} authorization...`);
 			if (challenge?.url !== undefined) void runHostCommand("open", [challenge.url]).catch(() => undefined);
 			renderer.upsertConnectionAuth?.({
@@ -1736,6 +2272,18 @@ function applyMcpAuthProbeEvent(
 	}
 }
 
+function renderFlowLines(
+	flow: SetupFlowRenderer,
+	lines: readonly string[],
+	tone: Parameters<SetupFlowRenderer["renderLine"]>[1],
+): void {
+	for (const line of lines) {
+		for (const segment of line.split(/\r?\n/)) {
+			if (segment.trim().length > 0) flow.renderLine(segment, tone);
+		}
+	}
+}
+
 type MappedConnectionAuthChallenge = {
 	readonly url?: string;
 	readonly userCode?: string;
@@ -1756,8 +2304,8 @@ function challengeForRenderer(challenge: MappedConnectionAuthChallenge | undefin
 function mcpAuthProbePrompt(connectionName: string): string {
 	return [
 		"TUI MCP connection auth probe.",
-		`Use connection__search to discover tools for only the curated MCP connection named "${connectionName}".`,
-		"Do not call any connection tool other than connection__search. Do not create, update, delete, post, or mutate anything.",
+		`Use connection_search to discover tools for only the curated MCP connection named "${connectionName}".`,
+		"Do not call any connection tool other than connection_search. Do not create, update, delete, post, or mutate anything.",
 		"If authorization is required, wait for the authorization flow to complete. Then reply with one short status sentence.",
 	].join("\n");
 }
@@ -1959,11 +2507,11 @@ async function selectMcpConnectionName(flow: SetupFlowRenderer, initialValue: st
 	}
 	return await selectOne(
 		flow,
-		"Choose the curated MCP connection to authorize.",
+		"Choose the curated MCP connection to verify or authorize.",
 		connections.map((connection) => ({
 			value: connection.connectionName,
 			label: connection.connectionName,
-			hint: connection.hasAuthorization ? "auth" : "no auth",
+			hint: mcpConnectionAuthHint(connection),
 			description: connection.description,
 		})),
 		initialValue,
@@ -2008,10 +2556,14 @@ function formatMcpConnectionLines(info: AgentInfoResult | undefined): string[] {
 	const connections = mcpConnections(info);
 	if (connections.length === 0) return ["(none)"];
 	return connections.map((connection) => {
-		const auth = mcpConnectionHasAuthorization(connection) ? "auth" : "no auth";
+		const auth = mcpConnectionAuthHint(connection);
 		const approval = mcpConnectionHasApproval(connection) ? "approval" : "no approval";
 		return `- ${connection.connectionName}: ${connection.protocol}, ${auth}, ${approval} - ${connection.description}`;
 	});
+}
+
+function mcpConnectionAuthHint(connection: AgentInfoConnectionEntry): string {
+	return mcpConnectionHasAuthorization(connection) ? "oauth" : "no oauth";
 }
 
 function mcpConnectionHasAuthorization(connection: AgentInfoConnectionEntry): boolean {
@@ -2272,9 +2824,29 @@ async function statusText(): Promise<string> {
 		`integrations: ${formatIntegrationSummary(bindings, connections)}`,
 		`mcp: ${formatMcpStatusSummary(info, mcpStore)}`,
 		`browser bridge: ${formatBrowserBridgeSummary(browser)}`,
+		`discord scope: ${formatDiscordScopeSummary(config)}`,
 		`discord gateway: ${formatJson(gateway)}`,
 	];
 	return lines.join("\n");
+}
+
+function formatDiscordScopeSummary(config: ClankyConfig): string {
+	return [
+		`guilds=${formatDiscordScopeList(config.discordAllowedGuildIds, "any")}`,
+		`channels=${formatDiscordScopeList(config.discordAllowedChannelIds, "any")}`,
+		`dms=${configBooleanDefaultTrue(config.discordAllowDms) ? "allowed" : "blocked"}`,
+	].join("; ");
+}
+
+function formatDiscordScopeList(raw: string | undefined, fallback: string): string {
+	const ids = parseMcpStringList(raw);
+	return ids.length === 0 ? fallback : ids.join(",");
+}
+
+function configBooleanDefaultTrue(raw: string | undefined): boolean {
+	const normalized = raw?.trim().toLowerCase();
+	if (normalized === undefined || normalized.length === 0) return true;
+	return !["0", "false", "no", "off"].includes(normalized);
 }
 
 async function selectProvider(
@@ -2545,6 +3117,7 @@ async function readConfig(): Promise<ClankyConfig> {
 	const localModel = get("CLANKY_LOCAL_MODEL");
 	const localBaseUrl = get("CLANKY_LOCAL_BASE_URL");
 	const localEffort = get("CLANKY_LOCAL_EFFORT");
+	const localContextTokens = get(LOCAL_CONTEXT_TOKENS_ENV);
 	const autoApprove = get("CLANKY_AUTO_APPROVE");
 	const codingHarness = get(CLANKY_CODING_HARNESS_ENV.id);
 	const codingHarnesses = get(CLANKY_CODING_HARNESS_ENV.allowed);
@@ -2565,12 +3138,16 @@ async function readConfig(): Promise<ClankyConfig> {
 	const elevenLabsTtsModel = get("CLANKY_ELEVENLABS_TTS_MODEL");
 	const voiceMemoryContextLimit = get("CLANKY_VOICE_MEMORY_CONTEXT_LIMIT");
 	const voiceEveSession = get("CLANKY_VOICE_EVE_SESSION");
+	const discordAllowedGuildIds = get(DISCORD_SCOPE_ENV.guilds);
+	const discordAllowedChannelIds = get(DISCORD_SCOPE_ENV.channels);
+	const discordAllowDms = get(DISCORD_SCOPE_ENV.dms);
 	if (codexModel !== undefined) config.codexModel = codexModel;
 	if (claudeModel !== undefined) config.claudeModel = claudeModel;
 	if (codexEffort !== undefined) config.codexEffort = codexEffort;
 	if (localModel !== undefined) config.localModel = localModel;
 	if (localBaseUrl !== undefined) config.localBaseUrl = localBaseUrl;
 	if (localEffort !== undefined) config.localEffort = localEffort;
+	if (localContextTokens !== undefined) config.localContextTokens = localContextTokens;
 	if (autoApprove !== undefined) config.autoApprove = autoApprove;
 	if (codingHarness !== undefined) config.codingHarness = codingHarness;
 	if (codingHarnesses !== undefined) config.codingHarnesses = codingHarnesses;
@@ -2591,17 +3168,25 @@ async function readConfig(): Promise<ClankyConfig> {
 	if (elevenLabsTtsModel !== undefined) config.elevenLabsTtsModel = elevenLabsTtsModel;
 	if (voiceMemoryContextLimit !== undefined) config.voiceMemoryContextLimit = voiceMemoryContextLimit;
 	if (voiceEveSession !== undefined) config.voiceEveSession = voiceEveSession;
+	if (discordAllowedGuildIds !== undefined) config.discordAllowedGuildIds = discordAllowedGuildIds;
+	if (discordAllowedChannelIds !== undefined) config.discordAllowedChannelIds = discordAllowedChannelIds;
+	if (discordAllowDms !== undefined) config.discordAllowDms = discordAllowDms;
 	return config;
 }
 
 async function writeEnv(updates: Record<string, string>): Promise<void> {
-	const existing = await readFile(ENV_PATH, "utf8").catch(() => "");
-	await writeFile(ENV_PATH, applyEnvUpserts(existing, updates), "utf8");
+	await updateEnv(updates, []);
 }
 
 async function removeEnv(keys: string[]): Promise<void> {
+	await updateEnv({}, keys);
+}
+
+async function updateEnv(updates: Record<string, string>, removals: readonly string[]): Promise<void> {
 	const existing = await readFile(ENV_PATH, "utf8").catch(() => "");
-	await writeFile(ENV_PATH, applyEnvRemovals(existing, keys), "utf8");
+	const withoutRemovals = removals.length === 0 ? existing : applyEnvRemovals(existing, removals);
+	const next = Object.keys(updates).length === 0 ? withoutRemovals : applyEnvUpserts(withoutRemovals, updates);
+	await writeFile(ENV_PATH, next, "utf8");
 }
 
 async function restartBrainMessage(prefix: string): Promise<string> {
@@ -2611,7 +3196,7 @@ async function restartBrainMessage(prefix: string): Promise<string> {
 	}
 
 	await stopServer();
-	startServer();
+	await startServer();
 	await waitForHealth();
 	forwardServerOutput = terminalReady;
 	return `${prefix}. Restarted Clanky.`;
@@ -2644,15 +3229,43 @@ async function probe(): Promise<"healthy" | "reachable" | "down"> {
 	}
 }
 
-function startServer(): void {
+async function startServer(): Promise<void> {
 	forwardServerOutput = false;
+	const env = await buildOwnedServerEnv();
 	server = spawn(join(REPO, "node_modules", ".bin", "eve"), ["dev", "--no-ui", "--port", String(PORT)], {
 		cwd: REPO,
-		env: buildEveDevServerEnv(process.env, HOST, PORT),
+		env,
 		stdio: ["ignore", "pipe", "pipe"],
 	});
 	server.stdout?.on("data", (chunk: Buffer) => forwardOwnedServerOutput("stdout", chunk));
 	server.stderr?.on("data", (chunk: Buffer) => forwardOwnedServerOutput("stderr", chunk));
+}
+
+async function buildOwnedServerEnv(): Promise<NodeJS.ProcessEnv> {
+	const env = withClankyFaceHerdrEnv(buildEveDevServerEnv(process.env, HOST, PORT));
+	const config = await readConfig();
+	if (config.provider !== "local") return env;
+	if (parseLocalContextWindowTokens(env[LOCAL_CONTEXT_TOKENS_ENV]) !== undefined) return env;
+	if (parseLocalContextWindowTokens(config.localContextTokens) !== undefined) return env;
+
+	const contextTokens = await resolveOllamaContextWindowTokens({
+		baseURL: config.localBaseUrl ?? DEFAULT_LOCAL_BASE_URL,
+		modelId: config.localModel ?? "qwen3-coder-next",
+	});
+	if (contextTokens === undefined) return env;
+	return { ...env, [LOCAL_CONTEXT_TOKENS_ENV]: String(contextTokens) };
+}
+
+function withClankyFaceHerdrEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+	const next = { ...env };
+	copyEnvIfPresent(next, CLANKY_FACE_HERDR_PANE_ID_ENV, process.env.HERDR_PANE_ID);
+	copyEnvIfPresent(next, CLANKY_FACE_HERDR_TAB_ID_ENV, process.env.HERDR_TAB_ID);
+	copyEnvIfPresent(next, CLANKY_FACE_HERDR_WORKSPACE_ID_ENV, process.env.HERDR_WORKSPACE_ID);
+	return next;
+}
+
+function copyEnvIfPresent(env: NodeJS.ProcessEnv, key: string, value: string | undefined): void {
+	if (value !== undefined && value.length > 0) env[key] = value;
 }
 
 function forwardOwnedServerOutput(stream: "stdout" | "stderr", chunk: Buffer): void {
@@ -2684,7 +3297,7 @@ async function ensureServer(): Promise<boolean> {
 		return false;
 	}
 
-	startServer();
+	await startServer();
 	await waitForHealth();
 	return true;
 }
@@ -2770,7 +3383,7 @@ async function stopCallbackProxy(): Promise<void> {
 	await new Promise<void>((resolve) => proxy.close(() => resolve()));
 }
 
-async function waitForHealth(timeoutMs = 45_000): Promise<void> {
+async function waitForHealth(timeoutMs = HEALTH_TIMEOUT_MS): Promise<void> {
 	const deadline = Date.now() + timeoutMs;
 	for (;;) {
 		try {

@@ -14,7 +14,7 @@ const expectedLinearUrl = process.env.CLANKY_LINEAR_MCP_URL?.trim() || "https://
 const expectedFigmaUrl = process.env.CLANKY_FIGMA_MCP_URL?.trim() || "https://mcp.figma.com/mcp";
 
 assert(linearConnection.url === expectedLinearUrl, "Linear connection URL drifted");
-assert(linearConnection.description.includes("Linear workspace"), "Linear connection description missing routing context");
+assert(linearConnection.description.includes("Curated Linear MCP connection"), "Linear connection description missing routing context");
 assert(linearConnection.auth !== undefined, "Linear connection missing OAuth auth");
 assert(linearConnection.auth.startAuthorization !== undefined, "Linear connection is not interactive OAuth");
 assert(linearConnection.auth.completeAuthorization !== undefined, "Linear connection cannot complete OAuth");
@@ -24,7 +24,7 @@ assert(authoredMcpConnectionHasAuthorization("linear"), "Linear authored metadat
 assert(authoredMcpConnectionHasApproval("linear"), "Linear authored metadata should report approval");
 
 assert(figmaConnection.url === expectedFigmaUrl, "Figma connection URL drifted");
-assert(figmaConnection.description.includes("Figma workspace"), "Figma connection description missing routing context");
+assert(figmaConnection.description.includes("Curated Figma MCP connection"), "Figma connection description missing routing context");
 assert(figmaConnection.auth !== undefined, "Figma connection missing OAuth auth");
 assert(figmaConnection.auth.startAuthorization !== undefined, "Figma connection is not interactive OAuth");
 assert(figmaConnection.auth.completeAuthorization !== undefined, "Figma connection cannot complete OAuth");

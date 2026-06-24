@@ -25,10 +25,10 @@ creating. If tasks share mutable paths, sequence them (separate runs or a
 - Give the worker a complete brief: context, exact scope, verification command,
   and what to report back.
 - Check `herdr_status.codingHarnesses` when choosing worker runtimes; it shows
-  the allowed harnesses and default fallback.
+  the allowed harnesses and automatic fallback.
 - Use `harness: "clanky"`, `"claude"`, `"codex"`, `"opencode"`, or `"custom"`
   when a specific allowed runner fits the task. Omit `harness`, `performer`, and
-  `command` only when the default fallback is fine. Use `performer` only as a
+  `command` only when Clanky may pick from the allowed set. Use `performer` only as a
   lower-level override.
 - `/harness allow` controls the allowed set. `/harness` also controls
   native-vs-Ollama launch models for Claude, Codex, and OpenCode workers; Codex

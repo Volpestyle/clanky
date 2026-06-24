@@ -1,8 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { readFile, mkdir, stat, writeFile } from "node:fs/promises";
-import { basename, extname, join, resolve } from "node:path";
+import { readFile, mkdir, readdir, stat, writeFile } from "node:fs/promises";
+import { basename, dirname, extname, join, resolve } from "node:path";
 import { createOpenAI } from "@ai-sdk/openai";
 import { generateText, type FilePart, type TextPart, type UserContent } from "ai";
+import {
+	createClankyModel,
+	type ClankyLocalModelSettings,
+	type ClankyModelSettings,
+	resolveClankyModelSettings,
+} from "./model-selection.ts";
 import { resolveClankyDataPath } from "./paths.ts";
 
 export type ImageQuality = "low" | "medium" | "high" | "auto";
@@ -53,7 +59,7 @@ export interface VisualInspectItem {
 }
 
 export interface VisualInspectResult {
-	provider: "openai";
+	provider: string;
 	model: string;
 	prompt: string;
 	items: VisualInspectItem[];
@@ -64,6 +70,7 @@ export interface VisualInspectResult {
 }
 
 export interface VisualInspectGenerateRequest {
+	provider: string;
 	model: string;
 	content: UserContent;
 }
@@ -75,6 +82,7 @@ export interface VisualInspectGenerateResult {
 
 export interface VisualInspectOptions {
 	env?: NodeJS.ProcessEnv;
+	fetchImpl?: typeof fetch;
 	generate?(request: VisualInspectGenerateRequest): Promise<VisualInspectGenerateResult>;
 }
 
@@ -86,6 +94,7 @@ const DEFAULT_VISUAL_PROMPT =
 const MAX_VISUAL_IMAGES = 12;
 const DEFAULT_VISUAL_MAX_BYTES_PER_IMAGE = 5 * 1024 * 1024;
 const MAX_VISUAL_BYTES_PER_IMAGE = 20 * 1024 * 1024;
+const OLLAMA_CAPABILITIES_TIMEOUT_MS = 3_000;
 
 export async function generateOpenAiImage(
 	input: OpenAiImageGenerateInput,
@@ -136,6 +145,7 @@ export async function inspectVisualMedia(
 	options: VisualInspectOptions = {},
 ): Promise<VisualInspectResult> {
 	const env = options.env ?? process.env;
+	const fetchImpl = options.fetchImpl ?? fetch;
 	const requestedPaths = input.paths.map((path) => path.trim()).filter((path) => path.length > 0);
 	if (requestedPaths.length === 0) throw new Error("media_inspect requires at least one local file path.");
 	const maxImages = clampInteger(input.maxImages ?? MAX_VISUAL_IMAGES, 1, MAX_VISUAL_IMAGES);
@@ -157,25 +167,85 @@ export async function inspectVisualMedia(
 		filename: item.filename,
 		mediaType: item.mediaType,
 	}));
-	const generated = await (options.generate ?? ((request) => generateOpenAiVisualInspection(request, env)))({
-		model,
-		content: [textPart, ...fileParts],
-	});
-	return {
+	const content: UserContent = [textPart, ...fileParts];
+	const active = input.model === undefined ? await resolveActiveVisualBackend(env, fetchImpl) : undefined;
+	let activeFailure: Error | undefined;
+	if (active?.backend !== undefined) {
+		try {
+			const generated = await generateActiveVisualInspection(
+				{ provider: active.backend.provider, model: active.backend.model, content },
+				active.backend,
+				prepared,
+				{ generate: options.generate, fetchImpl },
+			);
+			return buildVisualInspectResult({
+				provider: active.backend.provider,
+				model: active.backend.model,
+				prompt,
+				prepared,
+				totalRequested: requestedPaths.length,
+				generated,
+			});
+		} catch (error) {
+			activeFailure = asError(error);
+		}
+	}
+	const generated = await tryOpenAiVisualInspection(
+		{ provider: "openai", model, content },
+		env,
+		options.generate,
+		activeFailure ?? active?.unavailableReason,
+	);
+	return buildVisualInspectResult({
 		provider: "openai",
 		model,
 		prompt,
-		items: prepared.map(({ item }) => item),
+		prepared,
 		totalRequested: requestedPaths.length,
-		truncated: requestedPaths.length > prepared.length,
-		text: generated.text.trim(),
-		...(generated.usage === undefined ? {} : { usage: generated.usage }),
+		generated,
+	});
+}
+
+function buildVisualInspectResult(options: {
+	provider: string;
+	model: string;
+	prompt: string;
+	prepared: Array<{ item: VisualInspectItem; data: Buffer }>;
+	totalRequested: number;
+	generated: VisualInspectGenerateResult;
+}): VisualInspectResult {
+	return {
+		provider: options.provider,
+		model: options.model,
+		prompt: options.prompt,
+		items: options.prepared.map(({ item }) => item),
+		totalRequested: options.totalRequested,
+		truncated: options.totalRequested > options.prepared.length,
+		text: options.generated.text.trim(),
+		...(options.generated.usage === undefined ? {} : { usage: options.generated.usage }),
 	};
 }
 
-export function mediaBackendStatus(env: NodeJS.ProcessEnv = process.env): Record<string, unknown> {
+export async function mediaBackendStatus(
+	env: NodeJS.ProcessEnv = process.env,
+	fetchImpl: typeof fetch = fetch,
+): Promise<Record<string, unknown>> {
 	const hasOpenAiKey = resolveOpenAiApiKey({ env, throwIfMissing: false }) !== undefined;
+	const active = await resolveActiveVisualBackend(env, fetchImpl);
 	return {
+		activeVision: {
+			available: active.backend !== undefined,
+			...(active.backend === undefined
+				? {
+						provider: resolveClankyModelSettings(env).provider,
+						reason: active.unavailableReason.message,
+					}
+				: {
+						provider: active.backend.provider,
+						model: active.backend.model,
+						source: "current Clanky brain model",
+					}),
+		},
 		openaiImages: {
 			available: hasOpenAiKey,
 			model: env.CLANKY_OPENAI_IMAGE_MODEL || DEFAULT_OPENAI_IMAGE_MODEL,
@@ -206,14 +276,252 @@ async function generateOpenAiVisualInspection(
 	return { text: result.text, usage: result.usage };
 }
 
+interface ActiveVisualBackend {
+	provider: string;
+	model: string;
+	settings: ClankyModelSettings;
+	ollamaApiBaseURL?: string;
+	ollamaOpenAiBaseURL?: string;
+}
+
+async function resolveActiveVisualBackend(
+	env: NodeJS.ProcessEnv,
+	fetchImpl: typeof fetch,
+): Promise<{ backend?: ActiveVisualBackend; unavailableReason: Error }> {
+	const settings = resolveClankyModelSettings(env);
+	if (settings.provider === "local") {
+		const ollamaApiBaseURL = resolveOllamaApiBaseURL(settings);
+		if (ollamaApiBaseURL !== undefined) {
+			const capabilities = await fetchOllamaCapabilities(settings.modelId, ollamaApiBaseURL, fetchImpl);
+			if (capabilities.ok && capabilities.capabilities.includes("vision")) {
+				return {
+					backend: {
+						provider: "ollama",
+						model: settings.modelId,
+						settings,
+						ollamaApiBaseURL,
+						ollamaOpenAiBaseURL: resolveOpenAiCompatibleBaseURL(settings.baseURL),
+					},
+					unavailableReason: new Error("active Ollama model advertises vision"),
+				};
+			}
+			const reason = capabilities.ok
+				? `active Ollama model ${settings.modelId} does not advertise vision`
+				: `could not read Ollama capabilities for ${settings.modelId}: ${capabilities.error.message}`;
+			return { unavailableReason: new Error(reason) };
+		}
+		if (isEnabled(env.CLANKY_LOCAL_MODEL_SUPPORTS_VISION)) {
+			return {
+				backend: {
+					provider: "local",
+					model: settings.modelId,
+					settings,
+				},
+				unavailableReason: new Error("active local model is explicitly marked vision-capable"),
+			};
+		}
+		return {
+			unavailableReason: new Error(
+				"active local model is not an Ollama endpoint with detectable capabilities; set CLANKY_LOCAL_MODEL_SUPPORTS_VISION=1 to opt in",
+			),
+		};
+	}
+	if (isKnownVisionCapableHostedModel(settings)) {
+		return {
+			backend: {
+				provider: settings.provider,
+				model: settings.modelId,
+				settings,
+			},
+			unavailableReason: new Error(`active ${settings.provider} model is known vision-capable`),
+		};
+	}
+	return { unavailableReason: new Error(`active ${settings.provider} model ${settings.modelId} is not known to support vision`) };
+}
+
+async function generateActiveVisualInspection(
+	request: VisualInspectGenerateRequest,
+	backend: ActiveVisualBackend,
+	prepared: Array<{ item: VisualInspectItem; data: Buffer }>,
+	options: {
+		fetchImpl: typeof fetch;
+		generate?: (request: VisualInspectGenerateRequest) => Promise<VisualInspectGenerateResult>;
+	},
+): Promise<VisualInspectGenerateResult> {
+	if (options.generate !== undefined) return await options.generate(request);
+	if (backend.provider === "ollama" && backend.ollamaOpenAiBaseURL !== undefined) {
+		return await generateOllamaOpenAiVisualInspection(request, backend.ollamaOpenAiBaseURL, prepared, options.fetchImpl);
+	}
+	const result = await generateText({
+		model: createClankyModel(backend.settings),
+		messages: [{ role: "user", content: request.content }],
+		maxRetries: 1,
+	});
+	return { text: result.text, usage: result.usage };
+}
+
+async function tryOpenAiVisualInspection(
+	request: VisualInspectGenerateRequest,
+	env: NodeJS.ProcessEnv,
+	generate: VisualInspectOptions["generate"],
+	activeFailure: Error | undefined,
+): Promise<VisualInspectGenerateResult> {
+	try {
+		return await (generate ?? ((request) => generateOpenAiVisualInspection(request, env)))(request);
+	} catch (error) {
+		if (activeFailure === undefined) throw error;
+		throw new Error(`${activeFailure.message}; OpenAI vision fallback failed: ${asError(error).message}`);
+	}
+}
+
+async function generateOllamaOpenAiVisualInspection(
+	request: VisualInspectGenerateRequest,
+	openAiBaseURL: string,
+	prepared: Array<{ item: VisualInspectItem; data: Buffer }>,
+	fetchImpl: typeof fetch,
+): Promise<VisualInspectGenerateResult> {
+	const response = await fetchImpl(`${openAiBaseURL}/chat/completions`, {
+		method: "POST",
+		headers: { authorization: "Bearer local", "content-type": "application/json" },
+		body: JSON.stringify({
+			model: request.model,
+			stream: false,
+			messages: [
+				{
+					role: "user",
+					content: [
+						{ type: "text", text: textFromUserContent(request.content) },
+						...prepared.map(({ item, data }) => ({
+							type: "image_url",
+							image_url: { url: `data:${item.mediaType};base64,${data.toString("base64")}` },
+						})),
+					],
+				},
+			],
+		}),
+	});
+	const payload = await responseJson(response);
+	if (!response.ok) throw new Error(`Ollama vision request failed (${response.status}): ${summarizeApiError(payload)}`);
+	const choices = isRecord(payload) && Array.isArray(payload.choices) ? payload.choices : [];
+	const first = choices[0];
+	const message = isRecord(first) && isRecord(first.message) ? first.message : undefined;
+	const text = typeof message?.content === "string" ? message.content : undefined;
+	if (text === undefined || text.trim().length === 0) throw new Error("Ollama vision response did not include choices[0].message.content");
+	return {
+		text,
+		...(isRecord(payload) && payload.usage !== undefined ? { usage: payload.usage } : {}),
+	};
+}
+
+type OllamaCapabilitiesResult = { ok: true; capabilities: string[] } | { ok: false; error: Error };
+
+async function fetchOllamaCapabilities(
+	model: string,
+	apiBaseURL: string,
+	fetchImpl: typeof fetch,
+): Promise<OllamaCapabilitiesResult> {
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), OLLAMA_CAPABILITIES_TIMEOUT_MS);
+	try {
+		const response = await fetchImpl(`${apiBaseURL}/api/show`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ model }),
+			signal: controller.signal,
+		});
+		const payload = await responseJson(response);
+		if (!response.ok) return { ok: false, error: new Error(`Ollama capabilities request failed (${response.status})`) };
+		const capabilities = isRecord(payload) && Array.isArray(payload.capabilities) ? payload.capabilities : [];
+		return { ok: true, capabilities: capabilities.filter((value): value is string => typeof value === "string") };
+	} catch (error) {
+		return { ok: false, error: asError(error) };
+	} finally {
+		clearTimeout(timeout);
+	}
+}
+
+function resolveOllamaApiBaseURL(settings: ClankyLocalModelSettings): string | undefined {
+	let url: URL;
+	try {
+		url = new URL(settings.baseURL);
+	} catch {
+		return undefined;
+	}
+	const providerName = settings.providerName?.trim().toLowerCase();
+	const looksLikeOllama = providerName === "ollama" || (providerName === undefined && url.port === "11434");
+	if (!looksLikeOllama) return undefined;
+	url.search = "";
+	url.hash = "";
+	url.pathname = url.pathname.replace(/\/v1\/?$/u, "") || "/";
+	return url.toString().replace(/\/+$/u, "");
+}
+
+function resolveOpenAiCompatibleBaseURL(baseURL: string): string {
+	let url: URL;
+	try {
+		url = new URL(baseURL);
+	} catch {
+		return baseURL.replace(/\/+$/u, "");
+	}
+	url.search = "";
+	url.hash = "";
+	if (!url.pathname.endsWith("/v1")) url.pathname = `${url.pathname.replace(/\/+$/u, "")}/v1`;
+	return url.toString().replace(/\/+$/u, "");
+}
+
+function isKnownVisionCapableHostedModel(settings: ClankyModelSettings): boolean {
+	const model = settings.modelId.toLowerCase();
+	if (settings.provider === "claude") return model.startsWith("claude-3") || model.startsWith("claude-4") || model.includes("sonnet");
+	if (settings.provider === "codex") return /^(gpt-4|gpt-5|o[134])/u.test(model) || model.includes("4o");
+	return false;
+}
+
+function isEnabled(value: string | undefined): boolean {
+	if (value === undefined) return false;
+	return ["1", "on", "true", "yes"].includes(value.trim().toLowerCase());
+}
+
+function textFromUserContent(content: UserContent): string {
+	if (typeof content === "string") return content;
+	return content
+		.map((part) => {
+			if (part.type === "text") return part.text;
+			if (part.type === "file") {
+				const filename = part.filename ?? "image";
+				const mediaType = part.mediaType ?? "application/octet-stream";
+				return `Attached file: ${filename} (${mediaType})`;
+			}
+			return "";
+		})
+		.filter((value) => value.length > 0)
+		.join("\n\n");
+}
+
+async function responseJson(response: Response): Promise<unknown> {
+	const text = await response.text();
+	if (text.length === 0) return {};
+	try {
+		return JSON.parse(text) as unknown;
+	} catch {
+		return text;
+	}
+}
+
+function asError(error: unknown): Error {
+	return error instanceof Error ? error : new Error(String(error));
+}
+
+function isNodeErrorCode(error: unknown, code: string): boolean {
+	return error instanceof Error && "code" in error && error.code === code;
+}
+
 async function prepareVisualMedia(
 	paths: readonly string[],
 	maxBytesPerImage: number,
 ): Promise<Array<{ item: VisualInspectItem; data: Buffer }>> {
 	const prepared: Array<{ item: VisualInspectItem; data: Buffer }> = [];
 	for (const rawPath of paths) {
-		const path = resolve(rawPath);
-		const info = await stat(path);
+		const { path, info } = await statVisualMediaPath(rawPath);
 		if (!info.isFile()) throw new Error(`media_inspect path is not a file: ${path}`);
 		if (info.size > maxBytesPerImage) {
 			throw new Error(`media_inspect file exceeds maxBytesPerImage (${info.size} > ${maxBytesPerImage}): ${path}`);
@@ -233,6 +541,47 @@ async function prepareVisualMedia(
 		});
 	}
 	return prepared;
+}
+
+async function statVisualMediaPath(rawPath: string): Promise<{ path: string; info: Awaited<ReturnType<typeof stat>> }> {
+	const path = resolve(rawPath);
+	try {
+		return { path, info: await stat(path) };
+	} catch (error) {
+		if (!isNodeErrorCode(error, "ENOENT")) throw error;
+		const recovered = await recoverDiscordMediaPath(path);
+		if (recovered === undefined) throw error;
+		return { path: recovered, info: await stat(recovered) };
+	}
+}
+
+async function recoverDiscordMediaPath(path: string): Promise<string | undefined> {
+	const dir = dirname(path);
+	if (basename(dir) !== "discord-media") return undefined;
+	const requested = basename(path);
+	const timestamp = requested.match(/^(\d+)-/u)?.[1];
+	const suffixes = discordMediaFilenameSuffixes(requested);
+	if (suffixes.length === 0) return undefined;
+	const entries = await readdir(dir).catch(() => []);
+	for (const suffix of suffixes) {
+		const matches = entries.filter((entry) => entry !== requested && entry.endsWith(`-${suffix}`));
+		const sameTimestamp = timestamp === undefined ? [] : matches.filter((entry) => entry.startsWith(`${timestamp}-`));
+		if (sameTimestamp.length === 1) return join(dir, sameTimestamp[0]);
+		if (matches.length === 1) return join(dir, matches[0]);
+	}
+	return undefined;
+}
+
+function discordMediaFilenameSuffixes(filename: string): string[] {
+	const suffixes: string[] = [];
+	const exact = filename.match(/^\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-(.+)$/iu)?.[1];
+	if (exact !== undefined) suffixes.push(exact);
+	const parts = filename.split("-");
+	for (let index = 2; index < parts.length; index += 1) {
+		const suffix = parts.slice(index).join("-");
+		if (suffix.includes(".") && suffix.length >= 8 && !suffixes.includes(suffix)) suffixes.push(suffix);
+	}
+	return suffixes.sort((a, b) => b.length - a.length);
 }
 
 async function saveImageData(

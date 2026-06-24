@@ -7,8 +7,10 @@ import {
 	decideDiscordInbound,
 	EngagementTracker,
 	isSkipReplyText,
+	parseDiscordIdAllowlist,
+	resolveDiscordAllowDms,
 } from "../agent/lib/discord/acceptance.ts";
-import { parseBridgeCommand } from "../agent/lib/discord/host.ts";
+import { isDiscordSelfMessage, parseBridgeCommand, RecentDiscordMessageIds } from "../agent/lib/discord/host.ts";
 import { extractDiscordMemoryCandidates } from "../agent/lib/discord/memory.ts";
 import { buildPresenceSessionMessage } from "../agent/lib/discord/presence-payload.ts";
 import { formatPresencePrompt } from "../agent/lib/discord/prompt.ts";
@@ -52,6 +54,7 @@ function reason(d: DiscordAcceptanceDecision): string {
 const addressed = (t: string) => resolveWakeNameMatch(t, DEFAULT_DISCORD_WAKE_NAMES);
 check("'hey clanky' is addressed", addressed("hey clanky").addressed);
 check("'yo clank whats good' is addressed", addressed("yo clank whats good").addressed);
+check("'hi clankey' typo is addressed", addressed("hi clankey").addressed);
 check("'clanker can you check this' is addressed (leading)", addressed("clanker can you check this").addressed);
 check("'ok so anyway, clanky what now' is addressed (vocative)", addressed("ok so anyway, clanky what now").addressed);
 check(
@@ -95,6 +98,8 @@ check(
 {
 	const d = decideDiscordInbound(msg({ authorId: "self", text: "hey clanky" }), { ...NEVER, selfUserId: "self" });
 	check("own message never accepts", !d.accepted && d.reason === "self_message");
+	check("own message is detected before history recording", isDiscordSelfMessage(msg({ authorId: "self" }), "self"));
+	check("other message is not self", !isDiscordSelfMessage(msg({ authorId: "u2" }), "self"));
 }
 {
 	const d = decideDiscordInbound(msg({ authorIsBot: true, text: "hey clanky" }), NEVER);
@@ -108,6 +113,47 @@ check(
 	);
 	const d = decideDiscordInbound(msg({ channelId: "other", text: "anything" }), bound);
 	check("bound conversation ignores out-of-channel", !d.accepted);
+}
+{
+	const allowed = decideDiscordInbound(msg({ guildId: "g1", text: "hey clanky" }), {
+		...NEVER,
+		allowedGuildIds: ["g1"],
+	});
+	check("allowed guild accepts normally", reason(allowed) === "name_address");
+	const d = decideDiscordInbound(msg({ guildId: "g2", text: "hey clanky" }), {
+		...NEVER,
+		allowedGuildIds: ["g1"],
+	});
+	check("blocked guild rejects before wake", !d.accepted && d.reason === "blocked_guild");
+}
+{
+	const allowed = decideDiscordInbound(msg({ guildId: "g1", channelId: "c1", text: "hey clanky" }), {
+		...NEVER,
+		allowedChannelIds: ["c1"],
+	});
+	check("allowed channel accepts normally", reason(allowed) === "name_address");
+	const blocked = decideDiscordInbound(msg({ guildId: "g1", channelId: "c2", text: "hey clanky" }), {
+		...NEVER,
+		allowedChannelIds: ["c1"],
+	});
+	check("blocked channel rejects before wake", !blocked.accepted && blocked.reason === "blocked_channel");
+	const thread = decideDiscordInbound(
+		msg({ guildId: "g1", channelId: "thread1", threadId: "thread1", parentId: "c1", text: "hey clanky" }),
+		{ ...NEVER, allowedChannelIds: ["c1"] },
+	);
+	check("thread inherits parent channel allowlist", reason(thread) === "name_address");
+}
+{
+	const d = decideDiscordInbound(msg({ kind: "dm", text: "hi" }), { ...NEVER, allowDms: false });
+	check("dm can be disabled by scope", !d.accepted && d.reason === "blocked_dm");
+}
+{
+	const seen = new RecentDiscordMessageIds(2);
+	check("inbound dedupe accepts a new Discord message id", seen.remember("m1"));
+	check("inbound dedupe rejects the same Discord message id", !seen.remember("m1"));
+	seen.remember("m2");
+	seen.remember("m3");
+	check("inbound dedupe evicts old message ids", seen.remember("m1"));
 }
 
 // engagement decisions only re-arm the window when accepted-by-engagement is false
@@ -151,6 +197,12 @@ check("normal reply is not skip", !isSkipReplyText("sure, on it"));
 	check("presence prompt includes attachment metadata", prompt.includes("photo.png") && prompt.includes("3x5"));
 	check("presence prompt includes embed metadata", prompt.includes("YouTube") && prompt.includes("Preview title"));
 	check("presence prompt includes author id for scoped memory", prompt.includes("- authorId: u1"));
+	const historyPrompt = formatPresencePrompt(mediaMessage, "platform_mention", "Paul", [
+		{ author: "vuhlp", text: "hi clankey" },
+		{ author: "Clanky", text: "hey vuhlp, what's up?" },
+	]);
+	check("presence prompt includes gateway history", historyPrompt.includes("- vuhlp: hi clankey"));
+	check("presence prompt discourages redundant Discord reads", historyPrompt.includes("do not call discord_read_messages"));
 
 	const png = Buffer.alloc(24);
 	Buffer.from("89504e470d0a1a0a", "hex").copy(png, 0);
@@ -221,6 +273,12 @@ check(
 	"unknown credential kind falls back to bot-token",
 	resolveDiscordCredentialKind({ CLANKY_DISCORD_CREDENTIAL_KIND: "nonsense" }) === "bot-token",
 );
+check(
+	"discord id allowlist parses comma and space separated ids",
+	parseDiscordIdAllowlist("g1, g2  g1").join("|") === "g1|g2",
+);
+check("discord DMs allowed by default", resolveDiscordAllowDms({}) === true);
+check("discord DMs can be disabled", resolveDiscordAllowDms({ CLANKY_DISCORD_ALLOW_DMS: "off" }) === false);
 
 // --- .env upsert (TUI token config) --------------------------------------
 {

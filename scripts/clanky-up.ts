@@ -23,7 +23,15 @@
  */
 import { spawn } from "node:child_process";
 import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { createConnection } from "node:net";
+import { join } from "node:path";
+import { parseEnv } from "node:util";
+import {
+	LOCAL_CONTEXT_TOKENS_ENV,
+	parseLocalContextWindowTokens,
+	resolveOllamaContextWindowTokens,
+} from "../agent/lib/local-context.ts";
 
 const SESSION = process.env.CLANKY_SESSION ?? "clankies";
 const REPO = process.env.CLANKY_REPO_DIR ?? process.cwd();
@@ -31,6 +39,9 @@ const PORT = resolvePort(process.env.CLANKY_EVE_PORT, 2000);
 const HOST = process.env.CLANKY_EVE_HOST ?? "0.0.0.0";
 const BRAIN_AGENT = process.env.CLANKY_BRAIN_AGENT ?? "clanky";
 const HERDR = process.env.CLANKY_HERDR_BIN ?? "herdr";
+const ENV_PATH = join(REPO, ".env.local");
+const DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:11434/v1";
+const DEFAULT_LOCAL_MODEL = "qwen3-coder-next";
 
 function resolvePort(value: string | undefined, fallback: number): number {
 	const raw = value?.trim();
@@ -122,6 +133,7 @@ async function findBrain(): Promise<AgentEntry | undefined> {
 }
 
 async function startBrain(): Promise<AgentEntry> {
+	const command = await eveDevCommand();
 	await herdr([
 		"--session",
 		SESSION,
@@ -132,15 +144,7 @@ async function startBrain(): Promise<AgentEntry> {
 		REPO,
 		"--no-focus",
 		"--",
-		"pnpm",
-		"exec",
-		"eve",
-		"dev",
-		"--no-ui",
-		"--host",
-		HOST,
-		"--port",
-		String(PORT),
+		...command,
 	]);
 	for (let i = 0; i < 60; i++) {
 		await sleep(500);
@@ -150,6 +154,32 @@ async function startBrain(): Promise<AgentEntry> {
 		}
 	}
 	throw new Error(`brain '${BRAIN_AGENT}' did not serve on :${PORT} within 30s`);
+}
+
+async function eveDevCommand(): Promise<string[]> {
+	const command = ["pnpm", "exec", "eve", "dev", "--no-ui", "--host", HOST, "--port", String(PORT)];
+	const contextTokens = await contextTokensForOwnedBrain();
+	return contextTokens === undefined ? command : ["env", `${LOCAL_CONTEXT_TOKENS_ENV}=${contextTokens}`, ...command];
+}
+
+async function contextTokensForOwnedBrain(): Promise<number | undefined> {
+	const env = await readLocalEnv();
+	const explicit = parseLocalContextWindowTokens(process.env[LOCAL_CONTEXT_TOKENS_ENV]) ?? parseLocalContextWindowTokens(env[LOCAL_CONTEXT_TOKENS_ENV]);
+	if (explicit !== undefined) return explicit;
+	const provider = process.env.CLANKY_MODEL_PROVIDER ?? env.CLANKY_MODEL_PROVIDER ?? "codex";
+	if (provider !== "local") return undefined;
+	return await resolveOllamaContextWindowTokens({
+		baseURL: process.env.CLANKY_LOCAL_BASE_URL ?? env.CLANKY_LOCAL_BASE_URL ?? DEFAULT_LOCAL_BASE_URL,
+		modelId: process.env.CLANKY_LOCAL_MODEL ?? env.CLANKY_LOCAL_MODEL ?? DEFAULT_LOCAL_MODEL,
+	});
+}
+
+async function readLocalEnv(): Promise<Record<string, string>> {
+	try {
+		return parseEnv(await readFile(ENV_PATH, "utf8"));
+	} catch {
+		return {};
+	}
 }
 
 function statusJson(session: SessionEntry | undefined, brain: AgentEntry | undefined, serving: boolean, started: boolean) {

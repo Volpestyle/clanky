@@ -34,7 +34,7 @@ export default defineTool({
 				discordShareNextStep: {
 					tool: "discord_send_message",
 					filePaths: paths,
-					reason: "Generated image files are local artifacts; upload them with discord_send_message after approval when the user wants them posted.",
+					reason: "Generated image files are local artifacts; upload them with discord_send_message when the user wants them posted.",
 				},
 				inspectNextStep: {
 					tool: "media_inspect",

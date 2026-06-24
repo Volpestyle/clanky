@@ -156,6 +156,7 @@ export class DiscordGateway {
 
 	async start(handler: DiscordInboundHandler): Promise<void> {
 		this.client.on(Events.MessageCreate, (message) => {
+			this.ready = true;
 			void Promise.resolve(handler(this.normalize(message))).catch((error: unknown) => {
 				console.error("discord inbound handler failed:", error);
 			});
@@ -196,7 +197,7 @@ export class DiscordGateway {
 	}
 
 	isReady(): boolean {
-		return this.ready;
+		return this.ready || this.client.isReady();
 	}
 
 	async stop(): Promise<void> {

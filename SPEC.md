@@ -186,9 +186,12 @@ only inside eve's own transcript). Performer types:
 Allowed coding performers are selected through **coding harness profiles**, not
 by importing another agent's internals. `/harness allow` writes
 `CLANKY_CODING_HARNESSES` (`clanky`, `claude`, `codex`, `opencode`, `custom`, or
-`all`) as the policy allowlist. `/harness` also writes `CLANKY_CODING_HARNESS`
-as the default fallback plus per-harness launcher/model env for `claude`,
-`codex`, and `opencode`, or `CLANKY_CODING_HARNESS_COMMAND` for custom harnesses.
+`all`) as the policy allowlist. When a worker is spawned without an explicit
+harness, Clanky picks automatically from the allowed set, preferring `clanky`
+when it is allowed. Direct `/harness <id>` commands can still write
+`CLANKY_CODING_HARNESS` as an optional preferred fallback plus per-harness
+launcher/model env for `claude`, `codex`, and `opencode`, or
+`CLANKY_CODING_HARNESS_COMMAND` for custom harnesses.
 The launcher is either the native CLI default model or an Ollama CLI integration
 with a local model; Codex Ollama mode uses `ollama launch codex`, not
 `codex-app`. `herdr_spawn` rejects disallowed harnesses, resolves the selected
@@ -641,7 +644,7 @@ blur them.
    any other credentialed service (work trackers, design, finance). One file per
    server via `defineMcpClientConnection` (or `defineOpenAPIConnection`). eve
    brokers auth, keeps the URL and credentials out of the model's reach, exposes
-   each remote tool as a typed tool through `connection__search`, and supports
+   each remote tool as a typed tool through `connection_search`, and supports
    per-connection approval and tool allow/block. OAuth servers (Linear's hosted
    MCP, etc.) use `auth: defineInteractiveAuthorization` — self-hosted, not the
    Vercel `connect()` helper, since Clanky does not adopt Vercel surfaces. Adding

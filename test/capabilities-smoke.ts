@@ -709,6 +709,7 @@ try {
 		{ paths: [downloaded.items[0]?.path ?? ""], prompt: "Describe the visual artifact.", model: "test-vision" },
 		{
 			generate: async (request) => {
+				assert(request.provider === "openai", "explicit media_inspect model should use OpenAI fallback backend");
 				assert(request.model === "test-vision", "media_inspect did not preserve requested model");
 				assert(Array.isArray(request.content), "media_inspect did not pass multimodal content");
 				const fileParts = request.content.filter(isFilePart);
@@ -723,6 +724,84 @@ try {
 	);
 	assert(inspected.text.includes("tiny"), "media_inspect did not return generator text");
 	assert(inspected.items[0]?.bytes === png.length, "media_inspect did not report inspected byte size");
+
+	const mangledPath = (downloaded.items[0]?.path ?? "").replace(/-[0-9a-f]{8}-[0-9a-f]{4}-/u, "-00000000-0000-");
+	assert(mangledPath !== downloaded.items[0]?.path, "test did not mangle downloaded media path");
+	const recoveredInspect = await inspectVisualMedia(
+		{ paths: [mangledPath], prompt: "Describe the recovered visual artifact.", model: "test-vision" },
+		{
+			generate: async () => ({ text: "Recovered a tiny PNG artifact." }),
+		},
+	);
+	assert(recoveredInspect.items[0]?.path === downloaded.items[0]?.path, "media_inspect did not recover mangled Discord media path");
+
+	const localVisionCalls: string[] = [];
+	const localVision = await inspectVisualMedia(
+		{ paths: [downloaded.items[0]?.path ?? ""], prompt: "Describe the local visual artifact." },
+		{
+			env: {
+				CLANKY_MODEL_PROVIDER: "local",
+				CLANKY_LOCAL_MODEL: "test-local-vision",
+				CLANKY_LOCAL_BASE_URL: "http://127.0.0.1:11434/v1",
+			},
+			fetchImpl: async (input, init) => {
+				const href = String(input);
+				localVisionCalls.push(href);
+				const body = JSON.parse(String(init?.body ?? "{}")) as {
+					model?: string;
+					messages?: Array<{
+						content?: Array<{ type?: string; text?: string; image_url?: { url?: string } }>;
+					}>;
+				};
+				if (href === "http://127.0.0.1:11434/api/show") {
+					assert(body.model === "test-local-vision", "media_inspect probed the wrong Ollama model");
+					return jsonResponse({ capabilities: ["completion", "vision", "tools"] });
+				}
+				if (href === "http://127.0.0.1:11434/v1/chat/completions") {
+					assert(body.model === "test-local-vision", "media_inspect sent images to the wrong Ollama model");
+					const content = body.messages?.[0]?.content ?? [];
+					assert(content.some((part) => part.type === "text" && part.text?.includes("Describe the local visual artifact.")), "media_inspect omitted the prompt");
+					assert(content.filter((part) => part.type === "image_url").length === 1, "media_inspect did not send image bytes to Ollama");
+					assert(content.some((part) => part.image_url?.url?.startsWith("data:image/png;base64,") === true), "media_inspect did not send a data image URL to Ollama");
+					return jsonResponse({
+						choices: [{ message: { content: "The active local model saw a tiny PNG." } }],
+						usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
+					});
+				}
+				throw new Error(`unexpected Ollama URL ${href}`);
+			},
+		},
+	);
+	assert(localVision.provider === "ollama", "media_inspect did not use active Ollama vision backend");
+	assert(localVision.model === "test-local-vision", "media_inspect did not report active Ollama model");
+	assert(localVision.text.includes("active local model"), "media_inspect did not return Ollama vision text");
+	assert(localVisionCalls.includes("http://127.0.0.1:11434/api/show"), "media_inspect did not probe Ollama capabilities");
+	assert(localVisionCalls.includes("http://127.0.0.1:11434/v1/chat/completions"), "media_inspect did not call Ollama chat");
+
+	const fallbackVision = await inspectVisualMedia(
+		{ paths: [downloaded.items[0]?.path ?? ""], prompt: "Use fallback vision." },
+		{
+			env: {
+				CLANKY_MODEL_PROVIDER: "local",
+				CLANKY_LOCAL_MODEL: "test-local-text",
+				CLANKY_LOCAL_BASE_URL: "http://127.0.0.1:11434/v1",
+				CLANKY_OPENAI_API_KEY: "test-openai-key",
+				CLANKY_OPENAI_VISION_MODEL: "fallback-vision",
+			},
+			fetchImpl: async (input) => {
+				const href = String(input);
+				if (href === "http://127.0.0.1:11434/api/show") return jsonResponse({ capabilities: ["completion", "tools"] });
+				throw new Error(`unexpected fallback probe URL ${href}`);
+			},
+			generate: async (request) => {
+				assert(request.provider === "openai", "media_inspect did not fall back to OpenAI when active model lacked vision");
+				assert(request.model === "fallback-vision", "media_inspect did not use configured fallback vision model");
+				return { text: "OpenAI fallback described the artifact." };
+			},
+		},
+	);
+	assert(fallbackVision.provider === "openai", "media_inspect fallback did not report OpenAI provider");
+	assert(fallbackVision.text.includes("fallback"), "media_inspect fallback did not return generated text");
 
 	const sent = await discordSendMessage(
 		{ channelId: "c1", content: "hello" },
@@ -782,7 +861,12 @@ try {
 	assert(mcpChildEnv.EXPLICIT_TOKEN === "server-token", "mcp stdio env did not preserve explicit server env");
 	assert(mcpChildEnv.OPENAI_API_KEY === "explicit-openai", "mcp stdio env did not let explicit server env override ambient");
 
-	const media = mediaBackendStatus();
+	const media = await mediaBackendStatus({
+		...process.env,
+		CLANKY_MODEL_PROVIDER: "codex",
+		CLANKY_CODEX_MODEL: "gpt-5.4",
+	});
+	assert((media.activeVision as { available?: boolean }).available === true, "media status did not report active vision backend");
 	assert((media.openaiImages as { model?: string }).model === "gpt-image-2", "media status did not use configured image model");
 	assert((media.openaiVision as { model?: string }).model === "gpt-5.4-mini", "media status did not use configured vision model");
 } finally {

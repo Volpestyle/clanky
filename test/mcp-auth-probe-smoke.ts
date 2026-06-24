@@ -24,7 +24,7 @@ const authorized = inspectConnectionSearchOutput(
 		{
 			connection: "linear",
 			description: "List issues",
-			qualifiedName: "connection__linear__list_issues",
+			qualifiedName: "linear__list_issues",
 			tool: "list_issues",
 		},
 	],

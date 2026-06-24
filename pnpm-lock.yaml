@@ -24,8 +24,8 @@ importers:
         specifier: ^14.26.4
         version: 14.26.4
       eve:
-        specifier: 0.11.4
-        version: 0.11.4(ai@7.0.0-beta.178(zod@4.4.3))(just-bash@3.0.1)
+        specifier: 0.13.0
+        version: 0.13.0(ai@7.0.0-beta.178(zod@4.4.3))(just-bash@3.0.1)
       ws:
         specifier: ^8.21.0
         version: 8.21.0
@@ -597,8 +597,8 @@ packages:
     resolution: {integrity: sha512-aIL5Fx7mawVa300al2BnEE4iNvo1qETxLrPI/o05L7z6go7fCw1J6EQmbK4FmJ2AS7kgVF/KEZWufBfdClMcPg==}
     engines: {node: '>= 0.6'}
 
-  eve@0.11.4:
-    resolution: {integrity: sha512-gwJO+mIFj/LQL+D4WJTshPMUkK6cYXIA6ff1RML8I3rFOeIm1x/Mw6U8C+1Mx4o5HhWda38DnnlK84Bewqo/+Q==}
+  eve@0.13.0:
+    resolution: {integrity: sha512-Q/gfGUtm4tA6MksquRa+EggCfGRe3LF7Tkf/SaDbl9JJ/1oAOWqo1L3etJ1yNIFQiEACH0gXTwIEQJ7b6EUp5A==}
     engines: {node: '>=24'}
     hasBin: true
     peerDependencies:
@@ -1759,7 +1759,7 @@ snapshots:
 
   etag@1.8.1: {}
 
-  eve@0.11.4(ai@7.0.0-beta.178(zod@4.4.3))(just-bash@3.0.1):
+  eve@0.13.0(ai@7.0.0-beta.178(zod@4.4.3))(just-bash@3.0.1):
     dependencies:
       ai: 7.0.0-beta.178(zod@4.4.3)
       nitro: 3.0.260610-beta

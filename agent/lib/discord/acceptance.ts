@@ -60,7 +60,13 @@ export type DiscordAcceptanceReason =
 	| "name_mention"
 	| "recent_engagement";
 
-export type DiscordIgnoreReason = "not_engaged_no_mention" | "self_message" | "ignored_bot";
+export type DiscordScopeIgnoreReason = "blocked_dm" | "blocked_guild" | "blocked_channel";
+
+export type DiscordIgnoreReason =
+	| "not_engaged_no_mention"
+	| "self_message"
+	| "ignored_bot"
+	| DiscordScopeIgnoreReason;
 
 export type DiscordAcceptanceDecision =
 	| { accepted: true; reason: DiscordAcceptanceReason; recordInboundEngagement: boolean }
@@ -69,6 +75,12 @@ export type DiscordAcceptanceDecision =
 export interface DiscordAcceptanceOptions {
 	/** Wake names to match; defaults to the built-in set. */
 	wakeNames?: readonly string[];
+	/** If set, guild messages outside these server ids are ignored before wake matching. */
+	allowedGuildIds?: readonly string[];
+	/** If set, messages outside these channel/thread/parent channel ids are ignored before wake matching. */
+	allowedChannelIds?: readonly string[];
+	/** Whether DMs are eligible. Defaults to true. */
+	allowDms?: boolean;
 	/** True if the channel/user is inside an active engagement window. */
 	isEngaged: (channelId: string, userId: string) => boolean;
 	/** True if the given message id is one Clanky recently sent (reply-to-self). */
@@ -79,6 +91,12 @@ export interface DiscordAcceptanceOptions {
 	boundConversationId?: string;
 	/** Whether to ignore messages authored by other bots (default true). */
 	ignoreBotMessages?: boolean;
+}
+
+export interface DiscordScopeOptions {
+	allowedGuildIds?: readonly string[];
+	allowedChannelIds?: readonly string[];
+	allowDms?: boolean;
 }
 
 /**
@@ -95,6 +113,8 @@ export function decideDiscordInbound(
 	if ((options.ignoreBotMessages ?? true) && message.authorIsBot === true) {
 		return { accepted: false, reason: "ignored_bot" };
 	}
+	const scopeReason = decideDiscordScope(message, options);
+	if (scopeReason !== undefined) return { accepted: false, reason: scopeReason };
 
 	if (options.boundConversationId !== undefined) {
 		const matched =
@@ -126,6 +146,31 @@ export function decideDiscordInbound(
 	return { accepted: false, reason: "not_engaged_no_mention" };
 }
 
+export function decideDiscordScope(
+	message: DiscordInboundMessage,
+	options: DiscordScopeOptions,
+): DiscordScopeIgnoreReason | undefined {
+	if (message.kind === "dm") return options.allowDms === false ? "blocked_dm" : undefined;
+
+	const allowedGuildIds = normalizedIdSet(options.allowedGuildIds);
+	if (allowedGuildIds !== undefined) {
+		if (message.guildId === undefined || !allowedGuildIds.has(message.guildId)) return "blocked_guild";
+	}
+
+	const allowedChannelIds = normalizedIdSet(options.allowedChannelIds);
+	if (allowedChannelIds !== undefined) {
+		const ids = [message.channelId, message.threadId, message.parentId].filter((id): id is string => id !== undefined);
+		if (!ids.some((id) => allowedChannelIds.has(id))) return "blocked_channel";
+	}
+
+	return undefined;
+}
+
+function normalizedIdSet(ids: readonly string[] | undefined): Set<string> | undefined {
+	const set = new Set((ids ?? []).map((id) => id.trim()).filter((id) => id.length > 0));
+	return set.size === 0 ? undefined : set;
+}
+
 /** The model's opt-out: an accepted turn that decides to stay silent. */
 export function isSkipReplyText(text: string): boolean {
 	return /^\[SKIP\]$/i.test(text.trim());
@@ -139,6 +184,24 @@ export function resolveEngagementWindowMs(env: NodeJS.ProcessEnv): number {
 	const minutes = Number.parseFloat(raw);
 	if (!Number.isFinite(minutes) || minutes < 0) return DEFAULT_ENGAGEMENT_WINDOW_MS;
 	return Math.floor(minutes * 60 * 1000);
+}
+
+export function parseDiscordIdAllowlist(raw: string | undefined): string[] {
+	return [...new Set((raw ?? "").split(/[\s,]+/).map((id) => id.trim()).filter((id) => id.length > 0))];
+}
+
+export function resolveDiscordAllowDms(env: NodeJS.ProcessEnv): boolean {
+	const raw = env.CLANKY_DISCORD_ALLOW_DMS?.trim().toLowerCase();
+	if (raw === undefined || raw.length === 0) return true;
+	return !["0", "false", "no", "off"].includes(raw);
+}
+
+export function resolveDiscordScopeOptions(env: NodeJS.ProcessEnv): DiscordScopeOptions {
+	return {
+		allowedGuildIds: parseDiscordIdAllowlist(env.CLANKY_DISCORD_ALLOWED_GUILD_IDS),
+		allowedChannelIds: parseDiscordIdAllowlist(env.CLANKY_DISCORD_ALLOWED_CHANNEL_IDS),
+		allowDms: resolveDiscordAllowDms(env),
+	};
 }
 
 /**
