@@ -27,7 +27,13 @@ unavailable.
 
 ## Messaging
 
-Read another worker:
+Read another worker's durable Clanky transcript:
+
+```bash
+clanky transcript read clanky:<slug> --lines 120
+```
+
+Use Herdr for live screen state, current status, and sending input:
 
 ```bash
 herdr agent read clanky:<slug> --source recent --lines 120

@@ -97,6 +97,15 @@ planning, exploration, review, and subagent behavior. Use `performer:
 "clanky"` only when the worker should be Clanky himself, via the installed
 `clanky worker` CLI.
 
+Clanky-spawned workers are transcript-wrapped by default. Read durable history
+with:
+
+```bash
+clanky transcript read clanky:<slug> --lines 120
+```
+
+Use Herdr reads for live current-screen state and input routing.
+
 Independent means **write-disjoint**. Workers fanned out concurrently must not
 write the same files, and a read-only worker must never audit files another
 worker in the same run is creating — its analysis reads a moving target and
@@ -167,6 +176,10 @@ herdr agent read clanky:fix-auth-tests --source recent --lines 60
 
 `herdr agent list` shows all workers; `agent_status` is heuristic. Trust the
 harvest states, not `agent_status`, for completion.
+
+When monitoring from Clanky's Eve tools, use `herdr_read` with the default
+`source: "auto"` for worker history, and `source: "visible"` only when the
+current TUI screen matters.
 
 ## 3. Unblock or steer
 

@@ -111,6 +111,13 @@ herdr pane read 1-1 --source recent --lines 50
 - `--source recent` = recent scrollback as rendered in the pane
 - `--source recent-unwrapped` = recent terminal text with soft wraps joined back together
 
+If the target is a Clanky-spawned worker and you need durable historical output
+instead of current screen state, use:
+
+```bash
+clanky transcript read clanky:<slug> --lines 120
+```
+
 ## split a pane and run a command
 
 split your pane to the right and keep focus on your current pane:

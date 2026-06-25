@@ -15,6 +15,7 @@ import { defineChannel, GET, WS } from "eve/channels";
 import type { WebSocketMessage, WebSocketPeer } from "eve/channels";
 import { isFrontdoorAuthorized } from "../lib/frontdoor-auth.ts";
 import { herdrRequest, herdrStreamLines, type HerdrStream } from "../lib/herdr-socket.ts";
+import { readTranscript } from "../lib/transcripts.ts";
 
 interface RelayRequest {
 	id?: string | number;
@@ -62,8 +63,38 @@ async function dispatch(op: string, args: Record<string, unknown>): Promise<unkn
 			return args.pane ? herdrRequest("pane.get", { pane_id: target }) : herdrRequest("agent.get", { target });
 		case "read": {
 			if (!target) throw new Error("read requires agent or pane");
-			const source = str(args.source) ?? "recent";
+			const source = str(args.source) ?? "auto";
 			const lines = num(args.lines, 80);
+			if (!args.pane && source === "transcript") return readTranscript(target, { lines });
+			if (!args.pane && source === "auto") {
+				try {
+					return await readTranscript(target, { lines });
+				} catch (error) {
+					const result = await herdrRequest("agent.read", { target, source: "recent_unwrapped", lines });
+					return {
+						source: "herdr-recent-unwrapped",
+						fallback: true,
+						fallbackReason: (error as Error).message,
+						agent: target,
+						lines,
+						text: herdrText(result),
+						herdr: result,
+					};
+				}
+			}
+			if (args.pane && source === "transcript") throw new Error("transcript reads require an agent name");
+			if (args.pane && source === "auto") {
+				const result = await herdrRequest("pane.read", { pane_id: target, source: "recent_unwrapped", lines });
+				return {
+					source: "herdr-recent-unwrapped",
+					fallback: true,
+					fallbackReason: "transcript reads require an agent name",
+					pane: target,
+					lines,
+					text: herdrText(result),
+					herdr: result,
+				};
+			}
 			return args.pane
 				? herdrRequest("pane.read", { pane_id: target, source, lines })
 				: herdrRequest("agent.read", { target, source, lines });
@@ -108,6 +139,15 @@ async function dispatch(op: string, args: Record<string, unknown>): Promise<unkn
 		default:
 			throw new Error(`unknown op '${op}'`);
 	}
+}
+
+function herdrText(result: unknown): string {
+	if (typeof result === "string") return result;
+	if (typeof result === "object" && result !== null && "text" in result) {
+		const text = (result as { text?: unknown }).text;
+		if (typeof text === "string") return text;
+	}
+	return JSON.stringify(result);
 }
 
 function authorize(peer: WebSocketPeer): boolean {

@@ -114,7 +114,7 @@ herdr is used unmodified. It provides:
   Clanky writes.
 - **The swarm coordination CLI**, all over the local unix socket:
   - discovery: `herdr agent list`, `herdr agent get <name>`
-  - observation: `herdr agent read <name>` / `herdr pane read`
+  - live observation: `herdr agent read <name>` / `herdr pane read`
   - messaging: `herdr agent send <name> <text>` / `herdr pane send-text`
   - synchronization: `herdr agent wait <name> --status idle|working|blocked`
   - presence: `herdr pane report-agent --state … --message …`
@@ -124,6 +124,10 @@ Constraint: **no fork.** herdr's native API is a local unix socket; remote
 access is provided by eve (4.4), not by patching herdr. If a herdr-side feature
 is genuinely needed (e.g. the old bridge subcommand), it is **upstreamed** to
 `ogulcancelik/herdr`, never carried as a private fork.
+
+Herdr is not Clanky's durable historical transcript store. Visible and recent
+pane reads are live-stage inspection. Historical output for workers Clanky
+spawns is captured by Clanky's transcript layer (§4.3).
 
 ### 4.2 eve — the conductor (Clanky's brain and face)
 
@@ -199,6 +203,35 @@ profile, and starts the command as a visible herdr pane. Clanky then supervises
 by reading and steering the pane with `herdr_read` / `herdr_send`. Richer
 adapters can be added later, but the base protocol is always a visible pane.
 
+Clanky-spawned performers are wrapped with `clanky transcript-run` by default:
+Herdr still starts and owns the pane, while the runner passes terminal output
+through unchanged and appends a local transcript under
+`~/.clanky/herdr-transcripts/<herdr-session>/<agent>/<run-id>/`:
+
+```
+manifest.json
+stream.ansi
+stream.txt
+events.jsonl
+```
+
+`stream.ansi` is the lossless terminal stream, `stream.txt` is the normalized
+readable history, and `events.jsonl` records timestamped output chunks. Any
+agent in the same Herdr session can read it with `clanky transcript read
+clanky:<slug> --lines N`. `herdr_read` defaults to `source: "auto"`, which
+prefers this transcript when available and falls back to Herdr recent-unwrapped
+output. Explicit `source: "visible"` and `source: "recent"` still read Herdr for
+current screen/debugging state.
+
+| Need | Source |
+| --- | --- |
+| Running, idle, blocked, done | Herdr |
+| Send text or keys | Herdr |
+| Current TUI screen | Herdr `visible` |
+| Recent terminal screen buffer | Herdr `recent` / `recent_unwrapped` |
+| Historical worker output | Clanky transcript |
+| Cross-agent audit trail | Clanky transcript |
+
 Pi is **not** a performer. herdr can technically start any binary in a pane, so
 nothing stops a one-off `pi` pane, but Pi is not part of Clanky, not installed,
 and not maintained as a performer.
@@ -237,9 +270,9 @@ flowchart LR
   Modes: `up` / `status` / `down`, each emitting JSON the app parses.
 - **Interaction (relay).** The relay is a raw WS route, so it bypasses eve's
   session framing and carries terminal scrollback, status, and input injection
-  faithfully. It adds explicit `start`/`close` ops alongside `read`/`send`/
-  `run`/`keys`/`subscribe` and a raw `api` passthrough. Chat-with-Clanky uses
-  eve's session routes (`/eve/v1/session`).
+  faithfully. It adds explicit `start`/`close` ops alongside transcript-aware
+  `read`/`send`/`run`/`keys`/`subscribe` and a raw `api` passthrough.
+  Chat-with-Clanky uses eve's session routes (`/eve/v1/session`).
 - The brain is just another herdr pane — the lead pane — which is why lifecycle
   (SSH) sits below it and interaction (relay) sits inside it.
 - herdr stays vanilla; the glue is TypeScript inside the Clanky eve app.
@@ -526,7 +559,8 @@ conversations with full awareness of that work.
 
 Clanky (or any agent) acting as orchestrator loads `clanky-herdr-operator`,
 spawns one pane per task (`clanky:<slug>`), monitors via sentinel files +
-`herdr agent read`, unblocks by injecting into panes, and harvests results.
+`herdr_read` (`auto` for history, `visible` for current screen), unblocks by
+injecting into panes, and harvests results.
 The operator skill owns run directories, manifest files, sentinels, and cleanup;
 eve decides when to invoke it.
 
@@ -591,10 +625,13 @@ attach to whichever session you point him at. You may run multiple sessions.
 2. The **eve → herdr-pane spawn seam** — the conductor surfaces inbound and
    background work as `herdr agent start` panes (5.2). This is the core
    integration.
-3. The **eve relay channel** — raw WS route bridging the iOS app to `herdr.sock`
+3. The **Clanky transcript layer** — local append-only transcripts for
+   Clanky-spawned workers, exposed through `clanky transcript` and transcript
+   aware `herdr_read`.
+4. The **eve relay channel** — raw WS route bridging the iOS app to `herdr.sock`
    (4.4).
-4. iOS `Services/` repointed at the relay contract.
-5. The **presence self-report** addition to the `herdr` skill (vanilla,
+5. iOS `Services/` repointed at the relay contract.
+6. The **presence self-report** addition to the `herdr` skill (vanilla,
    upstreamable).
 
 ## 9. Repository and package layout
@@ -683,8 +720,8 @@ tool, is a binding change, not an edit to the persona.
 ## 10. Implementation status
 
 - **Core runtime:** eve agent, custom face, model selection, harness profiles,
-  herdr spawn seam, relay channel, schedules, and dynamic MCP bridge are active
-  surfaces.
+  herdr spawn seam, transcript layer, relay channel, schedules, and dynamic MCP
+  bridge are active surfaces.
 - **Discord presence:** Gateway-owned text presence, wake-name/free-will gate,
   per-channel presence sessions, pane mirror, bridge commands, voice join intent,
   user-token mode, and Go Live control layer are wired and verified offline.
