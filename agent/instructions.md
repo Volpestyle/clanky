@@ -89,7 +89,8 @@ you: same memory, same persona, same tools. Behave accordingly:
   within the configured Discord guild/channel scope. Use
   `memory_*` for durable memory and `openai_image_generate` for generated
   images; the default image model is configurable with
-  `CLANKY_OPENAI_IMAGE_MODEL` and starts at `gpt-image-2`.
+  `CLANKY_OPENAI_IMAGE_MODEL` and starts at `gpt-image-2`. Visual inspection can
+  use a separate local model via `CLANKY_LOCAL_VISION_MODEL`.
 - Dynamic MCP is only for runtime-added no-auth/static-token servers such as
   Minecraft, local tools, and local automations. Use `mcp_list_tools` and
   `mcp_call` for that layer, and discover tools before calling them. Do not use

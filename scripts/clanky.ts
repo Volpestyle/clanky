@@ -186,6 +186,7 @@ type ClankyExtensionCommandName =
 	| "effort"
 	| "approvals"
 	| "image-model"
+	| "vision-model"
 	| "attachments"
 	| "voice"
 	| "integrations"
@@ -223,6 +224,8 @@ type ClankyConfig = {
 	localBaseUrl?: string;
 	localEffort?: string;
 	localContextTokens?: string;
+	localVisionModel?: string;
+	openAiVisionModel?: string;
 	autoApprove?: string;
 	fullscreen?: string;
 	pet?: string;
@@ -569,6 +572,14 @@ function installClankyPromptCommands(): void {
 			argumentHint: "[model-id]",
 			takesArgument: true,
 			build: (argument) => ({ type: "extension", name: "image-model", argument }),
+		},
+		{
+			name: "vision-model",
+			aliases: ["vision"],
+			description: "Set the visual inspection model for media_inspect",
+			argumentHint: "[model-id|local <model-id>|openai <model-id>|unset|status]",
+			takesArgument: true,
+			build: (argument) => ({ type: "extension", name: "vision-model", argument }),
 		},
 		{
 			name: "attachments",
@@ -1039,6 +1050,8 @@ function createClankyCommandHandler(): PromptCommandHandler {
 					return { message: await configureApprovals(command.argument) };
 				case "image-model":
 					return { message: await configureImageModel(command.argument) };
+				case "vision-model":
+					return { message: await configureVisionModel(command.argument, context.renderer.setupFlow) };
 				case "attachments":
 					return { message: TUI_ATTACHMENT_HELP };
 				case "pet":
@@ -2054,6 +2067,96 @@ async function configureImageModel(argument: string): Promise<string> {
 	const model = argument.trim() || "gpt-image-2";
 	await writeEnv({ CLANKY_OPENAI_IMAGE_MODEL: model });
 	return await restartBrainMessage(`OpenAI image model set to ${model}`);
+}
+
+async function configureVisionModel(argument: string, flow: SetupFlowRenderer | undefined): Promise<string> {
+	const args = splitArgs(argument);
+	const first = args[0]?.toLowerCase();
+	const config = await readConfig();
+	if (first === "status" || first === "show") return formatVisionModelStatus(config);
+	if (first === "unset" || first === "clear" || first === "default" || first === "none" || first === "off") {
+		await removeEnv(["CLANKY_LOCAL_VISION_MODEL"]);
+		return await restartBrainMessage("Local vision model override cleared");
+	}
+	if (first === "local") return await saveLocalVisionModel(args.slice(1).join(" "));
+	if (first === "openai") return await saveOpenAiVisionModel(args.slice(1).join(" "));
+	if (argument.trim().length > 0) return await saveLocalVisionModel(argument);
+	if (flow === undefined) return `${formatVisionModelStatus(config)}\n\n${visionModelUsage()}`;
+	return await configureVisionModelInteractive(flow, config);
+}
+
+async function configureVisionModelInteractive(flow: SetupFlowRenderer, config: ClankyConfig): Promise<string> {
+	let update: { updates?: Record<string, string>; removals?: string[]; message: string } | undefined;
+	flow.begin("Configure vision model");
+	try {
+		flow.renderOutput(formatVisionModelStatus(config));
+		const action = await selectOne(
+			flow,
+			"Choose the vision setting to change.",
+			[
+				{ value: "local", label: "local vision model", hint: config.localVisionModel ?? "active local model" },
+				{ value: "openai", label: "OpenAI fallback model", hint: config.openAiVisionModel ?? "gpt-5.4-mini" },
+				{ value: "clear-local", label: "clear local override", hint: "use active local model when it supports vision" },
+			],
+			"local",
+		);
+		if (action === undefined) return "/vision-model cancelled.";
+		if (action === "clear-local") {
+			update = { removals: ["CLANKY_LOCAL_VISION_MODEL"], message: "Local vision model override cleared" };
+		} else {
+			const current = action === "openai" ? config.openAiVisionModel : config.localVisionModel;
+			const value = await flow.readText({
+				message: action === "openai" ? "Set the OpenAI fallback vision model." : "Set the local vision model for media_inspect.",
+				defaultValue: current ?? "",
+				placeholder: action === "openai" ? "gpt-5.4-mini" : "qwen3-vl:32b",
+				validate: requiredVisionModelText,
+			});
+			if (value === undefined) return "/vision-model cancelled.";
+			const model = value.trim();
+			update =
+				action === "openai"
+					? { updates: { CLANKY_OPENAI_VISION_MODEL: model }, message: `OpenAI fallback vision model set to ${model}` }
+					: { updates: { CLANKY_LOCAL_VISION_MODEL: model }, message: `Local vision model set to ${model}` };
+		}
+	} finally {
+		flow.end({ preserveDiagnostics: false });
+	}
+	if (update.removals !== undefined) await removeEnv(update.removals);
+	if (update.updates !== undefined) await writeEnv(update.updates);
+	return await restartBrainMessage(update.message);
+}
+
+async function saveLocalVisionModel(rawModel: string): Promise<string> {
+	const model = rawModel.trim();
+	if (model.length === 0) return "Usage: /vision-model <model-id> or /vision-model unset";
+	await writeEnv({ CLANKY_LOCAL_VISION_MODEL: model });
+	return await restartBrainMessage(`Local vision model set to ${model}`);
+}
+
+async function saveOpenAiVisionModel(rawModel: string): Promise<string> {
+	const model = rawModel.trim();
+	if (model.length === 0) return "Usage: /vision-model openai <model-id>";
+	await writeEnv({ CLANKY_OPENAI_VISION_MODEL: model });
+	return await restartBrainMessage(`OpenAI fallback vision model set to ${model}`);
+}
+
+function formatVisionModelStatus(config: ClankyConfig): string {
+	return [
+		`local vision model: ${config.localVisionModel ?? "(active local model)"}`,
+		`OpenAI fallback vision model: ${config.openAiVisionModel ?? "gpt-5.4-mini"}`,
+	].join("\n");
+}
+
+function visionModelUsage(): string {
+	return [
+		"Usage:",
+		"/vision-model",
+		"/vision-model status",
+		"/vision-model <local-model-id>",
+		"/vision-model local <local-model-id>",
+		"/vision-model openai <model-id>",
+		"/vision-model unset",
+	].join("\n");
 }
 
 async function configurePet(argument: string): Promise<string> {
@@ -3165,6 +3268,7 @@ async function statusText(): Promise<string> {
 		`approvals: ${isAutoApproveValue(config.autoApprove) ? "auto (no prompts)" : "prompt"}`,
 		`coding harness: ${formatCodingHarnessSummary(config)}`,
 		`image model: ${config.imageModel ?? "gpt-image-2"}`,
+		`vision model: local=${config.localVisionModel ?? "(active local model)"}; openai fallback=${config.openAiVisionModel ?? "gpt-5.4-mini"}`,
 		...formatVoiceStatusLines(config),
 		`integrations: ${formatIntegrationSummary(bindings, connections)}`,
 		`mcp: ${formatMcpStatusSummary(info, mcpStore)}`,
@@ -3445,6 +3549,10 @@ function requiredVoiceText(value: string): string | undefined {
 	return value.trim().length === 0 ? "Enter a value." : undefined;
 }
 
+function requiredVisionModelText(value: string): string | undefined {
+	return value.trim().length === 0 ? "Enter a model id." : undefined;
+}
+
 async function readConfig(): Promise<ClankyConfig> {
 	const content = await readFile(ENV_PATH, "utf8").catch(() => "");
 	const get = (key: string): string | undefined => {
@@ -3463,6 +3571,8 @@ async function readConfig(): Promise<ClankyConfig> {
 	const localBaseUrl = get("CLANKY_LOCAL_BASE_URL");
 	const localEffort = get("CLANKY_LOCAL_EFFORT");
 	const localContextTokens = get(LOCAL_CONTEXT_TOKENS_ENV);
+	const localVisionModel = get("CLANKY_LOCAL_VISION_MODEL");
+	const openAiVisionModel = get("CLANKY_OPENAI_VISION_MODEL");
 	const autoApprove = get("CLANKY_AUTO_APPROVE");
 	const fullscreen = get(CLANKY_FULLSCREEN_ENV);
 	const pet = get("CLANKY_PET");
@@ -3495,6 +3605,8 @@ async function readConfig(): Promise<ClankyConfig> {
 	if (localBaseUrl !== undefined) config.localBaseUrl = localBaseUrl;
 	if (localEffort !== undefined) config.localEffort = localEffort;
 	if (localContextTokens !== undefined) config.localContextTokens = localContextTokens;
+	if (localVisionModel !== undefined) config.localVisionModel = localVisionModel;
+	if (openAiVisionModel !== undefined) config.openAiVisionModel = openAiVisionModel;
 	if (autoApprove !== undefined) config.autoApprove = autoApprove;
 	if (fullscreen !== undefined) config.fullscreen = fullscreen;
 	if (pet !== undefined) config.pet = pet;

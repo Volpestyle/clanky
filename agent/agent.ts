@@ -11,7 +11,9 @@ import { createClankyModelFromEnv } from "./lib/model-selection.ts";
 //            OpenFugu / Maestro routing across a local model pool.
 // CLANKY_CODEX_MODEL picks the codex model (e.g. gpt-5.5) and CLANKY_CODEX_EFFORT
 // the reasoning effort. CLANKY_LOCAL_EFFORT sets the reasoning effort for thinking
-// local models (forwarded as reasoning_effort). Persona lives in instructions.md.
+// local models (forwarded as reasoning_effort). CLANKY_LOCAL_VISION_MODEL can
+// route media_inspect to a separate local Ollama vision model. Persona lives in
+// instructions.md.
 
 // Local models aren't in eve's AI Gateway catalog, so eve can't resolve their
 // context window to compile compaction. The face auto-injects this env var from

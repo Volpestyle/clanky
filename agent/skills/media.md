@@ -13,8 +13,10 @@ Use `openai_image_generate` for still-image generation. It defaults to
 `CLANKY_OPENAI_IMAGE_MODEL`, or `gpt-image-2` when unset. The custom face command
 `/image-model <model-id>` updates that default.
 Use `media_inspect` for local image artifacts that need visual understanding. It
-prefers Clanky's current brain model when that model is vision-capable. For
-Ollama local models, capability is checked through `/api/show`. If the active
+prefers `CLANKY_LOCAL_VISION_MODEL` when the local provider is active, then
+Clanky's current brain model when that model is vision-capable. For Ollama local
+models, capability is checked through `/api/show`. The custom face command
+`/vision-model <model-id>` updates the local vision override. If the active
 model cannot inspect images, it falls back to `CLANKY_OPENAI_VISION_MODEL`, or
 `gpt-5.4-mini` when unset.
 

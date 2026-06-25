@@ -770,7 +770,7 @@ try {
 					assert(body.model === "test-local-vision", "media_inspect sent images to the wrong Ollama model");
 					assert(body.think === false, "media_inspect should disable Ollama thinking for image inspection");
 					assert(body.options?.num_ctx === 8192, "media_inspect should bound Ollama vision context");
-					assert(body.options?.num_predict === 512, "media_inspect should bound Ollama vision output");
+					assert(body.options?.num_predict === 1024, "media_inspect should bound Ollama vision output");
 					assert(body.options?.temperature === 0, "media_inspect should use deterministic Ollama vision sampling");
 					const message = body.messages?.[0];
 					assert(message?.content?.includes("Describe the local visual artifact.") === true, "media_inspect omitted the prompt");
@@ -793,6 +793,46 @@ try {
 	assert(localVision.text.includes("active local model"), "media_inspect did not return Ollama vision text");
 	assert(localVisionCalls.includes("http://127.0.0.1:11434/api/show"), "media_inspect did not probe Ollama capabilities");
 	assert(localVisionCalls.includes("http://127.0.0.1:11434/api/chat"), "media_inspect did not call native Ollama chat");
+
+	const overrideVisionCalls: string[] = [];
+	const overrideVision = await inspectVisualMedia(
+		{ paths: [downloadedPathForPrompt], prompt: "Describe the override visual artifact." },
+		{
+			env: {
+				CLANKY_MODEL_PROVIDER: "local",
+				CLANKY_LOCAL_MODEL: "test-local-text",
+				CLANKY_LOCAL_VISION_MODEL: "test-local-vision-override",
+				CLANKY_LOCAL_BASE_URL: "http://127.0.0.1:11434/v1",
+			},
+			fetchImpl: async (input, init) => {
+				const href = String(input);
+				overrideVisionCalls.push(href);
+				const body = JSON.parse(String(init?.body ?? "{}")) as {
+					model?: string;
+					messages?: Array<{
+						images?: string[];
+					}>;
+				};
+				if (href === "http://127.0.0.1:11434/api/show") {
+					assert(body.model === "test-local-vision-override", "media_inspect did not probe configured local vision model");
+					return jsonResponse({ capabilities: ["completion", "vision"] });
+				}
+				if (href === "http://127.0.0.1:11434/api/chat") {
+					assert(body.model === "test-local-vision-override", "media_inspect did not send images to configured local vision model");
+					assert(body.messages?.[0]?.images?.length === 1, "override media_inspect did not send image bytes to Ollama");
+					return jsonResponse({
+						message: { role: "assistant", content: "The configured local vision model saw a tiny PNG." },
+					});
+				}
+				throw new Error(`unexpected override Ollama URL ${href}`);
+			},
+		},
+	);
+	assert(overrideVision.provider === "ollama", "media_inspect did not use configured Ollama vision backend");
+	assert(overrideVision.model === "test-local-vision-override", "media_inspect did not report configured local vision model");
+	assert(overrideVision.text.includes("configured local vision"), "media_inspect did not return configured local vision text");
+	assert(overrideVisionCalls.includes("http://127.0.0.1:11434/api/show"), "media_inspect did not probe override Ollama capabilities");
+	assert(overrideVisionCalls.includes("http://127.0.0.1:11434/api/chat"), "media_inspect did not call override Ollama chat");
 
 	const fallbackVision = await inspectVisualMedia(
 		{ paths: [downloaded.items[0]?.path ?? ""], prompt: "Use fallback vision." },
