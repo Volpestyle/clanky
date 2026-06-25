@@ -21,7 +21,8 @@ import {
 	type Performer,
 	resolveCodingHarness,
 } from "../lib/coding-harness.ts";
-import { newTranscriptRunId, resolveTranscriptRunPath } from "../lib/transcripts.ts";
+import { resolveClankyHome } from "../lib/paths.ts";
+import { newTranscriptRunId, resolveTranscriptRunPath, resolveTranscriptSession } from "../lib/transcripts.ts";
 
 const run = promisify(execFile);
 
@@ -135,14 +136,12 @@ export function resolveClankyCliPath(repoCwd = process.cwd()): string {
 	return resolve(repoCwd, "bin/clanky.ts");
 }
 
+// Pin the runner to the same transcript root/session the spawn tool predicted,
+// instead of trusting the worker pane to inherit a matching environment. The
+// worker pane may carry a different HERDR_SESSION than the eve host, which would
+// otherwise write the transcript where readers never look.
 function transcriptEnvPrefix(env: NodeJS.ProcessEnv = process.env): string[] {
-	const vars = ["CLANKY_HOME", "HERDR_SESSION"]
-		.map((key) => {
-			const value = env[key]?.trim();
-			return value === undefined || value.length === 0 ? undefined : `${key}=${value}`;
-		})
-		.filter((value): value is string => value !== undefined);
-	return vars.length === 0 ? [] : ["env", ...vars];
+	return ["env", `CLANKY_HOME=${resolveClankyHome(env)}`, `HERDR_SESSION=${resolveTranscriptSession(env)}`];
 }
 
 export function buildWorkerKickoff(input: {

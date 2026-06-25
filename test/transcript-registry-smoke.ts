@@ -58,6 +58,20 @@ try {
 
 	const listed = await listTranscriptRuns(env);
 	expectEqual(listed.map((item) => [item.agent, item.runId]), [["clanky:alpha", "run-1"]], "list returns transcript summary");
+
+	const split = await createTranscriptRun({
+		agent: "clanky:beta",
+		cwd: "/repo",
+		argv: ["printf", "x"],
+		runId: "run-1",
+		env,
+		now: new Date("2026-06-25T13:00:00.000Z"),
+	});
+	await appendTranscriptChunk(split, "stdout", Buffer.from("hello \x1b[3"));
+	await appendTranscriptChunk(split, "stdout", Buffer.from("1mWORLD\x1b[0m done\n"));
+	expectEqual(await readFile(split.textPath, "utf8"), "hello WORLD done\n", "ansi escape split across chunks is normalized");
+	await appendTranscriptChunk(split, "stdout", Buffer.from("tail\x1b["));
+	expectEqual(await readFile(split.textPath, "utf8"), "hello WORLD done\ntail", "trailing incomplete escape is withheld");
 } finally {
 	await rm(home, { recursive: true, force: true });
 }

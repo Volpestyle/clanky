@@ -391,9 +391,10 @@ async function runTranscriptProcess(
 				reject(error);
 				return;
 			}
+			// A transcript write failure must not mask the performer's own exit code;
+			// the pane should reflect the performer, not Clanky's logging layer.
 			if (writeError !== undefined) {
-				reject(writeError);
-				return;
+				process.stderr.write(`clanky: transcript write failed: ${writeError.message}\n`);
 			}
 			resolvePromise({ code: code ?? 1 });
 		};

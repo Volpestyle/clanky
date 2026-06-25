@@ -8,6 +8,8 @@ import {
 	serializeCommandLine,
 	splitCommandLine,
 } from "../agent/lib/coding-harness.ts";
+import { resolveClankyHome } from "../agent/lib/paths.ts";
+import { resolveTranscriptSession } from "../agent/lib/transcripts.ts";
 import {
 	buildWorkerKickoff,
 	resolveClankyCliPath,
@@ -153,6 +155,9 @@ expectEqual(resolvePerformerArgv({ performer: "claude", task, command: ["bash", 
 }, "custom command appends kickoff without token");
 
 expectEqual(wrapTranscriptArgv({ agent: "clanky:docs", cwd: "/repo", runId: "run-1", argv: ["codex", task], env: {} }), [
+	"env",
+	`CLANKY_HOME=${resolveClankyHome({})}`,
+	`HERDR_SESSION=${resolveTranscriptSession({})}`,
 	process.execPath,
 	resolveClankyCliPath(),
 	"transcript-run",
@@ -165,7 +170,7 @@ expectEqual(wrapTranscriptArgv({ agent: "clanky:docs", cwd: "/repo", runId: "run
 	"--",
 	"codex",
 	task,
-], "transcript wrapper preserves performer argv");
+], "transcript wrapper pins transcript root and preserves performer argv");
 
 let rejectedBlankExecutable = false;
 try {

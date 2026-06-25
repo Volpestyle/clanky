@@ -25,6 +25,8 @@ export interface TranscriptRun {
 	textPath: string;
 	eventsPath: string;
 	manifest: TranscriptManifest;
+	/** Bytes withheld from stream.txt because an escape sequence spans chunks. */
+	pending: { stdout: string; stderr: string };
 }
 
 export interface TranscriptSummary {
@@ -110,7 +112,13 @@ export async function appendTranscriptChunk(
 	now = new Date(),
 ): Promise<void> {
 	const buffer = Buffer.from(chunk);
-	const text = normalizeTerminalText(buffer.toString("utf8"));
+	// Escape sequences can split across chunks; normalize only the portion that
+	// cannot still be growing and carry the rest into the next append. stream.ansi
+	// stays the lossless raw record.
+	const combined = run.pending[stream] + buffer.toString("utf8");
+	const { done, pending } = splitPendingEscape(combined);
+	run.pending[stream] = pending;
+	const text = normalizeTerminalText(done);
 	const event = {
 		ts: now.toISOString(),
 		stream,
@@ -231,6 +239,66 @@ export function lastLines(text: string, lines: number): string {
 	return hadFinalNewline ? `${selected}\n` : selected;
 }
 
+/**
+ * Split a buffer into the part safe to normalize now (`done`) and a trailing
+ * incomplete escape sequence to carry into the next chunk (`pending`). `pending`
+ * always begins at an ESC; it is empty unless the buffer ends mid-sequence.
+ */
+export function splitPendingEscape(buf: string): { done: string; pending: string } {
+	const len = buf.length;
+	let i = 0;
+	while (i < len) {
+		if (buf[i] !== "\x1B") {
+			i++;
+			continue;
+		}
+		const end = consumeEscape(buf, i);
+		if (end === -1) {
+			const rest = buf.slice(i);
+			// A real control sequence is short; a long unterminated run is almost
+			// certainly stray bytes, so stop carrying and let normalize best-effort it.
+			if (rest.length > 256) return { done: buf, pending: "" };
+			return { done: buf.slice(0, i), pending: rest };
+		}
+		i = end;
+	}
+	return { done: buf, pending: "" };
+}
+
+/** Index after a complete escape sequence starting at `start`, or -1 if incomplete. */
+function consumeEscape(buf: string, start: number): number {
+	const len = buf.length;
+	if (start + 1 >= len) return -1;
+	const c = buf[start + 1];
+	if (c === "[") {
+		let j = start + 2;
+		while (j < len && buf[j] >= "0" && buf[j] <= "?") j++;
+		while (j < len && buf[j] >= " " && buf[j] <= "/") j++;
+		if (j < len && buf[j] >= "@" && buf[j] <= "~") return j + 1;
+		return -1;
+	}
+	if (c === "]") {
+		for (let j = start + 2; j < len; j++) {
+			if (buf[j] === "\x07") return j + 1;
+			if (buf[j] === "\x1B") {
+				if (j + 1 >= len) return -1;
+				if (buf[j + 1] === "\\") return j + 2;
+			}
+		}
+		return -1;
+	}
+	if (c === "P" || c === "^" || c === "_" || c === "X") {
+		for (let j = start + 2; j < len; j++) {
+			if (buf[j] === "\x1B") {
+				if (j + 1 >= len) return -1;
+				if (buf[j + 1] === "\\") return j + 2;
+			}
+		}
+		return -1;
+	}
+	return start + 2;
+}
+
 export function normalizeTerminalText(input: string): string {
 	const withoutEscapes = input
 		.replace(/\x1B\][^\x07]*(?:\x07|\x1B\\)/g, "")
@@ -263,6 +331,7 @@ function transcriptRunFromManifest(dir: string, manifest: TranscriptManifest): T
 		textPath: join(dir, "stream.txt"),
 		eventsPath: join(dir, "events.jsonl"),
 		manifest,
+		pending: { stdout: "", stderr: "" },
 	};
 }
 
