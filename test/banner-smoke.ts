@@ -11,10 +11,10 @@ function assert(condition: boolean, message: string): asserts condition {
 
 const FIELDS: BannerFields = {
 	title: "Clanky",
-	tagline: "a hooded agent on the eve · herdr stage",
+	tagline: "eve conductor · herdr stage",
 	model: "claude-opus-4-8 (high effort)",
 	cwd: "~/dev/clanky",
-	hint: "/help for commands · /model to switch brains · ctrl+c to exit",
+	hint: "/help for commands · ctrl+c to exit",
 };
 
 const ANSI = new RegExp(`${"\x1b"}\\[[0-9;]*m`, "gu");
@@ -27,12 +27,12 @@ const wide = (overrides: Partial<BannerCapabilities>): BannerCapabilities => ({
 	...overrides,
 });
 
-// Truecolor + unicode: full mascot, gradient title, and feed values present.
+// Truecolor + unicode: text-only title and feed values present.
 const full = renderClankyBanner(FIELDS, wide({}));
 const fullText = stripAnsi(full.join("\n"));
-assert(fullText.includes("█"), "unicode banner should render block mascot");
-assert(fullText.includes("●"), "unicode banner should render glowing eyes");
-assert(fullText.includes("C L A N K Y"), "feed should spell out the title");
+assert(!fullText.includes("█") && !fullText.includes("●"), "banner should not render a head icon");
+assert(fullText.includes("clanky"), "feed should render the simplified title");
+assert(!fullText.includes("C L A N K Y"), "title should not use spaced lettering");
 assert(
 	fullText.includes("claude-opus-4-8 (high effort)"),
 	"feed should show the model",
@@ -43,24 +43,14 @@ assert(
 	"truecolor banner should emit 24-bit color codes",
 );
 
-// Mascot and feed stay aligned: every mascot row shares the same feed column.
-const feedColumns = new Set<number>();
-for (const line of full) {
-	const plain = stripAnsi(line);
-	const match = /\S/u.exec(plain.slice(15));
-	if (
-		match !== null &&
-		(plain.includes("●") || plain.includes("model") || plain.includes("CLANKY"))
-	) {
-		feedColumns.add(15 + match.index);
-	}
-}
+// Text rows use a single left gutter.
+const gutterRows = full.map(stripAnsi).filter((line) => line.length > 0);
 assert(
-	feedColumns.size === 1,
-	`feed column should be consistent, saw ${[...feedColumns].join(",")}`,
+	gutterRows.every((line) => line.startsWith(" ")),
+	"non-empty banner rows should share a one-column left gutter",
 );
 
-// No-color mode: zero ANSI escapes, mascot still legible.
+// No-color mode: zero ANSI escapes, text still legible.
 const mono = renderClankyBanner(
 	FIELDS,
 	wide({ color: false, trueColor: false }),
@@ -70,21 +60,21 @@ assert(
 	"no-color banner must not emit escape codes",
 );
 assert(
-	mono.join("\n").includes("█"),
-	"no-color banner keeps the unicode mascot",
+	mono.join("\n").includes("clanky"),
+	"no-color banner keeps the simplified title",
 );
 
-// ASCII fallback: no block-drawing glyphs.
+// ASCII fallback: no icon glyphs.
 const ascii = stripAnsi(
 	renderClankyBanner(FIELDS, wide({ unicode: false })).join("\n"),
 );
 assert(
 	!ascii.includes("█") && !ascii.includes("●"),
-	"ascii fallback must avoid unicode block art",
+	"ascii fallback must avoid unicode icon art",
 );
 assert(
-	ascii.includes("o") && ascii.includes("#"),
-	"ascii fallback draws the hooded figure with #/o",
+	!ascii.includes("#") && ascii.includes("clanky"),
+	"ascii fallback remains text-only",
 );
 
 // Narrow terminal collapses to a condensed header (no wrapped mascot rows).
@@ -94,7 +84,7 @@ assert(
 	`condensed banner should be at most 2 lines, got ${condensed.length}`,
 );
 assert(
-	stripAnsi(condensed[0] ?? "").includes("Clanky"),
+	stripAnsi(condensed[0] ?? "").includes("clanky"),
 	"condensed banner should still name Clanky",
 );
 for (const line of condensed) {

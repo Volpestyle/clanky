@@ -23,7 +23,7 @@ interface InlineAttachmentResult {
 }
 
 const DEFAULT_MAX_INLINE_VISUAL_ATTACHMENTS = 4;
-const DEFAULT_MAX_INLINE_VISUAL_ATTACHMENT_BYTES = 3 * 1024 * 1024;
+const DEFAULT_MAX_INLINE_VISUAL_ATTACHMENT_BYTES = 100 * 1024 * 1024;
 
 export async function buildPresenceSessionMessage(
 	message: DiscordInboundMessage,

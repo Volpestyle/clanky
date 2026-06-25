@@ -1,5 +1,5 @@
 import { defineHook } from "eve/hooks";
-import { createPetClient } from "../lib/pet.ts";
+import { bubbleCaption, createPetClient } from "../lib/pet.ts";
 
 // Mirror Clanky's runtime activity onto a petdex desktop pet. Optional: enabled
 // with CLANKY_PET=1, no-ops otherwise (see lib/pet.ts). Because Clanky's
@@ -37,7 +37,7 @@ export default defineHook({
 		"message.completed"(event) {
 			if (event.data.message === null) return;
 			pet.setState("waving", REACTION_DURATION_MS);
-			pet.say(event.data.message);
+			pet.say(bubbleCaption(event.data.message));
 		},
 		"session.waiting"() {
 			pet.setState("waiting");
@@ -50,15 +50,15 @@ export default defineHook({
 		},
 		"turn.failed"(event) {
 			pet.setState("failed", FAILED_DURATION_MS);
-			pet.say(event.data.message);
+			pet.say(bubbleCaption(event.data.message));
 		},
 		"step.failed"(event) {
 			pet.setState("failed", FAILED_DURATION_MS);
-			pet.say(event.data.message);
+			pet.say(bubbleCaption(event.data.message));
 		},
 		"session.failed"(event) {
 			pet.setState("failed", FAILED_DURATION_MS);
-			pet.say(event.data.message);
+			pet.say(bubbleCaption(event.data.message));
 		},
 	},
 });

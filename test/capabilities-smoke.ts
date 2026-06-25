@@ -735,9 +735,11 @@ try {
 	);
 	assert(recoveredInspect.items[0]?.path === downloaded.items[0]?.path, "media_inspect did not recover mangled Discord media path");
 
+	const downloadedPathForPrompt = downloaded.items[0]?.path;
+	assert(downloadedPathForPrompt !== undefined, "test media download path missing");
 	const localVisionCalls: string[] = [];
 	const localVision = await inspectVisualMedia(
-		{ paths: [downloaded.items[0]?.path ?? ""], prompt: "Describe the local visual artifact." },
+		{ paths: [downloadedPathForPrompt], prompt: "Describe the local visual artifact." },
 		{
 			env: {
 				CLANKY_MODEL_PROVIDER: "local",
@@ -749,23 +751,37 @@ try {
 				localVisionCalls.push(href);
 				const body = JSON.parse(String(init?.body ?? "{}")) as {
 					model?: string;
+					think?: boolean;
+					options?: {
+						num_ctx?: number;
+						num_predict?: number;
+						temperature?: number;
+					};
 					messages?: Array<{
-						content?: Array<{ type?: string; text?: string; image_url?: { url?: string } }>;
+						content?: string;
+						images?: string[];
 					}>;
 				};
 				if (href === "http://127.0.0.1:11434/api/show") {
 					assert(body.model === "test-local-vision", "media_inspect probed the wrong Ollama model");
 					return jsonResponse({ capabilities: ["completion", "vision", "tools"] });
 				}
-				if (href === "http://127.0.0.1:11434/v1/chat/completions") {
+				if (href === "http://127.0.0.1:11434/api/chat") {
 					assert(body.model === "test-local-vision", "media_inspect sent images to the wrong Ollama model");
-					const content = body.messages?.[0]?.content ?? [];
-					assert(content.some((part) => part.type === "text" && part.text?.includes("Describe the local visual artifact.")), "media_inspect omitted the prompt");
-					assert(content.filter((part) => part.type === "image_url").length === 1, "media_inspect did not send image bytes to Ollama");
-					assert(content.some((part) => part.image_url?.url?.startsWith("data:image/png;base64,") === true), "media_inspect did not send a data image URL to Ollama");
+					assert(body.think === false, "media_inspect should disable Ollama thinking for image inspection");
+					assert(body.options?.num_ctx === 8192, "media_inspect should bound Ollama vision context");
+					assert(body.options?.num_predict === 512, "media_inspect should bound Ollama vision output");
+					assert(body.options?.temperature === 0, "media_inspect should use deterministic Ollama vision sampling");
+					const message = body.messages?.[0];
+					assert(message?.content?.includes("Describe the local visual artifact.") === true, "media_inspect omitted the prompt");
+					assert(message?.content?.includes(downloadedPathForPrompt) === false, "media_inspect should not steer Ollama with local paths");
+					assert(message?.content?.includes("Images attached as binary inputs:") === true, "media_inspect should tell Ollama images are attached");
+					assert(message.images?.length === 1, "media_inspect did not send image bytes to Ollama");
+					assert(typeof message.images[0] === "string" && message.images[0].length > 0, "media_inspect sent an empty Ollama image");
 					return jsonResponse({
-						choices: [{ message: { content: "The active local model saw a tiny PNG." } }],
-						usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
+						message: { role: "assistant", content: "The active local model saw a tiny PNG." },
+						prompt_eval_count: 1,
+						eval_count: 2,
 					});
 				}
 				throw new Error(`unexpected Ollama URL ${href}`);
@@ -776,7 +792,7 @@ try {
 	assert(localVision.model === "test-local-vision", "media_inspect did not report active Ollama model");
 	assert(localVision.text.includes("active local model"), "media_inspect did not return Ollama vision text");
 	assert(localVisionCalls.includes("http://127.0.0.1:11434/api/show"), "media_inspect did not probe Ollama capabilities");
-	assert(localVisionCalls.includes("http://127.0.0.1:11434/v1/chat/completions"), "media_inspect did not call Ollama chat");
+	assert(localVisionCalls.includes("http://127.0.0.1:11434/api/chat"), "media_inspect did not call native Ollama chat");
 
 	const fallbackVision = await inspectVisualMedia(
 		{ paths: [downloaded.items[0]?.path ?? ""], prompt: "Use fallback vision." },

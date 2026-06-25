@@ -38,11 +38,36 @@ const DEFAULT_PORT = 7777;
 // The sidecar caps bubble text at 200 chars; trim here so the request body
 // stays small and we don't ship multi-paragraph replies it would truncate.
 const MAX_BUBBLE_CHARS = 200;
+// A glanceable caption is far shorter than the sidecar's hard cap — the bubble
+// is only ~240px wide, so a full reply (tables, code) overflows it unreadably.
+const BUBBLE_CAPTION_MAX = 80;
 const REQUEST_TIMEOUT_MS = 1000;
 
+// Turn an assistant reply into a short speech-bubble caption: the first
+// meaningful line, markdown stripped, clipped to a phrase. Used for replies and
+// errors so the bubble shows a gist, not the whole message.
+export function bubbleCaption(text: string): string {
+	const lines = text.split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
+	const firstLine = lines.find((line) => !/^[|>#`*-]/.test(line)) ?? lines[0] ?? "";
+	const plain = firstLine
+		.replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1") // links/images -> their label
+		.replace(/[*_`#>]+/g, "") // emphasis / heading / quote marks
+		.replace(/\s+/g, " ")
+		.trim();
+	if (plain.length <= BUBBLE_CAPTION_MAX) return plain;
+	const clipped = plain.slice(0, BUBBLE_CAPTION_MAX);
+	const lastSpace = clipped.lastIndexOf(" ");
+	return `${(lastSpace > 40 ? clipped.slice(0, lastSpace) : clipped).trimEnd()}…`;
+}
+
+// Shared so the hook and the face's /pet command agree on what "enabled" means.
+export function isPetEnabledValue(value: string | undefined): boolean {
+	const flag = value?.trim().toLowerCase();
+	return flag === "1" || flag === "true" || flag === "on";
+}
+
 function readPetSettings(env: NodeJS.ProcessEnv): PetSettings {
-	const flag = env.CLANKY_PET?.trim().toLowerCase();
-	const enabled = flag === "1" || flag === "true" || flag === "on";
+	const enabled = isPetEnabledValue(env.CLANKY_PET);
 	const parsedPort = Number.parseInt(env.CLANKY_PET_PORT?.trim() ?? "", 10);
 	const port = Number.isInteger(parsedPort) && parsedPort > 0 ? parsedPort : DEFAULT_PORT;
 	const tokenPath = env.CLANKY_PET_TOKEN_PATH?.trim() || join(homedir(), ".petdex", "runtime", "update-token");

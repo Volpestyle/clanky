@@ -228,6 +228,43 @@ check("normal reply is not skip", !isSkipReplyText("sure, on it"));
 	);
 }
 
+{
+	const largeImageBytes = 26 * 1024 * 1024;
+	const largePng = Buffer.alloc(largeImageBytes);
+	Buffer.from("89504e470d0a1a0a", "hex").copy(largePng, 0);
+	let fetched = false;
+	const payload = await buildPresenceSessionMessage(
+		msg({
+			text: "clanky inspect this screenshot",
+			attachments: [
+				{
+					id: "a-large",
+					url: "https://cdn.discordapp.com/attachments/c1/m1/large.png",
+					filename: "large.png",
+					contentType: "image/png",
+					size: largeImageBytes,
+					width: 2400,
+					height: 1600,
+				},
+			],
+		}),
+		"platform_mention",
+		"Paul",
+		{
+			env: { DISCORD_BOT_TOKEN: "test-token" },
+			fetchImpl: async () => {
+				fetched = true;
+				return new Response(largePng, {
+					headers: { "content-type": "image/png", "content-length": String(largePng.length) },
+				});
+			},
+		},
+	);
+	check("presence payload default inline limit fetches >25 MiB images", fetched);
+	const parts = Array.isArray(payload) ? payload : [];
+	check("presence payload includes >25 MiB image by default", parts.some((part) => part.type === "file"));
+}
+
 // --- explicit Discord memory capture ------------------------------------
 {
 	const callMe = extractDiscordMemoryCandidates(

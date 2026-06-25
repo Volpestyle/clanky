@@ -29,6 +29,8 @@
 		"smoke:eve:env": "node test/eve-dev-env-smoke.ts",
 		"smoke:tui": "node test/tui-no-reply-smoke.ts",
 		"smoke:banner": "node test/banner-smoke.ts",
+		"smoke:fullscreen": "node test/fullscreen-smoke.ts",
+		"smoke:tui:attachments": "node test/tui-attachments-smoke.ts",
 		"smoke:mcp:auth": "node test/mcp-auth-probe-smoke.ts",
 		"smoke:mcp": "node test/mcp-stdio-smoke.ts",
 		"smoke:port": "node test/port-config-smoke.ts",

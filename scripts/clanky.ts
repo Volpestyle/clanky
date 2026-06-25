@@ -11,8 +11,18 @@ import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
 import { join } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { promisify } from "node:util";
-import { Client, type AgentInfoConnectionEntry, type AgentInfoResult, type HandleMessageStreamEvent } from "eve/client";
+import {
+	Client,
+	type AgentInfoConnectionEntry,
+	type AgentInfoResult,
+	type ClientSession,
+	type HandleMessageStreamEvent,
+	type SendTurnInput,
+	type SessionState,
+	type StreamOptions,
+} from "eve/client";
 import {
 	EveTUIRunner,
 	type AgentTUISessionOptions,
@@ -23,6 +33,7 @@ import {
 } from "../node_modules/eve/dist/src/cli/dev/tui/runner.js";
 import {
 	type AgentHeaderOptions,
+	type TerminalInput,
 	TerminalRenderer,
 	type TerminalOutput,
 } from "../node_modules/eve/dist/src/cli/dev/tui/terminal-renderer.js";
@@ -31,13 +42,16 @@ import {
 	type PromptCommand,
 	type PromptCommandSpec,
 } from "../node_modules/eve/dist/src/cli/dev/tui/prompt-commands.js";
+import { PromptHistory } from "../node_modules/eve/dist/src/cli/dev/tui/line-editor.js";
 import type { SetupFlowRenderer } from "../node_modules/eve/dist/src/cli/dev/tui/setup-flow.js";
 import { formatCompactTokenCount } from "../node_modules/eve/dist/src/cli/dev/tui/stream-format.js";
 import { applyEnvRemovals, applyEnvUpserts } from "../agent/lib/discord/env-file.ts";
 import { browserBridgeStatus } from "../agent/lib/browser-bridge.ts";
 import { buildEveDevServerEnv } from "../agent/lib/eve-dev-env.ts";
+import { installClankyPromptHistory } from "../agent/lib/tui-prompt-history.ts";
 import { appendContextUsagePercent } from "../agent/lib/tui-context-status.ts";
 import { detectBannerCapabilities, renderClankyBanner, type BannerFields } from "../agent/lib/clanky-banner.ts";
+import { ClankyFullscreenController, fullscreenViable, terminalDimensions } from "../agent/lib/clanky-fullscreen.ts";
 import {
 	LOCAL_CONTEXT_TOKENS_ENV,
 	parseLocalContextWindowTokens,
@@ -50,6 +64,8 @@ import {
 import { inspectConnectionSearchOutput } from "../agent/lib/mcp-auth-probe.ts";
 import { monitorNoReplyEvents, NO_ASSISTANT_REPLY_NOTICE } from "../agent/lib/tui-no-reply.ts";
 import { isAutoApproveValue } from "../agent/lib/approvals.ts";
+import { isPetEnabledValue } from "../agent/lib/pet.ts";
+import { buildTuiAttachmentMessage, createDroppedPathPasteRewriter, TUI_ATTACHMENT_HELP } from "../agent/lib/tui-attachments.ts";
 import {
 	ALL_CODING_HARNESSES,
 	BUILTIN_CODING_HARNESSES,
@@ -100,7 +116,10 @@ const PORT = resolvePort(process.env.CLANKY_EVE_PORT, 2000);
 const HOST = `http://127.0.0.1:${PORT}`;
 const CALLBACK_PROXY_PORT = resolvePort(process.env.CLANKY_EVE_CALLBACK_PROXY_PORT, 3000);
 const HEALTH_TIMEOUT_MS = resolveDurationMs(process.env.CLANKY_EVE_HEALTH_TIMEOUT_MS, 180_000, "CLANKY_EVE_HEALTH_TIMEOUT_MS");
+const SERVER_STOP_TIMEOUT_MS = resolveDurationMs(process.env.CLANKY_EVE_STOP_TIMEOUT_MS, 5_000, "CLANKY_EVE_STOP_TIMEOUT_MS");
+const SERVER_KILL_TIMEOUT_MS = resolveDurationMs(process.env.CLANKY_EVE_KILL_TIMEOUT_MS, 2_000, "CLANKY_EVE_KILL_TIMEOUT_MS");
 const ENV_PATH = join(REPO, ".env.local");
+const OWNED_SERVER_STARTUP_OUTPUT_LIMIT = 8_000;
 
 // eve's stock header lines (name, preview, tip). Clanky's banner owns the
 // header identity, so these are stripped from the header chunk before output.
@@ -114,6 +133,7 @@ const DEFAULT_TURN_TRACE_MODE: TurnTraceMode = "no-reply";
 const CLANKY_FACE_HERDR_PANE_ID_ENV = "CLANKY_FACE_HERDR_PANE_ID";
 const CLANKY_FACE_HERDR_TAB_ID_ENV = "CLANKY_FACE_HERDR_TAB_ID";
 const CLANKY_FACE_HERDR_WORKSPACE_ID_ENV = "CLANKY_FACE_HERDR_WORKSPACE_ID";
+const TERMINAL_RESIZE_POLL_MS = 250;
 const runHostCommand = promisify(execFile);
 
 function resolvePort(value: string | undefined, fallback: number): number {
@@ -145,6 +165,18 @@ function parseTurnTraceMode(value: string | undefined): TurnTraceMode | undefine
 	return undefined;
 }
 
+function parseToggle(value: string | undefined): boolean | undefined {
+	const normalized = value?.trim().toLowerCase();
+	if (normalized === undefined || normalized.length === 0) return undefined;
+	if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on" || normalized === "enable" || normalized === "enabled") {
+		return true;
+	}
+	if (normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off" || normalized === "disable" || normalized === "disabled") {
+		return false;
+	}
+	return undefined;
+}
+
 type ClankyExtensionCommandName =
 	| "discord-token"
 	| "discord-scope"
@@ -154,11 +186,14 @@ type ClankyExtensionCommandName =
 	| "effort"
 	| "approvals"
 	| "image-model"
+	| "attachments"
 	| "voice"
 	| "integrations"
 	| "mcp"
 	| "browser"
+	| "fullscreen"
 	| "trace"
+	| "pet"
 	| "status";
 type ClankyExtensionCommand = {
 	type: "extension";
@@ -172,6 +207,7 @@ type ClankyPromptCommandSpec = Omit<PromptCommandSpec, "build"> & {
 
 type SubscriptionProvider = "codex" | "claude";
 const DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:11434/v1";
+const CLANKY_FULLSCREEN_ENV = "CLANKY_FULLSCREEN";
 const DISCORD_SCOPE_ENV = {
 	guilds: "CLANKY_DISCORD_ALLOWED_GUILD_IDS",
 	channels: "CLANKY_DISCORD_ALLOWED_CHANNEL_IDS",
@@ -188,6 +224,8 @@ type ClankyConfig = {
 	localEffort?: string;
 	localContextTokens?: string;
 	autoApprove?: string;
+	fullscreen?: string;
+	pet?: string;
 	codingHarness?: string;
 	codingHarnesses?: string;
 	codingHarnessCommand?: string;
@@ -355,6 +393,13 @@ let ownsServer = false;
 let terminalReady = false;
 let forwardServerOutput = false;
 let bannerPrinted = false;
+let ownedServerStartupOutput = "";
+let ownedServerStartError: Error | undefined;
+const terminalResize = createTerminalResizeHub(process.stdout);
+const fullscreenController = new ClankyFullscreenController(process.stdout);
+let fullscreenResizeBound = false;
+let fullscreenPreferred = false;
+let fullscreenFields: BannerFields | undefined;
 let effortStatusSuffix = "";
 let currentContextSize: number | undefined;
 let turnTraceMode = parseTurnTraceMode(process.env.CLANKY_TURN_TRACE) ?? DEFAULT_TURN_TRACE_MODE;
@@ -367,8 +412,11 @@ ownsServer = await ensureServer();
 await startCallbackProxy();
 await reportClankyFaceToHerdr("idle", "Clanky face ready");
 
-const client = new Client({ host: HOST });
+const baseClient = new Client({ host: HOST });
+const client = createAttachmentAwareClient(baseClient);
+await installClankyPromptHistory(PromptHistory);
 const renderer = new TerminalRenderer({
+	input: createClankyInput(process.stdin),
 	output: createClankyOutput(process.stdout),
 	captureForeignOutput: true,
 });
@@ -384,13 +432,59 @@ const runner = new EveTUIRunner({
 });
 
 await refreshEffortStatusSuffix();
+await refreshFullscreenPreference();
 
 try {
 	await runner.run();
 } finally {
+	fullscreenController.disable();
 	await reportClankyFaceToHerdr("unknown", "Clanky face stopped");
 	await stopCallbackProxy();
 	if (ownsServer) await stopServer();
+}
+
+function createAttachmentAwareClient(client: Client): Client {
+	const wrapped = {
+		fetch(path: string, init?: RequestInit): Promise<Response> {
+			return client.fetch(path, init);
+		},
+		health() {
+			return client.health();
+		},
+		info() {
+			return client.info();
+		},
+		session(state?: SessionState | string): ClientSession {
+			return createAttachmentAwareSession(client.session(state));
+		},
+	};
+	return wrapped as unknown as Client;
+}
+
+function createAttachmentAwareSession(session: ClientSession): ClientSession {
+	const wrapped = {
+		get state() {
+			return session.state;
+		},
+		async send<TOutput = unknown>(input: SendTurnInput<TOutput>) {
+			return await session.send<TOutput>(await prepareAttachmentSendInput(input));
+		},
+		stream(options?: StreamOptions) {
+			return session.stream(options);
+		},
+	};
+	return wrapped as unknown as ClientSession;
+}
+
+async function prepareAttachmentSendInput<TOutput>(input: SendTurnInput<TOutput>): Promise<SendTurnInput<TOutput>> {
+	if (typeof input === "string") {
+		const message = await buildTuiAttachmentMessage(input, { cwd: REPO });
+		return message === input ? input : ({ message } as SendTurnInput<TOutput>);
+	}
+	if (typeof input.message !== "string") return input;
+	const message = await buildTuiAttachmentMessage(input.message, { cwd: REPO });
+	if (message === input.message) return input;
+	return { ...input, message } as SendTurnInput<TOutput>;
 }
 
 function installClankyPromptCommands(): void {
@@ -477,6 +571,21 @@ function installClankyPromptCommands(): void {
 			build: (argument) => ({ type: "extension", name: "image-model", argument }),
 		},
 		{
+			name: "attachments",
+			aliases: [],
+			description: "Show local file attachment syntax",
+			takesArgument: false,
+			build: () => ({ type: "extension", name: "attachments", argument: "" }),
+		},
+		{
+			name: "pet",
+			aliases: [],
+			description: "Toggle the petdex desktop pet that mirrors Clanky's activity",
+			argumentHint: "[on|off|status]",
+			takesArgument: true,
+			build: (argument) => ({ type: "extension", name: "pet", argument }),
+		},
+		{
 			name: "voice",
 			aliases: [],
 			description: "Configure Discord voice runtime",
@@ -507,6 +616,14 @@ function installClankyPromptCommands(): void {
 			argumentHint: "[status|install]",
 			takesArgument: true,
 			build: (argument) => ({ type: "extension", name: "browser", argument }),
+		},
+		{
+			name: "fullscreen",
+			aliases: ["fs"],
+			description: "Pin the TUI input at the bottom of the terminal",
+			argumentHint: "[status|on|off|toggle]",
+			takesArgument: true,
+			build: (argument) => ({ type: "extension", name: "fullscreen", argument }),
 		},
 		{
 			name: "trace",
@@ -548,30 +665,160 @@ function createClankyOutput(output: NodeJS.WriteStream): TerminalOutput {
 			return output.isTTY;
 		},
 		get columns() {
-			return output.columns;
+			return terminalDimensions(output).columns;
 		},
 		get rows() {
-			return output.rows;
+			return terminalDimensions(output).rows;
 		},
 		write(
 			chunk: string | Uint8Array,
 			encodingOrCallback?: BufferEncoding | ((error?: Error | null) => void),
 			callback?: (error?: Error | null) => void,
 		): boolean {
-			const next = rewriteOutputChunk(chunk);
+			const next = fullscreenController.remap(rewriteOutputChunk(chunk));
 			if (typeof encodingOrCallback === "function") return write(next, encodingOrCallback);
 			if (encodingOrCallback !== undefined) return write(next, encodingOrCallback, callback);
 			return write(next);
 		},
 		on(event: "resize", listener: () => void): TerminalOutput {
-			output.on(event, listener);
+			if (event === "resize") terminalResize.on(listener);
 			return this;
 		},
 		off(event: "resize", listener: () => void): TerminalOutput {
-			output.off(event, listener);
+			if (event === "resize") terminalResize.off(listener);
 			return this;
 		},
 	};
+}
+
+type TerminalResizeHub = {
+	on(listener: () => void): void;
+	off(listener: () => void): void;
+};
+
+function createTerminalResizeHub(output: NodeJS.WriteStream): TerminalResizeHub {
+	const listeners = new Set<() => void>();
+	let last = terminalDimensions(output);
+	let pending: NodeJS.Immediate | undefined;
+	let poll: NodeJS.Timeout | undefined;
+
+	const emitIfChanged = (): void => {
+		const next = terminalDimensions(output);
+		if (next.columns === last.columns && next.rows === last.rows) return;
+		last = next;
+		for (const listener of listeners) listener();
+	};
+
+	const schedule = (): void => {
+		if (pending !== undefined) return;
+		pending = setImmediate(() => {
+			pending = undefined;
+			emitIfChanged();
+		});
+		pending.unref?.();
+	};
+
+	const startPoll = (): void => {
+		if (poll !== undefined) return;
+		poll = setInterval(emitIfChanged, TERMINAL_RESIZE_POLL_MS);
+		poll.unref?.();
+	};
+
+	const stopPoll = (): void => {
+		if (poll === undefined) return;
+		clearInterval(poll);
+		poll = undefined;
+	};
+
+	output.on("resize", schedule);
+	process.on("SIGWINCH", schedule);
+
+	return {
+		on(listener: () => void): void {
+			listeners.add(listener);
+			startPoll();
+		},
+		off(listener: () => void): void {
+			listeners.delete(listener);
+			if (listeners.size === 0) stopPoll();
+		},
+	};
+}
+
+function createClankyInput(input: NodeJS.ReadStream): TerminalInput {
+	const listeners = new Set<(chunk: Buffer) => void>();
+	const source = input as NodeJS.ReadStream & { setRawMode?: (mode: boolean) => unknown };
+	const decoder = new StringDecoder("utf8");
+	const rewriteDroppedPaste = createDroppedPathPasteRewriter({ cwd: REPO });
+	input.on("data", (chunk: Buffer) => {
+		const next = rewriteDroppedPaste(filterFullscreenInput(decoder.write(chunk)));
+		if (next.length === 0) return;
+		const forwarded = Buffer.from(next, "utf8");
+		for (const listener of listeners) listener(forwarded);
+	});
+	return {
+		get isTTY() {
+			return input.isTTY;
+		},
+		on(event: "data", listener: (chunk: Buffer) => void): TerminalInput {
+			if (event === "data") listeners.add(listener);
+			return this;
+		},
+		off(event: "data", listener: (chunk: Buffer) => void): TerminalInput {
+			if (event === "data") listeners.delete(listener);
+			return this;
+		},
+		resume(): TerminalInput {
+			input.resume();
+			return this;
+		},
+		pause(): TerminalInput {
+			input.pause();
+			return this;
+		},
+		setRawMode(mode: boolean): TerminalInput {
+			source.setRawMode?.(mode);
+			return this;
+		},
+	};
+}
+
+function filterFullscreenInput(text: string): string {
+	if (!fullscreenController.active) return text;
+	let out = "";
+	for (let i = 0; i < text.length; ) {
+		const rest = text.slice(i);
+		const consumed = consumeFullscreenScrollInput(rest);
+		if (consumed > 0) {
+			i += consumed;
+			continue;
+		}
+		out += text[i] ?? "";
+		i += 1;
+	}
+	return out;
+}
+
+function consumeFullscreenScrollInput(text: string): number {
+	const pageUp = /^\x1b\[5(?:;\d+)?~/u.exec(text);
+	if (pageUp !== null) {
+		fullscreenController.scrollPage(1);
+		return pageUp[0].length;
+	}
+	const pageDown = /^\x1b\[6(?:;\d+)?~/u.exec(text);
+	if (pageDown !== null) {
+		fullscreenController.scrollPage(-1);
+		return pageDown[0].length;
+	}
+	const mouse = /^\x1b\[<(\d+);\d+;\d+([mM])/u.exec(text);
+	if (mouse !== null) {
+		const button = Number.parseInt(mouse[1] ?? "0", 10);
+		if (mouse[2] === "M" && (button & 64) === 64) {
+			fullscreenController.scroll((button & 1) === 0 ? 3 : -3);
+		}
+		return mouse[0].length;
+	}
+	return 0;
 }
 
 function rewriteOutputChunk(chunk: string | Uint8Array): string {
@@ -591,22 +838,53 @@ function gateServerOutputUntilHeader(renderer: TerminalRenderer): void {
 }
 
 // Clanky's welcome banner: a hooded-figure mascot with glowing eyes beside an
-// info feed (model + cwd). Printed once, above eve's header, as a title card.
-// eve's own name/preview/tip lines are stripped by rewriteOutputText so the
-// banner owns the header identity.
+// info feed (model + cwd). eve's own name/preview/tip lines are stripped by
+// rewriteOutputText so the banner owns the header identity.
+//
+// Default: printed once, above eve's header, as a title card that scrolls away.
+// With fullscreen enabled: seeded into the scrollable transcript while
+// Clanky's live input/status stays pinned to the bottom zone.
 function emitClankyBanner(info: AgentInfoResult | undefined): void {
 	if (bannerPrinted) return;
 	bannerPrinted = true;
+	const fields = buildBannerFields(info);
+	fullscreenFields = fields;
+	const lines = buildFullscreenHeader(fields);
+
+	if (fullscreenPreferred) {
+		if (fullscreenController.enable(lines)) {
+			bindFullscreenResize();
+			return;
+		}
+	}
+
+	process.stdout.write(`${lines.join("\n")}\n\n`);
+}
+
+function buildBannerFields(info: AgentInfoResult | undefined): BannerFields {
 	const fields: BannerFields = {
 		title: "Clanky",
-		tagline: "a hooded agent on the eve · herdr stage",
-		hint: "/help for commands · /model to switch brains · ctrl+c to exit",
+		tagline: "eve conductor · herdr stage",
+		hint: "/help for commands · ctrl+c to exit",
 	};
 	const modelId = bannerModelId(info);
 	if (modelId !== undefined) fields.model = modelId;
 	fields.cwd = displayHomePath(REPO);
-	const lines = renderClankyBanner(fields, detectBannerCapabilities(process.stdout));
-	process.stdout.write(`${lines.join("\n")}\n\n`);
+	return fields;
+}
+
+function buildFullscreenHeader(fields: BannerFields = fullscreenFields ?? buildBannerFields(undefined)): string[] {
+	return renderClankyBanner(fields, detectBannerCapabilities(process.stdout));
+}
+
+// Keep fullscreen's transcript and input zones sized to the terminal across resizes.
+function bindFullscreenResize(): void {
+	if (fullscreenResizeBound) return;
+	fullscreenResizeBound = true;
+	terminalResize.on(() => {
+		if (!fullscreenController.active) return;
+		fullscreenController.resize(buildFullscreenHeader());
+	});
 }
 
 function bannerModelId(info: AgentInfoResult | undefined): string | undefined {
@@ -692,6 +970,11 @@ async function refreshEffortStatusSuffix(): Promise<void> {
 	effortStatusSuffix = effort !== undefined && effort.length > 0 ? ` (${effort} effort)` : "";
 }
 
+async function refreshFullscreenPreference(): Promise<void> {
+	const config = await readConfig();
+	fullscreenPreferred = parseToggle(process.env[CLANKY_FULLSCREEN_ENV]) ?? parseToggle(config.fullscreen) ?? false;
+}
+
 async function reportClankyFaceToHerdr(state: "idle" | "working" | "blocked" | "unknown", message: string): Promise<void> {
 	if (process.env.HERDR_ENV !== "1") return;
 	const paneId = process.env.HERDR_PANE_ID;
@@ -756,6 +1039,10 @@ function createClankyCommandHandler(): PromptCommandHandler {
 					return { message: await configureApprovals(command.argument) };
 				case "image-model":
 					return { message: await configureImageModel(command.argument) };
+				case "attachments":
+					return { message: TUI_ATTACHMENT_HELP };
+				case "pet":
+					return { message: await configurePet(command.argument) };
 				case "voice":
 					return { message: await configureVoice(command.argument, context.renderer.setupFlow) };
 				case "integrations":
@@ -764,6 +1051,8 @@ function createClankyCommandHandler(): PromptCommandHandler {
 					return { message: await configureMcp(command.argument, context.renderer.setupFlow, context.renderer) };
 				case "browser":
 					return { message: await configureBrowserBridge(command.argument) };
+				case "fullscreen":
+					return { message: await configureFullscreen(command.argument) };
 				case "trace":
 					return { message: configureTrace(command.argument) };
 				case "status":
@@ -1369,10 +1658,9 @@ async function configureHarnessAllowlist(
 		if (flow === undefined) return `${formatCodingHarnessConfig(config)}\n\nUsage: /harness allow <all|clanky claude codex opencode custom>`;
 		flow.begin("Configure allowed coding harnesses");
 		try {
-			flow.renderOutput(formatCodingHarnessConfig(config));
 			const selected = await flow.readSelect({
 				kind: "multi",
-				message: "Choose which coding harnesses Clanky may use for worker panes.",
+				message: `${formatCodingHarnessConfig(config)}\n\nChoose which coding harnesses Clanky may use for worker panes.`,
 				options: CODING_HARNESS_OPTIONS,
 				initialValues: configuredAllowedHarnesses(config),
 				required: true,
@@ -1396,13 +1684,11 @@ async function configureHarnessAllowlist(
 }
 
 async function configureHarnessInteractive(flow: SetupFlowRenderer, config: ClankyConfig): Promise<string> {
-	let update: { updates: Record<string, string>; removals: readonly string[]; message: string } | undefined;
 	flow.begin("Configure coding harness");
 	try {
-		flow.renderOutput(formatCodingHarnessConfig(config));
 		const selectedAllowedValues = await flow.readSelect({
 			kind: "multi",
-			message: "Toggle which coding harnesses Clanky may use for worker panes.",
+			message: `${formatCodingHarnessConfig(config)}\n\nToggle which coding harnesses Clanky may use for worker panes.`,
 			options: CODING_HARNESS_OPTIONS,
 			initialValues: configuredAllowedHarnesses(config),
 			required: true,
@@ -1410,17 +1696,17 @@ async function configureHarnessInteractive(flow: SetupFlowRenderer, config: Clan
 		if (selectedAllowedValues === undefined) return "/harness cancelled.";
 		const allowed = selectedCodingHarnesses(selectedAllowedValues);
 		if (allowed.length === 0) return "Harness allowlist must include at least one harness.";
-		update = {
-			updates: { [CLANKY_CODING_HARNESS_ENV.allowed]: allowed.join(",") },
-			removals: [CLANKY_CODING_HARNESS_ENV.id, CLANKY_CODING_HARNESS_ENV.runtime],
-			message: `Allowed coding harnesses set to ${allowed.join(", ")}. Clanky will pick from the allowed set when no harness is specified.`,
-		};
+		await updateEnv(
+			{ [CLANKY_CODING_HARNESS_ENV.allowed]: allowed.join(",") },
+			[CLANKY_CODING_HARNESS_ENV.id, CLANKY_CODING_HARNESS_ENV.runtime],
+		);
+		flow.setStatus("Restarting Clanky...");
+		return await restartBrainMessage(
+			`Allowed coding harnesses set to ${allowed.join(", ")}. Clanky will pick from the allowed set when no harness is specified.`,
+		);
 	} finally {
 		flow.end({ preserveDiagnostics: false });
 	}
-	if (update === undefined) return "/harness cancelled.";
-	await updateEnv(update.updates, update.removals);
-	return await restartBrainMessage(update.message);
 }
 
 function selectedCodingHarnesses(values: readonly string[]): readonly CodingHarnessId[] {
@@ -1723,10 +2009,69 @@ function configureTrace(argument: string): string {
 	return `Turn trace: ${turnTraceMode}.`;
 }
 
+async function configureFullscreen(argument: string): Promise<string> {
+	const raw = splitArgs(argument)[0]?.toLowerCase();
+	const config = await readConfig();
+	if (raw === undefined || raw === "status" || raw === "show") return formatFullscreenStatus(config);
+
+	const target = raw === "toggle" ? !fullscreenController.active : parseToggle(raw);
+	if (target === undefined) return `Unknown fullscreen mode "${raw}". Use on, off, toggle, or status.`;
+
+	await writeEnv({ [CLANKY_FULLSCREEN_ENV]: target ? "1" : "0" });
+	process.env[CLANKY_FULLSCREEN_ENV] = target ? "1" : "0";
+	fullscreenPreferred = target;
+
+	if (!target) {
+		if (fullscreenController.active) fullscreenController.disable();
+		return "Fullscreen disabled. Saved CLANKY_FULLSCREEN=0 to .env.local.";
+	}
+
+	if (fullscreenController.active) return "Fullscreen is already on. Saved CLANKY_FULLSCREEN=1 to .env.local.";
+	if (fullscreenController.enable(buildFullscreenHeader())) {
+		bindFullscreenResize();
+		return "Fullscreen enabled. Saved CLANKY_FULLSCREEN=1 to .env.local.";
+	}
+	return `Fullscreen saved on, but it cannot activate in this terminal (${fullscreenUnavailableReason()}).`;
+}
+
+function formatFullscreenStatus(config: ClankyConfig): string {
+	const processValue = parseToggle(process.env[CLANKY_FULLSCREEN_ENV]);
+	const fileValue = parseToggle(config.fullscreen);
+	const preferred = processValue ?? fileValue ?? false;
+	const source = processValue !== undefined ? "process env" : fileValue !== undefined ? ".env.local" : "default";
+	const active = fullscreenController.active ? "on" : "off";
+	const viable = fullscreenViable(process.stdout, buildFullscreenHeader().length) ? "viable" : `not viable: ${fullscreenUnavailableReason()}`;
+	return `Fullscreen: ${active}. Configured ${preferred ? "on" : "off"} from ${source}; terminal ${viable}. Use /fullscreen on|off|toggle.`;
+}
+
+function fullscreenUnavailableReason(): string {
+	if (process.stdout.isTTY !== true) return "output is not a TTY";
+	if (terminalDimensions(process.stdout).columns < 20) return "terminal is narrower than 20 columns";
+	return "terminal has too few rows";
+}
+
 async function configureImageModel(argument: string): Promise<string> {
 	const model = argument.trim() || "gpt-image-2";
 	await writeEnv({ CLANKY_OPENAI_IMAGE_MODEL: model });
 	return await restartBrainMessage(`OpenAI image model set to ${model}`);
+}
+
+async function configurePet(argument: string): Promise<string> {
+	const mode = splitArgs(argument)[0]?.toLowerCase();
+	if (mode === undefined || mode === "status") {
+		const config = await readConfig();
+		const state = isPetEnabledValue(config.pet) ? "on" : "off";
+		return `Pet: ${state} (needs the petdex desktop app running). Usage: /pet [on|off]`;
+	}
+	if (mode === "on") {
+		await writeEnv({ CLANKY_PET: "1" });
+		return await restartBrainMessage("Desktop pet enabled; Clanky will mirror activity to the petdex sprite");
+	}
+	if (mode === "off") {
+		await writeEnv({ CLANKY_PET: "0" });
+		return await restartBrainMessage("Desktop pet disabled");
+	}
+	return `Unknown pet mode "${mode}". Use on, off, or status.`;
 }
 
 async function configureVoice(argument: string, flow: SetupFlowRenderer | undefined): Promise<string> {
@@ -3119,6 +3464,8 @@ async function readConfig(): Promise<ClankyConfig> {
 	const localEffort = get("CLANKY_LOCAL_EFFORT");
 	const localContextTokens = get(LOCAL_CONTEXT_TOKENS_ENV);
 	const autoApprove = get("CLANKY_AUTO_APPROVE");
+	const fullscreen = get(CLANKY_FULLSCREEN_ENV);
+	const pet = get("CLANKY_PET");
 	const codingHarness = get(CLANKY_CODING_HARNESS_ENV.id);
 	const codingHarnesses = get(CLANKY_CODING_HARNESS_ENV.allowed);
 	const codingHarnessCommand = get(CLANKY_CODING_HARNESS_ENV.command);
@@ -3149,6 +3496,8 @@ async function readConfig(): Promise<ClankyConfig> {
 	if (localEffort !== undefined) config.localEffort = localEffort;
 	if (localContextTokens !== undefined) config.localContextTokens = localContextTokens;
 	if (autoApprove !== undefined) config.autoApprove = autoApprove;
+	if (fullscreen !== undefined) config.fullscreen = fullscreen;
+	if (pet !== undefined) config.pet = pet;
 	if (codingHarness !== undefined) config.codingHarness = codingHarness;
 	if (codingHarnesses !== undefined) config.codingHarnesses = codingHarnesses;
 	if (codingHarnessCommand !== undefined) config.codingHarnessCommand = codingHarnessCommand;
@@ -3192,14 +3541,26 @@ async function updateEnv(updates: Record<string, string>, removals: readonly str
 async function restartBrainMessage(prefix: string): Promise<string> {
 	await refreshEffortStatusSuffix();
 	if (!ownsServer) {
-		return `${prefix}. Saved .env.local; attached to an external eve server, so restart it to apply.`;
+		return appendRestartSentence(prefix, "Saved .env.local; attached to an external eve server, so restart it to apply.");
 	}
 
-	await stopServer();
-	await startServer();
-	await waitForHealth();
+	try {
+		await stopServer();
+		await startServer();
+		await waitForHealth();
+	} catch (error) {
+		return appendRestartSentence(
+			prefix,
+			`Saved .env.local, but restarting Clanky failed: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
 	forwardServerOutput = terminalReady;
-	return `${prefix}. Restarted Clanky.`;
+	return appendRestartSentence(prefix, "Restarted Clanky.");
+}
+
+function appendRestartSentence(prefix: string, sentence: string): string {
+	const trimmed = prefix.trim();
+	return `${trimmed}${/[.!?]$/u.test(trimmed) ? " " : ". "}${sentence}`;
 }
 
 async function fetchInfo(): Promise<AgentInfoResult | undefined> {
@@ -3231,14 +3592,25 @@ async function probe(): Promise<"healthy" | "reachable" | "down"> {
 
 async function startServer(): Promise<void> {
 	forwardServerOutput = false;
+	ownedServerStartupOutput = "";
+	ownedServerStartError = undefined;
 	const env = await buildOwnedServerEnv();
-	server = spawn(join(REPO, "node_modules", ".bin", "eve"), ["dev", "--no-ui", "--port", String(PORT)], {
+	const child = spawn(join(REPO, "node_modules", ".bin", "eve"), ["dev", "--no-ui", "--port", String(PORT)], {
 		cwd: REPO,
 		env,
 		stdio: ["ignore", "pipe", "pipe"],
 	});
-	server.stdout?.on("data", (chunk: Buffer) => forwardOwnedServerOutput("stdout", chunk));
-	server.stderr?.on("data", (chunk: Buffer) => forwardOwnedServerOutput("stderr", chunk));
+	server = child;
+	child.once("error", (error: Error) => {
+		ownedServerStartError = error;
+		appendOwnedServerStartupOutput(`failed to start eve: ${error.message}\n`);
+		if (server === child) server = null;
+	});
+	child.once("exit", () => {
+		if (server === child) server = null;
+	});
+	child.stdout?.on("data", (chunk: Buffer) => forwardOwnedServerOutput("stdout", chunk));
+	child.stderr?.on("data", (chunk: Buffer) => forwardOwnedServerOutput("stderr", chunk));
 }
 
 async function buildOwnedServerEnv(): Promise<NodeJS.ProcessEnv> {
@@ -3269,11 +3641,19 @@ function copyEnvIfPresent(env: NodeJS.ProcessEnv, key: string, value: string | u
 }
 
 function forwardOwnedServerOutput(stream: "stdout" | "stderr", chunk: Buffer): void {
-	if (!forwardServerOutput) return;
 	const text = chunk.toString("utf8");
 	if (isSuppressedOwnedServerOutput(text)) return;
+	appendOwnedServerStartupOutput(text);
+	if (!forwardServerOutput) return;
 	if (stream === "stdout") process.stdout.write(text);
 	else process.stderr.write(text);
+}
+
+function appendOwnedServerStartupOutput(text: string): void {
+	ownedServerStartupOutput += text;
+	if (ownedServerStartupOutput.length > OWNED_SERVER_STARTUP_OUTPUT_LIMIT) {
+		ownedServerStartupOutput = ownedServerStartupOutput.slice(-OWNED_SERVER_STARTUP_OUTPUT_LIMIT);
+	}
 }
 
 function isSuppressedOwnedServerOutput(text: string): boolean {
@@ -3384,8 +3764,13 @@ async function stopCallbackProxy(): Promise<void> {
 }
 
 async function waitForHealth(timeoutMs = HEALTH_TIMEOUT_MS): Promise<void> {
+	const child = server;
 	const deadline = Date.now() + timeoutMs;
 	for (;;) {
+		if (ownedServerStartError !== undefined) {
+			throw new Error(`Eve server process failed to start: ${ownedServerStartError.message}`);
+		}
+		if (child !== null && hasChildExited(child)) throw new Error(ownedServerExitMessage(child));
 		try {
 			const response = await fetch(`${HOST}/eve/v1/info`);
 			if (response.ok) return;
@@ -3401,9 +3786,49 @@ async function stopServer(): Promise<void> {
 	const child = server;
 	server = null;
 	forwardServerOutput = false;
-	if (child === null || child.killed) return;
+	if (child === null || hasChildExited(child)) return;
 	child.kill("SIGTERM");
-	await new Promise((resolve) => setTimeout(resolve, 300));
+	if (await waitForChildExit(child, SERVER_STOP_TIMEOUT_MS)) return;
+	child.kill("SIGKILL");
+	await waitForChildExit(child, SERVER_KILL_TIMEOUT_MS);
+}
+
+function hasChildExited(child: ChildProcess): boolean {
+	return child.exitCode !== null || child.signalCode !== null;
+}
+
+async function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+	if (hasChildExited(child)) return true;
+	return await new Promise<boolean>((resolve) => {
+		let settled = false;
+		const finish = (exited: boolean): void => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timeout);
+			child.off("exit", onExit);
+			child.off("error", onError);
+			resolve(exited);
+		};
+		const onExit = (): void => finish(true);
+		const onError = (): void => finish(true);
+		const timeout = setTimeout(() => finish(false), timeoutMs);
+		child.once("exit", onExit);
+		child.once("error", onError);
+		if (hasChildExited(child)) finish(true);
+	});
+}
+
+function ownedServerExitMessage(child: ChildProcess): string {
+	const status =
+		child.exitCode !== null
+			? `exit code ${child.exitCode}`
+			: child.signalCode !== null
+				? `signal ${child.signalCode}`
+				: "unknown status";
+	const output = ownedServerStartupOutput.trim();
+	return output.length === 0
+		? `Eve server exited before becoming healthy (${status})`
+		: `Eve server exited before becoming healthy (${status}). Recent server output:\n${output}`;
 }
 
 function parseProvider(value: string | undefined): ClankyConfig["provider"] | undefined {
