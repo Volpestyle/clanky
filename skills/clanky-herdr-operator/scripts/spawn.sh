@@ -7,7 +7,7 @@ usage() {
 Usage: spawn.sh --slug <task-slug> --task "<one-line summary>" \
 				(--prompt "<text>" | --prompt-file <path>) \
 				[--run <run-id>] [--cwd <dir>] [--harness clanky|claude|codex|opencode|custom] \
-				[-- <worker argv...>]
+				[--no-transcript] [-- <worker argv...>]
 
 Spawns one worker agent named clanky:<slug> into the run's herdr tab.
 CLANKY_CODING_HARNESSES allowlists usable harnesses. When no harness is passed,
@@ -113,7 +113,7 @@ automatic_harness() {
 	fi
 }
 
-RUN_ID="" SLUG="" TASK="" PROMPT="" PROMPT_FILE="" WORKER_CWD="$PWD" HARNESS=""
+RUN_ID="" SLUG="" TASK="" PROMPT="" PROMPT_FILE="" WORKER_CWD="$PWD" HARNESS="" TRANSCRIPT=1
 ARGV=()
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -124,6 +124,7 @@ while [ $# -gt 0 ]; do
 		--prompt-file) PROMPT_FILE="$2"; shift 2 ;;
 		--cwd) WORKER_CWD="$2"; shift 2 ;;
 		--harness) HARNESS="$2"; shift 2 ;;
+		--no-transcript) TRANSCRIPT=0; shift ;;
 		--) shift; ARGV=("$@"); break ;;
 		*) usage ;;
 	esac
@@ -339,7 +340,28 @@ if [ -z "$TAB_ID" ]; then
 		| python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["tab"]["tab_id"])')"
 fi
 
-PANE_ID="$(herdr agent start "$AGENT_NAME" --cwd "$WORKER_CWD" --tab "$TAB_ID" --no-focus -- "${ARGV[@]}" \
+# Wrap the performer in Clanky's transcript runner so the worker produces a
+# durable, session-pinned transcript that peers read with `clanky transcript
+# read clanky:<slug>`. This mirrors agent/tools/herdr_spawn.ts: every spawn
+# entry point funnels through `clanky transcript-run`, never a raw performer
+# pane (SPEC.md §4.3). Pin CLANKY_HOME + HERDR_SESSION so the transcript lands
+# in the session root readers look in, even if the pane inherits a different env.
+if [ "$TRANSCRIPT" = "1" ]; then
+	if command -v clanky >/dev/null 2>&1; then
+		CLANKY_RUNNER=(clanky)
+	elif command -v node >/dev/null 2>&1 && [ -f "$REPO_ROOT/bin/clanky.ts" ]; then
+		CLANKY_RUNNER=(node "$REPO_ROOT/bin/clanky.ts")
+	else
+		echo "spawn.sh: need 'clanky' on PATH or node + $REPO_ROOT/bin/clanky.ts to wrap the transcript; pass --no-transcript to start an unwrapped pane" >&2
+		exit 1
+	fi
+	LAUNCH_ARGV=(env "CLANKY_HOME=${CLANKY_HOME:-$HOME/.clanky}" "HERDR_SESSION=${HERDR_SESSION:-default}" \
+		"${CLANKY_RUNNER[@]}" transcript-run --agent "$AGENT_NAME" --cwd "$WORKER_CWD" -- "${ARGV[@]}")
+else
+	LAUNCH_ARGV=("${ARGV[@]}")
+fi
+
+PANE_ID="$(herdr agent start "$AGENT_NAME" --cwd "$WORKER_CWD" --tab "$TAB_ID" --no-focus -- "${LAUNCH_ARGV[@]}" \
 	| python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["agent"]["pane_id"])')"
 
 # Display-only pane title so humans and remote clients see the task at a glance.

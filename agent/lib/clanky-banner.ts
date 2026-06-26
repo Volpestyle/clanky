@@ -33,19 +33,30 @@ export type BannerFields = {
 export class ClankyBannerComponent implements Component {
 	private readonly caps: BannerCapabilities;
 	private fields: BannerFields;
+	private visible: boolean;
 
-	constructor(fields: BannerFields, caps: BannerCapabilities) {
+	constructor(fields: BannerFields, caps: BannerCapabilities, visible = true) {
 		this.fields = fields;
 		this.caps = caps;
+		this.visible = visible;
 	}
 
 	setFields(fields: BannerFields): void {
 		this.fields = fields;
 	}
 
+	setVisible(visible: boolean): void {
+		this.visible = visible;
+	}
+
+	isVisible(): boolean {
+		return this.visible;
+	}
+
 	invalidate(): void {}
 
 	render(width: number): string[] {
+		if (!this.visible) return [];
 		const renderWidth = Math.max(1, width);
 		const lines = renderClankyBanner(this.fields, { ...this.caps, columns: renderWidth });
 		return ["", ...lines.map((line) => truncateToWidth(line, renderWidth, "", true)), ""];

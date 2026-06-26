@@ -135,4 +135,47 @@ assert(clankyTranscriptMouseScrollDirection("\x1b[<68;10;5M") === "up", "modifie
 assert(isClankySgrMouseInput("\x1b[<0;10;5M"), "plain mouse clicks should be classified as SGR mouse input");
 assert(!isClankyTranscriptMouseScrollInput("\x1b[<64;10;5m"), "mouse release should not be classified as wheel scroll");
 
+const selectionViewport = new ClankyTranscriptViewport(() => 3, {
+	dim: (text) => text,
+	selected: (text) => text,
+});
+selectionViewport.addChild(new LineComponent(["hello world", "second line", "third"]));
+selectionViewport.render(80);
+assert(!selectionViewport.hasSelection(), "a fresh viewport should have no selection");
+
+selectionViewport.selectionPress(0, 0);
+selectionViewport.selectionDrag(0, 5);
+assert(selectionViewport.hasSelection(), "dragging across columns should produce a selection");
+assert(selectionViewport.getSelectedText() === "hello", "single-line selection should return the dragged columns");
+assert(selectionViewport.render(80)[0]?.includes("\x1b[7m") === true, "selected columns should render with inverse styling");
+
+selectionViewport.selectionPress(0, 6);
+selectionViewport.selectionDrag(1, 6);
+assert(selectionViewport.getSelectedText() === "world\nsecond", "multi-line selection should join rows with newlines");
+
+selectionViewport.selectionPress(1, 6);
+selectionViewport.selectionDrag(0, 6);
+assert(selectionViewport.getSelectedText() === "world\nsecond", "reversed drag direction should normalize the selection");
+
+selectionViewport.selectionPress(0, 3);
+assert(!selectionViewport.hasSelection(), "a press without a drag should not select anything");
+assert(selectionViewport.getSelectedText() === "", "an empty selection should yield no text");
+
+selectionViewport.selectionPress(0, 0);
+selectionViewport.selectionDrag(0, 5);
+selectionViewport.clearSelection();
+assert(!selectionViewport.hasSelection(), "clearSelection should drop the active selection");
+assert(!selectionViewport.render(80)[0]?.includes("\x1b[7m"), "cleared selection should not render inverse styling");
+
+const focusedSelection = new ClankyTranscriptViewport(() => 1, {
+	dim: (text) => text,
+	selected: (text) => text,
+});
+focusedSelection.addChild(new LineComponent(["hello"]));
+focusedSelection.focused = true;
+focusedSelection.render(80);
+focusedSelection.selectionPress(0, 0);
+focusedSelection.selectionDrag(0, 7);
+assert(focusedSelection.getSelectedText() === "hello", "focused selection should exclude the block prefix gutter");
+
 console.log("clanky-transcript-viewport-smoke: ok");

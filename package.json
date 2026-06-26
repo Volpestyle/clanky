@@ -40,6 +40,8 @@
 		"smoke:transcript-block": "node test/clanky-transcript-block-smoke.ts",
 		"smoke:transcript-routing": "node test/clanky-transcript-key-routing-smoke.ts",
 		"smoke:transcript-viewport": "node test/clanky-transcript-viewport-smoke.ts",
+		"smoke:sgr-mouse": "node test/clanky-sgr-mouse-smoke.ts",
+		"smoke:clipboard": "node test/clanky-clipboard-smoke.ts",
 		"smoke:tui:input-queue": "node test/tui-input-request-queue-smoke.ts",
 		"smoke:tui:attachments": "node test/tui-attachments-smoke.ts",
 		"smoke:mcp:auth": "node test/mcp-auth-probe-smoke.ts",

@@ -15,7 +15,8 @@ import { defineChannel, GET, WS } from "eve/channels";
 import type { WebSocketMessage, WebSocketPeer } from "eve/channels";
 import { isFrontdoorAuthorized } from "../lib/frontdoor-auth.ts";
 import { herdrRequest, herdrStreamLines, type HerdrStream } from "../lib/herdr-socket.ts";
-import { readTranscript } from "../lib/transcripts.ts";
+import { newTranscriptRunId, readTranscript } from "../lib/transcripts.ts";
+import { wrapTranscriptArgv } from "../tools/herdr_spawn.ts";
 
 interface RelayRequest {
 	id?: string | number;
@@ -122,9 +123,16 @@ async function dispatch(op: string, args: Record<string, unknown>): Promise<unkn
 			const name = str(args.name);
 			const argv = Array.isArray(args.argv) ? (args.argv as unknown[]).map(String) : [];
 			if (!name || argv.length === 0) throw new Error("start requires name and argv[]");
-			const params: Record<string, unknown> = { name, argv, focus: args.focus === true };
-			const cwd = str(args.cwd);
-			if (cwd) params.cwd = cwd;
+			const cwd = str(args.cwd) ?? process.cwd();
+			// Remote-spawned workers funnel through the same transcript seam as the
+			// eve herdr_spawn tool and the operator spawn.sh, so a button in the iOS
+			// app yields the same durable, session-pinned transcript as a model tool
+			// call (SPEC.md §4.3). The raw `op:"api" method:"agent.start"` passthrough
+			// stays the explicit escape hatch; this op never starts an unwrapped pane
+			// unless the client opts out with transcript:false.
+			const launchArgv =
+				args.transcript === false ? argv : wrapTranscriptArgv({ agent: name, cwd, runId: newTranscriptRunId(), argv });
+			const params: Record<string, unknown> = { name, argv: launchArgv, cwd, focus: args.focus === true };
 			if (args.workspace_id) params.workspace_id = args.workspace_id;
 			if (args.tab_id) params.tab_id = args.tab_id;
 			const split = str(args.split);

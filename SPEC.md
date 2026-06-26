@@ -223,6 +223,19 @@ prefers this transcript when available and falls back to Herdr recent-unwrapped
 output. Explicit `source: "visible"` and `source: "recent"` still read Herdr for
 current screen/debugging state.
 
+A worker has a transcript **iff** it was launched under `clanky transcript-run`;
+sharing Clanky's `HERDR_SESSION` only grants read access to transcripts that
+already exist. Capture must sit in the pipe because Herdr exposes only bounded
+scrollback snapshots, with no lossless follow stream — so there is no way to
+transcribe a pane after the fact. Every spawn entry point therefore funnels
+through one wrapping seam (`wrapTranscriptArgv` in `agent/tools/herdr_spawn.ts`):
+the eve `herdr_spawn` tool, the `clanky-herdr-operator` `spawn.sh`, and the relay
+`start` op all launch performers under `clanky transcript-run` with a pinned
+`HERDR_SESSION`/`CLANKY_HOME`. New spawn surfaces (a TUI `/spawn` slash command,
+an iOS app button) call this seam, never raw `herdr agent start`. The relay's raw
+`api`/`agent.start` passthrough stays the explicit, opt-in escape hatch that
+starts an unwrapped pane with no transcript.
+
 | Need | Source |
 | --- | --- |
 | Running, idle, blocked, done | Herdr |

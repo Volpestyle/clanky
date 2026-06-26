@@ -2,11 +2,14 @@ import {
 	CURSOR_MARKER,
 	Key,
 	matchesKey,
+	sliceByColumn,
 	truncateToWidth,
+	visibleWidth,
 	type Component,
 	type Focusable,
 	type KeyId,
 } from "@earendil-works/pi-tui";
+import { parseClankySgrMouse } from "./clanky-sgr-mouse.ts";
 
 export type ClankyTranscriptViewportTheme = {
 	readonly dim: (text: string) => string;
@@ -42,6 +45,19 @@ type RenderedBlock = {
 
 type ScrollDirection = "down" | "up";
 
+type SelectionPoint = {
+	readonly line: number;
+	readonly col: number;
+};
+
+type Selection = {
+	readonly anchor: SelectionPoint;
+	readonly head: SelectionPoint;
+};
+
+const SELECTION_INVERSE = "\x1b[7m";
+const SELECTION_RESET = "\x1b[0m";
+
 const DEFAULT_THEME: ClankyTranscriptViewportTheme = {
 	dim: (text) => `\x1b[2m${text}\x1b[22m`,
 	selected: (text) => `\x1b[36m${text}\x1b[39m`,
@@ -56,6 +72,11 @@ export class ClankyTranscriptViewport implements Component, Focusable {
 	private scrollbackRows = 0;
 	private selectedIndex = 0;
 	private lastWidth = 80;
+	private selection: Selection | null = null;
+	private prefixWidth = 0;
+	private lastFlattened: readonly string[] = [];
+	private lastWindowStart = 0;
+	private lastTopPad = 0;
 	focused = false;
 
 	constructor(maxRows: (width: number) => number, theme: Partial<ClankyTranscriptViewportTheme> = {}) {
@@ -84,6 +105,7 @@ export class ClankyTranscriptViewport implements Component, Focusable {
 		if (index < 0) return;
 		this.blocks.splice(index, 1);
 		this.selectedIndex = clamp(this.selectedIndex, 0, Math.max(0, this.blocks.length - 1));
+		this.selection = null;
 		this.clampScrollback(this.lastWidth);
 	}
 
@@ -91,6 +113,7 @@ export class ClankyTranscriptViewport implements Component, Focusable {
 		this.blocks.length = 0;
 		this.scrollbackRows = 0;
 		this.selectedIndex = 0;
+		this.selection = null;
 	}
 
 	scroll(delta: number, width = this.lastWidth): void {
@@ -195,14 +218,82 @@ export class ClankyTranscriptViewport implements Component, Focusable {
 
 	render(width: number): string[] {
 		this.lastWidth = width;
+		this.prefixWidth = this.focused ? 2 : 0;
 		const rendered = this.renderBlocks(width);
 		const lines = rendered.flatMap((block) => block.lines);
+		this.lastFlattened = lines;
 		const maxRows = this.visibleRowCount(width);
 		this.clampScrollback(width, lines.length, maxRows);
-		if (lines.length <= maxRows) return [...Array.from({ length: maxRows - lines.length }, () => ""), ...lines];
-		const end = Math.max(maxRows, lines.length - this.scrollbackRows);
-		const start = Math.max(0, end - maxRows);
-		return lines.slice(start, end);
+		let visible: string[];
+		if (lines.length <= maxRows) {
+			this.lastTopPad = maxRows - lines.length;
+			this.lastWindowStart = 0;
+			visible = [...Array.from({ length: this.lastTopPad }, () => ""), ...lines];
+		} else {
+			const end = Math.max(maxRows, lines.length - this.scrollbackRows);
+			this.lastWindowStart = Math.max(0, end - maxRows);
+			this.lastTopPad = 0;
+			visible = lines.slice(this.lastWindowStart, end);
+		}
+		if (this.selection === null) return visible;
+		return visible.map((line, index) => this.applyHighlight(line, this.lastWindowStart + index - this.lastTopPad));
+	}
+
+	selectionPress(row: number, col: number): void {
+		const point = this.pointAt(row, col);
+		this.selection = { anchor: point, head: point };
+	}
+
+	selectionDrag(row: number, col: number): void {
+		if (this.selection === null) return;
+		this.selection = { anchor: this.selection.anchor, head: this.pointAt(row, col) };
+	}
+
+	hasSelection(): boolean {
+		if (this.selection === null) return false;
+		const { anchor, head } = this.selection;
+		return anchor.line !== head.line || anchor.col !== head.col;
+	}
+
+	clearSelection(): void {
+		this.selection = null;
+	}
+
+	getSelectedText(): string {
+		if (this.selection === null) return "";
+		const [first, last] = orderSelectionPoints(this.selection.anchor, this.selection.head);
+		const out: string[] = [];
+		for (let line = first.line; line <= last.line; line++) {
+			const text = this.lastFlattened[line];
+			if (text === undefined) continue;
+			const range = this.selectionColumns(first, last, line, text);
+			out.push(range === null ? "" : stripAnsi(sliceByColumn(text, range[0], range[1] - range[0])).replace(/\s+$/u, ""));
+		}
+		return out.join("\n");
+	}
+
+	private pointAt(row: number, col: number): SelectionPoint {
+		const line = clamp(this.lastWindowStart + row - this.lastTopPad, 0, Math.max(0, this.lastFlattened.length - 1));
+		return { col: Math.max(0, col), line };
+	}
+
+	private applyHighlight(line: string, flatIndex: number): string {
+		if (this.selection === null || flatIndex < 0) return line;
+		const [first, last] = orderSelectionPoints(this.selection.anchor, this.selection.head);
+		const range = this.selectionColumns(first, last, flatIndex, line);
+		if (range === null) return line;
+		const before = sliceByColumn(line, 0, range[0]);
+		const middle = stripAnsi(sliceByColumn(line, range[0], range[1] - range[0]));
+		const after = sliceByColumn(line, range[1], Number.MAX_SAFE_INTEGER);
+		return `${before}${SELECTION_RESET}${SELECTION_INVERSE}${middle}${SELECTION_RESET}${after}`;
+	}
+
+	private selectionColumns(first: SelectionPoint, last: SelectionPoint, line: number, text: string): [number, number] | null {
+		if (line < first.line || line > last.line) return null;
+		const width = visibleWidth(text);
+		const lo = Math.max(line === first.line ? first.col : 0, this.prefixWidth);
+		const hi = Math.min(line === last.line ? last.col : width, width);
+		return hi > lo ? [lo, hi] : null;
 	}
 
 	private handleFor(block: TranscriptBlock): ClankyTranscriptBlockHandle {
@@ -304,18 +395,25 @@ export function isClankyTranscriptMouseScrollInput(data: string, direction?: Scr
 }
 
 export function isClankySgrMouseInput(data: string): boolean {
-	return /^\x1b\[<\d+;\d+;\d+[Mm]$/u.test(data);
+	return parseClankySgrMouse(data) !== undefined;
 }
 
 export function clankyTranscriptMouseScrollDirection(data: string): ScrollDirection | undefined {
-	const match = /^\x1b\[<(\d+);\d+;\d+M$/u.exec(data);
-	if (match === null) return undefined;
-	const button = Number.parseInt(match[1] ?? "", 10);
-	if (!Number.isSafeInteger(button) || (button & 64) !== 64) return undefined;
-	const wheelButton = button & 3;
-	if (wheelButton === 0) return "up";
-	if (wheelButton === 1) return "down";
-	return undefined;
+	const event = parseClankySgrMouse(data);
+	return event?.kind === "wheel" ? event.wheelDirection : undefined;
+}
+
+function orderSelectionPoints(a: SelectionPoint, b: SelectionPoint): [SelectionPoint, SelectionPoint] {
+	if (a.line < b.line || (a.line === b.line && a.col <= b.col)) return [a, b];
+	return [b, a];
+}
+
+function stripAnsi(text: string): string {
+	return text
+		.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/gu, "")
+		.replace(/\x1b[_P^][^\x07\x1b]*(?:\x07|\x1b\\)/gu, "")
+		.replace(/\x1b\[[0-9;:?]*[ -/]*[@-~]/gu, "")
+		.replace(/\x1b./gu, "");
 }
 
 function collapsedLines(lines: readonly string[], width: number, theme: ClankyTranscriptViewportTheme): string[] {

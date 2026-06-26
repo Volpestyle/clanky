@@ -69,7 +69,13 @@ import {
 	type FaceBlockHandle,
 	type FaceRenderSink,
 } from "../agent/lib/clanky-face-renderer.ts";
-import { resolveClankyCommandRows, resolveClankyTranscriptRows } from "../agent/lib/clanky-face-layout.ts";
+import {
+	resolveClankyCommandRows,
+	resolveClankyTranscriptMouseTarget,
+	resolveClankyTranscriptRows,
+} from "../agent/lib/clanky-face-layout.ts";
+import { isClankyLeftMouseButton, parseClankySgrMouse, type ClankySgrMouseEvent } from "../agent/lib/clanky-sgr-mouse.ts";
+import { writeClankyClipboard } from "../agent/lib/clanky-clipboard.ts";
 import {
 	clankyCommandCompletion,
 	createClankyAutocompleteProvider,
@@ -94,7 +100,6 @@ import {
 import { ClankyTranscriptMarkdownBlock } from "../agent/lib/clanky-transcript-block.ts";
 import {
 	ClankyTranscriptViewport,
-	isClankySgrMouseInput,
 	type ClankyTranscriptBlockHandle,
 	type ClankyTranscriptBlockOptions,
 } from "../agent/lib/clanky-transcript-viewport.ts";
@@ -151,6 +156,7 @@ const CALLBACK_PROXY_PORT = resolvePort(process.env.CLANKY_EVE_CALLBACK_PROXY_PO
 const HEALTH_TIMEOUT_MS = resolveDurationMs(process.env.CLANKY_EVE_HEALTH_TIMEOUT_MS, 180_000, "CLANKY_EVE_HEALTH_TIMEOUT_MS");
 const SERVER_STOP_TIMEOUT_MS = resolveDurationMs(process.env.CLANKY_EVE_STOP_TIMEOUT_MS, 5_000, "CLANKY_EVE_STOP_TIMEOUT_MS");
 const SERVER_KILL_TIMEOUT_MS = resolveDurationMs(process.env.CLANKY_EVE_KILL_TIMEOUT_MS, 2_000, "CLANKY_EVE_KILL_TIMEOUT_MS");
+const BRAIN_HEALTH_POLL_MS = resolveDurationMs(process.env.CLANKY_EVE_HEALTH_POLL_MS, 5_000, "CLANKY_EVE_HEALTH_POLL_MS");
 const ENV_PATH = join(REPO, ".env.local");
 const DEV_SERVER_FILE = join(REPO, ".eve", "dev-server.json");
 const OWNED_SERVER_STARTUP_OUTPUT_LIMIT = 8_000;
@@ -158,8 +164,10 @@ const DEFAULT_TURN_TRACE_MODE: TurnTraceMode = "no-reply";
 const CLANKY_FACE_HERDR_PANE_ID_ENV = "CLANKY_FACE_HERDR_PANE_ID";
 const CLANKY_FACE_HERDR_TAB_ID_ENV = "CLANKY_FACE_HERDR_TAB_ID";
 const CLANKY_FACE_HERDR_WORKSPACE_ID_ENV = "CLANKY_FACE_HERDR_WORKSPACE_ID";
-const CLANKY_MOUSE_TRACKING_ENABLE = "\x1b[?1000h\x1b[?1006h";
-const CLANKY_MOUSE_TRACKING_DISABLE = "\x1b[?1000l\x1b[?1006l";
+// Mode 1002 reports drag motion while a button is held (1000 only reports
+// press/release), which the transcript needs to track a selection gesture.
+const CLANKY_MOUSE_TRACKING_ENABLE = "\x1b[?1002h\x1b[?1006h";
+const CLANKY_MOUSE_TRACKING_DISABLE = "\x1b[?1002l\x1b[?1006l";
 const MIN_TRANSCRIPT_ROWS = 4;
 const runHostCommand = promisify(execFile);
 const faceCapabilities = detectBannerCapabilities(process.stdout);
@@ -233,6 +241,14 @@ function parseTurnTraceMode(value: string | undefined): TurnTraceMode | undefine
 	return undefined;
 }
 
+function parseBooleanFlag(value: string | undefined): boolean | undefined {
+	const normalized = value?.trim().toLowerCase();
+	if (normalized === undefined || normalized.length === 0) return undefined;
+	if (normalized === "on" || normalized === "1" || normalized === "true" || normalized === "show") return true;
+	if (normalized === "off" || normalized === "0" || normalized === "false" || normalized === "hide") return false;
+	return undefined;
+}
+
 type ClankyExtensionCommandName =
 	| "discord-token"
 	| "discord-scope"
@@ -250,6 +266,7 @@ type ClankyExtensionCommandName =
 	| "browser"
 	| "trace"
 	| "pet"
+	| "header"
 	| "status";
 type ClankyExtensionCommand = {
 	type: "extension";
@@ -369,6 +386,13 @@ type ClankyConfig = {
 	discordAllowedChannelIds?: string;
 	discordAllowDms?: string;
 };
+
+type BrainHealthState =
+	| { state: "unknown"; checkedAt?: number }
+	| { state: "healthy"; checkedAt: number }
+	| { state: "unhealthy"; checkedAt: number; status: number; statusText: string; detail?: string }
+	| { state: "down"; checkedAt: number; detail: string };
+
 type TurnTraceMode = "off" | "no-reply" | "all";
 
 type MenuOption = {
@@ -567,6 +591,7 @@ const MCP_TRANSPORT_OPTIONS: readonly MenuOption[] = [
 	{ value: "sse", label: "sse", hint: "SSE MCP endpoint" },
 ];
 const MCP_DYNAMIC_NAME_RE = /^[a-z0-9][a-z0-9_-]*$/i;
+const MCP_CONNECTION_INFO_UNAVAILABLE = "(curated connection inventory unavailable: /eve/v1/info is not healthy)";
 
 let server: ChildProcess | null = null;
 let callbackProxyServer: HttpServer | null = null;
@@ -578,7 +603,12 @@ let brainHost = HOST;
 let effortStatusSuffix = "";
 let currentContextSize: number | undefined;
 let latestInfo: AgentInfoResult | undefined;
+let brainHealth: BrainHealthState = { state: "unknown" };
+let brainHealthMonitor: ReturnType<typeof setInterval> | undefined;
+let brainHealthRefreshRunning = false;
+let uiReady = false;
 let turnTraceMode = parseTurnTraceMode(process.env.CLANKY_TURN_TRACE) ?? DEFAULT_TURN_TRACE_MODE;
+let headerVisible = parseBooleanFlag(process.env.CLANKY_HEADER) ?? true;
 let runningTurn: Promise<void> | undefined;
 let isResponding = false;
 let shutdownStarted = false;
@@ -588,6 +618,7 @@ let commandTypeaheadState: ClankyCommandTypeaheadState | undefined;
 let currentStatusLabel = "starting";
 let connectionAuthPendingCount = 0;
 let mouseTrackingEnabled = false;
+let transcriptSelectionActive = false;
 
 const COMMANDS = buildClankyPromptCommands();
 
@@ -600,13 +631,13 @@ await reportClankyFaceToHerdr("idle", "Clanky face ready");
 
 const baseClient = new Client({ host: brainHost, preserveCompletedSessions: true });
 const client = createAttachmentAwareClient(baseClient);
-latestInfo = await fetchInfo();
-currentContextSize = contextSizeFromInfo(latestInfo);
+const initialInfo = await fetchInfo();
+if (initialInfo !== undefined) updateLatestInfo(initialInfo);
 let session: ClientSession = client.session();
 
 const tui = new TUI(new ProcessTerminal());
 tui.setClearOnShrink(true);
-const banner = new ClankyBannerComponent(buildBannerFields(latestInfo), faceCapabilities);
+const banner = new ClankyBannerComponent(buildBannerFields(latestInfo), faceCapabilities, headerVisible);
 const status = new Text("", 1, 0);
 const editor = new Editor(tui, editorTheme, { autocompleteMaxVisible: 12 });
 const commandTypeaheadPanel = new ClankyCommandTypeaheadPanel(COMMANDS, commandUiTheme, {
@@ -675,6 +706,24 @@ tui.addInputListener((data) => {
 		toggleTranscriptFocus();
 		return { consume: true };
 	}
+	// Drag selection and selection copy/clear work regardless of which pane holds
+	// key focus, so they run before the focus-specific branches below.
+	const mouse = parseClankySgrMouse(data);
+	if (mouse !== undefined && mouse.kind !== "wheel") {
+		handleTranscriptSelectionMouse(mouse);
+		return { consume: true };
+	}
+	if (matchesKey(data, Key.ctrl("c")) && transcriptViewport.hasSelection()) {
+		void copyTranscriptSelection();
+		transcriptViewport.clearSelection();
+		tui.requestRender();
+		return { consume: true };
+	}
+	if (matchesKey(data, Key.escape) && transcriptViewport.hasSelection()) {
+		transcriptViewport.clearSelection();
+		tui.requestRender();
+		return { consume: true };
+	}
 	if (transcriptViewport.focused) {
 		if (matchesKey(data, Key.escape)) {
 			tui.setFocus(editor);
@@ -713,10 +762,12 @@ tui.addInputListener((data) => {
 	if (commandInput !== undefined) return commandInput;
 	const transcriptInput = handleTranscriptViewportGlobalInput(data);
 	if (transcriptInput !== undefined) return transcriptInput;
-	if (isClankySgrMouseInput(data)) return { consume: true };
+	if (mouse !== undefined) return { consume: true };
 	const rewritten = rewriteDroppedPaste(data);
 	return rewritten === data ? undefined : { data: rewritten };
 });
+uiReady = true;
+startBrainHealthMonitor();
 refreshStatus("ready");
 tui.start();
 enableClankyMouseTracking();
@@ -724,6 +775,7 @@ enableClankyMouseTracking();
 try {
 	await new Promise<void>(() => {});
 } finally {
+	stopBrainHealthMonitor();
 	disableClankyMouseTracking();
 	tui.stop();
 	await reportClankyFaceToHerdr("unknown", "Clanky face stopped");
@@ -926,6 +978,14 @@ function buildClankyPromptCommands(): ClankyPromptCommandSpec[] {
 			build: (argument) => ({ type: "extension", name: "trace", argument }),
 		},
 		{
+			name: "header",
+			aliases: ["banner"],
+			description: "Toggle the sticky Clanky header",
+			argumentHint: "[on|off|toggle|status]",
+			takesArgument: true,
+			build: (argument) => ({ type: "extension", name: "header", argument }),
+		},
+		{
 			name: "status",
 			aliases: [],
 			description: "Show model and Discord gateway status",
@@ -1000,6 +1060,58 @@ function toggleTranscriptFocus(): void {
 	else tui.setFocus(transcriptViewport);
 	refreshStatusView();
 	tui.requestRender();
+}
+
+function handleTranscriptSelectionMouse(mouse: ClankySgrMouseEvent): void {
+	if (!isClankyLeftMouseButton(mouse)) return;
+	if (mouse.kind === "press") {
+		const target = transcriptMouseTarget(mouse);
+		if (target.inside) {
+			transcriptViewport.selectionPress(target.row, target.col);
+			transcriptSelectionActive = true;
+		} else {
+			transcriptViewport.clearSelection();
+			transcriptSelectionActive = false;
+		}
+		tui.requestRender();
+		return;
+	}
+	if (mouse.kind === "drag") {
+		if (!transcriptSelectionActive) return;
+		const target = transcriptMouseTarget(mouse);
+		transcriptViewport.selectionDrag(target.row, target.col);
+		tui.requestRender();
+		return;
+	}
+	// release
+	if (!transcriptSelectionActive) return;
+	transcriptSelectionActive = false;
+	if (transcriptViewport.hasSelection()) void copyTranscriptSelection();
+	else transcriptViewport.clearSelection();
+	tui.requestRender();
+}
+
+function transcriptMouseTarget(mouse: ClankySgrMouseEvent): ReturnType<typeof resolveClankyTranscriptMouseTarget> {
+	const width = tui.terminal.columns;
+	const belowRows = status.render(width).length + commandTypeaheadPanel.render(width).length + editor.render(width).length;
+	return resolveClankyTranscriptMouseTarget({
+		bannerRows: banner.render(width).length,
+		belowRows,
+		mouseCol: mouse.col,
+		mouseRow: mouse.row,
+		terminalRows: tui.terminal.rows,
+		transcriptRows: maxTranscriptRows(width),
+	});
+}
+
+async function copyTranscriptSelection(): Promise<void> {
+	const text = transcriptViewport.getSelectedText();
+	if (text.length === 0) return;
+	try {
+		await writeClankyClipboard(text, (chunk) => tui.terminal.write(chunk));
+	} catch {
+		return;
+	}
 }
 
 function isTranscriptNavigationInput(data: string): boolean {
@@ -1540,6 +1652,8 @@ async function handleExtensionCommand(command: ClankyExtensionCommand, renderer:
 			return { message: await configureBrowserBridge(command.argument, renderer.setupFlow) };
 		case "trace":
 			return { message: await configureTrace(command.argument, renderer.setupFlow) };
+		case "header":
+			return { message: configureHeader(command.argument) };
 		case "status":
 			return { message: await statusText() };
 	}
@@ -1630,6 +1744,47 @@ function refreshBannerView(): void {
 	tui.requestRender();
 }
 
+function refreshBrainHealthView(): void {
+	if (!uiReady) return;
+	refreshStatusView();
+}
+
+function startBrainHealthMonitor(): void {
+	if (brainHealthMonitor !== undefined) return;
+	brainHealthMonitor = setInterval(() => {
+		void refreshBrainHealth();
+	}, BRAIN_HEALTH_POLL_MS);
+}
+
+function stopBrainHealthMonitor(): void {
+	if (brainHealthMonitor === undefined) return;
+	clearInterval(brainHealthMonitor);
+	brainHealthMonitor = undefined;
+}
+
+async function refreshBrainHealth(): Promise<void> {
+	if (brainHealthRefreshRunning) return;
+	brainHealthRefreshRunning = true;
+	try {
+		const previousState = brainHealth.state;
+		const health = await fetchBrainHealth();
+		setBrainHealth(health);
+		if (health.state !== "healthy") return;
+		if (latestInfo !== undefined && previousState === "healthy") return;
+		const info = await fetchInfo();
+		if (info !== undefined) updateLatestInfo(info);
+	} finally {
+		brainHealthRefreshRunning = false;
+		refreshBrainHealthView();
+	}
+}
+
+function updateLatestInfo(info: AgentInfoResult): void {
+	latestInfo = info;
+	currentContextSize = contextSizeFromInfo(info);
+	if (uiReady) refreshBannerView();
+}
+
 function refreshCommandSurface(text: string): void {
 	const disabled = setupFlow.isWaitingForInput();
 	commandTypeaheadState = disabled ? undefined : clankyCommandTypeaheadFor(COMMANDS, text, commandTypeaheadState);
@@ -1643,9 +1798,11 @@ function formatStatusText(label: string): string {
 	const setupState = setupFlow.isWaitingForInput() ? "setup input" : "";
 	const authState = connectionAuthPendingCount > 0 ? `auth pending ${connectionAuthPendingCount}` : "";
 	const focusState = transcriptViewport.focused ? "transcript nav" : "";
+	const brainState = formatBrainHealthStatus(brainHealth);
 	return [
 		ansi.dim("Clanky"),
 		label,
+		brainState,
 		responseState,
 		setupState,
 		authState,
@@ -1657,6 +1814,19 @@ function formatStatusText(label: string): string {
 	]
 		.filter((part) => part.length > 0)
 		.join("  ·  ");
+}
+
+function formatBrainHealthStatus(health: BrainHealthState): string {
+	switch (health.state) {
+		case "healthy":
+			return "";
+		case "unknown":
+			return ansi.dim("brain unknown");
+		case "unhealthy":
+			return ansi.yellow(`brain unhealthy ${health.status}`);
+		case "down":
+			return ansi.red("brain down");
+	}
 }
 
 async function reportClankyFaceToHerdr(state: "idle" | "working" | "blocked" | "unknown", message: string): Promise<void> {
@@ -1683,6 +1853,7 @@ async function shutdown(exitCode: number): Promise<void> {
 	shutdownStarted = true;
 	try {
 		if (runningTurn !== undefined) await runningTurn.catch(() => undefined);
+		stopBrainHealthMonitor();
 		disableClankyMouseTracking();
 		tui.stop();
 		await reportClankyFaceToHerdr("unknown", "Clanky face stopped");
@@ -2838,6 +3009,29 @@ function formatTraceStatus(): string {
 	return `Turn trace: ${turnTraceMode}. Use /trace off|no-reply|all.`;
 }
 
+function configureHeader(argument: string): string {
+	const mode = argument.trim().toLowerCase();
+	if (mode === "status" || mode === "show") return formatHeaderStatus();
+	if (mode.length === 0 || mode === "toggle") {
+		applyHeaderVisible(!headerVisible);
+		return formatHeaderStatus();
+	}
+	const next = parseBooleanFlag(mode);
+	if (next === undefined) return `Unknown header mode "${argument}". Use /header on|off|toggle|status.`;
+	applyHeaderVisible(next);
+	return formatHeaderStatus();
+}
+
+function applyHeaderVisible(visible: boolean): void {
+	headerVisible = visible;
+	banner.setVisible(visible);
+	tui.requestRender();
+}
+
+function formatHeaderStatus(): string {
+	return `Header: ${headerVisible ? "on" : "off"}. Use /header on|off|toggle|status.`;
+}
+
 async function configureImageModel(argument: string, flow: SetupFlow | undefined): Promise<string> {
 	const args = splitArgs(argument);
 	const first = args[0]?.toLowerCase();
@@ -3446,7 +3640,9 @@ async function runMcpConnectionAuthByName(
 	flow: SetupFlow,
 	renderer: CommandRenderer,
 ): Promise<string> {
-	const connection = await findMcpConnection(connectionName);
+	const info = await fetchInfo();
+	if (info === undefined) return `${MCP_CONNECTION_INFO_UNAVAILABLE}\n\nCannot authorize "${connectionName}" until the eve dev server info endpoint recovers.`;
+	const connection = findMcpConnectionInInfo(info, connectionName);
 	if (connection === undefined) return `Unknown curated MCP connection "${connectionName}".\n\n${await mcpConnectionsText()}`;
 	return await runMcpConnectionAuth(connection, flow, renderer);
 }
@@ -3836,7 +4032,12 @@ async function selectDynamicMcpServer(
 }
 
 async function selectMcpConnectionName(flow: SetupFlow, initialValue: string | undefined): Promise<string | undefined> {
-	const connections = mcpConnections(await fetchInfo());
+	const info = await fetchInfo();
+	if (info === undefined) {
+		flow.renderLine(MCP_CONNECTION_INFO_UNAVAILABLE, "warning");
+		return undefined;
+	}
+	const connections = mcpConnections(info);
 	if (connections.length === 0) {
 		flow.renderLine("No curated MCP connections are installed in this eve server.", "warning");
 		return undefined;
@@ -3855,8 +4056,13 @@ async function selectMcpConnectionName(flow: SetupFlow, initialValue: string | u
 }
 
 async function findMcpConnection(name: string): Promise<AgentInfoConnectionEntry | undefined> {
+	const info = await fetchInfo();
+	return info === undefined ? undefined : findMcpConnectionInInfo(info, name);
+}
+
+function findMcpConnectionInInfo(info: AgentInfoResult, name: string): AgentInfoConnectionEntry | undefined {
 	const normalized = normalizeCommandToken(name);
-	return mcpConnections(await fetchInfo()).find((connection) => normalizeCommandToken(connection.connectionName) === normalized);
+	return mcpConnections(info).find((connection) => normalizeCommandToken(connection.connectionName) === normalized);
 }
 
 function mcpConnections(info: AgentInfoResult | undefined): AgentInfoConnectionEntry[] {
@@ -3889,6 +4095,7 @@ async function mcpToolListText(server: string | undefined): Promise<string> {
 }
 
 function formatMcpConnectionLines(info: AgentInfoResult | undefined): string[] {
+	if (info === undefined) return [MCP_CONNECTION_INFO_UNAVAILABLE];
 	const connections = mcpConnections(info);
 	if (connections.length === 0) return ["(none)"];
 	return connections.map((connection) => {
@@ -3922,9 +4129,10 @@ function formatDynamicMcpLines(store: Awaited<ReturnType<typeof listMcpServerCon
 }
 
 function formatMcpStatusSummary(info: AgentInfoResult | undefined, store: Awaited<ReturnType<typeof listMcpServerConfigs>>): string {
-	const curated = mcpConnections(info).map((connection) => connection.connectionName);
+	const curated = info === undefined ? undefined : mcpConnections(info).map((connection) => connection.connectionName);
 	const dynamic = Object.keys(store.servers).sort((a, b) => a.localeCompare(b));
-	return `curated=${curated.length === 0 ? "none" : curated.join(",")} dynamic=${dynamic.length === 0 ? "none" : dynamic.join(",")}`;
+	const curatedSummary = curated === undefined ? "unavailable" : curated.length === 0 ? "none" : curated.join(",");
+	return `curated=${curatedSummary} dynamic=${dynamic.length === 0 ? "none" : dynamic.join(",")}`;
 }
 
 function formatMcpServerStatus(status: McpServerStatus): string {
@@ -4174,6 +4382,7 @@ async function statusText(): Promise<string> {
 	const model = info?.agent?.model?.id ?? "(model unknown)";
 	const lines = [
 		`model: ${model}`,
+		`eve brain: ${formatBrainHealthSummary(brainHealth)}`,
 		`provider: ${formatProviderSummary(config)}`,
 		`auth: claude=${formatCredStatus(claudeAuth)}; codex=${formatCredStatus(codexAuth)}`,
 		`approvals: ${isAutoApproveValue(config.autoApprove) ? "auto (no prompts)" : "prompt"}`,
@@ -4188,6 +4397,22 @@ async function statusText(): Promise<string> {
 		`discord gateway: ${formatJson(gateway)}`,
 	];
 	return lines.join("\n");
+}
+
+function formatBrainHealthSummary(health: BrainHealthState): string {
+	switch (health.state) {
+		case "unknown":
+			return `unknown (${brainHost})`;
+		case "healthy":
+			return `healthy (${brainHost})`;
+		case "unhealthy": {
+			const statusText = health.statusText.length === 0 ? "" : ` ${health.statusText}`;
+			const detail = health.detail === undefined ? "" : `: ${health.detail}`;
+			return `unhealthy ${health.status}${statusText} (${brainHost})${detail}`;
+		}
+		case "down":
+			return `down (${brainHost}): ${health.detail}`;
+	}
 }
 
 function formatDiscordScopeSummary(config: ClankyConfig): string {
@@ -4598,9 +4823,8 @@ async function restartBrainMessage(prefix: string): Promise<string> {
 			`Saved .env.local, but restarting Clanky failed: ${error instanceof Error ? error.message : String(error)}`,
 		);
 	}
-	latestInfo = await fetchInfo();
-	currentContextSize = contextSizeFromInfo(latestInfo);
-	refreshBannerView();
+	const info = await fetchInfo();
+	if (info !== undefined) updateLatestInfo(info);
 	forwardServerOutput = true;
 	return appendRestartSentence(prefix, "Restarted Clanky.");
 }
@@ -4613,11 +4837,61 @@ function appendRestartSentence(prefix: string, sentence: string): string {
 async function fetchInfo(): Promise<AgentInfoResult | undefined> {
 	try {
 		const response = await fetch(`${brainHost}/eve/v1/info`);
-		if (!response.ok) return undefined;
-		return (await response.json()) as AgentInfoResult;
+		if (!response.ok) {
+			setBrainHealth({
+				state: "unhealthy",
+				checkedAt: Date.now(),
+				status: response.status,
+				statusText: response.statusText,
+				detail: await responseDetail(response),
+			});
+			return undefined;
+		}
+		const info = (await response.json()) as AgentInfoResult;
+		setBrainHealth({ state: "healthy", checkedAt: Date.now() });
+		return info;
+	} catch (error) {
+		setBrainHealth({
+			state: "down",
+			checkedAt: Date.now(),
+			detail: error instanceof Error ? error.message : String(error),
+		});
+		return undefined;
+	}
+}
+
+async function fetchBrainHealth(): Promise<BrainHealthState> {
+	try {
+		const response = await fetch(`${brainHost}/eve/v1/health`);
+		if (response.ok) return { state: "healthy", checkedAt: Date.now() };
+		return {
+			state: "unhealthy",
+			checkedAt: Date.now(),
+			status: response.status,
+			statusText: response.statusText,
+			detail: await responseDetail(response),
+		};
+	} catch (error) {
+		return {
+			state: "down",
+			checkedAt: Date.now(),
+			detail: error instanceof Error ? error.message : String(error),
+		};
+	}
+}
+
+async function responseDetail(response: Response): Promise<string | undefined> {
+	try {
+		const text = (await response.text()).trim();
+		return text.length === 0 ? undefined : truncate(text.replace(/\s+/gu, " "), 240);
 	} catch {
 		return undefined;
 	}
+}
+
+function setBrainHealth(next: BrainHealthState): void {
+	brainHealth = next;
+	refreshBrainHealthView();
 }
 
 async function fetchDiscordGatewayHealth(): Promise<unknown> {
