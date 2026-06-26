@@ -21,6 +21,8 @@ import {
 	type Performer,
 	resolveCodingHarness,
 } from "../lib/coding-harness.ts";
+import { resolveClankyHome } from "../lib/paths.ts";
+import { newTranscriptRunId, resolveTranscriptRunPath, resolveTranscriptSession } from "../lib/transcripts.ts";
 
 const run = promisify(execFile);
 
@@ -61,6 +63,30 @@ export function resolvePerformerArgv(input: {
 		throw new Error("custom command must start with a non-empty executable; omit command to use the performer default");
 	}
 	return { argv, performer: customCommand ? "custom" : input.performer };
+}
+
+export function wrapTranscriptArgv(input: {
+	agent: string;
+	cwd: string;
+	runId: string;
+	argv: readonly string[];
+	clankyCliPath?: string;
+	env?: NodeJS.ProcessEnv;
+}): string[] {
+	return [
+		...transcriptEnvPrefix(input.env),
+		process.execPath,
+		input.clankyCliPath ?? resolveClankyCliPath(),
+		"transcript-run",
+		"--agent",
+		input.agent,
+		"--cwd",
+		input.cwd,
+		"--run-id",
+		input.runId,
+		"--",
+		...input.argv,
+	];
 }
 
 interface HerdrAgent {
@@ -106,6 +132,18 @@ export function resolveWorkerSkillPath(repoCwd = process.cwd()): string {
 	return resolve(repoCwd, WORKER_SKILL_RELATIVE_PATH);
 }
 
+export function resolveClankyCliPath(repoCwd = process.cwd()): string {
+	return resolve(repoCwd, "bin/clanky.ts");
+}
+
+// Pin the runner to the same transcript root/session the spawn tool predicted,
+// instead of trusting the worker pane to inherit a matching environment. The
+// worker pane may carry a different HERDR_SESSION than the eve host, which would
+// otherwise write the transcript where readers never look.
+function transcriptEnvPrefix(env: NodeJS.ProcessEnv = process.env): string[] {
+	return ["env", `CLANKY_HOME=${resolveClankyHome(env)}`, `HERDR_SESSION=${resolveTranscriptSession(env)}`];
+}
+
 export function buildWorkerKickoff(input: {
 	agent: string;
 	task: string;
@@ -116,6 +154,10 @@ export function buildWorkerKickoff(input: {
 	return [
 		`You are ${input.agent}, a visible Clanky worker running in a Herdr pane.`,
 		`Host cwd: ${input.cwd}.`,
+		"",
+		"For durable worker history, use:",
+		`clanky transcript read ${input.agent} --lines N`,
+		"Use Herdr for current status, visible screen state, and sending input.",
 		"",
 		"Before doing the task, read and follow this Clanky Herdr worker skill file:",
 		workerSkillPath,
@@ -166,9 +208,13 @@ export default defineTool({
 			.array(z.string())
 			.optional()
 			.describe("raw argv override for custom commands only; omit for built-in performers, never pass an empty array"),
+		transcript: z
+			.boolean()
+			.optional()
+			.describe("wrap the performer in Clanky's local transcript runner; defaults to true, set false only for debugging"),
 	}),
 	async execute(input) {
-		const { slug, task, harness, performer, codingRuntime, cwd, command } = input;
+		const { slug, task, harness, performer, codingRuntime, cwd, command, transcript = true } = input;
 		if (!SLUG_RE.test(slug)) {
 			throw new Error(`invalid slug '${slug}' (use lowercase letters, digits, hyphens)`);
 		}
@@ -201,8 +247,14 @@ export default defineTool({
 			task: kickoff,
 			command: harnessProfile.command,
 		});
+		const runId = transcript ? newTranscriptRunId() : undefined;
+		const transcriptPath = runId === undefined ? undefined : resolveTranscriptRunPath({ agent, runId });
+		const launchArgv =
+			runId === undefined
+				? resolved.argv
+				: wrapTranscriptArgv({ agent, cwd: paneCwd, runId, argv: resolved.argv });
 		const startArgs = ["agent", "start", agent];
-		startArgs.push("--cwd", paneCwd, "--no-focus", "--", ...resolved.argv);
+		startArgs.push("--cwd", paneCwd, "--no-focus", "--", ...launchArgv);
 
 		const started = parseAgent(await herdr(startArgs));
 		return {
@@ -214,6 +266,12 @@ export default defineTool({
 			harness: harnessProfile.id,
 			harnessLabel: harnessProfile.label,
 			codingRuntime: harnessProfile.runtime,
+			transcript: {
+				enabled: runId !== undefined,
+				runId: runId ?? null,
+				path: transcriptPath ?? null,
+				readCommand: runId === undefined ? null : `clanky transcript read ${agent} --lines 300`,
+			},
 			started: true,
 		};
 	},

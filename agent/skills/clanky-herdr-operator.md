@@ -46,8 +46,9 @@ creating. If tasks share mutable paths, sequence them (separate runs or a
 ## Monitor
 
 Use `herdr_status` to list workers. For any worker that looks blocked, idle, or
-done, use `herdr_read` with `source: "recent"` first and `source: "visible"` if
-you need to see the current TUI state.
+done, use `herdr_read` with the default `source: "auto"` first so durable
+transcripts are preferred. Use `source: "visible"` when you need the exact
+current TUI state.
 
 ## Unblock
 

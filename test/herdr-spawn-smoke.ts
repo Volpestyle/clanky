@@ -2,6 +2,9 @@
 // session (HERDR_ENV=1). Spawns a harmless bash pane (not a real agent),
 // confirms the pane exists, then closes it.
 import { execFile } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import tool from "../agent/tools/herdr_spawn.ts";
 
@@ -23,6 +26,9 @@ const cases = [
 ];
 
 let ok = false;
+const home = await mkdtemp(join(tmpdir(), "clanky-herdr-spawn-smoke-"));
+const originalHome = process.env.CLANKY_HOME;
+process.env.CLANKY_HOME = home;
 try {
 	for (const item of cases) {
 		const agent = `clanky:${item.slug}`;
@@ -56,6 +62,9 @@ try {
 	}
 } finally {
 	for (const item of cases) await closeAgentPane(`clanky:${item.slug}`);
+	if (originalHome === undefined) delete process.env.CLANKY_HOME;
+	else process.env.CLANKY_HOME = originalHome;
+	await rm(home, { recursive: true, force: true });
 }
 
 process.exit(ok ? 0 : 1);

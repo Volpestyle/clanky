@@ -8,11 +8,15 @@ import {
 	serializeCommandLine,
 	splitCommandLine,
 } from "../agent/lib/coding-harness.ts";
+import { resolveClankyHome } from "../agent/lib/paths.ts";
+import { resolveTranscriptSession } from "../agent/lib/transcripts.ts";
 import {
 	buildWorkerKickoff,
+	resolveClankyCliPath,
 	resolvePaneCwd,
 	resolvePerformerArgv,
 	resolveWorkerSkillPath,
+	wrapTranscriptArgv,
 } from "../agent/tools/herdr_spawn.ts";
 
 function expectEqual(actual: unknown, expected: unknown, label: string): void {
@@ -150,6 +154,24 @@ expectEqual(resolvePerformerArgv({ performer: "claude", task, command: ["bash", 
 	performer: "custom",
 }, "custom command appends kickoff without token");
 
+expectEqual(wrapTranscriptArgv({ agent: "clanky:docs", cwd: "/repo", runId: "run-1", argv: ["codex", task], env: {} }), [
+	"env",
+	`CLANKY_HOME=${resolveClankyHome({})}`,
+	`HERDR_SESSION=${resolveTranscriptSession({})}`,
+	process.execPath,
+	resolveClankyCliPath(),
+	"transcript-run",
+	"--agent",
+	"clanky:docs",
+	"--cwd",
+	"/repo",
+	"--run-id",
+	"run-1",
+	"--",
+	"codex",
+	task,
+], "transcript wrapper pins transcript root and preserves performer argv");
+
 let rejectedBlankExecutable = false;
 try {
 	resolvePerformerArgv({ performer: "claude", task, command: [""] });
@@ -247,6 +269,7 @@ if (!workerSkillStats.isFile()) throw new Error(`worker skill path is not a file
 const kickoff = buildWorkerKickoff({ agent: "clanky:docs", task: "Do the docs task.", cwd: process.cwd() });
 for (const expected of [
 	"clanky:docs",
+	"clanky transcript read clanky:docs --lines N",
 	"skills/clanky-herdr-worker/SKILL.md",
 	"Do not load Clanky coding skill package paths",
 	"Do the docs task.",

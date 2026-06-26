@@ -10,8 +10,11 @@ under the repo-level `skills/herdr/` directory. Prefer the host tools over
 shelling out:
 
 - Use `herdr_status` to list agents, panes, tabs, and workspaces.
-- Use `herdr_read` to inspect recent or visible output from a named agent or
-  pane.
+- Use `herdr_read` with the default `source: "auto"` to inspect worker history;
+  it prefers Clanky's durable transcript and falls back to Herdr
+  recent-unwrapped output.
+- Use `herdr_read` with `source: "visible"` when you need the exact current TUI
+  screen state.
 - Use `herdr_send` to answer prompts, send text, or press keys in a pane.
 - Use `herdr_spawn` for watchable or parallel work that should become a visible
   `clanky:<slug>` pane.
@@ -31,6 +34,9 @@ cwd, or pass a real host path. Do not use sandbox paths like `/workspace`.
 
 Spawned workers receive a compact bootstrap pointing them to
 `skills/clanky-herdr-worker/SKILL.md` for coordination and completion only.
+They can read durable worker history through `clanky transcript read
+clanky:<slug> --lines N`; Herdr remains the live status, screen, and input
+control plane.
 Do not inject Clanky's coding skills into Claude Code, Codex, OpenCode, or
 custom worker prompts. Those runtimes should use their own native coding,
 planning, exploration, review, and subagent behavior. Use `performer:

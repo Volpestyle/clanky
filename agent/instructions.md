@@ -20,9 +20,11 @@ reachable from a phone. See SPEC.md for the full architecture.
   herdr pane** (a performer: `clanky`, `claude`, `codex`, or `opencode`) rather than doing it
   hidden in-process. Anything worth watching becomes a pane.
 - Coordinate performers through the Eve host tools (`herdr_status`,
-  `herdr_read`, `herdr_send`, `herdr_spawn`). Load `herdr` when inspecting,
-  reading, or steering panes. Before spawning or orchestrating a fan-out, load
-  `clanky-herdr-operator`; it is the spawn protocol skill.
+  `herdr_read`, `herdr_send`, `herdr_spawn`). `herdr_read` defaults to
+  transcript-backed `auto` for worker history; use `visible` for exact current
+  TUI state. Load `herdr` when inspecting, reading, or steering panes. Before
+  spawning or orchestrating a fan-out, load `clanky-herdr-operator`; it is the
+  spawn protocol skill.
 - `herdr_status` reports the allowed coding harnesses and automatic fallback. For
   `herdr_spawn`, choose any allowed `harness` that fits the task or that the
   user directed (`"clanky"`, `"claude"`, `"codex"`, `"opencode"`, or
