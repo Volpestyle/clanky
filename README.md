@@ -10,10 +10,11 @@ He is built on three off-the-shelf systems plus a thin layer of glue:
 
 - **herdr** is the *stage* — a vanilla terminal-agent multiplexer. Every agent
   is a visible pane, and herdr supplies the swarm coordination CLI.
-- **[eve](https://eve.dev)** is the *conductor* — Clanky's durable backend brain
-  and his visible face. eve owns inbound channels (Discord, voice), cron
-  schedules, durable sessions, and memory. Its interactive TUI runs in a herdr
-  pane and *is* what you see as Clanky.
+- **[eve](https://eve.dev)** is the *conductor* — Clanky's durable backend brain.
+  eve owns inbound channels (Discord, voice), cron schedules, durable sessions,
+  and memory. It runs headless (`eve dev --no-ui`); what you see as Clanky is his
+  own **face** — a pi-tui client (`scripts/clanky.ts`) that renders eve's event
+  stream in a herdr pane.
 - The **iOS app** is the *window* — it reaches the stage over the tailnet
   through an eve relay channel.
 
@@ -45,7 +46,7 @@ Stage, conductor, performers, window.
 flowchart TB
   subgraph mac["Mac mini — always on"]
     subgraph herdr["herdr (vanilla) — STAGE: persistent session 'clankies'"]
-      face["pane: eve dev<br/>Clanky's face"]
+      face["pane: clanky face<br/>pi-tui client · Clanky's face"]
       disc["pane: clanky:discord"]
       w1["pane: clanky / claude / codex / opencode<br/>performers"]
     end
@@ -57,7 +58,7 @@ flowchart TB
 
   discord -->|webhook| eve
   eve -->|spawns visible work| herdr
-  eve --- face
+  eve <-->|eve/client| face
   eve --> relay
   relay -->|reads herdr.sock| herdr
   phone <-->|tailnet| relay
@@ -103,9 +104,9 @@ pnpm clanky:install
 
 Then use `clanky` from anywhere:
 
-- **`clanky face`** — Clanky's custom face (`scripts/clanky.ts`) on
-  `eve/client`: mirrors eve's look, owns/attaches the headless brain, and adds
-  the slash commands eve can't — `/token <token> [--user-token] [--voice]`,
+- **`clanky face`** — Clanky's custom face (`scripts/clanky.ts`): a pi-tui client
+  that renders eve's `eve/client` event stream, owns/attaches the headless brain,
+  and adds the slash commands eve can't — `/token <token> [--user-token] [--voice]`,
   `/model <codex|claude> [id]`, `/harness allow ...`,
   `/harness <clanky|claude|codex|opencode|custom> [default|ollama] [model]`,
   `/new`, `/status`, `/help`, `/exit`. Config commands rewrite `.env.local`

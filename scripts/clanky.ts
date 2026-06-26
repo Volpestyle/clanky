@@ -2,8 +2,7 @@
  * Clanky's custom face (SPEC.md §4.2).
  *
  * The face owns Clanky-specific slash commands and server lifecycle, then
- * delegates rendering, input editing, HITL, subagents, connection auth, logs,
- * status lines, and stream translation to eve's dev TUI runner/renderer.
+ * renders the public eve/client event stream with pi-tui.
  *
  * Run: pnpm face   (CLANKY_EVE_PORT to change the port, default 2000)
  */
@@ -11,47 +10,43 @@ import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
 import { join } from "node:path";
-import { StringDecoder } from "node:string_decoder";
 import { promisify } from "node:util";
+import {
+	Editor,
+	type EditorTheme,
+	Key,
+	Loader,
+	type MarkdownTheme,
+	matchesKey,
+	ProcessTerminal,
+	type SelectListTheme,
+	Text,
+	TUI,
+	type Component,
+	type OverlayHandle,
+} from "@earendil-works/pi-tui";
 import {
 	Client,
 	type AgentInfoConnectionEntry,
 	type AgentInfoResult,
 	type ClientSession,
 	type HandleMessageStreamEvent,
+	type InputRequest,
+	type InputResponse,
 	type SendTurnInput,
 	type SessionState,
 	type StreamOptions,
 } from "eve/client";
-import {
-	EveTUIRunner,
-	type AgentTUISessionOptions,
-	type AgentTUIStreamResult,
-	type PromptCommandHandler,
-	type PromptCommandHandlerContext,
-	type PromptCommandOutcome,
-} from "../node_modules/eve/dist/src/cli/dev/tui/runner.js";
-import {
-	type AgentHeaderOptions,
-	type TerminalInput,
-	TerminalRenderer,
-	type TerminalOutput,
-} from "../node_modules/eve/dist/src/cli/dev/tui/terminal-renderer.js";
-import {
-	PROMPT_COMMANDS,
-	type PromptCommand,
-	type PromptCommandSpec,
-} from "../node_modules/eve/dist/src/cli/dev/tui/prompt-commands.js";
-import { PromptHistory } from "../node_modules/eve/dist/src/cli/dev/tui/line-editor.js";
-import type { SetupFlowRenderer } from "../node_modules/eve/dist/src/cli/dev/tui/setup-flow.js";
-import { formatCompactTokenCount } from "../node_modules/eve/dist/src/cli/dev/tui/stream-format.js";
 import { applyEnvRemovals, applyEnvUpserts } from "../agent/lib/discord/env-file.ts";
 import { browserBridgeStatus } from "../agent/lib/browser-bridge.ts";
 import { buildEveDevServerEnv } from "../agent/lib/eve-dev-env.ts";
-import { installClankyPromptHistory } from "../agent/lib/tui-prompt-history.ts";
-import { appendContextUsagePercent } from "../agent/lib/tui-context-status.ts";
-import { detectBannerCapabilities, renderClankyBanner, type BannerFields } from "../agent/lib/clanky-banner.ts";
-import { ClankyFullscreenController, fullscreenViable, terminalDimensions } from "../agent/lib/clanky-fullscreen.ts";
+import {
+	appendPromptHistoryEntry,
+	clankyPromptHistoryPath,
+	readPromptHistoryFile,
+} from "../agent/lib/tui-prompt-history.ts";
+import { InputRequestQueue } from "../agent/lib/tui-input-request-queue.ts";
+import { ClankyBannerComponent, detectBannerCapabilities, type BannerFields } from "../agent/lib/clanky-banner.ts";
 import {
 	LOCAL_CONTEXT_TOKENS_ENV,
 	parseLocalContextWindowTokens,
@@ -62,10 +57,48 @@ import {
 	authoredMcpConnectionHasAuthorization,
 } from "../agent/lib/curated-mcp-connections.ts";
 import { inspectConnectionSearchOutput } from "../agent/lib/mcp-auth-probe.ts";
-import { monitorNoReplyEvents, NO_ASSISTANT_REPLY_NOTICE } from "../agent/lib/tui-no-reply.ts";
 import { isAutoApproveValue } from "../agent/lib/approvals.ts";
 import { isPetEnabledValue } from "../agent/lib/pet.ts";
 import { buildTuiAttachmentMessage, createDroppedPathPasteRewriter, TUI_ATTACHMENT_HELP } from "../agent/lib/tui-attachments.ts";
+import { createClankyFaceAnsiTheme } from "../agent/lib/clanky-face-theme.ts";
+import {
+	ClankyFaceRenderer,
+	defaultResponseForInputRequest,
+	formatContextUsage,
+	formatInputRequests,
+	type FaceBlockHandle,
+	type FaceRenderSink,
+} from "../agent/lib/clanky-face-renderer.ts";
+import { resolveClankyCommandRows, resolveClankyTranscriptRows } from "../agent/lib/clanky-face-layout.ts";
+import {
+	clankyCommandCompletion,
+	createClankyAutocompleteProvider,
+} from "../agent/lib/clanky-autocomplete.ts";
+import {
+	ClankyCommandTypeaheadPanel,
+	ClankyCommandWorkbench,
+	clankyCommandFilterFromText,
+	clankyCommandTypeaheadFor,
+	dismissClankyCommandTypeahead,
+	isClankyCommandTypeaheadOpen,
+	isExactClankyCommandTypeahead,
+	moveClankyCommandTypeaheadSelection,
+	selectedClankyCommandTypeahead,
+	type ClankyCommandTypeaheadState,
+} from "../agent/lib/clanky-command-ui.ts";
+import {
+	InteractiveSelectPrompt,
+	InteractiveTextPrompt,
+	type InteractivePromptOption,
+} from "../agent/lib/clanky-interactive-flow.ts";
+import { ClankyTranscriptMarkdownBlock } from "../agent/lib/clanky-transcript-block.ts";
+import {
+	ClankyTranscriptViewport,
+	isClankySgrMouseInput,
+	type ClankyTranscriptBlockHandle,
+	type ClankyTranscriptBlockOptions,
+} from "../agent/lib/clanky-transcript-viewport.ts";
+import { shouldRouteClankyTranscriptGlobalInput } from "../agent/lib/clanky-transcript-key-routing.ts";
 import {
 	ALL_CODING_HARNESSES,
 	BUILTIN_CODING_HARNESSES,
@@ -119,22 +152,57 @@ const HEALTH_TIMEOUT_MS = resolveDurationMs(process.env.CLANKY_EVE_HEALTH_TIMEOU
 const SERVER_STOP_TIMEOUT_MS = resolveDurationMs(process.env.CLANKY_EVE_STOP_TIMEOUT_MS, 5_000, "CLANKY_EVE_STOP_TIMEOUT_MS");
 const SERVER_KILL_TIMEOUT_MS = resolveDurationMs(process.env.CLANKY_EVE_KILL_TIMEOUT_MS, 2_000, "CLANKY_EVE_KILL_TIMEOUT_MS");
 const ENV_PATH = join(REPO, ".env.local");
+const DEV_SERVER_FILE = join(REPO, ".eve", "dev-server.json");
 const OWNED_SERVER_STARTUP_OUTPUT_LIMIT = 8_000;
-
-// eve's stock header lines (name, preview, tip). Clanky's banner owns the
-// header identity, so these are stripped from the header chunk before output.
-const EVE_HEADER_NAME = " \x1b[1meve\x1b[22m \x1b[2mClanky\x1b[22m";
-const EVE_HEADER_TIPS = [
-	"Use /channels to add more ways to reach your agent.",
-	"Use /deploy to see your agent go live.",
-	"Type /help to see every command.",
-];
 const DEFAULT_TURN_TRACE_MODE: TurnTraceMode = "no-reply";
 const CLANKY_FACE_HERDR_PANE_ID_ENV = "CLANKY_FACE_HERDR_PANE_ID";
 const CLANKY_FACE_HERDR_TAB_ID_ENV = "CLANKY_FACE_HERDR_TAB_ID";
 const CLANKY_FACE_HERDR_WORKSPACE_ID_ENV = "CLANKY_FACE_HERDR_WORKSPACE_ID";
-const TERMINAL_RESIZE_POLL_MS = 250;
+const CLANKY_MOUSE_TRACKING_ENABLE = "\x1b[?1000h\x1b[?1006h";
+const CLANKY_MOUSE_TRACKING_DISABLE = "\x1b[?1000l\x1b[?1006l";
+const MIN_TRANSCRIPT_ROWS = 4;
 const runHostCommand = promisify(execFile);
+const faceCapabilities = detectBannerCapabilities(process.stdout);
+const ansi = createClankyFaceAnsiTheme(faceCapabilities);
+
+const selectListTheme: SelectListTheme = {
+	description: ansi.dim,
+	noMatch: ansi.dim,
+	scrollInfo: ansi.dim,
+	selectedPrefix: ansi.cyan,
+	selectedText: ansi.bold,
+};
+
+const editorTheme: EditorTheme = {
+	borderColor: ansi.dim,
+	selectList: selectListTheme,
+};
+
+const markdownTheme: MarkdownTheme = {
+	bold: ansi.bold,
+	code: ansi.yellow,
+	codeBlock: ansi.green,
+	codeBlockBorder: ansi.dim,
+	heading: ansi.cyan,
+	hr: ansi.dim,
+	italic: ansi.italic,
+	link: ansi.blue,
+	linkUrl: ansi.dim,
+	listBullet: ansi.cyan,
+	quote: ansi.italic,
+	quoteBorder: ansi.dim,
+	strikethrough: ansi.dim,
+	underline: ansi.underline,
+};
+
+const commandUiTheme = {
+	bold: ansi.bold,
+	cyan: ansi.cyan,
+	dim: ansi.dim,
+	green: ansi.green,
+	red: ansi.red,
+	yellow: ansi.yellow,
+};
 
 function resolvePort(value: string | undefined, fallback: number): number {
 	const raw = value?.trim();
@@ -165,18 +233,6 @@ function parseTurnTraceMode(value: string | undefined): TurnTraceMode | undefine
 	return undefined;
 }
 
-function parseToggle(value: string | undefined): boolean | undefined {
-	const normalized = value?.trim().toLowerCase();
-	if (normalized === undefined || normalized.length === 0) return undefined;
-	if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on" || normalized === "enable" || normalized === "enabled") {
-		return true;
-	}
-	if (normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off" || normalized === "disable" || normalized === "disabled") {
-		return false;
-	}
-	return undefined;
-}
-
 type ClankyExtensionCommandName =
 	| "discord-token"
 	| "discord-scope"
@@ -192,7 +248,6 @@ type ClankyExtensionCommandName =
 	| "integrations"
 	| "mcp"
 	| "browser"
-	| "fullscreen"
 	| "trace"
 	| "pet"
 	| "status";
@@ -201,14 +256,77 @@ type ClankyExtensionCommand = {
 	name: ClankyExtensionCommandName;
 	argument: string;
 };
-type ClankyPromptCommand = PromptCommand | ClankyExtensionCommand;
-type ClankyPromptCommandSpec = Omit<PromptCommandSpec, "build"> & {
+type NativePromptCommand =
+	| { type: "help" }
+	| { type: "new" }
+	| { type: "clear" }
+	| { type: "exit" };
+type ClankyPromptCommand = NativePromptCommand | ClankyExtensionCommand;
+type ClankyPromptCommandSpec = {
+	readonly name: string;
+	readonly aliases: readonly string[];
+	readonly description: string;
+	readonly argumentHint?: string;
+	readonly takesArgument: boolean;
 	readonly build: (argument: string) => ClankyPromptCommand;
+};
+
+type PromptCommandOutcome = {
+	readonly clearTranscript?: boolean;
+	readonly exit?: boolean;
+	readonly message?: string;
+	readonly newSession?: boolean;
+};
+type CommandLogTone = "error" | "success";
+
+type CommandRenderer = {
+	readonly setupFlow: SetupFlow | undefined;
+	setConnectionAuthPendingCount?(count: number): void;
+	upsertConnectionAuth?(state: ConnectionAuthState): void;
+};
+
+type ConnectionAuthState = {
+	readonly name: string;
+	readonly description?: string;
+	readonly state: "required" | "authorized" | "declined" | "failed" | "timed-out";
+	readonly challenge?: MappedConnectionAuthChallenge;
+	readonly reason?: string;
+};
+
+type FlowLineTone = "error" | "info" | "success" | "warning";
+
+type SetupFlow = {
+	begin(title: string): void;
+	end(options?: { readonly preserveDiagnostics?: boolean }): void;
+	renderOutput(text: string): void;
+	renderLine(text: string, tone?: FlowLineTone): void;
+	setStatus(status: string | undefined): void;
+	readText(options: {
+		readonly message: string;
+		readonly defaultValue?: string;
+		readonly placeholder?: string;
+		readonly validate?: (value: string) => string | undefined;
+	}): Promise<string | undefined>;
+	readSelect(options: {
+		readonly kind: "multi" | "single";
+		readonly message: string;
+		readonly options: readonly MenuOption[];
+		readonly initialValue?: string;
+		readonly initialValues?: readonly string[];
+		readonly required?: boolean;
+	}): Promise<string[] | undefined>;
+	waitForInterrupt(): {
+		readonly promise: Promise<void>;
+		dispose(): void;
+	};
+};
+type SetupFlowController = SetupFlow & {
+	handleSubmit(text: string): boolean;
+	isWaitingForInput(): boolean;
 };
 
 type SubscriptionProvider = "codex" | "claude";
 const DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:11434/v1";
-const CLANKY_FULLSCREEN_ENV = "CLANKY_FULLSCREEN";
 const DISCORD_SCOPE_ENV = {
 	guilds: "CLANKY_DISCORD_ALLOWED_GUILD_IDS",
 	channels: "CLANKY_DISCORD_ALLOWED_CHANNEL_IDS",
@@ -227,7 +345,6 @@ type ClankyConfig = {
 	localVisionModel?: string;
 	openAiVisionModel?: string;
 	autoApprove?: string;
-	fullscreen?: string;
 	pet?: string;
 	codingHarness?: string;
 	codingHarnesses?: string;
@@ -261,6 +378,17 @@ type MenuOption = {
 	description?: string;
 };
 
+interface DevServerRecord {
+	readonly pid: number;
+	readonly updatedAt?: string;
+	readonly url: string;
+}
+
+interface DiscoveredHost {
+	readonly host: string;
+	readonly source: string;
+}
+
 const EFFORT_LEVELS = ["minimal", "low", "medium", "high", "xhigh"] as const;
 const LOCAL_EFFORT_LEVELS = ["low", "medium", "high"] as const;
 const VOICE_SETTINGS = [
@@ -277,6 +405,15 @@ type VoiceSetting = (typeof VOICE_SETTINGS)[number];
 type VoiceRealtimeProvider = "openai" | "xai";
 type VoiceTtsProvider = "realtime" | "elevenlabs";
 type VoiceSettingUpdate = {
+	updates: Record<string, string>;
+	message: string;
+};
+type ImageModelUpdate = {
+	updates?: Record<string, string>;
+	removals?: string[];
+	message: string;
+};
+type DiscordTokenUpdate = {
 	updates: Record<string, string>;
 	message: string;
 };
@@ -336,6 +473,37 @@ const VOICE_EVE_SESSION_OPTIONS: readonly MenuOption[] = [
 	{ value: "on", label: "on", hint: "default" },
 	{ value: "off", label: "off" },
 ];
+const DISCORD_CREDENTIAL_KIND_OPTIONS: readonly MenuOption[] = [
+	{ value: "bot-token", label: "bot token", hint: "recommended" },
+	{ value: "user-token", label: "user token", hint: "only when explicitly needed" },
+];
+const DISCORD_TOKEN_VOICE_OPTIONS: readonly MenuOption[] = [
+	{ value: "off", label: "chat only" },
+	{ value: "on", label: "chat + voice", hint: "enable Discord voice runtime" },
+];
+const APPROVAL_OPTIONS: readonly MenuOption[] = [
+	{ value: "status", label: "view current mode" },
+	{ value: "auto", label: "auto approve", hint: "run tool calls without prompts" },
+	{ value: "prompt", label: "prompt", hint: "restore per-tool approvals" },
+];
+const TRACE_OPTIONS: readonly MenuOption[] = [
+	{ value: "status", label: "view current mode" },
+	{ value: "off", label: "off" },
+	{ value: "no-reply", label: "no-reply", hint: "show compact no-reply traces" },
+	{ value: "all", label: "all", hint: "show compact trace after every turn" },
+];
+const PET_OPTIONS: readonly MenuOption[] = [
+	{ value: "status", label: "view current state" },
+	{ value: "on", label: "on" },
+	{ value: "off", label: "off" },
+];
+const BROWSER_BRIDGE_OPTIONS: readonly MenuOption[] = [
+	{ value: "status", label: "view bridge status" },
+	{ value: "install", label: "install bridge", hint: "write extension and daemon config" },
+];
+const DEFAULT_OPENAI_IMAGE_MODEL = "gpt-image-2";
+const CUSTOM_IMAGE_MODEL_OPTION = "__custom_image_model__";
+const CLEAR_IMAGE_MODEL_OPTION = "__clear_image_model__";
 const DISCORD_SCOPE_ACTION_OPTIONS: readonly MenuOption[] = [
 	{ value: "status", label: "view scope", hint: "show current allowlists" },
 	{ value: "set-guilds", label: "set servers", hint: "replace server allowlist" },
@@ -373,6 +541,16 @@ const CODING_RUNTIME_OPTIONS: readonly MenuOption[] = [
 	{ value: "native", label: "native", hint: "use the harness internals" },
 	{ value: "opencode", label: "opencode", hint: "OpenCode-native alias" },
 ];
+const CODING_HARNESS_ACTION_OPTIONS: readonly MenuOption[] = [
+	{ value: "status", label: "view current config" },
+	{ value: "allow", label: "allowed harnesses", hint: "toggle workers Clanky may use" },
+	{ value: "fallback", label: "fallback harness", hint: "choose default worker, launcher, and model" },
+	{ value: "custom", label: "custom command", hint: "set command + runtime for custom worker" },
+];
+const CODING_HARNESS_LAUNCHER_OPTIONS: readonly MenuOption[] = [
+	{ value: "default", label: "default", hint: "use the CLI's configured model" },
+	{ value: "ollama", label: "ollama", hint: "launch through ollama with a model id" },
+];
 const MCP_ACTION_OPTIONS: readonly MenuOption[] = [
 	{ value: "status", label: "status", hint: "connections + dynamic server config" },
 	{ value: "list", label: "list tools", hint: "probe dynamic MCP servers" },
@@ -393,54 +571,161 @@ const MCP_DYNAMIC_NAME_RE = /^[a-z0-9][a-z0-9_-]*$/i;
 let server: ChildProcess | null = null;
 let callbackProxyServer: HttpServer | null = null;
 let ownsServer = false;
-let terminalReady = false;
 let forwardServerOutput = false;
-let bannerPrinted = false;
 let ownedServerStartupOutput = "";
 let ownedServerStartError: Error | undefined;
-const terminalResize = createTerminalResizeHub(process.stdout);
-const fullscreenController = new ClankyFullscreenController(process.stdout);
-let fullscreenResizeBound = false;
-let fullscreenPreferred = false;
-let fullscreenFields: BannerFields | undefined;
+let brainHost = HOST;
 let effortStatusSuffix = "";
 let currentContextSize: number | undefined;
+let latestInfo: AgentInfoResult | undefined;
 let turnTraceMode = parseTurnTraceMode(process.env.CLANKY_TURN_TRACE) ?? DEFAULT_TURN_TRACE_MODE;
+let runningTurn: Promise<void> | undefined;
+let isResponding = false;
+let shutdownStarted = false;
+let activeLoader: Loader | undefined;
+let commandPaletteOverlay: OverlayHandle | undefined;
+let commandTypeaheadState: ClankyCommandTypeaheadState | undefined;
+let currentStatusLabel = "starting";
+let connectionAuthPendingCount = 0;
+let mouseTrackingEnabled = false;
 
-installClankyPromptCommands();
+const COMMANDS = buildClankyPromptCommands();
 
 process.stdout.write("\x1b[2mstarting Clanky...\x1b[22m\n");
 await reportClankyFaceToHerdr("working", "starting Clanky face");
+await refreshEffortStatusSuffix();
 ownsServer = await ensureServer();
 await startCallbackProxy();
 await reportClankyFaceToHerdr("idle", "Clanky face ready");
 
-const baseClient = new Client({ host: HOST });
+const baseClient = new Client({ host: brainHost, preserveCompletedSessions: true });
 const client = createAttachmentAwareClient(baseClient);
-await installClankyPromptHistory(PromptHistory);
-const renderer = new TerminalRenderer({
-	input: createClankyInput(process.stdin),
-	output: createClankyOutput(process.stdout),
-	captureForeignOutput: true,
-});
-gateServerOutputUntilHeader(renderer);
-installRendererSessionHooks(renderer);
-const runner = new EveTUIRunner({
-	name: "Clanky",
-	session: client.session(),
-	client,
-	renderer,
-	serverUrl: HOST,
-	promptCommandHandler: createClankyCommandHandler(),
-});
+latestInfo = await fetchInfo();
+currentContextSize = contextSizeFromInfo(latestInfo);
+let session: ClientSession = client.session();
 
-await refreshEffortStatusSuffix();
-await refreshFullscreenPreference();
+const tui = new TUI(new ProcessTerminal());
+tui.setClearOnShrink(true);
+const banner = new ClankyBannerComponent(buildBannerFields(latestInfo), faceCapabilities);
+const status = new Text("", 1, 0);
+const editor = new Editor(tui, editorTheme, { autocompleteMaxVisible: 12 });
+const commandTypeaheadPanel = new ClankyCommandTypeaheadPanel(COMMANDS, commandUiTheme, {
+	maxVisibleRows: maxCommandTypeaheadRows,
+});
+const transcriptViewport = new ClankyTranscriptViewport(maxTranscriptRows, {
+	dim: ansi.dim,
+	selected: ansi.cyan,
+});
+const faceRenderer = new ClankyFaceRenderer(createFaceRenderSink());
+const setupFlow = createSetupFlow(createFlowHost());
+const commandRenderer: CommandRenderer = {
+	setupFlow,
+	setConnectionAuthPendingCount(count: number): void {
+		connectionAuthPendingCount = Math.max(0, count);
+		refreshStatusView();
+	},
+	upsertConnectionAuth(state: ConnectionAuthState): void {
+		const reason = state.reason === undefined ? "" : ` (${state.reason})`;
+		insertMarkdown(`**Connection authorization ${state.state}**\n\n${state.name}${reason}`);
+	},
+};
+const rewriteDroppedPaste = createDroppedPathPasteRewriter({ cwd: REPO });
+
+editor.setAutocompleteProvider(createClankyAutocompleteProvider(COMMANDS, REPO, {
+	async listMcpConnectionNames(): Promise<readonly string[]> {
+		return mcpConnections(latestInfo ?? await fetchInfo()).map((connection) => connection.connectionName);
+	},
+	async listMcpServerNames(): Promise<readonly string[]> {
+		const store = await listMcpServerConfigs();
+		return Object.keys(store.servers).sort((left, right) => left.localeCompare(right));
+	},
+	async listIntegrationConnectionNames(): Promise<readonly string[]> {
+		return await listAvailableConnections();
+	},
+}));
+await seedPromptHistory(editor);
+editor.onChange = (text) => {
+	refreshCommandSurface(text);
+};
+editor.onSubmit = (submitted) => {
+	refreshCommandSurface("");
+	if (setupFlow.handleSubmit(submitted)) return;
+	// Capture before submitting: anything entered while a turn is already
+	// streaming is a concurrent slash command (or a deferred prompt) and must not
+	// clobber the tracked in-flight turn.
+	const concurrent = isResponding;
+	const submission = submitEditorText(submitted).catch((error) => {
+		insertMarkdown(`**Error**\n\n${formatError(error)}`);
+	});
+	if (concurrent) return;
+	const tracked: Promise<void> = submission.finally(() => {
+		if (runningTurn === tracked) runningTurn = undefined;
+	});
+	runningTurn = tracked;
+};
+
+tui.addChild(banner);
+tui.addChild(transcriptViewport);
+tui.addChild(status);
+tui.addChild(commandTypeaheadPanel);
+tui.addChild(editor);
+tui.setFocus(editor);
+tui.addInputListener((data) => {
+	if ((matchesKey(data, Key.ctrl("t")) || data === "\x14") && !setupFlow.isWaitingForInput() && commandPaletteOverlay?.isFocused() !== true) {
+		toggleTranscriptFocus();
+		return { consume: true };
+	}
+	if (transcriptViewport.focused) {
+		if (matchesKey(data, Key.escape)) {
+			tui.setFocus(editor);
+			refreshStatusView();
+			return { consume: true };
+		}
+		if (isTranscriptNavigationInput(data)) {
+			transcriptViewport.handleInput(data);
+			tui.requestRender();
+			return { consume: true };
+		}
+		return { consume: true };
+	}
+	if (matchesKey(data, Key.ctrl("/")) || data === "\x1f") {
+		if (setupFlow.isWaitingForInput()) return undefined;
+		openCommandPalette();
+		return { consume: true };
+	}
+	if (matchesKey(data, Key.ctrl("c"))) {
+		if (commandPaletteOverlay?.isFocused() === true) {
+			closeCommandPalette();
+			return { consume: true };
+		}
+		if (setupFlow.isWaitingForInput()) {
+			setupFlow.handleSubmit("/cancel");
+			return { consume: true };
+		}
+		void shutdown(0);
+		return { consume: true };
+	}
+	if (matchesKey(data, Key.escape) && setupFlow.isWaitingForInput()) {
+		setupFlow.handleSubmit("/cancel");
+		return { consume: true };
+	}
+	const commandInput = handleCommandTypeaheadInput(data);
+	if (commandInput !== undefined) return commandInput;
+	const transcriptInput = handleTranscriptViewportGlobalInput(data);
+	if (transcriptInput !== undefined) return transcriptInput;
+	if (isClankySgrMouseInput(data)) return { consume: true };
+	const rewritten = rewriteDroppedPaste(data);
+	return rewritten === data ? undefined : { data: rewritten };
+});
+refreshStatus("ready");
+tui.start();
+enableClankyMouseTracking();
 
 try {
-	await runner.run();
+	await new Promise<void>(() => {});
 } finally {
-	fullscreenController.disable();
+	disableClankyMouseTracking();
+	tui.stop();
 	await reportClankyFaceToHerdr("unknown", "Clanky face stopped");
 	await stopCallbackProxy();
 	if (ownsServer) await stopServer();
@@ -490,11 +775,8 @@ async function prepareAttachmentSendInput<TOutput>(input: SendTurnInput<TOutput>
 	return { ...input, message } as SendTurnInput<TOutput>;
 }
 
-function installClankyPromptCommands(): void {
-	const registry = PROMPT_COMMANDS as unknown as ClankyPromptCommandSpec[];
-	registry.splice(
-		0,
-		registry.length,
+function buildClankyPromptCommands(): ClankyPromptCommandSpec[] {
+	return [
 		{
 			name: "help",
 			aliases: [],
@@ -508,6 +790,13 @@ function installClankyPromptCommands(): void {
 			description: "Start a fresh session",
 			takesArgument: false,
 			build: () => ({ type: "new" }),
+		},
+		{
+			name: "clear",
+			aliases: ["cls"],
+			description: "Clear the on-screen transcript (keeps the current session)",
+			takesArgument: false,
+			build: () => ({ type: "clear" }),
 		},
 		{
 			name: "discord-token",
@@ -569,7 +858,7 @@ function installClankyPromptCommands(): void {
 			name: "image-model",
 			aliases: ["images"],
 			description: "Set OpenAI image generation model",
-			argumentHint: "[model-id]",
+			argumentHint: "[model-id|status|unset]",
 			takesArgument: true,
 			build: (argument) => ({ type: "extension", name: "image-model", argument }),
 		},
@@ -620,26 +909,18 @@ function installClankyPromptCommands(): void {
 			takesArgument: true,
 			build: (argument) => ({ type: "extension", name: "mcp", argument }),
 		},
-		{
-			name: "browser",
-			aliases: ["bridge"],
-			description: "Install or inspect the browser-control extension bridge",
-			argumentHint: "[status|install]",
-			takesArgument: true,
-			build: (argument) => ({ type: "extension", name: "browser", argument }),
-		},
-		{
-			name: "fullscreen",
-			aliases: ["fs"],
-			description: "Pin the TUI input at the bottom of the terminal",
-			argumentHint: "[status|on|off|toggle]",
-			takesArgument: true,
-			build: (argument) => ({ type: "extension", name: "fullscreen", argument }),
-		},
-		{
-			name: "trace",
-			aliases: [],
-			description: "Show compact per-turn stream traces",
+			{
+				name: "browser",
+				aliases: ["bridge"],
+				description: "Install or inspect the browser-control extension bridge",
+				argumentHint: "[status|install]",
+				takesArgument: true,
+				build: (argument) => ({ type: "extension", name: "browser", argument }),
+			},
+				{
+					name: "trace",
+					aliases: [],
+				description: "Show compact per-turn stream traces",
 			argumentHint: "[status|off|no-reply|all]",
 			takesArgument: true,
 			build: (argument) => ({ type: "extension", name: "trace", argument }),
@@ -652,224 +933,645 @@ function installClankyPromptCommands(): void {
 			build: (argument) => ({ type: "extension", name: "status", argument }),
 		},
 		{
-			name: "loglevel",
-			aliases: [],
-			description: "Show or hide captured stdout/stderr/sandbox logs",
-			argumentHint: "[all|stderr|sandbox|none]",
-			takesArgument: true,
-			build: (argument) => ({ type: "loglevel", argument }),
-		},
-		{
 			name: "exit",
 			aliases: ["quit"],
 			description: "Quit the face",
 			takesArgument: false,
 			build: () => ({ type: "exit" }),
 		},
+	];
+}
+
+type FlowHost = {
+	insertMarkdown(text: string): FaceBlockHandle;
+	setStatus(message: string): void;
+};
+
+function createFaceRenderSink(): FaceRenderSink {
+	return {
+		insertMarkdown,
+		setLoaderMessage(message: string): void {
+			activeLoader?.setMessage(message);
+		},
+		setStatus(message: string): void {
+			refreshStatus(message);
+		},
+	};
+}
+
+function createFlowHost(): FlowHost {
+	return {
+		insertMarkdown,
+		setStatus: refreshStatus,
+	};
+}
+
+function openCommandPalette(): void {
+	closeCommandPalette();
+	const workbench = new ClankyCommandWorkbench(COMMANDS, {
+		onCancel: closeCommandPalette,
+		onRender: () => tui.requestRender(),
+		onSubmit(text): void {
+			closeCommandPalette();
+			editor.setText(text);
+			refreshCommandSurface(text);
+			tui.setFocus(editor);
+		},
+	}, commandUiTheme, clankyCommandFilterFromText(editor.getText()));
+	commandPaletteOverlay = tui.showOverlay(workbench, {
+		anchor: "bottom-center",
+		maxHeight: "70%",
+		margin: { bottom: 3, left: 2, right: 2 },
+		width: "92%",
+	});
+	tui.requestRender();
+}
+
+function closeCommandPalette(): void {
+	const handle = commandPaletteOverlay;
+	commandPaletteOverlay = undefined;
+	if (handle !== undefined) handle.hide();
+	tui.setFocus(editor);
+	tui.requestRender();
+}
+
+function toggleTranscriptFocus(): void {
+	if (transcriptViewport.focused) tui.setFocus(editor);
+	else tui.setFocus(transcriptViewport);
+	refreshStatusView();
+	tui.requestRender();
+}
+
+function isTranscriptNavigationInput(data: string): boolean {
+	return (
+		matchesKey(data, Key.up) ||
+		matchesKey(data, Key.down) ||
+		matchesKey(data, Key.pageUp) ||
+		matchesKey(data, Key.pageDown) ||
+		matchesKey(data, Key.home) ||
+		matchesKey(data, Key.end) ||
+		matchesKey(data, Key.enter) ||
+		matchesKey(data, Key.space) ||
+		data === "\r" ||
+		data === " "
 	);
 }
 
-function createClankyOutput(output: NodeJS.WriteStream): TerminalOutput {
-	const write = output.write.bind(output);
-	return {
-		get isTTY() {
-			return output.isTTY;
-		},
-		get columns() {
-			return terminalDimensions(output).columns;
-		},
-		get rows() {
-			return terminalDimensions(output).rows;
-		},
-		write(
-			chunk: string | Uint8Array,
-			encodingOrCallback?: BufferEncoding | ((error?: Error | null) => void),
-			callback?: (error?: Error | null) => void,
-		): boolean {
-			const next = fullscreenController.remap(rewriteOutputChunk(chunk));
-			if (typeof encodingOrCallback === "function") return write(next, encodingOrCallback);
-			if (encodingOrCallback !== undefined) return write(next, encodingOrCallback, callback);
-			return write(next);
-		},
-		on(event: "resize", listener: () => void): TerminalOutput {
-			if (event === "resize") terminalResize.on(listener);
-			return this;
-		},
-		off(event: "resize", listener: () => void): TerminalOutput {
-			if (event === "resize") terminalResize.off(listener);
-			return this;
-		},
-	};
+function handleTranscriptViewportGlobalInput(data: string): { consume: true } | undefined {
+	if (!shouldRouteClankyTranscriptGlobalInput(data, {
+		commandPaletteFocused: commandPaletteOverlay?.isFocused() === true,
+		editorAutocompleteOpen: editor.isShowingAutocomplete(),
+		editorText: editor.getText(),
+		setupWaiting: setupFlow.isWaitingForInput(),
+		transcriptFocused: transcriptViewport.focused,
+	})) {
+		return undefined;
+	}
+	if (!transcriptViewport.handleGlobalInput(data)) return undefined;
+	tui.requestRender();
+	return { consume: true };
 }
 
-type TerminalResizeHub = {
-	on(listener: () => void): void;
-	off(listener: () => void): void;
-};
+function handleCommandTypeaheadInput(data: string): { consume?: boolean; data?: string } | undefined {
+	if (setupFlow.isWaitingForInput() || commandPaletteOverlay?.isFocused() === true) return undefined;
+	const state = commandTypeaheadState;
+	if (state === undefined || state.dismissed) return undefined;
+	const selected = selectedClankyCommandTypeahead(state);
+	const hasSelection = selected !== undefined;
+	const listOpen = isClankyCommandTypeaheadOpen(state);
+	const exact = isExactClankyCommandTypeahead(state);
 
-function createTerminalResizeHub(output: NodeJS.WriteStream): TerminalResizeHub {
-	const listeners = new Set<() => void>();
-	let last = terminalDimensions(output);
-	let pending: NodeJS.Immediate | undefined;
-	let poll: NodeJS.Timeout | undefined;
+	if (listOpen && matchesKey(data, Key.up)) {
+		setCommandTypeaheadState(moveClankyCommandTypeaheadSelection(state, -1));
+		return { consume: true };
+	}
+	if (listOpen && matchesKey(data, Key.down)) {
+		setCommandTypeaheadState(moveClankyCommandTypeaheadSelection(state, 1));
+		return { consume: true };
+	}
+	if ((listOpen || exact || state.matches.length === 0) && matchesKey(data, Key.escape)) {
+		setCommandTypeaheadState(dismissClankyCommandTypeahead(state));
+		return { consume: true };
+	}
+	if (hasSelection && (matchesKey(data, Key.tab) || data === "\t")) {
+		const text = clankyCommandCompletion(selected);
+		editor.setText(text);
+		refreshCommandSurface(text);
+		return { consume: true };
+	}
+	if (hasSelection && listOpen && (matchesKey(data, Key.enter) || data === "\r")) {
+		const text = clankyCommandCompletion(selected).trimEnd();
+		editor.setText(text);
+		refreshCommandSurface(text);
+		return undefined;
+	}
 
-	const emitIfChanged = (): void => {
-		const next = terminalDimensions(output);
-		if (next.columns === last.columns && next.rows === last.rows) return;
-		last = next;
-		for (const listener of listeners) listener();
-	};
+	return undefined;
+}
 
-	const schedule = (): void => {
-		if (pending !== undefined) return;
-		pending = setImmediate(() => {
-			pending = undefined;
-			emitIfChanged();
+function setCommandTypeaheadState(state: ClankyCommandTypeaheadState | undefined): void {
+	commandTypeaheadState = state;
+	commandTypeaheadPanel.setText(editor.getText(), state, setupFlow.isWaitingForInput());
+	tui.requestRender();
+}
+
+function createSetupFlow(host: FlowHost): SetupFlowController {
+	let cancelActivePrompt: (() => void) | undefined;
+	const interruptResolvers = new Set<() => void>();
+
+	function handleSubmit(text: string): boolean {
+		const trimmed = text.trim();
+		if (trimmed !== "/cancel") return false;
+		cancelActivePrompt?.();
+		for (const resolve of interruptResolvers) resolve();
+		interruptResolvers.clear();
+		refreshStatusView();
+		refreshCommandSurface(editor.getText());
+		host.setStatus("cancelled");
+		return true;
+	}
+
+	async function readTextOverlay(
+		options: Parameters<SetupFlow["readText"]>[0],
+		error: string | undefined,
+		defaultValue: string | undefined,
+	): Promise<string | undefined> {
+		return await new Promise<string | undefined>((resolve) => {
+			let settled = false;
+			let handle: OverlayHandle | undefined;
+			const finish = (value: string | undefined): void => {
+				if (settled) return;
+				settled = true;
+				if (cancelActivePrompt === cancel) cancelActivePrompt = undefined;
+				handle?.hide();
+				tui.setFocus(editor);
+				refreshStatusView();
+				refreshCommandSurface(editor.getText());
+				tui.requestRender();
+				resolve(value);
+			};
+			const cancel = (): void => finish(undefined);
+			cancelActivePrompt = cancel;
+			refreshStatusView();
+			refreshCommandSurface(editor.getText());
+			const prompt = new InteractiveTextPrompt({
+				defaultValue,
+				error,
+				message: options.message,
+				onCancel: cancel,
+				onRender: () => tui.requestRender(),
+				onSubmit: (value) => finish(value),
+				placeholder: options.placeholder,
+			});
+			handle = tui.showOverlay(prompt, setupOverlayOptions("center"));
+			handle.focus();
+			tui.requestRender();
 		});
-		pending.unref?.();
-	};
+	}
 
-	const startPoll = (): void => {
-		if (poll !== undefined) return;
-		poll = setInterval(emitIfChanged, TERMINAL_RESIZE_POLL_MS);
-		poll.unref?.();
-	};
-
-	const stopPoll = (): void => {
-		if (poll === undefined) return;
-		clearInterval(poll);
-		poll = undefined;
-	};
-
-	output.on("resize", schedule);
-	process.on("SIGWINCH", schedule);
+	async function readSelectOverlay(options: Parameters<SetupFlow["readSelect"]>[0]): Promise<string[] | undefined> {
+		return await new Promise<string[] | undefined>((resolve) => {
+			let settled = false;
+			let handle: OverlayHandle | undefined;
+			const finish = (values: readonly string[] | undefined): void => {
+				if (settled) return;
+				settled = true;
+				if (cancelActivePrompt === cancel) cancelActivePrompt = undefined;
+				handle?.hide();
+				tui.setFocus(editor);
+				refreshStatusView();
+				refreshCommandSurface(editor.getText());
+				tui.requestRender();
+				resolve(values === undefined ? undefined : [...values]);
+			};
+			const cancel = (): void => finish(undefined);
+			cancelActivePrompt = cancel;
+			refreshStatusView();
+			refreshCommandSurface(editor.getText());
+			const prompt = new InteractiveSelectPrompt({
+				initialValue: options.initialValue,
+				initialValues: options.initialValues,
+				kind: options.kind,
+				message: options.message,
+				onCancel: cancel,
+				onRender: () => tui.requestRender(),
+				onSubmit: (values) => finish(values),
+				options: options.options.map(toInteractivePromptOption),
+				required: options.required,
+				theme: selectListTheme,
+			});
+			handle = tui.showOverlay(prompt, setupOverlayOptions("center"));
+			handle.focus();
+			tui.requestRender();
+		});
+	}
 
 	return {
-		on(listener: () => void): void {
-			listeners.add(listener);
-			startPoll();
+		begin(title: string): void {
+			host.setStatus(title);
 		},
-		off(listener: () => void): void {
-			listeners.delete(listener);
-			if (listeners.size === 0) stopPoll();
+		end(): void {
+			host.setStatus("ready");
+		},
+		renderOutput(text: string): void {
+			const summary = firstMeaningfulLine(text);
+			if (summary !== undefined) host.setStatus(summary);
+		},
+		renderLine(text: string, tone: FlowLineTone = "info"): void {
+			const summary = firstMeaningfulLine(text);
+			if (summary !== undefined) host.setStatus(`${titleCaseConnection(tone)}: ${summary}`);
+		},
+		setStatus(statusText: string | undefined): void {
+			host.setStatus(statusText ?? "ready");
+		},
+		async readText(options): Promise<string | undefined> {
+			let defaultValue = options.defaultValue;
+			let error: string | undefined;
+			for (;;) {
+				const submitted = await readTextOverlay(options, error, defaultValue);
+				if (submitted === undefined) return undefined;
+				const value = submitted.trim().length === 0 && options.defaultValue !== undefined ? options.defaultValue : submitted;
+				error = options.validate?.(value);
+				if (error === undefined) return value;
+				defaultValue = value;
+			}
+		},
+		async readSelect(options): Promise<string[] | undefined> {
+			return await readSelectOverlay(options);
+		},
+		waitForInterrupt() {
+			let resolvePromise: (() => void) | undefined;
+			const promise = new Promise<void>((resolve) => {
+				resolvePromise = resolve;
+				interruptResolvers.add(resolve);
+				refreshStatusView();
+				refreshCommandSurface(editor.getText());
+			});
+			return {
+				promise,
+				dispose(): void {
+					if (resolvePromise !== undefined) interruptResolvers.delete(resolvePromise);
+					refreshStatusView();
+					refreshCommandSurface(editor.getText());
+				},
+			};
+		},
+		handleSubmit,
+		isWaitingForInput(): boolean {
+			return cancelActivePrompt !== undefined || interruptResolvers.size > 0;
 		},
 	};
 }
 
-function createClankyInput(input: NodeJS.ReadStream): TerminalInput {
-	const listeners = new Set<(chunk: Buffer) => void>();
-	const source = input as NodeJS.ReadStream & { setRawMode?: (mode: boolean) => unknown };
-	const decoder = new StringDecoder("utf8");
-	const rewriteDroppedPaste = createDroppedPathPasteRewriter({ cwd: REPO });
-	input.on("data", (chunk: Buffer) => {
-		const next = rewriteDroppedPaste(filterFullscreenInput(decoder.write(chunk)));
-		if (next.length === 0) return;
-		const forwarded = Buffer.from(next, "utf8");
-		for (const listener of listeners) listener(forwarded);
+function setupOverlayOptions(anchor: "center" | "bottom-center"): Parameters<TUI["showOverlay"]>[1] {
+	return {
+		anchor,
+		margin: { bottom: 3, left: 2, right: 2, top: 2 },
+		maxHeight: "70%",
+		minWidth: 48,
+		width: "88%",
+	};
+}
+
+function toInteractivePromptOption(option: MenuOption): InteractivePromptOption {
+	return {
+		description: option.description,
+		hint: option.hint,
+		label: option.label,
+		value: option.value,
+	};
+}
+
+function insertMarkdown(text: string): FaceBlockHandle {
+	const component = new ClankyTranscriptMarkdownBlock(text, {
+		bold: ansi.bold,
+		cyan: ansi.cyan,
+		dim: ansi.dim,
+		green: ansi.green,
+		markdown: markdownTheme,
+		red: ansi.red,
+		yellow: ansi.yellow,
 	});
+	insertTranscript(component);
+	tui.requestRender();
 	return {
-		get isTTY() {
-			return input.isTTY;
-		},
-		on(event: "data", listener: (chunk: Buffer) => void): TerminalInput {
-			if (event === "data") listeners.add(listener);
-			return this;
-		},
-		off(event: "data", listener: (chunk: Buffer) => void): TerminalInput {
-			if (event === "data") listeners.delete(listener);
-			return this;
-		},
-		resume(): TerminalInput {
-			input.resume();
-			return this;
-		},
-		pause(): TerminalInput {
-			input.pause();
-			return this;
-		},
-		setRawMode(mode: boolean): TerminalInput {
-			source.setRawMode?.(mode);
-			return this;
+		setMarkdown(markdown: string): void {
+			component.setMarkdown(markdown);
+			tui.requestRender();
 		},
 	};
 }
 
-function filterFullscreenInput(text: string): string {
-	if (!fullscreenController.active) return text;
-	let out = "";
-	for (let i = 0; i < text.length; ) {
-		const rest = text.slice(i);
-		const consumed = consumeFullscreenScrollInput(rest);
-		if (consumed > 0) {
-			i += consumed;
-			continue;
+function insertCommandResult(prompt: string, message: string, tone: CommandLogTone): void {
+	const component = new Text(formatCommandLogText(prompt, message, tone), 1, 0);
+	insertTranscript(component);
+	tui.requestRender();
+}
+
+function formatCommandLogText(prompt: string, message: string, tone: CommandLogTone): string {
+	const command = slashCommandLabel(prompt);
+	const status = tone === "error" ? ansi.red("error") : ansi.green("done");
+	const header = `${status} ${ansi.cyan(command)} ${ansi.dim("command")}`;
+	const body = commandResultBodyLines(message);
+	return [header, ...body.map((line) => `  ${styleCommandResultLine(line)}`)].join("\n");
+}
+
+function slashCommandLabel(prompt: string): string {
+	const token = prompt.trim().split(/\s+/u)[0];
+	return token?.startsWith("/") === true ? token : "/command";
+}
+
+function commandResultBodyLines(message: string): string[] {
+	const normalized = message.trim().replace(/\n{3,}/gu, "\n\n");
+	if (normalized.length === 0) return [];
+	const lines = normalized.split(/\r?\n/u);
+	const maxLines = 8;
+	if (lines.length <= maxLines) return lines;
+	return [...lines.slice(0, maxLines - 1), ansi.dim(`... ${lines.length - maxLines + 1} more lines`)];
+}
+
+function styleCommandResultLine(line: string): string {
+	if (line.trim().length === 0) return "";
+	const heading = /^([A-Za-z][A-Za-z0-9 /_-]{0,30}:)(.*)$/u.exec(line);
+	if (heading !== null) return `${ansi.yellow(heading[1] ?? "")}${heading[2] ?? ""}`;
+	if (/^(Usage|Examples):$/u.test(line)) return ansi.dim(line);
+	return line;
+}
+
+function firstMeaningfulLine(text: string): string | undefined {
+	const line = text.split(/\r?\n/u).map((entry) => entry.trim()).find((entry) => entry.length > 0);
+	return line === undefined ? undefined : truncate(line, 96);
+}
+
+function insertTranscript(component: Component, options?: ClankyTranscriptBlockOptions): ClankyTranscriptBlockHandle {
+	return transcriptViewport.addChild(component, options);
+}
+
+function maxTranscriptRows(width: number): number {
+	const reservedRows =
+		banner.render(width).length +
+		status.render(width).length +
+		commandTypeaheadPanel.render(width).length +
+		editor.render(width).length;
+	return resolveClankyTranscriptRows({
+		minRows: MIN_TRANSCRIPT_ROWS,
+		reservedRows,
+		terminalRows: tui.terminal.rows,
+	});
+}
+
+function maxCommandTypeaheadRows(width = tui.terminal.columns): number {
+	const reservedRows =
+		banner.render(width).length +
+		status.render(width).length +
+		editor.render(width).length +
+		MIN_TRANSCRIPT_ROWS;
+	return resolveClankyCommandRows({
+		maxRows: 10,
+		reservedRows,
+		terminalRows: tui.terminal.rows,
+	});
+}
+
+async function seedPromptHistory(targetEditor: Editor): Promise<void> {
+	const entries = await readPromptHistoryFile(clankyPromptHistoryPath());
+	for (const entry of entries) targetEditor.addToHistory(entry);
+}
+
+function rememberPrompt(prompt: string): void {
+	editor.addToHistory(prompt);
+	void appendPromptHistoryEntry(clankyPromptHistoryPath(), prompt).catch(() => undefined);
+}
+
+async function submitEditorText(rawPrompt: string): Promise<void> {
+	const prompt = rawPrompt.trim();
+	if (prompt.length === 0) return;
+	// Slash commands stay usable while a turn streams, so they are never gated on
+	// isResponding. A second plain prompt would collide with the active turn, so
+	// restore the text rather than dropping what the user typed.
+	if (prompt.startsWith("/")) {
+		rememberPrompt(prompt);
+		await handleSlashPrompt(prompt);
+		return;
+	}
+	if (isResponding) {
+		editor.setText(rawPrompt);
+		refreshCommandSurface(rawPrompt);
+		return;
+	}
+	rememberPrompt(prompt);
+	await submitPrompt(prompt);
+}
+
+async function handleSlashPrompt(prompt: string): Promise<void> {
+	const parsed = parsePromptCommand(prompt);
+	if (typeof parsed === "string") {
+		insertCommandResult(prompt, parsed, "error");
+		return;
+	}
+	const outcome = await handleClankyCommand(parsed, commandRenderer);
+	if (outcome.clearTranscript === true) {
+		transcriptViewport.clear();
+		faceRenderer.resetTurn();
+		tui.requestRender();
+	}
+	if (outcome.message !== undefined && outcome.message.length > 0) {
+		insertCommandResult(prompt, outcome.message, outcome.message.toLowerCase().includes("unknown ") ? "error" : "success");
+	}
+	if (outcome.clearTranscript === true) {
+		insertCommandResult(prompt, "Transcript cleared.", "success");
+	}
+	if (outcome.newSession === true) {
+		if (isResponding) {
+			insertCommandResult(prompt, "Clanky is still responding; wait for the current turn to finish before starting a new session.", "error");
+		} else {
+			session = client.session();
+			faceRenderer.resetSession();
+			insertCommandResult(prompt, "New session started.", "success");
 		}
-		out += text[i] ?? "";
-		i += 1;
 	}
-	return out;
+	if (outcome.exit === true) await shutdown(0);
 }
 
-function consumeFullscreenScrollInput(text: string): number {
-	const pageUp = /^\x1b\[5(?:;\d+)?~/u.exec(text);
-	if (pageUp !== null) {
-		fullscreenController.scrollPage(1);
-		return pageUp[0].length;
+async function submitPrompt(prompt: string): Promise<void> {
+	faceRenderer.resetTurn();
+	isResponding = true;
+	insertMarkdown(`**You**\n\n${prompt}`);
+	const loader = new Loader(tui, ansi.cyan, ansi.dim, "Thinking...");
+	activeLoader = loader;
+	const loaderTranscript = insertTranscript(loader, { collapsible: false });
+	loader.start();
+	refreshStatus("thinking");
+	tui.requestRender();
+
+	try {
+		await consumeTurn(session.send(prompt));
+		const notice = faceRenderer.noticeForCompletedTurn(turnTraceMode);
+		if (notice !== undefined) insertMarkdown(`**Notice**\n\n${notice}`);
+	} catch (error) {
+		insertMarkdown(`**Error**\n\n${formatError(error)}`);
+	} finally {
+		loader.stop();
+		loaderTranscript.remove();
+		if (activeLoader === loader) activeLoader = undefined;
+		isResponding = false;
+		refreshStatus("ready");
+		tui.requestRender();
 	}
-	const pageDown = /^\x1b\[6(?:;\d+)?~/u.exec(text);
-	if (pageDown !== null) {
-		fullscreenController.scrollPage(-1);
-		return pageDown[0].length;
+}
+
+async function consumeTurn(responsePromise: Promise<Awaited<ReturnType<ClientSession["send"]>>>): Promise<void> {
+	const pendingInputRequests = new InputRequestQueue();
+	const response = await responsePromise;
+	for await (const event of response) {
+		const result = faceRenderer.renderEvent(event);
+		if (result.inputRequests.length > 0) pendingInputRequests.add(result.inputRequests);
+		refreshStatus(statusLabelForEvent(event));
+		tui.requestRender();
+		if (result.terminal) break;
 	}
-	const mouse = /^\x1b\[<(\d+);\d+;\d+([mM])/u.exec(text);
-	if (mouse !== null) {
-		const button = Number.parseInt(mouse[1] ?? "0", 10);
-		if (mouse[2] === "M" && (button & 64) === 64) {
-			fullscreenController.scroll((button & 1) === 0 ? 3 : -3);
+	const requests = pendingInputRequests.drain();
+	if (requests.length === 0) return;
+		const inputResponses = await readInputResponses(requests);
+		if (inputResponses.length === 0) return;
+		faceRenderer.recordInputResponses(inputResponses);
+		await consumeTurn(session.send({ inputResponses }));
+	}
+
+async function readInputResponses(requests: readonly InputRequest[]): Promise<InputResponse[]> {
+	activeLoader?.setMessage("Waiting for input...");
+	const responses: InputResponse[] = [];
+	try {
+		for (const request of requests) {
+			const response = await readInputResponse(request);
+			if (response === undefined) return [];
+			responses.push(response);
 		}
-		return mouse[0].length;
+		return responses;
+	} finally {
+		activeLoader?.setMessage("Continuing...");
 	}
-	return 0;
 }
 
-function rewriteOutputChunk(chunk: string | Uint8Array): string {
-	if (typeof chunk === "string") return rewriteOutputText(chunk);
-	return rewriteOutputText(Buffer.from(chunk).toString("utf8"));
-}
-
-function gateServerOutputUntilHeader(renderer: TerminalRenderer): void {
-	const renderAgentHeader = renderer.renderAgentHeader.bind(renderer);
-	renderer.renderAgentHeader = (options) => {
-		currentContextSize = contextSizeFromInfo(options.info);
-		emitClankyBanner(options.info);
-		renderAgentHeader(withStatusModelId(options));
-		terminalReady = true;
-		forwardServerOutput = server !== null;
-	};
-}
-
-// Clanky's welcome banner: a hooded-figure mascot with glowing eyes beside an
-// info feed (model + cwd). eve's own name/preview/tip lines are stripped by
-// rewriteOutputText so the banner owns the header identity.
-//
-// Default: printed once, above eve's header, as a title card that scrolls away.
-// With fullscreen enabled: seeded into the scrollable transcript while
-// Clanky's live input/status stays pinned to the bottom zone.
-function emitClankyBanner(info: AgentInfoResult | undefined): void {
-	if (bannerPrinted) return;
-	bannerPrinted = true;
-	const fields = buildBannerFields(info);
-	fullscreenFields = fields;
-	const lines = buildFullscreenHeader(fields);
-
-	if (fullscreenPreferred) {
-		if (fullscreenController.enable(lines)) {
-			bindFullscreenResize();
-			return;
-		}
+async function readInputResponse(request: InputRequest): Promise<InputResponse | undefined> {
+	const options = request.options ?? [];
+	if (options.length > 0) {
+		const selected = await setupFlow.readSelect({
+			kind: "single",
+			message: `${request.prompt}\n\n${formatInputRequests([request])}`,
+			options: options.map((option) => ({
+				value: option.id,
+				label: option.label,
+				description: option.description,
+				hint: option.style,
+			})),
+			initialValue: options[0]?.id,
+			required: request.display !== "text" && request.allowFreeform !== true,
+		});
+		if (selected === undefined) return undefined;
+		const optionId = selected[0];
+		if (optionId !== undefined) return { requestId: request.requestId, optionId };
+		if (request.allowFreeform !== true) return defaultResponseForInputRequest(request);
 	}
+	const text = await setupFlow.readText({
+		message: request.prompt,
+		placeholder: "Type a response, or /cancel",
+	});
+	return text === undefined ? undefined : { requestId: request.requestId, text };
+}
 
-	process.stdout.write(`${lines.join("\n")}\n\n`);
+function parsePromptCommand(prompt: string): ClankyPromptCommand | string {
+	const [rawName = "", ...rest] = prompt.slice(1).trim().split(/\s+/u);
+	const name = rawName.toLowerCase();
+	const spec = COMMANDS.find((command) => command.name === name || command.aliases.includes(name));
+	if (spec === undefined) return `Unknown command "/${rawName}". Type /help for available commands.`;
+	const argument = rest.join(" ").trim();
+	if (!spec.takesArgument && argument.length > 0) return `/${spec.name} does not take an argument.`;
+	return spec.build(argument);
+}
+
+async function handleClankyCommand(command: ClankyPromptCommand, renderer: CommandRenderer): Promise<PromptCommandOutcome> {
+	switch (command.type) {
+		case "help":
+			return { message: formatHelp() };
+		case "new":
+			return { newSession: true };
+		case "clear":
+			return { clearTranscript: true };
+		case "exit":
+			return { exit: true };
+		case "extension":
+			return await handleExtensionCommand(command, renderer);
+	}
+	return { message: "Unknown command." };
+}
+
+async function handleExtensionCommand(command: ClankyExtensionCommand, renderer: CommandRenderer): Promise<PromptCommandOutcome> {
+	switch (command.name) {
+		case "discord-token":
+			return { message: await setDiscordToken(command.argument, renderer.setupFlow) };
+		case "discord-scope":
+			return { message: await configureDiscordScope(command.argument, renderer.setupFlow) };
+		case "login":
+			return { message: await configureLogin(command.argument, renderer.setupFlow) };
+		case "model":
+			return { message: await configureModel(command.argument, renderer.setupFlow) };
+		case "harness":
+			return { message: await configureHarness(command.argument, renderer.setupFlow) };
+		case "effort":
+			return { message: await configureEffort(command.argument, renderer.setupFlow) };
+		case "approvals":
+			return { message: await configureApprovals(command.argument, renderer.setupFlow) };
+		case "image-model":
+			return { message: await configureImageModel(command.argument, renderer.setupFlow) };
+		case "vision-model":
+			return { message: await configureVisionModel(command.argument, renderer.setupFlow) };
+		case "attachments":
+			return { message: TUI_ATTACHMENT_HELP };
+		case "pet":
+			return { message: await configurePet(command.argument, renderer.setupFlow) };
+		case "voice":
+			return { message: await configureVoice(command.argument, renderer.setupFlow) };
+		case "integrations":
+			return { message: await configureIntegrations(command.argument, renderer.setupFlow) };
+		case "mcp":
+			return { message: await configureMcp(command.argument, renderer.setupFlow, renderer) };
+		case "browser":
+			return { message: await configureBrowserBridge(command.argument, renderer.setupFlow) };
+		case "trace":
+			return { message: await configureTrace(command.argument, renderer.setupFlow) };
+		case "status":
+			return { message: await statusText() };
+	}
+}
+
+function formatHelp(): string {
+	return [
+		"Available commands:",
+		"",
+		...COMMANDS.map((command) => {
+			const aliases = command.aliases.length === 0 ? "" : ` (${command.aliases.map((alias) => `/${alias}`).join(", ")})`;
+			const hint = command.argumentHint === undefined ? "" : ` ${command.argumentHint}`;
+			return `- /${command.name}${hint}${aliases} - ${command.description}`;
+		}),
+	].join("\n");
+}
+
+function statusLabelForEvent(event: HandleMessageStreamEvent): string {
+	switch (event.type) {
+		case "step.started":
+			return `step ${event.data.stepIndex + 1}`;
+		case "step.completed":
+			return `step ${event.data.stepIndex + 1} completed`;
+		case "session.waiting":
+			return "waiting";
+		case "session.completed":
+			return "ready";
+		case "session.failed":
+			return "failed";
+		default:
+			return "streaming";
+	}
 }
 
 function buildBannerFields(info: AgentInfoResult | undefined): BannerFields {
@@ -882,20 +1584,6 @@ function buildBannerFields(info: AgentInfoResult | undefined): BannerFields {
 	if (modelId !== undefined) fields.model = modelId;
 	fields.cwd = displayHomePath(REPO);
 	return fields;
-}
-
-function buildFullscreenHeader(fields: BannerFields = fullscreenFields ?? buildBannerFields(undefined)): string[] {
-	return renderClankyBanner(fields, detectBannerCapabilities(process.stdout));
-}
-
-// Keep fullscreen's transcript and input zones sized to the terminal across resizes.
-function bindFullscreenResize(): void {
-	if (fullscreenResizeBound) return;
-	fullscreenResizeBound = true;
-	terminalResize.on(() => {
-		if (!fullscreenController.active) return;
-		fullscreenController.resize(buildFullscreenHeader());
-	});
 }
 
 function bannerModelId(info: AgentInfoResult | undefined): string | undefined {
@@ -915,63 +1603,9 @@ function displayHomePath(path: string): string {
 	return path;
 }
 
-function installRendererSessionHooks(renderer: TerminalRenderer): void {
-	const readPrompt = renderer.readPrompt.bind(renderer);
-	renderer.readPrompt = async (options) => await readPrompt(withCurrentContextSize(options));
-
-	const readToolApproval = renderer.readToolApproval.bind(renderer);
-	renderer.readToolApproval = async (request, options) => await readToolApproval(request, withCurrentContextSize(options));
-
-	const readInputQuestion = renderer.readInputQuestion.bind(renderer);
-	renderer.readInputQuestion = async (question, options) => await readInputQuestion(question, withCurrentContextSize(options));
-
-	const renderStream = renderer.renderStream.bind(renderer);
-	renderer.renderStream = async (result: AgentTUIStreamResult, options) => {
-		const monitor = monitorNoReplyEvents(result.events);
-		await renderStream({ ...result, events: monitor.events }, withCurrentContextSize(options));
-		if (monitor.shouldRenderNotice()) {
-			renderer.renderNotice(turnTraceMode === "off" ? NO_ASSISTANT_REPLY_NOTICE : monitor.formatNoReplyNotice());
-		} else if (turnTraceMode === "all") {
-			renderer.renderNotice(monitor.formatTraceNotice());
-		}
-	};
-}
-
-function withCurrentContextSize(options: AgentTUISessionOptions | undefined): AgentTUISessionOptions | undefined {
-	if (currentContextSize === undefined) return options;
-	return { ...(options ?? {}), contextSize: currentContextSize };
-}
-
 function contextSizeFromInfo(info: AgentInfoResult | undefined): number | undefined {
 	const tokens = info?.agent.model.contextWindowTokens;
 	return typeof tokens === "number" && Number.isSafeInteger(tokens) && tokens > 0 ? tokens : undefined;
-}
-
-// eve renders the resolved model id on the persistent status line (not the
-// header). Append the active provider's reasoning effort to that id so the
-// face surfaces effort the way /status reports it. Local models also get their
-// effective context window in the model segment.
-function withStatusModelId(options: AgentHeaderOptions): AgentHeaderOptions {
-	const info = options.info;
-	if (info === undefined) return options;
-	const contextSize = contextSizeFromInfo(info);
-	let modelId = info.agent.model.id;
-	if (info.agent.model.endpoint?.kind === "external" && info.agent.model.endpoint.provider === "ollama") {
-		modelId = modelId.replace(/^ollama\//u, "");
-	}
-	if (contextSize !== undefined) modelId = `${modelId} ctx ${formatCompactTokenCount(contextSize)}`;
-	if (effortStatusSuffix.length > 0) modelId = `${modelId}${effortStatusSuffix}`;
-	if (modelId === info.agent.model.id) return options;
-	return {
-		...options,
-		info: {
-			...info,
-			agent: {
-				...info.agent,
-				model: { ...info.agent.model, id: modelId },
-			},
-		},
-	};
 }
 
 async function refreshEffortStatusSuffix(): Promise<void> {
@@ -981,9 +1615,48 @@ async function refreshEffortStatusSuffix(): Promise<void> {
 	effortStatusSuffix = effort !== undefined && effort.length > 0 ? ` (${effort} effort)` : "";
 }
 
-async function refreshFullscreenPreference(): Promise<void> {
-	const config = await readConfig();
-	fullscreenPreferred = parseToggle(process.env[CLANKY_FULLSCREEN_ENV]) ?? parseToggle(config.fullscreen) ?? false;
+function refreshStatus(label: string): void {
+	currentStatusLabel = label;
+	refreshStatusView();
+}
+
+function refreshStatusView(): void {
+	status.setText(formatStatusText(currentStatusLabel));
+	tui.requestRender();
+}
+
+function refreshBannerView(): void {
+	banner.setFields(buildBannerFields(latestInfo));
+	tui.requestRender();
+}
+
+function refreshCommandSurface(text: string): void {
+	const disabled = setupFlow.isWaitingForInput();
+	commandTypeaheadState = disabled ? undefined : clankyCommandTypeaheadFor(COMMANDS, text, commandTypeaheadState);
+	commandTypeaheadPanel.setText(text, commandTypeaheadState, disabled);
+	tui.requestRender();
+}
+
+function formatStatusText(label: string): string {
+	const model = bannerModelId(latestInfo) ?? "model unknown";
+	const responseState = isResponding && label !== "thinking" && !label.startsWith("step ") ? "responding" : "";
+	const setupState = setupFlow.isWaitingForInput() ? "setup input" : "";
+	const authState = connectionAuthPendingCount > 0 ? `auth pending ${connectionAuthPendingCount}` : "";
+	const focusState = transcriptViewport.focused ? "transcript nav" : "";
+	return [
+		ansi.dim("Clanky"),
+		label,
+		responseState,
+		setupState,
+		authState,
+		focusState,
+		model,
+		formatContextUsage(faceRenderer.lastUsage, currentContextSize),
+		`events ${faceRenderer.eventCount}`,
+		brainHost.replace(/^https?:\/\//u, ""),
+	]
+		.filter((part) => part.length > 0)
+		.join("  ·  ");
 }
 
 async function reportClankyFaceToHerdr(state: "idle" | "working" | "blocked" | "unknown", message: string): Promise<void> {
@@ -1005,96 +1678,79 @@ async function reportClankyFaceToHerdr(state: "idle" | "working" | "blocked" | "
 	]).catch(() => {});
 }
 
-function rewriteOutputText(chunk: string): string {
-	const text = chunk.includes(EVE_HEADER_NAME) ? stripEveHeaderIdentity(chunk) : chunk;
-	return appendContextUsagePercent(text, currentContextSize);
-}
-
-// Remove eve's name, preview, and tip lines from the agent-header chunk so
-// Clanky's banner is the sole header identity. Diagnostics (discovery
-// errors/warnings) and the live-region content are left untouched.
-function stripEveHeaderIdentity(chunk: string): string {
-	const esc = "\x1b";
-	const previewLine = new RegExp(
-		` ${esc}\\[2m(?:eve is currently in preview|Public preview): https://vercel\\.com/docs/release-phases/[^${esc}\\r\\n]*${esc}\\[22m\\n?`,
-		"gu",
-	);
-	let text = chunk.replace(`${EVE_HEADER_NAME}\n`, "").replace(EVE_HEADER_NAME, "");
-	text = text.replace(previewLine, "");
-	for (const tip of EVE_HEADER_TIPS) {
-		text = text.replace(` ${esc}[2m${tip}${esc}[22m\n`, "").replace(` ${esc}[2m${tip}${esc}[22m`, "");
+async function shutdown(exitCode: number): Promise<void> {
+	if (shutdownStarted) return;
+	shutdownStarted = true;
+	try {
+		if (runningTurn !== undefined) await runningTurn.catch(() => undefined);
+		disableClankyMouseTracking();
+		tui.stop();
+		await reportClankyFaceToHerdr("unknown", "Clanky face stopped");
+		await stopCallbackProxy();
+		if (ownsServer) await stopServer();
+	} finally {
+		process.exit(exitCode);
 	}
-	return text;
 }
 
-function createClankyCommandHandler(): PromptCommandHandler {
-	const handler = {
-		async handle(
-			command: ClankyExtensionCommand,
-			context: PromptCommandHandlerContext,
-		): Promise<PromptCommandOutcome> {
-			switch (command.name) {
-				case "discord-token":
-					return { message: await setDiscordToken(command.argument) };
-				case "discord-scope":
-					return { message: await configureDiscordScope(command.argument, context.renderer.setupFlow) };
-				case "login":
-					return { message: await configureLogin(command.argument, context.renderer.setupFlow) };
-				case "model":
-					return { message: await configureModel(command.argument, context.renderer.setupFlow) };
-				case "harness":
-					return { message: await configureHarness(command.argument, context.renderer.setupFlow) };
-				case "effort":
-					return { message: await configureEffort(command.argument, context.renderer.setupFlow) };
-				case "approvals":
-					return { message: await configureApprovals(command.argument) };
-				case "image-model":
-					return { message: await configureImageModel(command.argument) };
-				case "vision-model":
-					return { message: await configureVisionModel(command.argument, context.renderer.setupFlow) };
-				case "attachments":
-					return { message: TUI_ATTACHMENT_HELP };
-				case "pet":
-					return { message: await configurePet(command.argument) };
-				case "voice":
-					return { message: await configureVoice(command.argument, context.renderer.setupFlow) };
-				case "integrations":
-					return { message: await configureIntegrations(command.argument, context.renderer.setupFlow) };
-				case "mcp":
-					return { message: await configureMcp(command.argument, context.renderer.setupFlow, context.renderer) };
-				case "browser":
-					return { message: await configureBrowserBridge(command.argument) };
-				case "fullscreen":
-					return { message: await configureFullscreen(command.argument) };
-				case "trace":
-					return { message: configureTrace(command.argument) };
-				case "status":
-					return { message: await statusText() };
-			}
-		},
-	};
-	return handler as unknown as PromptCommandHandler;
+function enableClankyMouseTracking(): void {
+	if (mouseTrackingEnabled) return;
+	mouseTrackingEnabled = true;
+	tui.terminal.write(CLANKY_MOUSE_TRACKING_ENABLE);
 }
 
-async function setDiscordToken(argument: string): Promise<string> {
+function disableClankyMouseTracking(): void {
+	if (!mouseTrackingEnabled) return;
+	mouseTrackingEnabled = false;
+	tui.terminal.write(CLANKY_MOUSE_TRACKING_DISABLE);
+}
+
+async function setDiscordToken(argument: string, flow: SetupFlow | undefined): Promise<string> {
 	const args = splitArgs(argument);
 	const token = args.find((arg) => !arg.startsWith("--"));
 	if (token === undefined) {
-		return "Usage: /discord-token <token> [--user-token] [--voice]";
+		if (flow === undefined) return "Usage: /discord-token <token> [--user-token] [--voice]";
+		const update = await promptDiscordToken(flow);
+		if (update === undefined) return "/discord-token cancelled.";
+		await writeEnv(update.updates);
+		return await restartBrainMessage(update.message);
 	}
 
-	const updates: Record<string, string> = {
-		DISCORD_BOT_TOKEN: token,
-		CLANKY_DISCORD_CREDENTIAL_KIND: args.includes("--user-token") ? "user-token" : "bot-token",
-		CLANKY_DISCORD_PRESENCE: "1",
-	};
-	if (args.includes("--voice")) updates.CLANKY_DISCORD_VOICE = "1";
-
-	await writeEnv(updates);
-	return await restartBrainMessage("Discord credential saved");
+	const update = buildDiscordTokenUpdate(token, args.includes("--user-token") ? "user-token" : "bot-token", args.includes("--voice"));
+	await writeEnv(update.updates);
+	return await restartBrainMessage(update.message);
 }
 
-async function configureDiscordScope(argument: string, flow: SetupFlowRenderer | undefined): Promise<string> {
+async function promptDiscordToken(flow: SetupFlow): Promise<DiscordTokenUpdate | undefined> {
+	flow.begin("Set Discord credential");
+	try {
+		const kind = await selectOne(flow, "Choose the Discord credential kind.", DISCORD_CREDENTIAL_KIND_OPTIONS, "bot-token");
+		if (kind !== "bot-token" && kind !== "user-token") return undefined;
+		const voiceValue = await selectOne(flow, "Enable Discord voice with this credential?", DISCORD_TOKEN_VOICE_OPTIONS, "off");
+		const voice = parseOnOff(voiceValue);
+		if (voice === undefined) return undefined;
+		const token = await flow.readText({
+			message: "Paste the Discord credential.",
+			placeholder: kind === "user-token" ? "Discord user token" : "Discord bot token",
+			validate: requiredDiscordTokenText,
+		});
+		return token === undefined ? undefined : buildDiscordTokenUpdate(token, kind, voice);
+	} finally {
+		flow.end({ preserveDiagnostics: false });
+	}
+}
+
+function buildDiscordTokenUpdate(token: string, kind: "bot-token" | "user-token", voice: boolean): DiscordTokenUpdate {
+	const updates: Record<string, string> = {
+		DISCORD_BOT_TOKEN: token.trim(),
+		CLANKY_DISCORD_CREDENTIAL_KIND: kind,
+		CLANKY_DISCORD_PRESENCE: "1",
+		CLANKY_DISCORD_VOICE: voice ? "1" : "0",
+	};
+	return { updates, message: "Discord credential saved" };
+}
+
+async function configureDiscordScope(argument: string, flow: SetupFlow | undefined): Promise<string> {
 	const args = splitArgs(argument);
 	const command = args[0]?.toLowerCase() ?? "status";
 	const config = await readConfig();
@@ -1171,7 +1827,7 @@ async function configureDiscordScope(argument: string, flow: SetupFlowRenderer |
 }
 
 async function configureDiscordScopeFocused(
-	flow: SetupFlowRenderer,
+	flow: SetupFlow,
 	config: ClankyConfig,
 	title: string,
 	prompt: () => Promise<DiscordScopeUpdate | string | undefined>,
@@ -1189,7 +1845,7 @@ async function configureDiscordScopeFocused(
 	return await saveDiscordScopeUpdate(update);
 }
 
-async function configureDiscordScopeInteractive(flow: SetupFlowRenderer, config: ClankyConfig): Promise<string> {
+async function configureDiscordScopeInteractive(flow: SetupFlow, config: ClankyConfig): Promise<string> {
 	let update: DiscordScopeUpdate | string | undefined;
 	flow.begin("Configure Discord reply scope");
 	try {
@@ -1236,7 +1892,7 @@ async function configureDiscordScopeInteractive(flow: SetupFlowRenderer, config:
 }
 
 async function promptDiscordScopeReplace(
-	flow: SetupFlowRenderer,
+	flow: SetupFlow,
 	config: ClankyConfig,
 	target: DiscordScopeTarget,
 ): Promise<DiscordScopeUpdate | string | undefined> {
@@ -1255,7 +1911,7 @@ async function promptDiscordScopeReplace(
 }
 
 async function promptDiscordScopeAdd(
-	flow: SetupFlowRenderer,
+	flow: SetupFlow,
 	config: ClankyConfig,
 	target: DiscordScopeTarget,
 ): Promise<DiscordScopeUpdate | string | undefined> {
@@ -1272,7 +1928,7 @@ async function promptDiscordScopeAdd(
 }
 
 async function promptDiscordScopeRemove(
-	flow: SetupFlowRenderer,
+	flow: SetupFlow,
 	config: ClankyConfig,
 	target: DiscordScopeTarget,
 ): Promise<DiscordScopeUpdate | string | undefined> {
@@ -1291,7 +1947,7 @@ async function promptDiscordScopeRemove(
 }
 
 async function promptDiscordScopeDms(
-	flow: SetupFlowRenderer,
+	flow: SetupFlow,
 	config: ClankyConfig,
 ): Promise<DiscordScopeUpdate | undefined> {
 	const selected = await selectOne(
@@ -1304,7 +1960,7 @@ async function promptDiscordScopeDms(
 	return enabled === undefined ? undefined : buildDiscordScopeDmsUpdate(enabled);
 }
 
-async function promptDiscordScopeClear(flow: SetupFlowRenderer): Promise<DiscordScopeUpdate | undefined> {
+async function promptDiscordScopeClear(flow: SetupFlow): Promise<DiscordScopeUpdate | undefined> {
 	const target = await selectOne(flow, "Choose Discord scope settings to clear.", DISCORD_SCOPE_CLEAR_OPTIONS, "all");
 	if (target === undefined) return undefined;
 	const removals = discordScopeRemovalKeys(target);
@@ -1358,13 +2014,7 @@ function discordScopeStatusText(config: ClankyConfig): string {
 	return [
 		formatDiscordScopeConfig(config),
 		"",
-		"Run /discord-scope for the interactive picker.",
-		"Usage:",
-		"/discord-scope guilds <server_id...>",
-		"/discord-scope channels <channel_or_thread_id...>",
-		"/discord-scope add|remove guilds|channels <id...>",
-		"/discord-scope clear guilds|channels|dms|all",
-		"/discord-scope dms on|off",
+		"Run /discord-scope to edit, or /discord-scope help for usage.",
 	].join("\n");
 }
 
@@ -1466,7 +2116,7 @@ function uniqueStrings(values: readonly string[]): string[] {
 	return [...new Set(values)];
 }
 
-async function configureLogin(argument: string, flow: SetupFlowRenderer | undefined): Promise<string> {
+async function configureLogin(argument: string, flow: SetupFlow | undefined): Promise<string> {
 	const args = splitArgs(argument);
 	const first = args[0]?.toLowerCase();
 	if (first === "status") return await loginStatusText();
@@ -1485,7 +2135,7 @@ async function configureLogin(argument: string, flow: SetupFlowRenderer | undefi
 	return await runLogin(provider, flow);
 }
 
-async function selectLoginProvider(flow: SetupFlowRenderer): Promise<SubscriptionProvider | undefined> {
+async function selectLoginProvider(flow: SetupFlow): Promise<SubscriptionProvider | undefined> {
 	flow.begin("Authorize a subscription provider");
 	try {
 		const selected = await selectOne(
@@ -1503,7 +2153,7 @@ async function selectLoginProvider(flow: SetupFlowRenderer): Promise<Subscriptio
 	}
 }
 
-async function runLogin(provider: SubscriptionProvider, flow: SetupFlowRenderer): Promise<string> {
+async function runLogin(provider: SubscriptionProvider, flow: SetupFlow): Promise<string> {
 	const label = provider === "claude" ? "Claude" : "Codex";
 	const abort = new AbortController();
 	// Print the authorize URL to scrollback (static) and wait under a single-line
@@ -1576,7 +2226,7 @@ function formatCredStatus(status: { present: boolean; expiresMs?: number }): str
 	return `${state} (expires ${new Date(status.expiresMs).toISOString()})`;
 }
 
-async function configureModel(argument: string, flow: SetupFlowRenderer | undefined): Promise<string> {
+async function configureModel(argument: string, flow: SetupFlow | undefined): Promise<string> {
 	const args = splitArgs(argument);
 	const existing = await readConfig();
 	let provider = parseProvider(args[0]);
@@ -1624,8 +2274,13 @@ type HarnessUpdate = {
 	updates: Record<string, string>;
 	summary: string;
 };
+type HarnessInteractiveUpdate = {
+	updates: Record<string, string>;
+	removals?: readonly string[];
+	message: string;
+};
 
-async function configureHarness(argument: string, flow: SetupFlowRenderer | undefined): Promise<string> {
+async function configureHarness(argument: string, flow: SetupFlow | undefined): Promise<string> {
 	let args: string[];
 	try {
 		args = splitCommandLine(argument);
@@ -1658,7 +2313,7 @@ async function configureHarness(argument: string, flow: SetupFlowRenderer | unde
 async function configureHarnessAllowlist(
 	args: readonly string[],
 	config: ClankyConfig,
-	flow: SetupFlowRenderer | undefined,
+	flow: SetupFlow | undefined,
 ): Promise<string> {
 	let allowed: readonly CodingHarnessId[] | undefined;
 	if (args.length > 0) {
@@ -1685,45 +2340,163 @@ async function configureHarnessAllowlist(
 		}
 	}
 
+	const update = buildHarnessAllowlistUpdate(config, allowed);
+	if (typeof update === "string") return update;
+	await updateEnv(update.updates, update.removals ?? []);
+	return await restartBrainMessage(update.message);
+}
+
+async function configureHarnessInteractive(flow: SetupFlow, config: ClankyConfig): Promise<string> {
+	let update: HarnessInteractiveUpdate | string | undefined;
+	flow.begin("Configure coding harness");
+	try {
+		flow.renderOutput(formatCodingHarnessConfig(config));
+		const action = await selectOne(flow, "Choose the coding harness setting to change.", CODING_HARNESS_ACTION_OPTIONS, "status");
+		switch (action) {
+			case "status":
+				update = formatCodingHarnessConfig(config);
+				break;
+			case "allow": {
+				const selectedAllowedValues = await flow.readSelect({
+					kind: "multi",
+					message: "Toggle which coding harnesses Clanky may use for worker panes.",
+					options: CODING_HARNESS_OPTIONS,
+					initialValues: configuredAllowedHarnesses(config),
+					required: true,
+				});
+				update = selectedAllowedValues === undefined
+					? undefined
+					: buildHarnessAllowlistUpdate(config, selectedCodingHarnesses(selectedAllowedValues));
+				break;
+			}
+			case "fallback":
+				update = await promptHarnessFallbackUpdate(flow, config);
+				break;
+			case "custom":
+				update = await promptCustomHarnessUpdate(flow, config);
+				break;
+			default:
+				update = undefined;
+				break;
+		}
+	} finally {
+		flow.end({ preserveDiagnostics: false });
+	}
+	if (update === undefined) return "/harness cancelled.";
+	if (typeof update === "string") return update;
+	await updateEnv(update.updates, update.removals ?? []);
+	return await restartBrainMessage(update.message);
+}
+
+function buildHarnessAllowlistUpdate(
+	config: ClankyConfig,
+	allowed: readonly CodingHarnessId[] | undefined,
+): HarnessInteractiveUpdate | string {
 	if (allowed === undefined || allowed.length === 0) return "Harness allowlist must include at least one harness.";
 	const updates: Record<string, string> = { [CLANKY_CODING_HARNESS_ENV.allowed]: allowed.join(",") };
 	const configured = parseCodingHarnessId(config.codingHarness);
 	const removals = configured !== undefined && !allowed.includes(configured)
 		? [CLANKY_CODING_HARNESS_ENV.id, CLANKY_CODING_HARNESS_ENV.runtime]
 		: [];
-	await updateEnv(updates, removals);
 	const autoMessage = removals.length > 0 ? " Cleared the configured fallback; Clanky will pick from the allowed set." : "";
-	return await restartBrainMessage(`Allowed coding harnesses set to ${allowed.join(", ")}.${autoMessage}`);
+	return {
+		updates,
+		removals,
+		message: `Allowed coding harnesses set to ${allowed.join(", ")}.${autoMessage}`,
+	};
 }
 
-async function configureHarnessInteractive(flow: SetupFlowRenderer, config: ClankyConfig): Promise<string> {
-	flow.begin("Configure coding harness");
-	try {
-		const selectedAllowedValues = await flow.readSelect({
-			kind: "multi",
-			message: `${formatCodingHarnessConfig(config)}\n\nToggle which coding harnesses Clanky may use for worker panes.`,
-			options: CODING_HARNESS_OPTIONS,
-			initialValues: configuredAllowedHarnesses(config),
-			required: true,
-		});
-		if (selectedAllowedValues === undefined) return "/harness cancelled.";
-		const allowed = selectedCodingHarnesses(selectedAllowedValues);
-		if (allowed.length === 0) return "Harness allowlist must include at least one harness.";
-		await updateEnv(
-			{ [CLANKY_CODING_HARNESS_ENV.allowed]: allowed.join(",") },
-			[CLANKY_CODING_HARNESS_ENV.id, CLANKY_CODING_HARNESS_ENV.runtime],
+async function promptHarnessFallbackUpdate(
+	flow: SetupFlow,
+	config: ClankyConfig,
+): Promise<HarnessInteractiveUpdate | string | undefined> {
+	const allowed = configuredAllowedHarnesses(config);
+	const selectedHarness = parseCodingHarnessId(
+		await selectOne(
+			flow,
+			"Choose the fallback coding harness.",
+			CODING_HARNESS_OPTIONS.filter((option) => allowed.includes(option.value as CodingHarnessId)),
+			initialAllowedHarnessValue(config, allowed),
+		),
+	);
+	if (selectedHarness === undefined) return undefined;
+	if (selectedHarness === "custom") return await promptCustomHarnessUpdate(flow, config);
+
+	const runtime = parseCodingRuntime(
+		await selectOne(
+			flow,
+			"Choose the worker runtime.",
+			CODING_RUNTIME_OPTIONS,
+			config.codingHarness === selectedHarness ? config.codingHarnessRuntime ?? defaultCodingRuntimeForHarness(selectedHarness) : defaultCodingRuntimeForHarness(selectedHarness),
+		),
+	);
+	if (runtime === undefined) return undefined;
+
+	const launchable = parseLaunchableCodingHarnessId(selectedHarness);
+	const tail = ["--runtime", runtime];
+	if (launchable !== undefined) {
+		const env = codingHarnessEnv(config);
+		const launcher = parseCodingHarnessLauncher(
+			await selectOne(
+				flow,
+				`Choose the ${selectedHarness} launcher.`,
+				CODING_HARNESS_LAUNCHER_OPTIONS,
+				parseCodingHarnessLauncher(env[codingHarnessLauncherEnvKey(launchable)]) ?? "default",
+			),
 		);
-		flow.setStatus("Restarting Clanky...");
-		return await restartBrainMessage(
-			`Allowed coding harnesses set to ${allowed.join(", ")}. Clanky will pick from the allowed set when no harness is specified.`,
-		);
-	} finally {
-		flow.end({ preserveDiagnostics: false });
+		if (launcher === undefined) return undefined;
+		tail.push(launcher);
+		if (launcher === "ollama") {
+			const model = await flow.readText({
+				message: `Set the Ollama model for ${selectedHarness}.`,
+				defaultValue: env[codingHarnessModelEnvKey(launchable)] ?? "",
+				placeholder: "qwen3-coder:30b",
+			});
+			if (model === undefined) return undefined;
+			if (model.trim().length > 0) tail.push(model.trim());
+		}
 	}
+
+	const result = buildHarnessUpdate(selectedHarness, tail, config);
+	return typeof result === "string" ? result : { updates: result.updates, message: `Coding harness set to ${result.summary}` };
+}
+
+async function promptCustomHarnessUpdate(
+	flow: SetupFlow,
+	config: ClankyConfig,
+): Promise<HarnessInteractiveUpdate | string | undefined> {
+	if (!configuredAllowedHarnesses(config).includes("custom")) {
+		return "Custom coding harness is not allowed. Run /harness allow custom to allow it first.";
+	}
+	const runtime = parseCodingRuntime(
+		await selectOne(flow, "Choose the custom harness runtime.", CODING_RUNTIME_OPTIONS, parseCodingRuntime(config.codingHarnessRuntime) ?? "native"),
+	);
+	if (runtime === undefined) return undefined;
+	const commandText = await flow.readText({
+		message: "Set the custom coding harness command.",
+		defaultValue: config.codingHarnessCommand ?? "",
+		placeholder: "node worker.js",
+		validate: validateHarnessCommandText,
+	});
+	if (commandText === undefined) return undefined;
+	let command: string[];
+	try {
+		command = parseHarnessCommand(commandText) ?? [];
+	} catch (error) {
+		return `Invalid custom harness command: ${error instanceof Error ? error.message : String(error)}`;
+	}
+	const result = buildHarnessUpdate("custom", ["--runtime", runtime, ...command], config);
+	return typeof result === "string" ? result : { updates: result.updates, message: `Coding harness set to ${result.summary}` };
 }
 
 function selectedCodingHarnesses(values: readonly string[]): readonly CodingHarnessId[] {
 	return values.map((value) => parseCodingHarnessId(value)).filter((value): value is CodingHarnessId => value !== undefined);
+}
+
+function initialAllowedHarnessValue(config: ClankyConfig, allowed: readonly CodingHarnessId[]): CodingHarnessId | undefined {
+	const configured = parseCodingHarnessId(config.codingHarness);
+	if (configured !== undefined && allowed.includes(configured)) return configured;
+	return allowed[0];
 }
 
 function buildHarnessUpdate(harness: CodingHarnessId, args: readonly string[], config: ClankyConfig): HarnessUpdate | string {
@@ -1956,7 +2729,7 @@ function harnessUsage(): string {
 	].join("\n");
 }
 
-async function configureEffort(argument: string, flow: SetupFlowRenderer | undefined): Promise<string> {
+async function configureEffort(argument: string, flow: SetupFlow | undefined): Promise<string> {
 	const existing = await readConfig();
 	if (existing.provider === "claude") {
 		return "Reasoning effort is not configurable for the claude provider (it uses a different thinking mechanism).";
@@ -1990,18 +2763,34 @@ async function configureEffort(argument: string, flow: SetupFlowRenderer | undef
 	return await restartBrainMessage(`Codex reasoning effort set to ${effort}`);
 }
 
-async function configureApprovals(argument: string): Promise<string> {
+async function configureApprovals(argument: string, flow: SetupFlow | undefined): Promise<string> {
 	const mode = splitArgs(argument)[0]?.toLowerCase();
-	if (mode === undefined || mode === "status") {
-		const config = await readConfig();
-		const state = isAutoApproveValue(config.autoApprove)
-			? "auto (Clanky runs every tool without asking)"
-			: "prompt (per-tool approval policy applies)";
-		return `Approvals: ${state}. Usage: /approvals [auto|prompt]`;
+	if (mode === undefined) {
+		if (flow === undefined) return formatApprovalsStatus(await readConfig());
+		return await configureApprovalsInteractive(flow);
 	}
+	if (mode === "status" || mode === "show") return formatApprovalsStatus(await readConfig());
 	if (mode !== "auto" && mode !== "prompt") {
 		return `Unknown approvals mode "${mode}". Use auto, prompt, or status.`;
 	}
+	return await saveApprovalsMode(mode);
+}
+
+async function configureApprovalsInteractive(flow: SetupFlow): Promise<string> {
+	flow.begin("Configure approvals");
+	try {
+		flow.renderOutput(formatApprovalsStatus(await readConfig()));
+		const mode = await selectOne(flow, "Choose the approval mode.", APPROVAL_OPTIONS, "status");
+		if (mode === undefined) return "/approvals cancelled.";
+		if (mode === "status") return formatApprovalsStatus(await readConfig());
+		if (mode !== "auto" && mode !== "prompt") return "/approvals cancelled.";
+		return await saveApprovalsMode(mode);
+	} finally {
+		flow.end({ preserveDiagnostics: false });
+	}
+}
+
+async function saveApprovalsMode(mode: "auto" | "prompt"): Promise<string> {
 	await writeEnv({ CLANKY_AUTO_APPROVE: mode === "auto" ? "1" : "0" });
 	return await restartBrainMessage(
 		mode === "auto"
@@ -2010,66 +2799,143 @@ async function configureApprovals(argument: string): Promise<string> {
 	);
 }
 
-function configureTrace(argument: string): string {
+function formatApprovalsStatus(config: ClankyConfig): string {
+	const state = isAutoApproveValue(config.autoApprove)
+		? "auto (Clanky runs every tool without asking)"
+		: "prompt (per-tool approval policy applies)";
+	return `Approvals: ${state}. Usage: /approvals [auto|prompt|status]`;
+}
+
+async function configureTrace(argument: string, flow: SetupFlow | undefined): Promise<string> {
 	const raw = argument.trim();
 	const mode = parseTurnTraceMode(raw);
 	const normalized = raw.toLowerCase();
-	if (raw.length === 0 || normalized === "status" || normalized === "show") {
-		return `Turn trace: ${turnTraceMode}. Use /trace off|no-reply|all.`;
+	if (raw.length === 0) {
+		if (flow === undefined) return formatTraceStatus();
+		return await configureTraceInteractive(flow);
 	}
+	if (normalized === "status" || normalized === "show") return formatTraceStatus();
 	if (mode === undefined) return `Unknown trace mode "${argument}". Use /trace off|no-reply|all.`;
 	turnTraceMode = mode;
-	return `Turn trace: ${turnTraceMode}.`;
+	return formatTraceStatus();
 }
 
-async function configureFullscreen(argument: string): Promise<string> {
-	const raw = splitArgs(argument)[0]?.toLowerCase();
+async function configureTraceInteractive(flow: SetupFlow): Promise<string> {
+	flow.begin("Configure turn trace");
+	try {
+		flow.renderOutput(formatTraceStatus());
+		const selected = await selectOne(flow, "Choose the compact turn trace mode.", TRACE_OPTIONS, turnTraceMode);
+		const mode = parseTurnTraceMode(selected);
+		if (mode === undefined) return selected === "status" ? formatTraceStatus() : "/trace cancelled.";
+		turnTraceMode = mode;
+		return formatTraceStatus();
+	} finally {
+		flow.end({ preserveDiagnostics: false });
+	}
+}
+
+function formatTraceStatus(): string {
+	return `Turn trace: ${turnTraceMode}. Use /trace off|no-reply|all.`;
+}
+
+async function configureImageModel(argument: string, flow: SetupFlow | undefined): Promise<string> {
+	const args = splitArgs(argument);
+	const first = args[0]?.toLowerCase();
 	const config = await readConfig();
-	if (raw === undefined || raw === "status" || raw === "show") return formatFullscreenStatus(config);
-
-	const target = raw === "toggle" ? !fullscreenController.active : parseToggle(raw);
-	if (target === undefined) return `Unknown fullscreen mode "${raw}". Use on, off, toggle, or status.`;
-
-	await writeEnv({ [CLANKY_FULLSCREEN_ENV]: target ? "1" : "0" });
-	process.env[CLANKY_FULLSCREEN_ENV] = target ? "1" : "0";
-	fullscreenPreferred = target;
-
-	if (!target) {
-		if (fullscreenController.active) fullscreenController.disable();
-		return "Fullscreen disabled. Saved CLANKY_FULLSCREEN=0 to .env.local.";
+	if (first === "status" || first === "show") return formatImageModelStatus(config);
+	if (first === "unset" || first === "clear" || first === "default" || first === "none" || first === "off") {
+		await removeEnv(["CLANKY_OPENAI_IMAGE_MODEL"]);
+		return await restartBrainMessage(`OpenAI image model cleared; using ${DEFAULT_OPENAI_IMAGE_MODEL}`);
 	}
+	if (argument.trim().length > 0) return await saveOpenAiImageModel(argument);
+	if (flow === undefined) return `${formatImageModelStatus(config)}\n\n${imageModelUsage()}`;
+	return await configureImageModelInteractive(flow, config);
+}
 
-	if (fullscreenController.active) return "Fullscreen is already on. Saved CLANKY_FULLSCREEN=1 to .env.local.";
-	if (fullscreenController.enable(buildFullscreenHeader())) {
-		bindFullscreenResize();
-		return "Fullscreen enabled. Saved CLANKY_FULLSCREEN=1 to .env.local.";
+async function configureImageModelInteractive(flow: SetupFlow, config: ClankyConfig): Promise<string> {
+	let update: ImageModelUpdate | undefined;
+	flow.begin("Configure image model");
+	try {
+		flow.renderOutput(formatImageModelStatus(config));
+		const selected = await selectOne(
+			flow,
+			"Choose the OpenAI image generation model.",
+			imageModelOptions(config),
+			config.imageModel ?? DEFAULT_OPENAI_IMAGE_MODEL,
+		);
+		if (selected === undefined) return "/image-model cancelled.";
+		if (selected === CLEAR_IMAGE_MODEL_OPTION) {
+			update = {
+				removals: ["CLANKY_OPENAI_IMAGE_MODEL"],
+				message: `OpenAI image model cleared; using ${DEFAULT_OPENAI_IMAGE_MODEL}`,
+			};
+		} else {
+			const rawModel = selected === CUSTOM_IMAGE_MODEL_OPTION
+				? await flow.readText({
+					message: "Set the OpenAI image generation model.",
+					defaultValue: config.imageModel ?? DEFAULT_OPENAI_IMAGE_MODEL,
+					placeholder: DEFAULT_OPENAI_IMAGE_MODEL,
+					validate: requiredImageModelText,
+				})
+				: selected;
+			if (rawModel === undefined) return "/image-model cancelled.";
+			const model = rawModel.trim();
+			update = {
+				updates: { CLANKY_OPENAI_IMAGE_MODEL: model },
+				message: `OpenAI image model set to ${model}`,
+			};
+		}
+	} finally {
+		flow.end({ preserveDiagnostics: false });
 	}
-	return `Fullscreen saved on, but it cannot activate in this terminal (${fullscreenUnavailableReason()}).`;
+	if (update.removals !== undefined) await removeEnv(update.removals);
+	if (update.updates !== undefined) await writeEnv(update.updates);
+	return await restartBrainMessage(update.message);
 }
 
-function formatFullscreenStatus(config: ClankyConfig): string {
-	const processValue = parseToggle(process.env[CLANKY_FULLSCREEN_ENV]);
-	const fileValue = parseToggle(config.fullscreen);
-	const preferred = processValue ?? fileValue ?? false;
-	const source = processValue !== undefined ? "process env" : fileValue !== undefined ? ".env.local" : "default";
-	const active = fullscreenController.active ? "on" : "off";
-	const viable = fullscreenViable(process.stdout, buildFullscreenHeader().length) ? "viable" : `not viable: ${fullscreenUnavailableReason()}`;
-	return `Fullscreen: ${active}. Configured ${preferred ? "on" : "off"} from ${source}; terminal ${viable}. Use /fullscreen on|off|toggle.`;
-}
-
-function fullscreenUnavailableReason(): string {
-	if (process.stdout.isTTY !== true) return "output is not a TTY";
-	if (terminalDimensions(process.stdout).columns < 20) return "terminal is narrower than 20 columns";
-	return "terminal has too few rows";
-}
-
-async function configureImageModel(argument: string): Promise<string> {
-	const model = argument.trim() || "gpt-image-2";
+async function saveOpenAiImageModel(rawModel: string): Promise<string> {
+	const model = rawModel.trim();
+	if (model.length === 0) return imageModelUsage();
 	await writeEnv({ CLANKY_OPENAI_IMAGE_MODEL: model });
 	return await restartBrainMessage(`OpenAI image model set to ${model}`);
 }
 
-async function configureVisionModel(argument: string, flow: SetupFlowRenderer | undefined): Promise<string> {
+function imageModelOptions(config: ClankyConfig): readonly MenuOption[] {
+	const current = config.imageModel?.trim();
+	const options: MenuOption[] = [];
+	if (current !== undefined && current.length > 0 && current !== DEFAULT_OPENAI_IMAGE_MODEL) {
+		options.push({ value: current, label: current, hint: "current" });
+	}
+	options.push(
+		{
+			value: DEFAULT_OPENAI_IMAGE_MODEL,
+			label: DEFAULT_OPENAI_IMAGE_MODEL,
+			hint: current === undefined || current.length === 0 || current === DEFAULT_OPENAI_IMAGE_MODEL ? "current default" : "built-in default",
+		},
+		{ value: CUSTOM_IMAGE_MODEL_OPTION, label: "custom model id", hint: "type another OpenAI Images API model" },
+		{ value: CLEAR_IMAGE_MODEL_OPTION, label: "clear override", hint: `use built-in ${DEFAULT_OPENAI_IMAGE_MODEL}` },
+	);
+	return options;
+}
+
+function formatImageModelStatus(config: ClankyConfig): string {
+	const configured = config.imageModel?.trim();
+	const source = configured === undefined || configured.length === 0 ? "built-in default" : ".env.local";
+	return `OpenAI image model: ${configured && configured.length > 0 ? configured : DEFAULT_OPENAI_IMAGE_MODEL} (${source})`;
+}
+
+function imageModelUsage(): string {
+	return [
+		"Usage:",
+		"/image-model",
+		"/image-model status",
+		`/image-model ${DEFAULT_OPENAI_IMAGE_MODEL}`,
+		"/image-model <model-id>",
+		"/image-model unset",
+	].join("\n");
+}
+
+async function configureVisionModel(argument: string, flow: SetupFlow | undefined): Promise<string> {
 	const args = splitArgs(argument);
 	const first = args[0]?.toLowerCase();
 	const config = await readConfig();
@@ -2085,7 +2951,7 @@ async function configureVisionModel(argument: string, flow: SetupFlowRenderer | 
 	return await configureVisionModelInteractive(flow, config);
 }
 
-async function configureVisionModelInteractive(flow: SetupFlowRenderer, config: ClankyConfig): Promise<string> {
+async function configureVisionModelInteractive(flow: SetupFlow, config: ClankyConfig): Promise<string> {
 	let update: { updates?: Record<string, string>; removals?: string[]; message: string } | undefined;
 	flow.begin("Configure vision model");
 	try {
@@ -2159,25 +3025,47 @@ function visionModelUsage(): string {
 	].join("\n");
 }
 
-async function configurePet(argument: string): Promise<string> {
+async function configurePet(argument: string, flow: SetupFlow | undefined): Promise<string> {
 	const mode = splitArgs(argument)[0]?.toLowerCase();
-	if (mode === undefined || mode === "status") {
-		const config = await readConfig();
-		const state = isPetEnabledValue(config.pet) ? "on" : "off";
-		return `Pet: ${state} (needs the petdex desktop app running). Usage: /pet [on|off]`;
+	if (mode === undefined) {
+		if (flow === undefined) return formatPetStatus(await readConfig());
+		return await configurePetInteractive(flow);
 	}
+	if (mode === "status" || mode === "show") return formatPetStatus(await readConfig());
+	if (mode === "on" || mode === "off") return await savePetMode(mode);
+	return `Unknown pet mode "${mode}". Use on, off, or status.`;
+}
+
+async function configurePetInteractive(flow: SetupFlow): Promise<string> {
+	flow.begin("Configure desktop pet");
+	try {
+		const config = await readConfig();
+		flow.renderOutput(formatPetStatus(config));
+		const selected = await selectOne(flow, "Choose the desktop pet state.", PET_OPTIONS, isPetEnabledValue(config.pet) ? "on" : "off");
+		if (selected === undefined) return "/pet cancelled.";
+		if (selected === "status") return formatPetStatus(await readConfig());
+		if (selected !== "on" && selected !== "off") return "/pet cancelled.";
+		return await savePetMode(selected);
+	} finally {
+		flow.end({ preserveDiagnostics: false });
+	}
+}
+
+async function savePetMode(mode: "on" | "off"): Promise<string> {
 	if (mode === "on") {
 		await writeEnv({ CLANKY_PET: "1" });
 		return await restartBrainMessage("Desktop pet enabled; Clanky will mirror activity to the petdex sprite");
 	}
-	if (mode === "off") {
-		await writeEnv({ CLANKY_PET: "0" });
-		return await restartBrainMessage("Desktop pet disabled");
-	}
-	return `Unknown pet mode "${mode}". Use on, off, or status.`;
+	await writeEnv({ CLANKY_PET: "0" });
+	return await restartBrainMessage("Desktop pet disabled");
 }
 
-async function configureVoice(argument: string, flow: SetupFlowRenderer | undefined): Promise<string> {
+function formatPetStatus(config: ClankyConfig): string {
+	const state = isPetEnabledValue(config.pet) ? "on" : "off";
+	return `Pet: ${state} (needs the petdex desktop app running). Usage: /pet [on|off|status]`;
+}
+
+async function configureVoice(argument: string, flow: SetupFlow | undefined): Promise<string> {
 	const args = splitArgs(argument);
 	const config = await readConfig();
 	if (args.length === 0) {
@@ -2203,7 +3091,7 @@ async function configureVoice(argument: string, flow: SetupFlowRenderer | undefi
 }
 
 async function configureVoiceInteractive(
-	flow: SetupFlowRenderer,
+	flow: SetupFlow,
 	config: ClankyConfig,
 	initialSetting: VoiceSetting | undefined,
 ): Promise<string> {
@@ -2229,7 +3117,7 @@ async function configureVoiceInteractive(
 }
 
 async function promptVoiceSettingValue(
-	flow: SetupFlowRenderer,
+	flow: SetupFlow,
 	setting: VoiceSetting,
 	config: ClankyConfig,
 ): Promise<string | undefined> {
@@ -2356,7 +3244,7 @@ function buildVoiceSettingUpdate(setting: VoiceSetting, rawValue: string): Voice
 	}
 }
 
-async function configureIntegrations(argument: string, flow: SetupFlowRenderer | undefined): Promise<string> {
+async function configureIntegrations(argument: string, flow: SetupFlow | undefined): Promise<string> {
 	const available = await listAvailableConnections();
 	const current = await resolveRoleBindings();
 	const args = splitArgs(argument);
@@ -2414,8 +3302,8 @@ async function configureIntegrations(argument: string, flow: SetupFlowRenderer |
 
 async function configureMcp(
 	argument: string,
-	flow: SetupFlowRenderer | undefined,
-	renderer: PromptCommandHandlerContext["renderer"],
+	flow: SetupFlow | undefined,
+	renderer: CommandRenderer,
 ): Promise<string> {
 	const args = splitArgs(argument);
 	const action = parseMcpAction(args[0]);
@@ -2472,8 +3360,8 @@ async function configureMcp(
 }
 
 async function configureMcpInteractive(
-	flow: SetupFlowRenderer,
-	renderer: PromptCommandHandlerContext["renderer"],
+	flow: SetupFlow,
+	renderer: CommandRenderer,
 ): Promise<string> {
 	flow.begin("Manage MCPs");
 	try {
@@ -2513,8 +3401,8 @@ async function configureMcpInteractive(
 
 async function runMcpInstallCommand(
 	connectionName: string | undefined,
-	flow: SetupFlowRenderer,
-	renderer: PromptCommandHandlerContext["renderer"],
+	flow: SetupFlow,
+	renderer: CommandRenderer,
 ): Promise<string> {
 	if (connectionName === undefined) {
 		flow.begin("Install/auth MCP connection");
@@ -2540,8 +3428,8 @@ async function runMcpInstallCommand(
 
 async function runMcpAuthCommand(
 	connectionName: string | undefined,
-	flow: SetupFlowRenderer,
-	renderer: PromptCommandHandlerContext["renderer"],
+	flow: SetupFlow,
+	renderer: CommandRenderer,
 ): Promise<string> {
 	flow.begin("Authorize MCP connection");
 	try {
@@ -2555,8 +3443,8 @@ async function runMcpAuthCommand(
 
 async function runMcpConnectionAuthByName(
 	connectionName: string,
-	flow: SetupFlowRenderer,
-	renderer: PromptCommandHandlerContext["renderer"],
+	flow: SetupFlow,
+	renderer: CommandRenderer,
 ): Promise<string> {
 	const connection = await findMcpConnection(connectionName);
 	if (connection === undefined) return `Unknown curated MCP connection "${connectionName}".\n\n${await mcpConnectionsText()}`;
@@ -2565,8 +3453,8 @@ async function runMcpConnectionAuthByName(
 
 async function runMcpConnectionAuth(
 	connection: AgentInfoConnectionEntry,
-	flow: SetupFlowRenderer,
-	renderer: PromptCommandHandlerContext["renderer"],
+	flow: SetupFlow,
+	renderer: CommandRenderer,
 ): Promise<string> {
 	if (!mcpConnectionHasAuthorization(connection)) {
 		return `${connection.connectionName} is installed and does not require authorization.`;
@@ -2623,8 +3511,8 @@ type McpAuthProbeResult = {
 
 async function probeMcpConnection(
 	connection: AgentInfoConnectionEntry,
-	flow: SetupFlowRenderer,
-	renderer: PromptCommandHandlerContext["renderer"],
+	flow: SetupFlow,
+	renderer: CommandRenderer,
 	signal: AbortSignal,
 	updatePendingAuth: (countDelta: number) => void,
 ): Promise<McpAuthProbeResult> {
@@ -2647,8 +3535,8 @@ async function probeMcpConnection(
 function applyMcpAuthProbeEvent(
 	event: HandleMessageStreamEvent,
 	connection: AgentInfoConnectionEntry,
-	flow: SetupFlowRenderer,
-	renderer: PromptCommandHandlerContext["renderer"],
+	flow: SetupFlow,
+	renderer: CommandRenderer,
 	updatePendingAuth: (countDelta: number) => void,
 	result: McpAuthProbeResult,
 ): void {
@@ -2721,9 +3609,9 @@ function applyMcpAuthProbeEvent(
 }
 
 function renderFlowLines(
-	flow: SetupFlowRenderer,
+	flow: SetupFlow,
 	lines: readonly string[],
-	tone: Parameters<SetupFlowRenderer["renderLine"]>[1],
+	tone: Parameters<SetupFlow["renderLine"]>[1],
 ): void {
 	for (const line of lines) {
 		for (const segment of line.split(/\r?\n/)) {
@@ -2758,14 +3646,14 @@ function mcpAuthProbePrompt(connectionName: string): string {
 	].join("\n");
 }
 
-async function promptAndSaveMcpServer(flow: SetupFlowRenderer): Promise<string> {
+async function promptAndSaveMcpServer(flow: SetupFlow): Promise<string> {
 	const configured = await promptMcpServerConfig(flow);
 	if (configured === undefined) return "/mcp add cancelled.";
 	const result = await upsertMcpServer(configured.name, configured.config);
 	return `Dynamic MCP server "${configured.name}" saved to ${result.path}. Run /mcp list ${configured.name} to verify tools.`;
 }
 
-async function promptMcpServerConfig(flow: SetupFlowRenderer): Promise<{ name: string; config: McpServerConfig } | undefined> {
+async function promptMcpServerConfig(flow: SetupFlow): Promise<{ name: string; config: McpServerConfig } | undefined> {
 	const name = await flow.readText({
 		message: "Name this dynamic MCP server.",
 		placeholder: "minecraft",
@@ -2877,7 +3765,7 @@ function parseMcpServerArgs(args: string[]): { name: string; config: McpServerCo
 	return { name, config: { type: transport, url } };
 }
 
-async function promptAndRemoveMcpServer(flow: SetupFlowRenderer): Promise<string> {
+async function promptAndRemoveMcpServer(flow: SetupFlow): Promise<string> {
 	const name = await selectDynamicMcpServer(flow, "Choose the file-backed dynamic MCP server to remove.", false);
 	if (name === undefined) return "/mcp remove cancelled.";
 	const confirmed = await selectOne(
@@ -2904,7 +3792,7 @@ async function removeDynamicMcpServer(name: string): Promise<string> {
 	return `Dynamic MCP server "${name}" ${result.removed ? "removed" : "was not present"} from ${result.path}.${stillActive ? " It is still active from CLANKY_MCP_SERVERS." : ""}`;
 }
 
-async function promptAndSetMcpServerEnabled(flow: SetupFlowRenderer, enabled: boolean): Promise<string> {
+async function promptAndSetMcpServerEnabled(flow: SetupFlow, enabled: boolean): Promise<string> {
 	const name = await selectDynamicMcpServer(flow, `Choose the file-backed dynamic MCP server to ${enabled ? "enable" : "disable"}.`, false);
 	if (name === undefined) return `/mcp ${enabled ? "enable" : "disable"} cancelled.`;
 	return await setDynamicMcpServerEnabled(name, enabled);
@@ -2922,7 +3810,7 @@ async function setDynamicMcpServerEnabled(name: string, enabled: boolean): Promi
 }
 
 async function selectDynamicMcpServer(
-	flow: SetupFlowRenderer,
+	flow: SetupFlow,
 	message: string,
 	includeAll: boolean,
 ): Promise<string | undefined> {
@@ -2947,7 +3835,7 @@ async function selectDynamicMcpServer(
 	);
 }
 
-async function selectMcpConnectionName(flow: SetupFlowRenderer, initialValue: string | undefined): Promise<string | undefined> {
+async function selectMcpConnectionName(flow: SetupFlow, initialValue: string | undefined): Promise<string | undefined> {
 	const connections = mcpConnections(await fetchInfo());
 	if (connections.length === 0) {
 		flow.renderLine("No curated MCP connections are installed in this eve server.", "warning");
@@ -3176,6 +4064,10 @@ function requiredMcpText(value: string): string | undefined {
 	return value.trim().length === 0 ? "Enter a value." : undefined;
 }
 
+function requiredDiscordTokenText(value: string): string | undefined {
+	return value.trim().length === 0 ? "Paste a Discord credential." : undefined;
+}
+
 function validateMcpUrl(value: string): string | undefined {
 	try {
 		const url = new URL(value.trim());
@@ -3226,10 +4118,29 @@ function titleCaseConnection(name: string): string {
 	return name.length === 0 ? name : `${name.charAt(0).toUpperCase()}${name.slice(1)}`;
 }
 
-async function configureBrowserBridge(argument: string): Promise<string> {
+async function configureBrowserBridge(argument: string, flow: SetupFlow | undefined): Promise<string> {
 	const command = splitArgs(argument)[0] ?? "status";
+	if (argument.trim().length === 0 && flow !== undefined) return await configureBrowserBridgeInteractive(flow);
 	if (command === "status") return formatBrowserBridgeStatus(await browserBridgeStatus());
 	if (command !== "install") return "Usage: /browser [status|install]";
+	return await installBrowserBridgeMessage();
+}
+
+async function configureBrowserBridgeInteractive(flow: SetupFlow): Promise<string> {
+	flow.begin("Configure browser bridge");
+	try {
+		flow.renderOutput(formatBrowserBridgeStatus(await browserBridgeStatus()));
+		const selected = await selectOne(flow, "Choose the browser bridge action.", BROWSER_BRIDGE_OPTIONS, "status");
+		if (selected === undefined) return "/browser cancelled.";
+		if (selected === "status") return formatBrowserBridgeStatus(await browserBridgeStatus());
+		if (selected === "install") return await installBrowserBridgeMessage();
+		return "/browser cancelled.";
+	} finally {
+		flow.end({ preserveDiagnostics: false });
+	}
+}
+
+async function installBrowserBridgeMessage(): Promise<string> {
 	const result = await installBrowserBridge();
 	const status = await browserBridgeStatus();
 	return [
@@ -3267,7 +4178,7 @@ async function statusText(): Promise<string> {
 		`auth: claude=${formatCredStatus(claudeAuth)}; codex=${formatCredStatus(codexAuth)}`,
 		`approvals: ${isAutoApproveValue(config.autoApprove) ? "auto (no prompts)" : "prompt"}`,
 		`coding harness: ${formatCodingHarnessSummary(config)}`,
-		`image model: ${config.imageModel ?? "gpt-image-2"}`,
+		`image model: ${config.imageModel ?? DEFAULT_OPENAI_IMAGE_MODEL}`,
 		`vision model: local=${config.localVisionModel ?? "(active local model)"}; openai fallback=${config.openAiVisionModel ?? "gpt-5.4-mini"}`,
 		...formatVoiceStatusLines(config),
 		`integrations: ${formatIntegrationSummary(bindings, connections)}`,
@@ -3293,13 +4204,23 @@ function formatDiscordScopeList(raw: string | undefined, fallback: string): stri
 }
 
 function configBooleanDefaultTrue(raw: string | undefined): boolean {
-	const normalized = raw?.trim().toLowerCase();
-	if (normalized === undefined || normalized.length === 0) return true;
-	return !["0", "false", "no", "off"].includes(normalized);
+	return parseToggle(raw) ?? true;
+}
+
+function parseToggle(value: string | undefined): boolean | undefined {
+	const normalized = value?.trim().toLowerCase();
+	if (normalized === undefined || normalized.length === 0) return undefined;
+	if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on" || normalized === "enable" || normalized === "enabled") {
+		return true;
+	}
+	if (normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off" || normalized === "disable" || normalized === "disabled") {
+		return false;
+	}
+	return undefined;
 }
 
 async function selectProvider(
-	flow: SetupFlowRenderer,
+	flow: SetupFlow,
 	initialValue: ClankyConfig["provider"],
 ): Promise<ClankyConfig["provider"] | undefined> {
 	flow.begin("Configure Clanky model");
@@ -3333,7 +4254,7 @@ async function selectProvider(
 }
 
 async function selectModel(
-	flow: SetupFlowRenderer,
+	flow: SetupFlow,
 	provider: ClankyConfig["provider"],
 	config: ClankyConfig,
 ): Promise<string | undefined> {
@@ -3372,7 +4293,7 @@ async function localModelOptions(baseUrl: string): Promise<readonly MenuOption[]
 }
 
 async function selectEffort(
-	flow: SetupFlowRenderer,
+	flow: SetupFlow,
 	currentEffort: string | undefined,
 ): Promise<string | undefined> {
 	flow.begin("Configure Codex reasoning effort");
@@ -3384,7 +4305,7 @@ async function selectEffort(
 }
 
 async function selectLocalEffort(
-	flow: SetupFlowRenderer,
+	flow: SetupFlow,
 	currentEffort: string | undefined,
 ): Promise<string | undefined> {
 	flow.begin("Configure local reasoning effort");
@@ -3396,7 +4317,7 @@ async function selectLocalEffort(
 }
 
 async function selectOne(
-	flow: SetupFlowRenderer,
+	flow: SetupFlow,
 	message: string,
 	options: readonly MenuOption[],
 	initialValue: string | undefined,
@@ -3549,6 +4470,19 @@ function requiredVoiceText(value: string): string | undefined {
 	return value.trim().length === 0 ? "Enter a value." : undefined;
 }
 
+function validateHarnessCommandText(value: string): string | undefined {
+	try {
+		const command = parseHarnessCommand(value);
+		return command === undefined || command.length === 0 ? "Enter a command." : undefined;
+	} catch (error) {
+		return error instanceof Error ? error.message : String(error);
+	}
+}
+
+function requiredImageModelText(value: string): string | undefined {
+	return value.trim().length === 0 ? "Enter a model id." : undefined;
+}
+
 function requiredVisionModelText(value: string): string | undefined {
 	return value.trim().length === 0 ? "Enter a model id." : undefined;
 }
@@ -3572,11 +4506,10 @@ async function readConfig(): Promise<ClankyConfig> {
 	const localEffort = get("CLANKY_LOCAL_EFFORT");
 	const localContextTokens = get(LOCAL_CONTEXT_TOKENS_ENV);
 	const localVisionModel = get("CLANKY_LOCAL_VISION_MODEL");
-	const openAiVisionModel = get("CLANKY_OPENAI_VISION_MODEL");
-	const autoApprove = get("CLANKY_AUTO_APPROVE");
-	const fullscreen = get(CLANKY_FULLSCREEN_ENV);
-	const pet = get("CLANKY_PET");
-	const codingHarness = get(CLANKY_CODING_HARNESS_ENV.id);
+		const openAiVisionModel = get("CLANKY_OPENAI_VISION_MODEL");
+		const autoApprove = get("CLANKY_AUTO_APPROVE");
+			const pet = get("CLANKY_PET");
+			const codingHarness = get(CLANKY_CODING_HARNESS_ENV.id);
 	const codingHarnesses = get(CLANKY_CODING_HARNESS_ENV.allowed);
 	const codingHarnessCommand = get(CLANKY_CODING_HARNESS_ENV.command);
 	const codingHarnessRuntime = get(CLANKY_CODING_HARNESS_ENV.runtime);
@@ -3606,11 +4539,10 @@ async function readConfig(): Promise<ClankyConfig> {
 	if (localEffort !== undefined) config.localEffort = localEffort;
 	if (localContextTokens !== undefined) config.localContextTokens = localContextTokens;
 	if (localVisionModel !== undefined) config.localVisionModel = localVisionModel;
-	if (openAiVisionModel !== undefined) config.openAiVisionModel = openAiVisionModel;
-	if (autoApprove !== undefined) config.autoApprove = autoApprove;
-	if (fullscreen !== undefined) config.fullscreen = fullscreen;
-	if (pet !== undefined) config.pet = pet;
-	if (codingHarness !== undefined) config.codingHarness = codingHarness;
+		if (openAiVisionModel !== undefined) config.openAiVisionModel = openAiVisionModel;
+		if (autoApprove !== undefined) config.autoApprove = autoApprove;
+			if (pet !== undefined) config.pet = pet;
+			if (codingHarness !== undefined) config.codingHarness = codingHarness;
 	if (codingHarnesses !== undefined) config.codingHarnesses = codingHarnesses;
 	if (codingHarnessCommand !== undefined) config.codingHarnessCommand = codingHarnessCommand;
 	if (codingHarnessRuntime !== undefined) config.codingHarnessRuntime = codingHarnessRuntime;
@@ -3666,7 +4598,10 @@ async function restartBrainMessage(prefix: string): Promise<string> {
 			`Saved .env.local, but restarting Clanky failed: ${error instanceof Error ? error.message : String(error)}`,
 		);
 	}
-	forwardServerOutput = terminalReady;
+	latestInfo = await fetchInfo();
+	currentContextSize = contextSizeFromInfo(latestInfo);
+	refreshBannerView();
+	forwardServerOutput = true;
 	return appendRestartSentence(prefix, "Restarted Clanky.");
 }
 
@@ -3677,7 +4612,7 @@ function appendRestartSentence(prefix: string, sentence: string): string {
 
 async function fetchInfo(): Promise<AgentInfoResult | undefined> {
 	try {
-		const response = await fetch(`${HOST}/eve/v1/info`);
+		const response = await fetch(`${brainHost}/eve/v1/info`);
 		if (!response.ok) return undefined;
 		return (await response.json()) as AgentInfoResult;
 	} catch {
@@ -3687,18 +4622,71 @@ async function fetchInfo(): Promise<AgentInfoResult | undefined> {
 
 async function fetchDiscordGatewayHealth(): Promise<unknown> {
 	try {
-		const response = await fetch(`${HOST}/discord-gateway/health`);
+		const response = await fetch(`${brainHost}/discord-gateway/health`);
 		return await response.json();
 	} catch {
 		return { running: false };
 	}
 }
 
-async function probe(): Promise<"healthy" | "reachable" | "down"> {
+async function probe(host = brainHost): Promise<"healthy" | "reachable" | "down"> {
 	try {
-		return (await fetch(`${HOST}/eve/v1/info`)).ok ? "healthy" : "reachable";
+		return (await fetch(`${host}/eve/v1/info`)).ok ? "healthy" : "reachable";
 	} catch {
 		return "down";
+	}
+}
+
+async function discoverDevServerHost(): Promise<DiscoveredHost | undefined> {
+	const record = await readDevServerRecord();
+	if (record === undefined || !isPidAlive(record.pid)) return undefined;
+	const host = normalizeHost(record.url);
+	if (host === undefined) return undefined;
+	return {
+		host,
+		source: `.eve/dev-server.json pid ${record.pid}${record.updatedAt === undefined ? "" : ` updated ${record.updatedAt}`}`,
+	};
+}
+
+async function readDevServerRecord(): Promise<DevServerRecord | undefined> {
+	let text: string;
+	try {
+		text = await readFile(DEV_SERVER_FILE, "utf8");
+	} catch {
+		return undefined;
+	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(text);
+	} catch {
+		return undefined;
+	}
+	if (!isRecord(parsed)) return undefined;
+	if (typeof parsed.pid !== "number" || !Number.isSafeInteger(parsed.pid)) return undefined;
+	if (typeof parsed.url !== "string" || parsed.url.trim().length === 0) return undefined;
+	return {
+		pid: parsed.pid,
+		updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : undefined,
+		url: parsed.url,
+	};
+}
+
+function isPidAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return typeof error === "object" && error !== null && "code" in error && String(error.code) === "EPERM";
+	}
+}
+
+function normalizeHost(value: string): string | undefined {
+	try {
+		const url = new URL(value);
+		if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
+		return url.origin;
+	} catch {
+		return undefined;
 	}
 }
 
@@ -3706,6 +4694,7 @@ async function startServer(): Promise<void> {
 	forwardServerOutput = false;
 	ownedServerStartupOutput = "";
 	ownedServerStartError = undefined;
+	brainHost = HOST;
 	const env = await buildOwnedServerEnv();
 	const child = spawn(join(REPO, "node_modules", ".bin", "eve"), ["dev", "--no-ui", "--port", String(PORT)], {
 		cwd: REPO,
@@ -3757,8 +4746,7 @@ function forwardOwnedServerOutput(stream: "stdout" | "stderr", chunk: Buffer): v
 	if (isSuppressedOwnedServerOutput(text)) return;
 	appendOwnedServerStartupOutput(text);
 	if (!forwardServerOutput) return;
-	if (stream === "stdout") process.stdout.write(text);
-	else process.stderr.write(text);
+	insertMarkdown(`**eve ${stream}**\n\n\`\`\`\n${truncate(text.trim(), 4_000)}\n\`\`\``);
 }
 
 function appendOwnedServerStartupOutput(text: string): void {
@@ -3776,14 +4764,26 @@ function isSuppressedOwnedServerOutput(text: string): boolean {
 }
 
 async function ensureServer(): Promise<boolean> {
-	const initial = await probe();
+	const discovered = await discoverDevServerHost();
+	if (discovered !== undefined) {
+		brainHost = discovered.host;
+		const state = await probe(brainHost);
+		if (state === "healthy") return false;
+		if (state === "reachable") {
+			process.stdout.write(`  \x1b[2mdev server ${brainHost} is reachable but not ready; attaching anyway.\x1b[22m\n`);
+			return false;
+		}
+	}
+
+	brainHost = HOST;
+	const initial = await probe(HOST);
 	if (initial === "healthy") return false;
 	if (initial === "reachable") {
 		process.stdout.write(`  \x1b[2ma server is on ${HOST} but not ready yet; waiting...\x1b[22m\n`);
 		const deadline = Date.now() + 20_000;
 		while (Date.now() < deadline) {
 			await new Promise((resolve) => setTimeout(resolve, 800));
-			if ((await probe()) === "healthy") return false;
+			if ((await probe(HOST)) === "healthy") return false;
 		}
 		process.stdout.write(`  \x1b[33m${HOST} is up but unhealthy. Restart the eve server that owns it; attaching anyway.\x1b[39m\n`);
 		return false;
@@ -3833,7 +4833,7 @@ async function proxyCallbackRequest(request: IncomingMessage, response: ServerRe
 			return;
 		}
 
-		const targetUrl = new URL(`${sourceUrl.pathname}${sourceUrl.search}`, HOST);
+		const targetUrl = new URL(`${sourceUrl.pathname}${sourceUrl.search}`, brainHost);
 		const method = request.method ?? "GET";
 		const headers = requestHeadersForProxy(request);
 		const body = method === "GET" || method === "HEAD" ? undefined : await readRequestBody(request);
@@ -3884,12 +4884,12 @@ async function waitForHealth(timeoutMs = HEALTH_TIMEOUT_MS): Promise<void> {
 		}
 		if (child !== null && hasChildExited(child)) throw new Error(ownedServerExitMessage(child));
 		try {
-			const response = await fetch(`${HOST}/eve/v1/info`);
+			const response = await fetch(`${brainHost}/eve/v1/info`);
 			if (response.ok) return;
 		} catch {
 			// Server is still starting.
 		}
-		if (Date.now() > deadline) throw new Error(`Clanky server did not become healthy on ${HOST}`);
+		if (Date.now() > deadline) throw new Error(`Clanky server did not become healthy on ${brainHost}`);
 		await new Promise((resolve) => setTimeout(resolve, 500));
 	}
 }
@@ -4045,6 +5045,15 @@ function formatJson(value: unknown): string {
 	} catch {
 		return String(value);
 	}
+}
+
+function formatError(error: unknown): string {
+	return error instanceof Error ? error.stack ?? error.message : String(error);
+}
+
+function truncate(text: string, maxChars: number): string {
+	if (text.length <= maxChars) return text;
+	return `${text.slice(0, maxChars)}\n... truncated ${text.length - maxChars} chars`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

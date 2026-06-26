@@ -54,6 +54,10 @@ export async function installClankyPromptHistory(
 	});
 }
 
+export function clankyPromptHistoryPath(env: NodeJS.ProcessEnv = process.env): string {
+	return resolveClankyDataPath(PROMPT_HISTORY_RELATIVE_PATH, env);
+}
+
 export function installPromptHistoryPrototype(
 	PromptHistoryClass: PromptHistoryConstructor,
 	options: PromptHistoryPrototypeOptions = {},

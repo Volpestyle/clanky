@@ -7,6 +7,8 @@
  * support check. On narrow terminals it collapses to a single condensed line
  * so the header never wraps into noise.
  */
+import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
+import { paintClankyFaceText, type ClankyFaceColor } from "./clanky-face-theme.ts";
 
 export type BannerCapabilities = {
 	/** Emit ANSI color (false for NO_COLOR / non-TTY / dumb terminals). */
@@ -28,21 +30,27 @@ export type BannerFields = {
 	hint?: string;
 };
 
-type Rgb = readonly [number, number, number];
+export class ClankyBannerComponent implements Component {
+	private readonly caps: BannerCapabilities;
+	private fields: BannerFields;
 
-// Warm, dusty palette pulled from the hooded-figure brand art.
-const PALETTE = {
-	titleA: [255, 196, 112] as Rgb,
-	label: [150, 132, 126] as Rgb,
-	dim: [128, 116, 112] as Rgb,
-} as const;
+	constructor(fields: BannerFields, caps: BannerCapabilities) {
+		this.fields = fields;
+		this.caps = caps;
+	}
 
-// 256-color approximations for terminals without truecolor.
-const PALETTE_256: Record<keyof typeof PALETTE, number> = {
-	titleA: 215,
-	label: 245,
-	dim: 244,
-};
+	setFields(fields: BannerFields): void {
+		this.fields = fields;
+	}
+
+	invalidate(): void {}
+
+	render(width: number): string[] {
+		const renderWidth = Math.max(1, width);
+		const lines = renderClankyBanner(this.fields, { ...this.caps, columns: renderWidth });
+		return ["", ...lines.map((line) => truncateToWidth(line, renderWidth, "", true)), ""];
+	}
+}
 
 export function renderClankyBanner(
 	fields: BannerFields,
@@ -67,7 +75,9 @@ function buildFeedLines(
 	caps: BannerCapabilities,
 ): string[] {
 	const lines: string[] = [];
-	lines.push(paint(fields.title.toLowerCase(), { fg: "titleA", bold: true }, caps));
+	const mascot = paint(clankyMascot(caps), { fg: "accent", bold: true }, caps);
+	const name = paint(fields.title.toLowerCase(), { fg: "accent", bold: true }, caps);
+	lines.push(`${mascot}  ${name}`);
 	lines.push(paint(fields.tagline, { fg: "dim" }, caps));
 	lines.push("");
 	for (const [label, value] of [
@@ -87,12 +97,13 @@ function renderCondensed(
 	fields: BannerFields,
 	caps: BannerCapabilities,
 ): string[] {
-	const head = paint(fields.title.toLowerCase(), { fg: "titleA", bold: true }, caps);
+	const mascot = paint(clankyMascot(caps), { fg: "accent", bold: true }, caps);
+	const head = paint(fields.title.toLowerCase(), { fg: "accent", bold: true }, caps);
 	const detail =
 		fields.model !== undefined
 			? paint(` — ${fields.model}`, { fg: "dim" }, caps)
 			: "";
-	const lines = [` ${head}${detail}`];
+	const lines = [` ${mascot} ${head}${detail}`];
 	if (fields.hint !== undefined && fields.hint.length > 0) {
 		lines.push(` ${paint(fields.hint, { fg: "dim" }, caps)}`);
 	}
@@ -102,30 +113,21 @@ function renderCondensed(
 function paint(
 	text: string,
 	style: {
-		fg?: keyof typeof PALETTE;
+		fg?: ClankyFaceColor;
 		bold?: boolean;
 	},
 	caps: BannerCapabilities,
 ): string {
-	if (!caps.color) return text;
-	const codes: string[] = [];
-	if (style.bold === true) codes.push("1");
-	if (style.fg !== undefined) codes.push(colorCode(style.fg, false, caps));
-	if (codes.length === 0) return text;
-	return `\x1b[${codes.join(";")}m${text}\x1b[0m`;
+	return paintClankyFaceText(text, style, caps);
 }
 
-function colorCode(
-	key: keyof typeof PALETTE,
-	background: boolean,
-	caps: BannerCapabilities,
-): string {
-	const layer = background ? "48" : "38";
-	if (caps.trueColor) {
-		const [r, g, b] = PALETTE[key];
-		return `${layer};2;${r};${g};${b}`;
-	}
-	return `${layer};5;${PALETTE_256[key]}`;
+/**
+ * Clanky's inline mascot: a little robot face that rides alongside the name.
+ * The brackets read as a head/screen, `◉` eyes, `‿` a contented mouth. Falls
+ * back to plain ASCII when the terminal can't render the unicode glyphs.
+ */
+function clankyMascot(caps: BannerCapabilities): string {
+	return caps.unicode ? "[◉‿◉]" : "[o_o]";
 }
 
 /** Detect banner capabilities from the environment and an output stream. */

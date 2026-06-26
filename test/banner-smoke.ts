@@ -1,9 +1,12 @@
 import {
+	ClankyBannerComponent,
 	type BannerCapabilities,
 	type BannerFields,
 	detectBannerCapabilities,
 	renderClankyBanner,
 } from "../agent/lib/clanky-banner.ts";
+import { visibleWidth } from "@earendil-works/pi-tui";
+import { createClankyFaceAnsiTheme } from "../agent/lib/clanky-face-theme.ts";
 
 function assert(condition: boolean, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -27,12 +30,16 @@ const wide = (overrides: Partial<BannerCapabilities>): BannerCapabilities => ({
 	...overrides,
 });
 
-// Truecolor + unicode: text-only title and feed values present.
+// Truecolor + unicode: inline robot mascot rides alongside the name.
 const full = renderClankyBanner(FIELDS, wide({}));
 const fullText = stripAnsi(full.join("\n"));
-assert(!fullText.includes("█") && !fullText.includes("●"), "banner should not render a head icon");
-assert(fullText.includes("clanky"), "feed should render the simplified title");
+assert(fullText.includes("[◉‿◉]"), "banner should render the inline robot mascot");
+assert(fullText.includes("clanky"), "feed should render the name beside the mascot");
 assert(!fullText.includes("C L A N K Y"), "title should not use spaced lettering");
+assert(
+	/\[◉‿◉\]\s+clanky/u.test(fullText),
+	"mascot should sit on the same line as the name",
+);
 assert(
 	fullText.includes("claude-opus-4-8 (high effort)"),
 	"feed should show the model",
@@ -41,6 +48,11 @@ assert(fullText.includes("~/dev/clanky"), "feed should show the cwd");
 assert(
 	full.join("\n").includes("\x1b[38;2;"),
 	"truecolor banner should emit 24-bit color codes",
+);
+const fullTheme = createClankyFaceAnsiTheme(wide({}));
+assert(
+	fullTheme.cyan("system").includes("\x1b[38;2;255;196;112m"),
+	"system accent should use the same truecolor accent as the banner",
 );
 
 // Text rows use a single left gutter.
@@ -60,21 +72,25 @@ assert(
 	"no-color banner must not emit escape codes",
 );
 assert(
+	createClankyFaceAnsiTheme(wide({ color: false, trueColor: false })).cyan("system") === "system",
+	"no-color system accent must not emit escape codes",
+);
+assert(
 	mono.join("\n").includes("clanky"),
 	"no-color banner keeps the simplified title",
 );
 
-// ASCII fallback: no icon glyphs.
+// ASCII fallback: mascot degrades to plain ASCII, no unicode glyphs.
 const ascii = stripAnsi(
 	renderClankyBanner(FIELDS, wide({ unicode: false })).join("\n"),
 );
 assert(
-	!ascii.includes("█") && !ascii.includes("●"),
-	"ascii fallback must avoid unicode icon art",
+	!ascii.includes("◉") && !ascii.includes("‿"),
+	"ascii fallback must avoid unicode mascot glyphs",
 );
 assert(
-	!ascii.includes("#") && ascii.includes("clanky"),
-	"ascii fallback remains text-only",
+	ascii.includes("[o_o]") && ascii.includes("clanky"),
+	"ascii fallback renders the plain mascot beside the name",
 );
 
 // Narrow terminal collapses to a condensed header (no wrapped mascot rows).
@@ -93,6 +109,23 @@ for (const line of condensed) {
 		"condensed banner lines should not blow past a narrow width",
 	);
 }
+
+// Component form adapts to the render width, not just startup terminal width.
+const component = new ClankyBannerComponent(FIELDS, wide({ columns: 100 }));
+const narrowComponent = component.render(32);
+assert(narrowComponent.length <= 4, "dynamic banner should condense in a narrow render pass");
+for (const line of narrowComponent) {
+	assert(visibleWidth(line) <= 32, `dynamic banner line should fit narrow width: ${JSON.stringify(line)}`);
+}
+assert(
+	stripAnsi(narrowComponent.join("\n")).includes("clanky"),
+	"dynamic banner should keep Clanky visible when narrow",
+);
+component.setFields({ ...FIELDS, model: "qwen3.6:27b-mlx-bf16 (high effort)" });
+assert(
+	stripAnsi(component.render(100).join("\n")).includes("qwen3.6:27b-mlx-bf16"),
+	"dynamic banner should refresh model fields without recreating the component",
+);
 
 // Capability detection: non-TTY and NO_COLOR disable color.
 const noTty = detectBannerCapabilities({ isTTY: false, columns: 80 }, {});

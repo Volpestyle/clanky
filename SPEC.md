@@ -20,10 +20,11 @@ glue:
 - The **window** is the Clanky iOS app, which reaches the stage over the tailnet
   through an eve relay channel.
 
-Pi is outside this architecture: it is not a dependency, runtime, or performer.
-A local `~/dev/pi` checkout may be used only as a source reference for the Codex
-OAuth implementation in `agent/lib` (§4.6); deleting it must not affect how
-Clanky runs.
+Pi's `@earendil-works/pi-tui` is the face's presentation layer — the UI toolkit
+the face renders the `eve/client` event stream through. eve remains the brain;
+pi is the face renderer only, never the brain, the runtime conductor, or a
+performer. A local `~/dev/pi` checkout also remains a source reference for the
+Codex OAuth implementation in `agent/lib` (§4.6).
 
 ## 2. Goals and non-goals
 
@@ -161,13 +162,12 @@ commands `eve dev` can't: `/discord-token`, `/model`, `/harness`, `/effort`,
 `eve dev` TUI stays available as a local dev/debug interface against the same
 runtime.
 
-Known gap: the face does not yet surface `input.requested` (tool-approval /
-human-input prompts) or `session.waiting`; only the streaming render path above
-is wired. Until it does, approval-gated tools would park a turn the face can't
-resume, so `/approvals auto` (env `CLANKY_AUTO_APPROVE=1`, read by
-`agent/lib/approvals.ts`) globally bypasses every tool/connection approval gate
-so Clanky never asks; `/approvals prompt` restores per-tool gating. This only
-affects approval gates, not the model's own `ask_question` clarifications.
+The face surfaces `input.requested` (tool-approval / human-input prompts) and
+`session.waiting`, then resumes the turn with explicit responses. `/approvals
+auto` (env `CLANKY_AUTO_APPROVE=1`, read by `agent/lib/approvals.ts`) remains
+available for uninterrupted tool execution; `/approvals prompt` restores
+per-tool gating. This only affects approval gates, not the model's own
+`ask_question` clarifications.
 
 The same HTTP routes back the iOS chat surface. For any non-local client, eve's
 default dev auth is not sufficient — public surfaces need their own route auth
@@ -233,8 +233,8 @@ current screen/debugging state.
 | Cross-agent audit trail | Clanky transcript |
 
 Pi is **not** a performer. herdr can technically start any binary in a pane, so
-nothing stops a one-off `pi` pane, but Pi is not part of Clanky, not installed,
-and not maintained as a performer.
+nothing stops a one-off `pi` pane, but Pi is not maintained as a performer —
+Clanky's only use of Pi is `@earendil-works/pi-tui` as the face UI toolkit (§1).
 
 All performers coordinate through the vanilla `herdr` skill (4.5). Whoever is
 orchestrating loads `clanky-herdr-operator` for the harvestable fan-out
@@ -613,9 +613,9 @@ attach to whichever session you point him at. You may run multiple sessions.
 **Off the shelf (no custom maintenance):**
 
 - herdr — stage, persistent session, swarm CLI.
-- eve — brain, `eve dev` TUI, channels, schedules, durable sessions.
-- `clanky` / `claude` / `codex` / `opencode` — performer agents (Pi is not
-  used).
+- eve — brain, channels, schedules, durable sessions (headless `eve dev --no-ui` + `eve/client`).
+- `@earendil-works/pi-tui` — the face's terminal UI toolkit (rendering primitives).
+- `clanky` / `claude` / `codex` / `opencode` — performer agents (pi is not a performer).
 - the vanilla `herdr` skill.
 
 **We build (all TypeScript, no fork):**
@@ -736,8 +736,9 @@ tool, is a binding change, not an edit to the persona.
   subcommand and let eve be a client of it.
 - **Face surface — RESOLVED: custom face.** eve's stock TUI has a fixed,
   non-extensible slash-command set, so the face is `scripts/clanky.ts` (`pnpm
-  face`) on the public eve/client: it mirrors eve dev's look and adds the slash
-  commands eve can't (`/discord-token`, `/model`, `/harness`, …). It attaches to
+  face`) on the public eve/client: it renders eve's event stream through pi-tui
+  (`@earendil-works/pi-tui`), matching eve's look only where useful, and adds the
+  slash commands eve can't (`/discord-token`, `/model`, `/harness`, …). It attaches to
   a running eve server or spawns/owns a headless one (eve allows one dev server
   per agent).
 - **Memory store** — reuse `@clanky/core` memory verbatim in `agent/lib` vs.
