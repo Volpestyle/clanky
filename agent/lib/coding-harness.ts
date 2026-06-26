@@ -391,6 +391,9 @@ function nonEmpty(value: string | undefined): string | undefined {
 
 function quoteCommandArg(arg: string): string {
 	if (arg.length === 0) return "''";
-	if (!/[\s"'\\]/.test(arg)) return arg;
+	// Whitelist shell-safe characters. Everything else (including metacharacters
+	// like $ ` ; * ( ) and whitespace) is single-quoted so serializeCommandLine
+	// output is safe to pass through `sh -c` (e.g. `script -c` on Linux TTY runs).
+	if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(arg)) return arg;
 	return `'${arg.replace(/'/g, `'"'"'`)}'`;
 }

@@ -259,6 +259,14 @@ expectEqual(resolveCodingHarness({ command: envPrefixedCodex }), {
 expectEqual(parseHarnessCommand("codex --flag 'two words'"), ["codex", "--flag", "two words"], "harness command parses quoted args");
 expectEqual(splitCommandLine(serializeCommandLine(["cmd", "two words", "it's ok"])), ["cmd", "two words", "it's ok"], "harness command serialization round-trips");
 
+const metacharArgv = ["codex", "exec", "$(id)", "`whoami`", "foo;bar", "a*b", "x|y", "p&q", "r>z"];
+expectEqual(splitCommandLine(serializeCommandLine(metacharArgv)), metacharArgv, "shell metacharacters round-trip through serialization");
+for (const part of serializeCommandLine(metacharArgv).split(" ")) {
+	if (/^(?:\$\(id\)|`whoami`|foo;bar|a\*b|x\|y|p&q|r>z)$/.test(part)) {
+		throw new Error(`shell metacharacter left unquoted in serialized command: ${part}`);
+	}
+}
+
 expectEqual(await resolvePaneCwd(undefined), process.cwd(), "omitted cwd uses process cwd");
 expectEqual(await resolvePaneCwd(""), process.cwd(), "empty cwd uses process cwd");
 
