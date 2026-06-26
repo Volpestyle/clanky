@@ -10,6 +10,7 @@ import {
 	type SelectListTheme,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
+import { renderClankyOutline } from "./clanky-outline.ts";
 
 export type InteractivePromptOption = {
 	readonly value: string;
@@ -81,7 +82,7 @@ export class InteractiveTextPrompt implements Component, Focusable {
 	}
 
 	render(width: number): string[] {
-		const contentWidth = Math.max(1, width - 2);
+		const contentWidth = Math.max(1, width - 4);
 		const lines = [
 			...promptHeader("Input", this.options.message, contentWidth),
 			...(this.options.defaultValue === undefined ? [] : [dim(`Default: ${this.options.defaultValue}`)]),
@@ -191,7 +192,7 @@ export class InteractiveSelectPrompt implements Component, Focusable {
 	}
 
 	render(width: number): string[] {
-		const contentWidth = Math.max(1, width - 2);
+		const contentWidth = Math.max(1, width - 4);
 		const filtered = this.filteredOptions();
 		const hint = this.options.kind === "multi" ? MULTI_FILTER_HINT : FILTER_HINT;
 		const lines = [
@@ -322,8 +323,7 @@ function wrapPromptMessage(message: string, width: number): string[] {
 }
 
 function boxLines(lines: readonly string[], width: number): string[] {
-	const contentWidth = Math.max(1, width - 2);
-	return lines.map((line) => ` ${truncateToWidth(line, contentWidth, "", true)}`);
+	return renderClankyOutline(lines, width, dim);
 }
 
 function optionSearchText(option: InteractivePromptOption): string {

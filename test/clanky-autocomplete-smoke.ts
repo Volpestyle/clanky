@@ -185,6 +185,7 @@ assert(workbench.getFilter() === "tok", "workbench should keep the initial filte
 assert(workbench.getSelectedCommand()?.name === "discord-token", "workbench should search aliases");
 assertFits(workbench.render(88), 88, "wide workbench");
 assertFits(workbench.render(48), 48, "narrow workbench");
+assert(workbench.render(88)[0]?.startsWith("┌") === true, "workbench should render a solid outline");
 workbench.handleInput("\r");
 assert(submitted === "/discord-token ", "workbench enter should insert the canonical command skeleton");
 workbench.handleInput("\x1b");

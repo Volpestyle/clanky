@@ -167,6 +167,16 @@ selectionViewport.clearSelection();
 assert(!selectionViewport.hasSelection(), "clearSelection should drop the active selection");
 assert(!selectionViewport.render(80)[0]?.includes("\x1b[7m"), "cleared selection should not render inverse styling");
 
+const spacedViewport = new ClankyTranscriptViewport(() => 6, { dim: (text) => text, selected: (text) => text }, { blockSpacing: 1 });
+spacedViewport.addChild(new LineComponent(["You", "hi"]));
+spacedViewport.addChild(new LineComponent(["Clanky", "hello"]));
+assert(plain(spacedViewport.render(80)).join("|") === "|You|hi||Clanky|hello", "blockSpacing should insert a blank row between blocks");
+
+const unspacedViewport = new ClankyTranscriptViewport(() => 6, { dim: (text) => text, selected: (text) => text });
+unspacedViewport.addChild(new LineComponent(["You", "hi"]));
+unspacedViewport.addChild(new LineComponent(["Clanky", "hello"]));
+assert(plain(unspacedViewport.render(80)).join("|") === "||You|hi|Clanky|hello", "default spacing should keep blocks adjacent");
+
 const focusedSelection = new ClankyTranscriptViewport(() => 1, {
 	dim: (text) => text,
 	selected: (text) => text,

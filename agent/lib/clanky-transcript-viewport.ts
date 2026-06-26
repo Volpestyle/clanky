@@ -16,6 +16,12 @@ export type ClankyTranscriptViewportTheme = {
 	readonly selected: (text: string) => string;
 };
 
+export type ClankyTranscriptViewportOptions = {
+	// Blank rows inserted before each block after the first, so turns read as
+	// separated paragraphs rather than one wall of text.
+	readonly blockSpacing?: number;
+};
+
 export type ClankyTranscriptBlockHandle = {
 	remove(): void;
 	setCollapsed(collapsed: boolean): void;
@@ -68,6 +74,7 @@ export class ClankyTranscriptViewport implements Component, Focusable {
 	private readonly blocks: TranscriptBlock[] = [];
 	private readonly maxRows: (width: number) => number;
 	private readonly theme: ClankyTranscriptViewportTheme;
+	private readonly blockSpacing: number;
 	private nextBlockId = 1;
 	private scrollbackRows = 0;
 	private selectedIndex = 0;
@@ -79,9 +86,14 @@ export class ClankyTranscriptViewport implements Component, Focusable {
 	private lastTopPad = 0;
 	focused = false;
 
-	constructor(maxRows: (width: number) => number, theme: Partial<ClankyTranscriptViewportTheme> = {}) {
+	constructor(
+		maxRows: (width: number) => number,
+		theme: Partial<ClankyTranscriptViewportTheme> = {},
+		options: ClankyTranscriptViewportOptions = {},
+	) {
 		this.maxRows = maxRows;
 		this.theme = { ...DEFAULT_THEME, ...theme };
+		this.blockSpacing = Math.max(0, Math.floor(options.blockSpacing ?? 0));
 	}
 
 	addChild(component: Component, options: ClankyTranscriptBlockOptions = {}): ClankyTranscriptBlockHandle {
@@ -364,7 +376,9 @@ export class ClankyTranscriptViewport implements Component, Focusable {
 				const prefix = selected ? this.theme.selected(`${marker} `) : `${marker} `;
 				return `${prefix}${cursorMarker}${truncateToWidth(line, childWidth, "", true)}`;
 			});
-			const rendered = { block, end: cursor + bodyLines.length, lines: bodyLines, start: cursor };
+			const spacer = index === 0 ? [] : Array.from({ length: this.blockSpacing }, () => "");
+			const lines = [...spacer, ...bodyLines];
+			const rendered = { block, end: cursor + lines.length, lines, start: cursor };
 			cursor = rendered.end;
 			return rendered;
 		});

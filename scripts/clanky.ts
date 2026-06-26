@@ -389,6 +389,7 @@ type ClankyConfig = {
 
 type BrainHealthState =
 	| { state: "unknown"; checkedAt?: number }
+	| { state: "restarting"; checkedAt: number; detail?: string }
 	| { state: "healthy"; checkedAt: number }
 	| { state: "unhealthy"; checkedAt: number; status: number; statusText: string; detail?: string }
 	| { state: "down"; checkedAt: number; detail: string };
@@ -606,6 +607,8 @@ let latestInfo: AgentInfoResult | undefined;
 let brainHealth: BrainHealthState = { state: "unknown" };
 let brainHealthMonitor: ReturnType<typeof setInterval> | undefined;
 let brainHealthRefreshRunning = false;
+let brainRestartInProgress = false;
+let brainHealthGeneration = 0;
 let uiReady = false;
 let turnTraceMode = parseTurnTraceMode(process.env.CLANKY_TURN_TRACE) ?? DEFAULT_TURN_TRACE_MODE;
 let headerVisible = parseBooleanFlag(process.env.CLANKY_HEADER) ?? true;
@@ -646,7 +649,7 @@ const commandTypeaheadPanel = new ClankyCommandTypeaheadPanel(COMMANDS, commandU
 const transcriptViewport = new ClankyTranscriptViewport(maxTranscriptRows, {
 	dim: ansi.dim,
 	selected: ansi.cyan,
-});
+}, { blockSpacing: 1 });
 const faceRenderer = new ClankyFaceRenderer(createFaceRenderSink());
 const setupFlow = createSetupFlow(createFlowHost());
 const commandRenderer: CommandRenderer = {
@@ -1763,15 +1766,18 @@ function stopBrainHealthMonitor(): void {
 }
 
 async function refreshBrainHealth(): Promise<void> {
-	if (brainHealthRefreshRunning) return;
+	if (brainRestartInProgress || brainHealthRefreshRunning) return;
 	brainHealthRefreshRunning = true;
+	const generation = brainHealthGeneration;
 	try {
 		const previousState = brainHealth.state;
 		const health = await fetchBrainHealth();
+		if (brainRestartInProgress || generation !== brainHealthGeneration) return;
 		setBrainHealth(health);
 		if (health.state !== "healthy") return;
 		if (latestInfo !== undefined && previousState === "healthy") return;
-		const info = await fetchInfo();
+		const info = await fetchInfo({ healthGeneration: generation });
+		if (brainRestartInProgress || generation !== brainHealthGeneration) return;
 		if (info !== undefined) updateLatestInfo(info);
 	} finally {
 		brainHealthRefreshRunning = false;
@@ -1782,7 +1788,9 @@ async function refreshBrainHealth(): Promise<void> {
 function updateLatestInfo(info: AgentInfoResult): void {
 	latestInfo = info;
 	currentContextSize = contextSizeFromInfo(info);
-	if (uiReady) refreshBannerView();
+	if (!uiReady) return;
+	refreshBannerView();
+	refreshStatusView();
 }
 
 function refreshCommandSurface(text: string): void {
@@ -1799,10 +1807,9 @@ function formatStatusText(label: string): string {
 	const authState = connectionAuthPendingCount > 0 ? `auth pending ${connectionAuthPendingCount}` : "";
 	const focusState = transcriptViewport.focused ? "transcript nav" : "";
 	const brainState = formatBrainHealthStatus(brainHealth);
-	return [
-		ansi.dim("Clanky"),
+	const parts = [
+		"Clanky",
 		label,
-		brainState,
 		responseState,
 		setupState,
 		authState,
@@ -1813,7 +1820,9 @@ function formatStatusText(label: string): string {
 		brainHost.replace(/^https?:\/\//u, ""),
 	]
 		.filter((part) => part.length > 0)
-		.join("  ·  ");
+		.map((part) => ansi.dim(part));
+	if (brainState.length > 0) parts.splice(2, 0, brainState);
+	return parts.join("  ·  ");
 }
 
 function formatBrainHealthStatus(health: BrainHealthState): string {
@@ -1822,6 +1831,8 @@ function formatBrainHealthStatus(health: BrainHealthState): string {
 			return "";
 		case "unknown":
 			return ansi.dim("brain unknown");
+		case "restarting":
+			return ansi.yellow("brain restarting");
 		case "unhealthy":
 			return ansi.yellow(`brain unhealthy ${health.status}`);
 		case "down":
@@ -4403,6 +4414,10 @@ function formatBrainHealthSummary(health: BrainHealthState): string {
 	switch (health.state) {
 		case "unknown":
 			return `unknown (${brainHost})`;
+		case "restarting": {
+			const detail = health.detail === undefined ? "" : `: ${health.detail}`;
+			return `restarting (${brainHost})${detail}`;
+		}
 		case "healthy":
 			return `healthy (${brainHost})`;
 		case "unhealthy": {
@@ -4813,19 +4828,36 @@ async function restartBrainMessage(prefix: string): Promise<string> {
 		return appendRestartSentence(prefix, "Saved .env.local; attached to an external eve server, so restart it to apply.");
 	}
 
+	brainRestartInProgress = true;
+	brainHealthGeneration += 1;
+	stopBrainHealthMonitor();
+	setBrainHealth({ state: "restarting", checkedAt: Date.now(), detail: "applying configuration" });
+	refreshStatus("restarting");
+
 	try {
 		await stopServer();
 		await startServer();
 		await waitForHealth();
 	} catch (error) {
+		const detail = error instanceof Error ? error.message : String(error);
+		brainRestartInProgress = false;
+		brainHealthGeneration += 1;
+		setBrainHealth({ state: "down", checkedAt: Date.now(), detail });
+		startBrainHealthMonitor();
+		refreshStatus("ready");
 		return appendRestartSentence(
 			prefix,
-			`Saved .env.local, but restarting Clanky failed: ${error instanceof Error ? error.message : String(error)}`,
+			`Saved .env.local, but restarting Clanky failed: ${detail}`,
 		);
 	}
+
+	brainRestartInProgress = false;
+	brainHealthGeneration += 1;
 	const info = await fetchInfo();
 	if (info !== undefined) updateLatestInfo(info);
 	forwardServerOutput = true;
+	startBrainHealthMonitor();
+	refreshStatus("ready");
 	return appendRestartSentence(prefix, "Restarted Clanky.");
 }
 
@@ -4834,30 +4866,45 @@ function appendRestartSentence(prefix: string, sentence: string): string {
 	return `${trimmed}${/[.!?]$/u.test(trimmed) ? " " : ". "}${sentence}`;
 }
 
-async function fetchInfo(): Promise<AgentInfoResult | undefined> {
+type FetchInfoOptions = {
+	readonly healthGeneration?: number;
+	readonly reportHealth?: boolean;
+};
+
+async function fetchInfo(options: FetchInfoOptions = {}): Promise<AgentInfoResult | undefined> {
+	const reportHealth = options.reportHealth ?? true;
 	try {
 		const response = await fetch(`${brainHost}/eve/v1/info`);
 		if (!response.ok) {
-			setBrainHealth({
-				state: "unhealthy",
-				checkedAt: Date.now(),
-				status: response.status,
-				statusText: response.statusText,
-				detail: await responseDetail(response),
-			});
+			if (shouldReportFetchInfoHealth(options, reportHealth)) {
+				setBrainHealth({
+					state: "unhealthy",
+					checkedAt: Date.now(),
+					status: response.status,
+					statusText: response.statusText,
+					detail: await responseDetail(response),
+				});
+			}
 			return undefined;
 		}
 		const info = (await response.json()) as AgentInfoResult;
-		setBrainHealth({ state: "healthy", checkedAt: Date.now() });
+		if (shouldReportFetchInfoHealth(options, reportHealth)) setBrainHealth({ state: "healthy", checkedAt: Date.now() });
 		return info;
 	} catch (error) {
-		setBrainHealth({
-			state: "down",
-			checkedAt: Date.now(),
-			detail: error instanceof Error ? error.message : String(error),
-		});
+		if (shouldReportFetchInfoHealth(options, reportHealth)) {
+			setBrainHealth({
+				state: "down",
+				checkedAt: Date.now(),
+				detail: error instanceof Error ? error.message : String(error),
+			});
+		}
 		return undefined;
 	}
+}
+
+function shouldReportFetchInfoHealth(options: FetchInfoOptions, reportHealth: boolean): boolean {
+	if (!reportHealth || brainRestartInProgress) return false;
+	return options.healthGeneration === undefined || options.healthGeneration === brainHealthGeneration;
 }
 
 async function fetchBrainHealth(): Promise<BrainHealthState> {
@@ -4890,6 +4937,7 @@ async function responseDetail(response: Response): Promise<string | undefined> {
 }
 
 function setBrainHealth(next: BrainHealthState): void {
+	if (brainRestartInProgress && next.state !== "restarting") return;
 	brainHealth = next;
 	refreshBrainHealthView();
 }

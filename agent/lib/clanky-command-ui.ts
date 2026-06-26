@@ -18,6 +18,7 @@ import {
 	type ClankyCommandDetail,
 	type ClankyCommandSearchItem,
 } from "./clanky-autocomplete.ts";
+import { renderClankyOutline } from "./clanky-outline.ts";
 
 export type ClankyCommandUiTheme = {
 	readonly bold: (text: string) => string;
@@ -223,7 +224,8 @@ export class ClankyCommandWorkbench implements Component, Focusable {
 	}
 
 	render(width: number): string[] {
-		const usableWidth = Math.max(24, width);
+		const renderWidth = Math.max(24, width);
+		const usableWidth = Math.max(20, renderWidth - 4);
 		const header = fit(
 			`${this.theme.bold("Command workbench")} ${this.theme.dim(`${this.items.length}/${this.commands.length}`)}`,
 			usableWidth,
@@ -240,7 +242,7 @@ export class ClankyCommandWorkbench implements Component, Focusable {
 		const list = this.renderCommandRows(usableWidth);
 		const detail = this.renderSelectedDetail(usableWidth);
 		const body = usableWidth >= 84 ? this.renderWideBody(list, detail, usableWidth) : [...list, "", ...detail];
-		return [header, filterLine, "", ...body, "", footer];
+		return renderClankyOutline([header, filterLine, "", ...body, "", footer], renderWidth, this.theme.dim);
 	}
 
 	handleInput(data: string): void {

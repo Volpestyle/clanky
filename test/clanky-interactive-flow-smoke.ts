@@ -23,6 +23,10 @@ function assertFits(lines: readonly string[], width: number, label: string): voi
 	}
 }
 
+function stripAnsi(text: string): string {
+	return text.replace(/\x1b\[[0-9;:?]*[ -/]*[@-~]/gu, "");
+}
+
 let textSubmitted: string | undefined;
 let textCancelled = false;
 let renderCount = 0;
@@ -46,6 +50,7 @@ assert(textSubmitted === "qwen", "text prompt should submit typed input");
 assert(!textCancelled, "text prompt should not cancel when submitted");
 assert(renderCount > 0, "text prompt should request renders while typing");
 assertFits(textPrompt.render(44), 44, "text prompt");
+assert(stripAnsi(textPrompt.render(44)[0] ?? "").startsWith("┌"), "text prompt should render a solid outline");
 
 const selectOptions: InteractivePromptOption[] = [
 	{ value: "codex", label: "codex", description: "OpenAI subscription" },
@@ -71,6 +76,7 @@ const singlePrompt = new InteractiveSelectPrompt({
 singlePrompt.focused = true;
 singlePrompt.handleInput("cl");
 const filteredSingleRows = singlePrompt.render(60);
+assert(stripAnsi(filteredSingleRows[0] ?? "").startsWith("┌"), "single select should render a solid outline");
 assert(filteredSingleRows.some((line) => line.includes("claude")), "single select filter should show matching options");
 assert(filteredSingleRows.some((line) => line.includes("Filter: cl") && line.includes("1/3")), "single select should render filter counts");
 assert(filteredSingleRows.some((line) => line.includes(CURSOR_MARKER)), "focused select should render a cursor marker on the filter row");
