@@ -168,11 +168,20 @@ function buildElevenLabsConfig(env: NodeJS.ProcessEnv): VoiceExternalTtsConfig {
 }
 
 function resolveRealtimeModel(provider: VoiceRealtimeProvider, env: NodeJS.ProcessEnv): string {
-	if (env.CLANKY_VOICE_REALTIME_MODEL !== undefined && env.CLANKY_VOICE_REALTIME_MODEL.trim().length > 0) {
-		return env.CLANKY_VOICE_REALTIME_MODEL.trim();
-	}
+	const configured = env.CLANKY_VOICE_REALTIME_MODEL?.trim();
+	if (configured !== undefined && configured.length > 0 && realtimeModelMatchesProvider(provider, configured)) return configured;
+	return defaultRealtimeModelForProvider(provider);
+}
+
+function defaultRealtimeModelForProvider(provider: VoiceRealtimeProvider): string {
 	if (provider === "local") return DEFAULT_LOCAL_VOICE_LLM_MODEL;
 	return provider === "xai" ? "grok-voice-2" : "gpt-realtime";
+}
+
+function realtimeModelMatchesProvider(provider: VoiceRealtimeProvider, model: string): boolean {
+	if (provider === "local") return true;
+	const normalized = model.trim().toLowerCase();
+	return provider === "xai" ? normalized.startsWith("grok-") : normalized.startsWith("gpt-") || normalized.startsWith("o");
 }
 
 function parseRealtimeProvider(value: string | undefined): VoiceRealtimeProvider {

@@ -43,6 +43,7 @@ const DEV_BRAIN_SUPERVISE_POLL_MS = 5_000;
 // while still rescuing a wedged worker that returns 503 indefinitely.
 const DEV_BRAIN_SUPERVISE_FAILS = 3;
 const DEV_SERVER_RECORD_STARTUP_GRACE_MS = 15_000;
+const DEV_SERVER_UNHEALTHY_SETTLE_MS = 5_000;
 const DEV_SERVER_RECORD_REPROBE_MS = 500;
 const CLANKY_STARTUP_MODEL_FALLBACK_PROVIDER_ENV = "CLANKY_STARTUP_MODEL_FALLBACK_PROVIDER";
 const CLANKY_STARTUP_MODEL_FALLBACK_ENV_NAMES_ENV = "CLANKY_STARTUP_MODEL_FALLBACK_ENV_NAMES";
@@ -66,6 +67,11 @@ type DevServerRecord = {
 	readonly pid: number;
 	readonly updatedAt?: string;
 	readonly url: string;
+};
+type DiscoveredDevServer = {
+	readonly host: string;
+	readonly record: DevServerRecord;
+	readonly state: "healthy" | "reachable";
 };
 
 type EveEvent = {
@@ -229,15 +235,24 @@ function superviseDevBrain(initial: DevBrain): DevBrainSupervisor {
 }
 
 async function ensureDevBrain(): Promise<DevBrain> {
-	const discovered = await discoverDevServerHost();
-	if (discovered !== undefined) return { host: discovered, owned: false };
+	const discovered = await discoverDevServer();
+	if (discovered !== undefined) {
+		if (discovered.state === "healthy") return { host: discovered.host, owned: false };
+		if (await waitForDiscoveredDevServerHealth(discovered)) return { host: discovered.host, owned: false };
+		await stopUnhealthyDevServerRecord(discovered);
+		return await startDevBrain();
+	}
 
 	const staleRecord = await staleDevServerRecord();
 	if (staleRecord !== undefined) await stopStaleDevServerRecord(staleRecord);
 
 	const host = clankyHost();
 	const state = await probeHost(host);
-	if (state !== "down") return { host, owned: false };
+	if (state === "healthy") return { host, owned: false };
+	if (state === "reachable") {
+		if (await waitForHostHealth(host, DEV_SERVER_UNHEALTHY_SETTLE_MS)) return { host, owned: false };
+		throw new Error(`Eve dev server on ${host} is reachable but unhealthy, and no live ${DEV_SERVER_FILE} process was available to restart`);
+	}
 
 	return await startDevBrain();
 }
@@ -426,21 +441,43 @@ async function waitForDevBrainHealth(
 	}
 }
 
-async function discoverDevServerHost(): Promise<string | undefined> {
+async function discoverDevServer(): Promise<DiscoveredDevServer | undefined> {
 	const record = await readDevServerRecord();
 	if (record === undefined || !isPidAlive(record.pid)) return undefined;
 	const host = normalizeHost(record.url);
 	if (host === undefined) return undefined;
-	if ((await probeHost(host)) !== "down") return host;
+	const initialState = await probeHost(host);
+	if (initialState === "healthy" || initialState === "reachable") return { host, record, state: initialState };
 
 	const graceMs = devServerRecordStartupGraceMs(record);
 	if (graceMs <= 0) return undefined;
 	const deadline = Date.now() + graceMs;
 	while (Date.now() < deadline && isPidAlive(record.pid)) {
 		await sleep(Math.min(DEV_SERVER_RECORD_REPROBE_MS, Math.max(0, deadline - Date.now())));
-		if ((await probeHost(host)) !== "down") return host;
+		const state = await probeHost(host);
+		if (state === "healthy" || state === "reachable") return { host, record, state };
 	}
 	return undefined;
+}
+
+async function waitForDiscoveredDevServerHealth(discovered: DiscoveredDevServer): Promise<boolean> {
+	const graceMs = Math.max(DEV_SERVER_UNHEALTHY_SETTLE_MS, devServerRecordStartupGraceMs(discovered.record));
+	if (graceMs <= 0) return false;
+	return await waitForHostHealth(discovered.host, graceMs, () => isPidAlive(discovered.record.pid));
+}
+
+async function waitForHostHealth(host: string, timeoutMs: number, shouldContinue: () => boolean = () => true): Promise<boolean> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline && shouldContinue()) {
+		await sleep(Math.min(DEV_SERVER_RECORD_REPROBE_MS, Math.max(0, deadline - Date.now())));
+		if ((await probeHost(host)) === "healthy") return true;
+	}
+	return false;
+}
+
+async function stopUnhealthyDevServerRecord(discovered: DiscoveredDevServer): Promise<void> {
+	process.stderr.write(`clanky: Eve dev server pid ${discovered.record.pid} at ${discovered.host} is reachable but unhealthy; restarting it for dev\n`);
+	await stopDevServerRecord(discovered.record, "unhealthy");
 }
 
 async function staleDevServerRecord(): Promise<DevServerRecord | undefined> {
@@ -454,13 +491,18 @@ async function staleDevServerRecord(): Promise<DevServerRecord | undefined> {
 async function stopStaleDevServerRecord(record: DevServerRecord): Promise<void> {
 	const host = normalizeHost(record.url) ?? record.url;
 	process.stderr.write(`clanky: stale Eve dev server pid ${record.pid} is alive but ${host} is unreachable; stopping it before restart\n`);
+	await stopDevServerRecord(record, "stale");
+}
+
+async function stopDevServerRecord(record: DevServerRecord, reason: "stale" | "unhealthy"): Promise<void> {
+	if (record.pid === process.pid) return;
 	try {
 		process.kill(record.pid, "SIGTERM");
 	} catch {
 		return;
 	}
 	if (await waitForPidExit(record.pid, SERVER_STOP_TIMEOUT_MS)) return;
-	process.stderr.write(`clanky: stale Eve dev server pid ${record.pid} did not exit after SIGTERM; forcing stop\n`);
+	process.stderr.write(`clanky: ${reason} Eve dev server pid ${record.pid} did not exit after SIGTERM; forcing stop\n`);
 	try {
 		process.kill(record.pid, "SIGKILL");
 	} catch {

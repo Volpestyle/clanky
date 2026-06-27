@@ -185,6 +185,9 @@ const CALLBACK_PROXY_PORT = resolvePort(process.env.CLANKY_EVE_CALLBACK_PROXY_PO
 const HEALTH_TIMEOUT_MS = resolveDurationMs(process.env.CLANKY_EVE_HEALTH_TIMEOUT_MS, 180_000, "CLANKY_EVE_HEALTH_TIMEOUT_MS");
 const SERVER_STOP_TIMEOUT_MS = resolveDurationMs(process.env.CLANKY_EVE_STOP_TIMEOUT_MS, 5_000, "CLANKY_EVE_STOP_TIMEOUT_MS");
 const SERVER_KILL_TIMEOUT_MS = resolveDurationMs(process.env.CLANKY_EVE_KILL_TIMEOUT_MS, 2_000, "CLANKY_EVE_KILL_TIMEOUT_MS");
+const DEV_SERVER_RECORD_STARTUP_GRACE_MS = 15_000;
+const DEV_SERVER_UNHEALTHY_SETTLE_MS = 5_000;
+const DEV_SERVER_RECORD_REPROBE_MS = 500;
 const BRAIN_HEALTH_POLL_MS = resolveDurationMs(process.env.CLANKY_EVE_HEALTH_POLL_MS, 5_000, "CLANKY_EVE_HEALTH_POLL_MS");
 const ENV_PATH = join(REPO, ".env.local");
 const DEV_SERVER_FILE = join(REPO, ".eve", "dev-server.json");
@@ -320,7 +323,7 @@ type ClankyExtensionCommandName =
 	| "auth"
 	| "login"
 	| "model"
-	| "local"
+	| "profile"
 	| "harness"
 	| "effort"
 	| "approvals"
@@ -424,6 +427,7 @@ type SetupFlow = {
 		readonly kind: "multi" | "single";
 		readonly message: string;
 		readonly options: readonly MenuOption[];
+		readonly statusActions?: readonly MenuOption[];
 		readonly initialValue?: string;
 		readonly initialValues?: readonly string[];
 		readonly currentValue?: string;
@@ -582,7 +586,9 @@ interface DevServerRecord {
 
 interface DiscoveredHost {
 	readonly host: string;
+	readonly record: DevServerRecord;
 	readonly source: string;
+	readonly state: "healthy" | "reachable";
 }
 
 const EFFORT_LEVELS = ["minimal", "low", "medium", "high", "xhigh"] as const;
@@ -637,6 +643,9 @@ type AuthAction =
 	| "relay"
 	| "local-voice"
 	| "login";
+type MenuBackOptions = {
+	readonly backReturnsToMenu?: boolean;
+};
 type AuthSecretAction = "openai" | "elevenlabs" | "relay" | "local-voice";
 type SubscriptionLoginPromptResult =
 	| { readonly state: "ready"; readonly message?: string }
@@ -699,10 +708,12 @@ const LOCAL_EFFORT_STATUS_OPTIONS: readonly MenuOption[] = [
 	{ value: "status", label: "status", hint: "show current effort" },
 	...LOCAL_EFFORT_OPTIONS,
 ];
-const LOCAL_STACK_OPTIONS: readonly MenuOption[] = [
-	{ value: "status", label: "status", hint: "show the current local stack" },
-	{ value: "tiered", label: "tiered", hint: "4-bit conductor + small voice model on a 2nd server" },
-	{ value: "single", label: "single", hint: "one shared model for brain and voice" },
+const PROFILE_OPTIONS: readonly MenuOption[] = [
+	{ value: "local-tiered", label: "local tiered", hint: "local conductor + separate local voice server" },
+	{ value: "local-single", label: "local single", hint: "one local model for conductor and voice" },
+	{ value: "api", label: "api", hint: "hosted/API conductor + hosted realtime voice API" },
+	{ value: "local-api", label: "local + API voice", hint: "local conductor + hosted realtime voice API" },
+	{ value: "api-local", label: "API + local voice", hint: "hosted/API conductor + local voice stack" },
 ];
 // Top-level voice menu: a short list of categories instead of 15 flat settings.
 // Most entries drill into a grouped submenu (group:*); "mode" is common enough
@@ -942,6 +953,8 @@ const MCP_TRANSPORT_OPTIONS: readonly MenuOption[] = [
 	{ value: "sse", label: "sse", hint: "SSE MCP endpoint" },
 ];
 const SETTINGS_STATUS_TOGGLE_VALUE = "__settings_status_toggle__";
+const SETTINGS_STATUS_EXPAND_ICON = "▶";
+const SETTINGS_STATUS_COLLAPSE_ICON = "▼";
 const MCP_DYNAMIC_NAME_RE = /^[a-z0-9][a-z0-9_-]*$/i;
 const MCP_CONNECTION_INFO_UNAVAILABLE = "(curated connection inventory unavailable: /eve/v1/info is not healthy)";
 
@@ -1205,9 +1218,16 @@ function buildClankyPromptCommands(): ClankyPromptCommandSpec[] {
 			build: () => ({ type: "help" }),
 		},
 		{
+			name: "n",
+			aliases: [],
+			description: "Start a fresh session and clear the transcript",
+			takesArgument: false,
+			build: () => ({ type: "new" }),
+		},
+		{
 			name: "new",
 			aliases: [],
-			description: "Start a fresh session",
+			description: "Start a fresh session and clear the transcript",
 			takesArgument: false,
 			build: () => ({ type: "new" }),
 		},
@@ -1251,12 +1271,12 @@ function buildClankyPromptCommands(): ClankyPromptCommandSpec[] {
 			build: (argument) => ({ type: "extension", name: "auth", argument }),
 		},
 		{
-			name: "local",
-			aliases: ["local-stack"],
-			description: "Apply an all-local tiered model stack (conductor + voice)",
-			argumentHint: "[status|tiered|single] [voice-model]",
+			name: "profile",
+			aliases: [],
+			description: "Switch conductor and voice between local and hosted API profiles",
+			argumentHint: "[status|local-tiered|local-single|api|local-api|api-local] [model]",
 			takesArgument: true,
-			build: (argument) => ({ type: "extension", name: "local", argument }),
+			build: (argument) => ({ type: "extension", name: "profile", argument }),
 		},
 		{
 			name: "harness",
@@ -1852,6 +1872,7 @@ function createSetupFlow(host: FlowHost): SetupFlowController {
 				onSubmit: (values) => finish(values),
 				options: options.options.map(toInteractivePromptOption),
 				required: options.required,
+				statusActions: options.statusActions?.map(toInteractivePromptOption),
 				theme: selectListTheme,
 			});
 			handle = showSelectableOverlay(prompt, setupOverlayOptions("center"));
@@ -2136,6 +2157,10 @@ async function handleSlashPrompt(prompt: string): Promise<void> {
 		return;
 	}
 	const outcome = await handleClankyCommand(parsed, commandRenderer);
+	if (outcome.newSession === true && isResponding) {
+		insertCommandResult(prompt, "Clanky is still responding; wait for the current turn to finish before starting a new session.", "error");
+		return;
+	}
 	if (outcome.clearTranscript === true) {
 		transcriptViewport.clear();
 		faceRenderer.resetTurn();
@@ -2147,13 +2172,9 @@ async function handleSlashPrompt(prompt: string): Promise<void> {
 		tuiLedger.record(slashCommandLabel(prompt), outcome.message, tone);
 	}
 	if (outcome.newSession === true) {
-		if (isResponding) {
-			insertCommandResult(prompt, "Clanky is still responding; wait for the current turn to finish before starting a new session.", "error");
-		} else {
-			session = client.session();
-			faceRenderer.resetSession();
-			insertCommandResult(prompt, "New session started.", "success");
-		}
+		session = client.session();
+		faceRenderer.resetSession();
+		insertCommandResult(prompt, "New session started.", "success");
 	}
 	if (outcome.exit === true) await shutdown(0);
 }
@@ -2343,7 +2364,7 @@ async function handleClankyCommand(command: ClankyPromptCommand, renderer: Comma
 		case "help":
 			return { message: formatHelp() };
 		case "new":
-			return { newSession: true };
+			return { clearTranscript: true, newSession: true };
 		case "clear":
 			return { clearTranscript: true };
 		case "exit":
@@ -2357,7 +2378,7 @@ async function handleClankyCommand(command: ClankyPromptCommand, renderer: Comma
 async function handleExtensionCommand(command: ClankyExtensionCommand, renderer: CommandRenderer): Promise<PromptCommandOutcome> {
 	switch (command.name) {
 		case "discord-token":
-			return { message: await setDiscordToken(command.argument, renderer.setupFlow) };
+			return { message: (await setDiscordToken(command.argument, renderer.setupFlow)) ?? "/discord-token cancelled." };
 		case "discord-scope":
 			return { message: await configureDiscordScope(command.argument, renderer.setupFlow) };
 		case "auth":
@@ -2366,8 +2387,8 @@ async function handleExtensionCommand(command: ClankyExtensionCommand, renderer:
 			return { message: await configureLogin(command.argument, renderer.setupFlow) };
 		case "model":
 			return { message: await configureModel(command.argument, renderer.setupFlow) };
-		case "local":
-			return { message: await configureLocalStack(command.argument, renderer.setupFlow) };
+		case "profile":
+			return { message: await configureProfile(command.argument, renderer.setupFlow) };
 		case "harness":
 			return { message: await configureHarness(command.argument, renderer.setupFlow) };
 		case "effort":
@@ -2694,7 +2715,11 @@ function disableClankyMouseTracking(): void {
 	tui.terminal.write(CLANKY_MOUSE_TRACKING_DISABLE);
 }
 
-async function setDiscordToken(argument: string, flow: SetupFlow | undefined): Promise<string> {
+async function setDiscordToken(
+	argument: string,
+	flow: SetupFlow | undefined,
+	options: MenuBackOptions = {},
+): Promise<string | undefined> {
 	const args = splitArgs(argument);
 	const config = await readConfig();
 	const first = args[0]?.toLowerCase();
@@ -2703,7 +2728,7 @@ async function setDiscordToken(argument: string, flow: SetupFlow | undefined): P
 	if (token === undefined) {
 		if (flow === undefined) return `${formatDiscordCredentialStatus(config)}\n\nUsage: /discord-token [status|<token>] [--user-token] [--voice]`;
 		const update = await promptDiscordToken(flow, config);
-		if (update === undefined) return "/discord-token cancelled.";
+		if (update === undefined) return options.backReturnsToMenu === true ? undefined : "/discord-token cancelled.";
 		if (typeof update === "string") return update;
 		await writeEnv(update.updates);
 		return await restartBrainMessage(update.message);
@@ -3190,7 +3215,7 @@ async function configureAuth(
 		return await configureAuthInteractive(flow, renderer);
 	}
 	if (action === "status") return await authStatusText();
-	return await runAuthAction(action, args.slice(1), flow, renderer);
+	return (await runAuthAction(action, args.slice(1), flow, renderer)) ?? `/auth ${action} cancelled.`;
 }
 
 async function configureAuthInteractive(flow: SetupFlow, renderer: CommandRenderer): Promise<string> {
@@ -3202,7 +3227,7 @@ async function configureAuthInteractive(flow: SetupFlow, renderer: CommandRender
 			dispatch: async (value) => {
 				const action = parseAuthAction(value);
 				if (action === undefined || action === "status") return undefined;
-				return await runAuthAction(action, [], flow, renderer);
+				return await runAuthAction(action, [], flow, renderer, { backReturnsToMenu: true });
 			},
 		});
 	// Status is read once: every credential action closes the flow, so it never
@@ -3223,7 +3248,7 @@ async function configureAuthInteractive(flow: SetupFlow, renderer: CommandRender
 					case "group:tokens":
 						return await runGroup("Choose a token to set.", AUTH_TOKEN_OPTIONS);
 					case "mcp":
-						return await runAuthAction("mcp", [], flow, renderer);
+						return await runAuthAction("mcp", [], flow, renderer, { backReturnsToMenu: true });
 					default:
 						return undefined;
 				}
@@ -3240,7 +3265,8 @@ async function runAuthAction(
 	args: readonly string[],
 	flow: SetupFlow | undefined,
 	renderer: CommandRenderer,
-): Promise<string> {
+	options: MenuBackOptions = {},
+): Promise<string | undefined> {
 	switch (action) {
 		case "status":
 			return await authStatusText();
@@ -3253,15 +3279,18 @@ async function runAuthAction(
 			return await runLogin(action, flow);
 		case "xai":
 		case "gemini":
-			return await setProviderApiKeyFromAuth(action, args, flow);
+			return await setProviderApiKeyFromAuth(action, args, flow, options);
 		case "openai":
 		case "elevenlabs":
 		case "relay":
 		case "local-voice":
-			return await setAuthSecret(action, args, flow);
+			return await setAuthSecret(action, args, flow, options);
 		case "discord":
-			return await setDiscordToken(args.join(" "), flow);
+			return await setDiscordToken(args.join(" "), flow, options);
 		case "mcp":
+			if (options.backReturnsToMenu === true && flow !== undefined && args.length === 0) {
+				return await configureMcpInteractive(flow, renderer, "auth", options);
+			}
 			return await configureMcp(["auth", ...args].join(" "), flow, renderer);
 	}
 }
@@ -3270,13 +3299,14 @@ async function setProviderApiKeyFromAuth(
 	provider: "xai" | "gemini",
 	args: readonly string[],
 	flow: SetupFlow | undefined,
-): Promise<string> {
+	options: MenuBackOptions = {},
+): Promise<string | undefined> {
 	if (args[0]?.toLowerCase() === "status" || args[0]?.toLowerCase() === "show") return await authStatusText();
 	const directValue = args.join(" ").trim();
 	if (directValue.length > 0) return await saveProviderApiKey(provider, directValue);
 	if (flow === undefined) return `Usage: /auth ${provider} <api-key>`;
-	const entered = await promptProviderApiKey(flow, provider, await readConfig());
-	if (entered === undefined) return `/auth ${provider} cancelled.`;
+	const entered = await promptProviderApiKey(flow, provider, await readConfig(), options.backReturnsToMenu === true);
+	if (entered === undefined) return options.backReturnsToMenu === true ? undefined : `/auth ${provider} cancelled.`;
 	if (entered === "keep") return `${providerLabel(provider)} API key unchanged.`;
 	return await saveProviderApiKey(provider, entered);
 }
@@ -3290,7 +3320,8 @@ async function setAuthSecret(
 	action: AuthSecretAction,
 	args: readonly string[],
 	flow: SetupFlow | undefined,
-): Promise<string> {
+	options: MenuBackOptions = {},
+): Promise<string | undefined> {
 	if (args[0]?.toLowerCase() === "status" || args[0]?.toLowerCase() === "show") return await authStatusText();
 	const target = AUTH_SECRET_TARGETS[action];
 	const directValue = args.join(" ").trim();
@@ -3306,8 +3337,9 @@ async function setAuthSecret(
 				? `Paste the ${target.label} to replace the current one. Leave blank to keep it.`
 				: `Paste the ${target.label} to store it in .env.local. Leave blank to cancel.`,
 			placeholder: target.placeholder,
+			allowBack: options.backReturnsToMenu === true,
 		});
-		if (value === undefined) return `/auth ${action} cancelled.`;
+		if (value === undefined) return options.backReturnsToMenu === true ? undefined : `/auth ${action} cancelled.`;
 		const trimmed = value.trim();
 		if (trimmed.length === 0) return present ? `${target.label} unchanged.` : `${target.label} not changed.`;
 		return await saveAuthSecret(target.envKey, trimmed, target.savedMessage);
@@ -3656,70 +3688,83 @@ async function configureModel(argument: string, flow: SetupFlow | undefined): Pr
 		return `Unknown model provider "${args[0]}". Use codex, claude, local, xai, gemini, or status.`;
 	}
 
-	if (provider === undefined) {
-		if (flow === undefined) return `${await formatModelStatusWithAuth(existing)}\n\nUsage: /model [status|codex|claude|local|xai|gemini] [id] [effort|baseUrl]`;
-		// Provider -> model -> (codex effort) wizard. Left/Esc steps back one
-		// stage; backing out of the provider step cancels the command.
-		let step: "provider" | "model" | "effort" = "provider";
-		let wizardProvider: ClankyConfig["provider"] | undefined;
-		let wizardModel: string | undefined;
-		let wizardEffort: string | undefined;
-		for (;;) {
-			if (step === "provider") {
-				const selectedProvider = await selectProvider(flow, wizardProvider ?? "status", true);
-				if (selectedProvider === "status") return await formatModelStatusWithAuth(existing);
-				if (selectedProvider === undefined) return "/model cancelled.";
-				wizardProvider = selectedProvider;
-				step = "model";
-				continue;
-			}
-			if (wizardProvider === undefined) {
-				step = "provider";
-				continue;
-			}
-			if (step === "model") {
-				const picked = await selectModel(flow, wizardProvider, existing, true);
-				if (picked === undefined) {
-					step = "provider";
-					continue;
-				}
-				wizardModel = picked;
-				step = "effort";
-				continue;
-			}
-			if (wizardProvider === "codex") {
-				const pickedEffort = await selectEffort(flow, existing.codexEffort, false, true);
-				if (pickedEffort === undefined) {
+	for (;;) {
+		if (provider === undefined) {
+			if (flow === undefined) return `${await formatModelStatusWithAuth(existing)}\n\nUsage: /model [status|codex|claude|local|xai|gemini] [id] [effort|baseUrl]`;
+			const modelMenuStatus = await formatModelMenuStatusWithAuth(existing);
+			// Provider -> model -> (codex effort) wizard. Left/Esc steps back one
+			// stage; backing out of the provider step cancels the command.
+			let step: "provider" | "model" | "effort" = "provider";
+			let wizardProvider: ClankyConfig["provider"] | undefined;
+			let wizardModel: string | undefined;
+			let wizardEffort: string | undefined;
+			for (;;) {
+				if (step === "provider") {
+					const selectedProvider = await selectProvider(flow, wizardProvider ?? existing.provider, true, modelMenuStatus);
+					if (selectedProvider === undefined) return "/model cancelled.";
+					wizardProvider = selectedProvider;
 					step = "model";
 					continue;
 				}
-				wizardEffort = pickedEffort;
+				if (wizardProvider === undefined) {
+					step = "provider";
+					continue;
+				}
+				if (step === "model") {
+					const picked = await selectModel(flow, wizardProvider, existing, true);
+					if (picked === undefined) {
+						step = "provider";
+						continue;
+					}
+					wizardModel = picked;
+					step = "effort";
+					continue;
+				}
+				if (wizardProvider === "codex") {
+					const pickedEffort = await selectEffort(flow, existing.codexEffort, false, true);
+					if (pickedEffort === undefined) {
+						step = "model";
+						continue;
+					}
+					wizardEffort = pickedEffort;
+				}
+				break;
 			}
-			break;
+			if (wizardProvider === undefined) return "/model cancelled.";
+			provider = wizardProvider;
+			providerSelectedInteractively = true;
+			modelId = wizardModel === "keep-current" ? undefined : wizardModel;
+			if (wizardProvider === "codex") effort = wizardEffort === "keep-current" ? undefined : wizardEffort;
 		}
-		if (wizardProvider === undefined) return "/model cancelled.";
-		provider = wizardProvider;
-		providerSelectedInteractively = true;
-		modelId = wizardModel === "keep-current" ? undefined : wizardModel;
-		if (wizardProvider === "codex") effort = wizardEffort === "keep-current" ? undefined : wizardEffort;
+
+		if ((provider === "codex" || provider === "claude") && flow !== undefined) {
+			const login = await promptSubscriptionLoginIfNeeded(flow, provider);
+			if (login.state === "cancelled") return login.message;
+			if (login.state === "ready" && login.message !== undefined) loginMessages.push(login.message);
+		}
+
+		if (
+			(provider === "xai" || provider === "gemini") &&
+			apiKey === undefined &&
+			flow !== undefined &&
+			(providerSelectedInteractively || !providerApiKeyPresent(provider, existing))
+		) {
+			const entered = await promptProviderApiKey(flow, provider, existing, providerSelectedInteractively);
+			if (entered === undefined) {
+				if (!providerSelectedInteractively) return "/model cancelled.";
+				provider = undefined;
+				providerSelectedInteractively = false;
+				modelId = undefined;
+				effort = undefined;
+				apiKey = undefined;
+				continue;
+			}
+			if (entered !== "keep") apiKey = entered;
+		}
+		break;
 	}
 
-	if ((provider === "codex" || provider === "claude") && flow !== undefined) {
-		const login = await promptSubscriptionLoginIfNeeded(flow, provider);
-		if (login.state === "cancelled") return login.message;
-		if (login.state === "ready" && login.message !== undefined) loginMessages.push(login.message);
-	}
-
-	if (
-		(provider === "xai" || provider === "gemini") &&
-		apiKey === undefined &&
-		flow !== undefined &&
-		(providerSelectedInteractively || !providerApiKeyPresent(provider, existing))
-	) {
-		const entered = await promptProviderApiKey(flow, provider, existing, providerSelectedInteractively);
-		if (entered === undefined) return "/model cancelled.";
-		if (entered !== "keep") apiKey = entered;
-	}
+	if (provider === undefined) return "/model cancelled.";
 
 	const updates: Record<string, string> = { CLANKY_MODEL_PROVIDER: provider };
 	if (provider === "local") {
@@ -3767,13 +3812,68 @@ function formatModelStatus(config: ClankyConfig): string {
 }
 
 async function formatModelStatusWithAuth(config: ClankyConfig): Promise<string> {
+	return formatModelStatusWithAuthFromStatuses(config, await subscriptionAuthStatuses());
+}
+
+async function formatModelMenuStatusWithAuth(config: ClankyConfig): Promise<SettingsMenuStatus> {
+	const auth = await subscriptionAuthStatuses();
+	return collapsibleMenuStatus(formatModelMenuSummary(config, auth), formatModelStatusWithAuthFromStatuses(config, auth));
+}
+
+type SubscriptionAuthStatuses = {
+	readonly claude: { present: boolean; expiresMs?: number };
+	readonly codex: { present: boolean; expiresMs?: number };
+};
+
+async function subscriptionAuthStatuses(): Promise<SubscriptionAuthStatuses> {
 	const [claude, codex] = await Promise.all([claudeCredentialStatus(), codexCredentialStatus()]);
+	return { claude, codex };
+}
+
+function formatModelStatusWithAuthFromStatuses(
+	config: ClankyConfig,
+	auth: SubscriptionAuthStatuses,
+): string {
 	return [
 		formatModelStatus(config),
 		statusSection("Subscription auth"),
-		statusLine("codex", formatCredStatus(codex), credentialStatusTone(codex)),
-		statusLine("claude", formatCredStatus(claude), credentialStatusTone(claude)),
+		statusLine("codex", formatCredStatus(auth.codex), credentialStatusTone(auth.codex)),
+		statusLine("claude", formatCredStatus(auth.claude), credentialStatusTone(auth.claude)),
 	].join("\n");
+}
+
+function formatModelMenuSummary(
+	config: ClankyConfig,
+	auth: SubscriptionAuthStatuses,
+): string {
+	const configured = formatProviderSummary(config);
+	const running = formatRunningConductorSummary(config);
+	const lines = [statusTitle("Model"), statusLine("running", running, running !== configured ? "warn" : "active")];
+	if (running !== configured) lines.push(statusLine("configured", configured, "muted"));
+	lines.push(formatActiveModelGate(config, auth));
+	return lines.join("\n");
+}
+
+function formatActiveModelGate(
+	config: ClankyConfig,
+	auth: SubscriptionAuthStatuses,
+): string {
+	switch (config.provider) {
+		case "codex":
+			return statusLine("auth", `codex ${formatCredStatus(auth.codex)}`, credentialStatusTone(auth.codex));
+		case "claude":
+			return statusLine("auth", `claude ${formatCredStatus(auth.claude)}`, credentialStatusTone(auth.claude));
+		case "xai":
+			return statusLine("auth", `xai api key ${formatCredentialPresence(config.xaiApiKeyPresent)}`, config.xaiApiKeyPresent === true ? "ok" : "warn");
+		case "gemini":
+			return statusLine(
+				"auth",
+				`gemini api key ${formatCredentialPresence(config.geminiApiKeyPresent)}`,
+				config.geminiApiKeyPresent === true ? "ok" : "warn",
+			);
+		case "local":
+			return statusLine("endpoint", config.localBaseUrl ?? DEFAULT_LOCAL_BASE_URL, "muted");
+	}
 }
 
 async function modelRouteAuthHint(
@@ -3794,50 +3894,215 @@ async function modelRouteAuthHint(
 	return "";
 }
 
-async function configureLocalStack(argument: string, flow: SetupFlow | undefined): Promise<string> {
+async function configureProfile(argument: string, flow: SetupFlow | undefined): Promise<string> {
 	const args = splitArgs(argument);
 	const config = await readConfig();
 	const first = args[0]?.toLowerCase();
-	if (first === "status" || first === "show") return await formatLocalStackStatus(config);
-	let action: "tiered" | "single" | undefined = first === "tiered" || first === "single" ? first : undefined;
+	if (first === "status" || first === "show") return await formatProfileStatus(config);
+	let action: ProfileAction | undefined = parseProfileAction(first);
 	if (action === undefined && first !== undefined) {
-		return `Unknown /local option "${args[0]}". Use status, tiered, or single.`;
+		return `Unknown /profile option "${args[0]}". Use status, local-tiered, local-single, api, local-api, or api-local.`;
 	}
 	if (action === undefined) {
-		if (flow === undefined) return `${await formatLocalStackStatus(config)}\n\n${localStackUsage()}`;
-		const selected = await selectOne(flow, "Choose the all-local model stack profile.", LOCAL_STACK_OPTIONS, "tiered", true);
-		if (selected === undefined) return "/local cancelled.";
-		if (selected === "status") return await formatLocalStackStatus(config);
-		action = selected === "single" ? "single" : "tiered";
+		if (flow === undefined) return `${await formatProfileStatus(config)}\n\n${profileUsage()}`;
+		action = await selectProfileAction(flow, config);
+		if (action === undefined) return "/profile cancelled.";
 	}
 	const voiceModelOverride = args[1]?.trim();
-	return await applyLocalStackProfile(action, config, voiceModelOverride);
+	if (action === "api") return await applyApiStackProfile(config);
+	if (action === "local-api") return await applyLocalApiProfile(config);
+	if (action === "api-local") return await applyApiLocalProfile(config, voiceModelOverride);
+	return await applyLocalProfile(action, config, voiceModelOverride);
 }
 
-async function applyLocalStackProfile(
-	profile: "tiered" | "single",
+type LocalProfile = "local-tiered" | "local-single";
+type ProfileAction = LocalProfile | "api" | "local-api" | "api-local";
+type ApiModelProvider = Exclude<ClankyConfig["provider"], "local">;
+type ApiVoiceProvider = Exclude<VoiceRealtimeProvider, "local">;
+
+function parseProfileAction(value: string | undefined): ProfileAction | undefined {
+	if (value === undefined) return undefined;
+	const normalized = normalizeCommandToken(value);
+	if (normalized === "localtiered") return "local-tiered";
+	if (normalized === "localsingle") return "local-single";
+	if (normalized === "api") return "api";
+	if (normalized === "localapi") return "local-api";
+	if (normalized === "apilocal") return "api-local";
+	return undefined;
+}
+
+async function selectProfileAction(flow: SetupFlow, config: ClankyConfig): Promise<ProfileAction | undefined> {
+	flow.begin("Configure profile");
+	let statusExpanded = false;
+	let expandedStatus: string | undefined;
+	let initial: string | undefined = currentProfileAction(config);
+	const toggleStatus: Exclude<SettingsMenuStatus, string> = { collapsed: "", expanded: "" };
+	try {
+		for (;;) {
+			if (statusExpanded && expandedStatus === undefined) expandedStatus = await formatProfileStatus(config);
+			const status = statusExpanded ? expandedStatus : formatProfileSummary(config);
+			const message = `${status ?? ""}\n\nChoose the runtime profile.`;
+			const selected = await selectOne(
+				flow,
+				message,
+				PROFILE_OPTIONS,
+				initial,
+				true,
+				undefined,
+				[settingsStatusToggleOption(toggleStatus, statusExpanded)],
+			);
+			if (selected === undefined) return undefined;
+			if (selected === SETTINGS_STATUS_TOGGLE_VALUE) {
+				statusExpanded = !statusExpanded;
+				initial = SETTINGS_STATUS_TOGGLE_VALUE;
+				continue;
+			}
+			return parseProfileAction(selected);
+		}
+	} finally {
+		flow.end({ preserveDiagnostics: false });
+	}
+}
+
+function currentProfileAction(config: ClankyConfig): ProfileAction {
+	const conductorLocal = config.provider === "local";
+	const voiceProvider = parseVoiceRealtimeProvider(config.voiceRealtimeProvider) ?? "openai";
+	const voiceLocal = voiceProvider === "local";
+	if (conductorLocal && voiceLocal) return isSingleLocalProfile(config) ? "local-single" : "local-tiered";
+	if (conductorLocal) return "local-api";
+	if (voiceLocal) return "api-local";
+	return "api";
+}
+
+function isSingleLocalProfile(config: ClankyConfig): boolean {
+	const localBaseUrl = config.localBaseUrl ?? DEFAULT_LOCAL_BASE_URL;
+	const voiceBaseUrl = config.voiceLocalBaseUrl ?? config.localBaseUrl ?? DEFAULT_LOCAL_BASE_URL;
+	const localModel = config.localModel ?? DEFAULT_LOCAL_CONDUCTOR_MODEL;
+	const voiceModel = config.voiceRealtimeModel ?? DEFAULT_LOCAL_VOICE_LLM_MODEL;
+	return voiceBaseUrl === localBaseUrl && voiceModel === localModel;
+}
+
+async function applyLocalProfile(
+	profile: LocalProfile,
 	config: ClankyConfig,
 	voiceModelOverride: string | undefined,
 ): Promise<string> {
 	// Drop bf16 for the conductor: it doubles memory bandwidth per token and roughly
 	// halves throughput, which starves the concurrent voice/Discord agents on one GPU.
-	const conductorModel =
-		config.localModel !== undefined && config.localModel.length > 0 && !config.localModel.includes("bf16")
-			? config.localModel
-			: DEFAULT_LOCAL_CONDUCTOR_MODEL;
-	const conductorBaseUrl = config.localBaseUrl ?? DEFAULT_LOCAL_BASE_URL;
-	const voiceModel =
-		voiceModelOverride !== undefined && voiceModelOverride.length > 0
-			? voiceModelOverride
-			: profile === "single"
-				? conductorModel
-				: DEFAULT_LOCAL_VOICE_SMALL_MODEL;
-	const voiceBaseUrl = profile === "single" ? conductorBaseUrl : DEFAULT_LOCAL_VOICE_SERVER_BASE_URL;
+	const local = localProfileSettings(profile, config, voiceModelOverride);
 
 	const updates: Record<string, string> = {
 		CLANKY_MODEL_PROVIDER: "local",
-		CLANKY_LOCAL_MODEL: conductorModel,
-		CLANKY_LOCAL_BASE_URL: conductorBaseUrl,
+		CLANKY_LOCAL_MODEL: local.conductorModel,
+		CLANKY_LOCAL_BASE_URL: local.conductorBaseUrl,
+		CLANKY_DISCORD_VOICE: "1",
+		CLANKY_VOICE_REALTIME_PROVIDER: "local",
+		CLANKY_VOICE_REALTIME_MODEL: local.voiceModel,
+		CLANKY_VOICE_REALTIME_VOICE: config.voiceRealtimeVoice ?? DEFAULT_LOCAL_VOICE,
+		CLANKY_VOICE_TTS_PROVIDER: "realtime",
+		CLANKY_VOICE_ASR_MODEL: config.voiceAsrModel ?? defaultVoiceAsrModelPath(),
+		CLANKY_VOICE_ASR_COMMAND: config.voiceAsrCommand ?? "whisper-cli",
+		CLANKY_VOICE_LOCAL_BASE_URL: local.voiceBaseUrl,
+		CLANKY_VOICE_LOCAL_TTS_ENGINE: config.voiceLocalTtsEngine ?? "say",
+		CLANKY_VOICE_MEMORY_CONTEXT_LIMIT: config.voiceMemoryContextLimit ?? "16",
+		CLANKY_VOICE_EVE_SESSION: config.voiceEveSession ?? "1",
+	};
+	await writeEnv(updates);
+
+	const headline =
+		profile === "local-tiered"
+			? `Profile applied: local tiered; conductor ${local.conductorModel} @ ${local.conductorBaseUrl}, voice ${local.voiceModel} @ ${local.voiceBaseUrl}`
+			: `Profile applied: local single; ${local.conductorModel} @ ${local.conductorBaseUrl} for conductor and voice`;
+	const restarted = await restartBrainMessage(headline);
+	const guidance = await buildLocalStackGuidance(profile, local.conductorModel, local.conductorBaseUrl, local.voiceModel, local.voiceBaseUrl);
+	return `${restarted}\n\n${guidance}`;
+}
+
+function localProfileSettings(
+	profile: LocalProfile,
+	config: ClankyConfig,
+	voiceModelOverride: string | undefined,
+): { conductorModel: string; conductorBaseUrl: string; voiceModel: string; voiceBaseUrl: string } {
+	const override = voiceModelOverride !== undefined && voiceModelOverride.length > 0 ? voiceModelOverride : undefined;
+	let conductorModel = DEFAULT_LOCAL_CONDUCTOR_MODEL;
+	if (profile === "local-single" && override !== undefined) {
+		conductorModel = override;
+	} else if (config.localModel !== undefined && config.localModel.length > 0 && !config.localModel.includes("bf16")) {
+		conductorModel = config.localModel;
+	}
+	const conductorBaseUrl = config.localBaseUrl ?? DEFAULT_LOCAL_BASE_URL;
+	const voiceModel =
+		override !== undefined
+			? override
+			: profile === "local-single"
+				? conductorModel
+				: DEFAULT_LOCAL_VOICE_SMALL_MODEL;
+	const voiceBaseUrl = profile === "local-single" ? conductorBaseUrl : DEFAULT_LOCAL_VOICE_SERVER_BASE_URL;
+	return { conductorModel, conductorBaseUrl, voiceModel, voiceBaseUrl };
+}
+
+async function applyApiStackProfile(config: ClankyConfig): Promise<string> {
+	const conductorProvider = apiConductorProvider(config);
+	const voiceProvider = apiVoiceProvider(config);
+	const voiceModel = defaultRealtimeModelForProvider(voiceProvider);
+	const voice = defaultRealtimeVoiceForProvider(voiceProvider);
+	const updates: Record<string, string> = {
+		CLANKY_MODEL_PROVIDER: conductorProvider,
+		CLANKY_DISCORD_VOICE: "1",
+		CLANKY_VOICE_REALTIME_PROVIDER: voiceProvider,
+		CLANKY_VOICE_REALTIME_MODEL: voiceModel,
+		CLANKY_VOICE_REALTIME_VOICE: voice,
+		CLANKY_VOICE_TTS_PROVIDER: "realtime",
+	};
+	await writeEnv(updates);
+
+	const authHints = new Set<string>();
+	const conductorHint = await modelRouteAuthHint(conductorProvider, false, config);
+	if (conductorHint.length > 0) authHints.add(`Conductor: ${conductorHint.replace(/^ — /, "")}.`);
+	if (voiceProvider === "openai" && config.openAiApiKeyPresent !== true) {
+		authHints.add("Voice: run /auth openai to set CLANKY_OPENAI_API_KEY.");
+	}
+	if (voiceProvider === "xai" && config.xaiApiKeyPresent !== true) {
+		authHints.add("Voice: run /auth xai to set CLANKY_XAI_API_KEY.");
+	}
+
+	const restarted = await restartBrainMessage(`API provider stack applied: conductor ${conductorProvider}, voice ${voiceProvider} realtime (${voiceModel})`);
+	return authHints.size === 0 ? restarted : `${restarted}\n\n${[...authHints].join("\n")}`;
+}
+
+async function applyLocalApiProfile(config: ClankyConfig): Promise<string> {
+	const local = localProfileSettings("local-single", config, undefined);
+	const voiceProvider = apiVoiceProvider(config);
+	const voiceModel = defaultRealtimeModelForProvider(voiceProvider);
+	const voice = defaultRealtimeVoiceForProvider(voiceProvider);
+	const updates: Record<string, string> = {
+		CLANKY_MODEL_PROVIDER: "local",
+		CLANKY_LOCAL_MODEL: local.conductorModel,
+		CLANKY_LOCAL_BASE_URL: local.conductorBaseUrl,
+		CLANKY_DISCORD_VOICE: "1",
+		CLANKY_VOICE_REALTIME_PROVIDER: voiceProvider,
+		CLANKY_VOICE_REALTIME_MODEL: voiceModel,
+		CLANKY_VOICE_REALTIME_VOICE: voice,
+		CLANKY_VOICE_TTS_PROVIDER: "realtime",
+	};
+	await writeEnv(updates);
+
+	const authHints = voiceApiAuthHints(voiceProvider, config);
+	const restarted = await restartBrainMessage(`Profile applied: local conductor + ${voiceProvider} voice API (${voiceModel})`);
+	return authHints.length === 0 ? restarted : `${restarted}\n\n${authHints.join("\n")}`;
+}
+
+async function applyApiLocalProfile(config: ClankyConfig, voiceModelOverride: string | undefined): Promise<string> {
+	const conductorProvider = apiConductorProvider(config);
+	const voiceModel =
+		voiceModelOverride !== undefined && voiceModelOverride.length > 0
+			? voiceModelOverride
+			: parseVoiceRealtimeProvider(config.voiceRealtimeProvider) === "local" && config.voiceRealtimeModel !== undefined
+				? config.voiceRealtimeModel
+				: DEFAULT_LOCAL_VOICE_SMALL_MODEL;
+	const voiceBaseUrl = config.voiceLocalBaseUrl ?? DEFAULT_LOCAL_VOICE_SERVER_BASE_URL;
+	const updates: Record<string, string> = {
+		CLANKY_MODEL_PROVIDER: conductorProvider,
 		CLANKY_DISCORD_VOICE: "1",
 		CLANKY_VOICE_REALTIME_PROVIDER: "local",
 		CLANKY_VOICE_REALTIME_MODEL: voiceModel,
@@ -3852,17 +4117,29 @@ async function applyLocalStackProfile(
 	};
 	await writeEnv(updates);
 
-	const headline =
-		profile === "tiered"
-			? `Local tiered stack applied: conductor ${conductorModel} @ ${conductorBaseUrl}, voice ${voiceModel} @ ${voiceBaseUrl}`
-			: `Local single stack applied: ${conductorModel} @ ${conductorBaseUrl} for brain and voice`;
-	const restarted = await restartBrainMessage(headline);
-	const guidance = await buildLocalStackGuidance(profile, conductorModel, conductorBaseUrl, voiceModel, voiceBaseUrl);
-	return `${restarted}\n\n${guidance}`;
+	const authHints: string[] = [];
+	const conductorHint = await modelRouteAuthHint(conductorProvider, false, config);
+	if (conductorHint.length > 0) authHints.push(`Conductor: ${conductorHint.replace(/^ — /, "")}.`);
+	const restarted = await restartBrainMessage(`Profile applied: ${conductorProvider} conductor + local voice ${voiceModel} @ ${voiceBaseUrl}`);
+	return authHints.length === 0 ? restarted : `${restarted}\n\n${authHints.join("\n")}`;
+}
+
+function apiConductorProvider(config: ClankyConfig): ApiModelProvider {
+	return config.provider === "local" ? "codex" : config.provider;
+}
+
+function apiVoiceProvider(config: ClankyConfig): ApiVoiceProvider {
+	return parseVoiceRealtimeProvider(config.voiceRealtimeProvider) === "xai" ? "xai" : "openai";
+}
+
+function voiceApiAuthHints(provider: ApiVoiceProvider, config: ClankyConfig): string[] {
+	if (provider === "openai" && config.openAiApiKeyPresent !== true) return ["Voice: run /auth openai to set CLANKY_OPENAI_API_KEY."];
+	if (provider === "xai" && config.xaiApiKeyPresent !== true) return ["Voice: run /auth xai to set CLANKY_XAI_API_KEY."];
+	return [];
 }
 
 async function buildLocalStackGuidance(
-	profile: "tiered" | "single",
+	profile: LocalProfile,
 	conductorModel: string,
 	conductorBaseUrl: string,
 	voiceModel: string,
@@ -3873,7 +4150,7 @@ async function buildLocalStackGuidance(
 	// same models, so one check covers both the conductor and voice models.
 	const installed = await fetchLocalModelIds(conductorBaseUrl);
 	if (installed !== undefined) {
-		const needed = profile === "tiered" ? [conductorModel, voiceModel] : [conductorModel];
+		const needed = profile === "local-tiered" ? [conductorModel, voiceModel] : [conductorModel];
 		const missing = [...new Set(needed.filter((model) => !installed.includes(model)))];
 		if (missing.length > 0) {
 			lines.push("Pull missing models:");
@@ -3885,7 +4162,7 @@ async function buildLocalStackGuidance(
 	lines.push("  launchctl setenv OLLAMA_MAX_LOADED_MODELS 2");
 	lines.push("  launchctl setenv OLLAMA_NUM_PARALLEL 3");
 	lines.push("  launchctl setenv OLLAMA_KEEP_ALIVE -1");
-	if (profile === "tiered") {
+	if (profile === "local-tiered") {
 		const voicePort = (() => {
 			try {
 				return new URL(voiceBaseUrl).port || "11435";
@@ -3900,14 +4177,14 @@ async function buildLocalStackGuidance(
 	return lines.join("\n");
 }
 
-async function formatLocalStackStatus(config: ClankyConfig): Promise<string> {
+async function formatProfileStatus(config: ClankyConfig): Promise<string> {
 	const localActive = config.provider === "local";
 	const localModel = config.localModel ?? DEFAULT_LOCAL_MODEL;
 	const localBaseUrl = config.localBaseUrl ?? DEFAULT_LOCAL_BASE_URL;
 	const voiceProvider = parseVoiceRealtimeProvider(config.voiceRealtimeProvider) ?? "openai";
 	const voiceModel = voiceRealtimeModelLabel(config, voiceProvider);
 	const voiceBaseUrl = config.voiceLocalBaseUrl ?? config.localBaseUrl ?? DEFAULT_LOCAL_BASE_URL;
-	const bf16Note = localModel.includes("bf16") ? "  [bf16 is heavy; /local tiered switches to 4-bit]" : "";
+	const bf16Note = localModel.includes("bf16") ? "  [bf16 is heavy; /profile local-tiered switches to 4-bit]" : "";
 	const voiceLines =
 		voiceProvider === "local"
 			? [
@@ -3928,9 +4205,9 @@ async function formatLocalStackStatus(config: ClankyConfig): Promise<string> {
 		statusLine("model", `${activeConductorModel(config)}${localActive ? ` @ ${localBaseUrl}` : ""}`, "active"),
 		"",
 		// The local conductor fields persist regardless of route. When a hosted route is
-		// live they describe the standby stack /local tiered would activate, not anything
+		// live they describe the standby stack /profile local-tiered would activate, not anything
 		// currently serving turns — label them so the two never read as contradictory.
-		statusSection(localActive ? "Local conductor stack (active)" : "Local conductor stack (standby; run /local tiered to activate)"),
+		statusSection(localActive ? "Local conductor stack (active)" : "Local conductor stack (standby; run /profile local-tiered to activate)"),
 		statusLine("conductor model", `${localModel} @ ${localBaseUrl}${bf16Note}`, localActive ? "ok" : "muted"),
 		"",
 		statusSection("Voice"),
@@ -3950,8 +4227,34 @@ async function formatLocalStackStatus(config: ClankyConfig): Promise<string> {
 	return lines.join("\n");
 }
 
-function localStackUsage(): string {
-	return ["Usage:", "/local status", "/local tiered [voice-model]", "/local single [model]"].join("\n");
+function formatProfileSummary(config: ClankyConfig): string {
+	const localActive = config.provider === "local";
+	const localBaseUrl = config.localBaseUrl ?? DEFAULT_LOCAL_BASE_URL;
+	const voiceProvider = parseVoiceRealtimeProvider(config.voiceRealtimeProvider) ?? "openai";
+	const voiceTone = voiceProvider === "local" ? "ok" : "active";
+	const lines = [
+		statusTitle("Profile"),
+		statusLine("conductor", formatProviderSummary(config), localActive ? "ok" : "active"),
+		statusLine("voice", voiceModeLabel(voiceProvider), voiceTone),
+	];
+	if (localActive || voiceProvider === "local") {
+		lines.push(statusLine("local endpoint", localBaseUrl, localActive ? "ok" : "muted"));
+	} else {
+		lines.push(statusLine("api mode", `${config.provider} conductor + ${voiceProvider} voice`, "active"));
+	}
+	return lines.join("\n");
+}
+
+function profileUsage(): string {
+	return [
+		"Usage:",
+		"/profile status",
+		"/profile local-tiered [voice-model]",
+		"/profile local-single [model]",
+		"/profile api",
+		"/profile local-api",
+		"/profile api-local [voice-model]",
+	].join("\n");
 }
 
 async function fetchLocalModelIds(baseUrl: string): Promise<readonly string[] | undefined> {
@@ -5292,11 +5595,13 @@ async function saveLocalVoiceDefaults(config: ClankyConfig): Promise<string> {
 }
 
 function localVoiceDefaultsUpdate(config: Partial<ClankyConfig>): VoiceSettingUpdate {
+	const currentProvider = parseVoiceRealtimeProvider(config.voiceRealtimeProvider);
+	const model = currentProvider === "local" ? (config.voiceRealtimeModel ?? DEFAULT_LOCAL_VOICE_LLM_MODEL) : DEFAULT_LOCAL_VOICE_LLM_MODEL;
 	return {
 		updates: {
 			CLANKY_DISCORD_VOICE: "1",
 			CLANKY_VOICE_REALTIME_PROVIDER: "local",
-			CLANKY_VOICE_REALTIME_MODEL: config.voiceRealtimeModel ?? DEFAULT_LOCAL_VOICE_LLM_MODEL,
+			CLANKY_VOICE_REALTIME_MODEL: model,
 			CLANKY_VOICE_REALTIME_VOICE: config.voiceRealtimeVoice ?? DEFAULT_LOCAL_VOICE,
 			CLANKY_VOICE_TTS_PROVIDER: "realtime",
 			CLANKY_VOICE_ASR_MODEL: config.voiceAsrModel ?? defaultVoiceAsrModelPath(),
@@ -5431,10 +5736,9 @@ async function configureIntegrations(argument: string, flow: SetupFlow | undefin
 	flow.begin("Configure integration roles");
 	try {
 		flow.renderOutput(formatIntegrationTable(current, available));
-		const selectedRoleValue = await selectOne(
-			flow,
-			"Choose the integration role to bind.",
-			[
+		const result = await settingsLoop(flow, {
+			title: "Choose the integration role to bind.",
+			options: () => [
 				{ value: "status", label: "status", hint: "show current bindings" },
 				...INTEGRATION_ROLES.map((entry) => ({
 					value: entry.key,
@@ -5442,28 +5746,32 @@ async function configureIntegrations(argument: string, flow: SetupFlow | undefin
 					hint: current[entry.key] ?? "unset",
 				})),
 			],
-			role ?? "status",
-		);
-		if (selectedRoleValue === "status") return formatIntegrationTable(current, available);
-		const selectedRole = parseIntegrationRole(selectedRoleValue);
-		if (selectedRole === undefined) return "/integrations cancelled.";
-		const selectedBinding = await selectOne(
-			flow,
-			`Bind ${roleLabel(selectedRole)} to a connection.`,
-			[
-				{ value: "unset", label: "unset", hint: "no configured connection" },
-				...available.map((connection) => ({
-					value: connection,
-					label: connection,
-					hint: current[selectedRole] === connection ? "current" : undefined,
-				})),
-			],
-			current[selectedRole] ?? "unset",
-		);
-		if (selectedBinding === undefined) return "/integrations cancelled.";
-		const binding = selectedBinding === "unset" ? undefined : selectedBinding;
-		await setRoleBinding(selectedRole, binding);
-		return integrationSavedMessage(selectedRole, binding);
+			initial: role ?? "status",
+			dispatch: async (selectedRoleValue) => {
+				if (selectedRoleValue === "status") return formatIntegrationTable(current, available);
+				const selectedRole = parseIntegrationRole(selectedRoleValue);
+				if (selectedRole === undefined) return undefined;
+				const selectedBinding = await selectOne(
+					flow,
+					`Bind ${roleLabel(selectedRole)} to a connection.`,
+					[
+						{ value: "unset", label: "unset", hint: "no configured connection" },
+						...available.map((connection) => ({
+							value: connection,
+							label: connection,
+							hint: current[selectedRole] === connection ? "current" : undefined,
+						})),
+					],
+					current[selectedRole] ?? "unset",
+					true,
+				);
+				if (selectedBinding === undefined) return undefined;
+				const binding = selectedBinding === "unset" ? undefined : selectedBinding;
+				await setRoleBinding(selectedRole, binding);
+				return integrationSavedMessage(selectedRole, binding);
+			},
+		});
+		return result ?? "/integrations cancelled.";
 	} finally {
 		flow.end({ preserveDiagnostics: false });
 	}
@@ -5479,7 +5787,7 @@ async function configureMcp(
 	if (args[0] !== undefined && action === undefined) return `Unknown /mcp action "${args[0]}".\n\n${mcpUsage()}`;
 	if (action === undefined) {
 		if (flow === undefined) return `${await mcpStatusText()}\n\n${mcpUsage()}`;
-		return await configureMcpInteractive(flow, renderer);
+		return (await configureMcpInteractive(flow, renderer)) ?? "/mcp cancelled.";
 	}
 
 	switch (action) {
@@ -5505,7 +5813,7 @@ async function configureMcp(
 			if (flow === undefined) return "Usage: /mcp remove <name>";
 			flow.begin("Remove dynamic MCP server");
 			try {
-				return await promptAndRemoveMcpServer(flow);
+				return (await promptAndRemoveMcpServer(flow)) ?? "/mcp remove cancelled.";
 			} finally {
 				flow.end({ preserveDiagnostics: false });
 			}
@@ -5515,15 +5823,17 @@ async function configureMcp(
 			if (flow === undefined) return `Usage: /mcp ${action} <name>`;
 			flow.begin(`${action === "enable" ? "Enable" : "Disable"} dynamic MCP server`);
 			try {
-				return await promptAndSetMcpServerEnabled(flow, action === "enable");
+				return (await promptAndSetMcpServerEnabled(flow, action === "enable")) ?? `/mcp ${action} cancelled.`;
 			} finally {
 				flow.end({ preserveDiagnostics: false });
 			}
 		case "auth":
 			if (flow === undefined) return "Usage: /mcp auth <connection>";
+			if (args[1] === undefined) return (await configureMcpInteractive(flow, renderer, "auth")) ?? "/mcp auth cancelled.";
 			return await runMcpAuthCommand(args[1], flow, renderer);
 		case "install":
 			if (flow === undefined) return "Usage: /mcp install <linear|figma|connection>";
+			if (args[1] === undefined) return (await configureMcpInteractive(flow, renderer, "install")) ?? "/mcp install cancelled.";
 			return await runMcpInstallCommand(args[1], flow, renderer);
 	}
 }
@@ -5531,38 +5841,59 @@ async function configureMcp(
 async function configureMcpInteractive(
 	flow: SetupFlow,
 	renderer: CommandRenderer,
-): Promise<string> {
+	initialAction?: McpCommandAction,
+	options: MenuBackOptions = {},
+): Promise<string | undefined> {
 	flow.begin("Manage MCPs");
 	try {
 		flow.renderOutput(await mcpStatusText());
-		const action = parseMcpAction(await selectOne(flow, "Choose an MCP action.", MCP_ACTION_OPTIONS, "status", true));
-		if (action === undefined) return "/mcp cancelled.";
-		switch (action) {
-			case "status":
-				return await mcpStatusText();
-			case "connections":
-				return await mcpConnectionsText();
-			case "list": {
-				const server = await selectDynamicMcpServer(flow, "Choose a dynamic MCP server to probe.", true);
-				if (server === undefined) return "/mcp cancelled.";
-				return await mcpToolListText(server === "all" ? undefined : server);
+		const dispatch = async (value: string): Promise<string | undefined> => {
+			const action = parseMcpAction(value);
+			if (action === undefined) return undefined;
+			switch (action) {
+				case "status":
+					return await mcpStatusText();
+				case "connections":
+					return await mcpConnectionsText();
+				case "list": {
+					const server = await selectDynamicMcpServer(flow, "Choose a dynamic MCP server to probe.", true, true);
+					if (server === undefined) return undefined;
+					return await mcpToolListText(server === "all" ? undefined : server);
+				}
+				case "add":
+					return await promptAndSaveMcpServer(flow);
+				case "remove":
+					return await promptAndRemoveMcpServer(flow, { backReturnsToMenu: true });
+				case "enable":
+				case "disable":
+					return await promptAndSetMcpServerEnabled(flow, action === "enable", { backReturnsToMenu: true });
+				case "auth": {
+					const connection = await selectMcpConnectionName(flow, undefined, true);
+					if (connection === undefined) return undefined;
+					return await runMcpConnectionAuthByName(connection, flow, renderer);
+				}
+				case "install": {
+					const connection = await selectMcpConnectionName(flow, "linear", true);
+					if (connection === undefined) return undefined;
+					return await runMcpConnectionAuthByName(connection, flow, renderer);
+				}
+				case "help":
+					return mcpUsage();
 			}
-			case "add":
-				return await promptAndSaveMcpServer(flow);
-			case "remove":
-				return await promptAndRemoveMcpServer(flow);
-			case "enable":
-			case "disable":
-				return await promptAndSetMcpServerEnabled(flow, action === "enable");
-			case "auth": {
-				const connection = await selectMcpConnectionName(flow, undefined);
-				if (connection === undefined) return "/mcp cancelled.";
-				return await runMcpConnectionAuthByName(connection, flow, renderer);
-			}
-			case "install":
-			case "help":
-				return mcpUsage();
+		};
+
+		if (initialAction !== undefined) {
+			const result = await dispatch(initialAction);
+			if (result !== undefined) return result;
 		}
+
+		const result = await settingsLoop(flow, {
+			title: "Choose an MCP action.",
+			options: () => MCP_ACTION_OPTIONS,
+			initial: initialAction ?? "status",
+			dispatch,
+		});
+		return result ?? (options.backReturnsToMenu === true ? undefined : "/mcp cancelled.");
 	} finally {
 		flow.end({ preserveDiagnostics: false });
 	}
@@ -5936,9 +6267,12 @@ function parseMcpServerArgs(args: string[]): { name: string; config: McpServerCo
 	return { name, config: { type: transport, url } };
 }
 
-async function promptAndRemoveMcpServer(flow: SetupFlow): Promise<string> {
-	const name = await selectDynamicMcpServer(flow, "Choose the file-backed dynamic MCP server to remove.", false);
-	if (name === undefined) return "/mcp remove cancelled.";
+async function promptAndRemoveMcpServer(
+	flow: SetupFlow,
+	options: MenuBackOptions = {},
+): Promise<string | undefined> {
+	const name = await selectDynamicMcpServer(flow, "Choose the file-backed dynamic MCP server to remove.", false, options.backReturnsToMenu === true);
+	if (name === undefined) return options.backReturnsToMenu === true ? undefined : "/mcp remove cancelled.";
 	const confirmed = await selectOne(
 		flow,
 		`Remove dynamic MCP server "${name}" from the file-backed store?`,
@@ -5947,7 +6281,9 @@ async function promptAndRemoveMcpServer(flow: SetupFlow): Promise<string> {
 			{ value: "remove", label: "remove", hint: "delete from ~/.clanky/mcp-servers.json" },
 		],
 		"cancel",
+		options.backReturnsToMenu === true,
 	);
+	if (confirmed === undefined) return options.backReturnsToMenu === true ? undefined : "/mcp remove cancelled.";
 	if (confirmed !== "remove") return "/mcp remove cancelled.";
 	return await removeDynamicMcpServer(name);
 }
@@ -5963,9 +6299,18 @@ async function removeDynamicMcpServer(name: string): Promise<string> {
 	return `Dynamic MCP server "${name}" ${result.removed ? "removed" : "was not present"} from ${result.path}.${stillActive ? " It is still active from CLANKY_MCP_SERVERS." : ""}`;
 }
 
-async function promptAndSetMcpServerEnabled(flow: SetupFlow, enabled: boolean): Promise<string> {
-	const name = await selectDynamicMcpServer(flow, `Choose the file-backed dynamic MCP server to ${enabled ? "enable" : "disable"}.`, false);
-	if (name === undefined) return `/mcp ${enabled ? "enable" : "disable"} cancelled.`;
+async function promptAndSetMcpServerEnabled(
+	flow: SetupFlow,
+	enabled: boolean,
+	options: MenuBackOptions = {},
+): Promise<string | undefined> {
+	const name = await selectDynamicMcpServer(
+		flow,
+		`Choose the file-backed dynamic MCP server to ${enabled ? "enable" : "disable"}.`,
+		false,
+		options.backReturnsToMenu === true,
+	);
+	if (name === undefined) return options.backReturnsToMenu === true ? undefined : `/mcp ${enabled ? "enable" : "disable"} cancelled.`;
 	return await setDynamicMcpServerEnabled(name, enabled);
 }
 
@@ -5984,6 +6329,7 @@ async function selectDynamicMcpServer(
 	flow: SetupFlow,
 	message: string,
 	includeAll: boolean,
+	allowBack = false,
 ): Promise<string | undefined> {
 	const store = await listMcpServerConfigs();
 	const names = Object.keys(includeAll ? store.servers : store.fileServers).sort((a, b) => a.localeCompare(b));
@@ -6003,10 +6349,15 @@ async function selectDynamicMcpServer(
 			})),
 		],
 		includeAll ? "all" : names[0],
+		allowBack,
 	);
 }
 
-async function selectMcpConnectionName(flow: SetupFlow, initialValue: string | undefined): Promise<string | undefined> {
+async function selectMcpConnectionName(
+	flow: SetupFlow,
+	initialValue: string | undefined,
+	allowBack = false,
+): Promise<string | undefined> {
 	const info = await fetchInfo();
 	if (info === undefined) {
 		flow.renderLine(MCP_CONNECTION_INFO_UNAVAILABLE, "warning");
@@ -6027,6 +6378,7 @@ async function selectMcpConnectionName(flow: SetupFlow, initialValue: string | u
 			description: connection.description,
 		})),
 		initialValue,
+		allowBack,
 	);
 }
 
@@ -6926,20 +7278,29 @@ function parseToggle(value: string | undefined): boolean | undefined {
 
 async function selectProvider(
 	flow: SetupFlow,
-	initialValue: ClankyConfig["provider"] | "status",
+	initialValue: ClankyConfig["provider"],
 	allowBack = false,
-): Promise<ClankyConfig["provider"] | "status" | undefined> {
+	status?: SettingsMenuStatus,
+): Promise<ClankyConfig["provider"] | undefined> {
 	flow.begin("Configure Clanky model");
+	let statusExpanded = false;
+	let initial: string | undefined = initialValue;
 	try {
-		const selected = await selectOne(
-			flow,
-			"Choose the subscription provider Clanky should use.",
-			[
-				{
-					value: "status",
-					label: "status",
-					hint: "show current model config",
-				},
+		for (;;) {
+			const statusSpec = typeof status === "object" ? status : undefined;
+			const statusText =
+				typeof status === "string"
+					? status
+					: statusSpec === undefined
+						? undefined
+						: statusExpanded
+							? statusSpec.expanded
+							: statusSpec.collapsed;
+			const message =
+				statusText !== undefined && statusText.length > 0
+					? `${statusText}\n\nChoose the model provider Clanky should use.`
+					: "Choose the model provider Clanky should use.";
+			const options: readonly MenuOption[] = [
 				{
 					value: "codex",
 					label: "codex",
@@ -6965,12 +7326,24 @@ async function selectProvider(
 					label: "gemini",
 					hint: "Google Gemini (CLANKY_GEMINI_API_KEY / GEMINI_API_KEY)",
 				},
-			],
-			initialValue,
-			allowBack,
-		);
-		if (selected === "status") return "status";
-		return parseProvider(selected);
+			];
+			const selected = await selectOne(
+				flow,
+				message,
+				options,
+				initial,
+				allowBack,
+				undefined,
+				statusSpec === undefined ? undefined : [settingsStatusToggleOption(statusSpec, statusExpanded)],
+			);
+			if (selected === undefined) return undefined;
+			if (selected === SETTINGS_STATUS_TOGGLE_VALUE && statusSpec !== undefined) {
+				statusExpanded = !statusExpanded;
+				initial = SETTINGS_STATUS_TOGGLE_VALUE;
+				continue;
+			}
+			return parseProvider(selected);
+		}
 	} finally {
 		flow.end({ preserveDiagnostics: false });
 	}
@@ -7086,6 +7459,7 @@ async function selectOne(
 	initialValue: string | undefined,
 	allowBack = false,
 	currentValue?: string,
+	statusActions?: readonly MenuOption[],
 ): Promise<string | undefined> {
 	const selected = await flow.readSelect({
 		kind: "single",
@@ -7094,6 +7468,7 @@ async function selectOne(
 		currentValue,
 		initialValue,
 		allowBack,
+		statusActions,
 	});
 	return selected?.[0];
 }
@@ -7130,17 +7505,15 @@ async function settingsLoop(
 						? statusSpec.expanded
 						: statusSpec.collapsed;
 		const message = status !== undefined && status.length > 0 ? `${status}\n\n${spec.title}` : spec.title;
-		const options = statusSpec !== undefined
-			? [
-					...spec.options(),
-					{
-						value: SETTINGS_STATUS_TOGGLE_VALUE,
-						label: "",
-						description: statusExpanded ? (statusSpec.collapseLabel ?? "hide details") : (statusSpec.expandLabel ?? "show details"),
-					},
-				]
-			: spec.options();
-		const choice = await selectOne(flow, message, options, initial, true);
+		const choice = await selectOne(
+			flow,
+			message,
+			spec.options(),
+			initial,
+			true,
+			undefined,
+			statusSpec === undefined ? undefined : [settingsStatusToggleOption(statusSpec, statusExpanded)],
+		);
 		if (choice === undefined) return undefined;
 		if (choice === SETTINGS_STATUS_TOGGLE_VALUE && statusSpec !== undefined) {
 			statusExpanded = !statusExpanded;
@@ -7155,6 +7528,15 @@ async function settingsLoop(
 
 function collapsibleMenuStatus(collapsed: string, expanded: string): SettingsMenuStatus {
 	return { collapsed, expanded };
+}
+
+function settingsStatusToggleOption(status: Exclude<SettingsMenuStatus, string>, expanded: boolean): MenuOption {
+	const icon = expanded ? SETTINGS_STATUS_COLLAPSE_ICON : SETTINGS_STATUS_EXPAND_ICON;
+	return {
+		value: SETTINGS_STATUS_TOGGLE_VALUE,
+		label: icon,
+		description: expanded ? (status.collapseLabel ?? "hide details") : (status.expandLabel ?? "show details"),
+	};
 }
 
 function formatVoiceConfig(config: ClankyConfig): string {
@@ -7425,16 +7807,22 @@ function defaultRealtimeModel(config: ClankyConfig): string {
 }
 
 function voiceRealtimeModelLabel(config: ClankyConfig, provider: VoiceRealtimeProvider): string {
-	const model = config.voiceRealtimeModel ?? defaultRealtimeModelForProvider(provider);
 	const defaultModel = defaultRealtimeModelForProvider(provider);
-	return config.voiceRealtimeModel !== undefined && model !== defaultModel
-		? `${model} (configured override; default ${defaultModel})`
-		: model;
+	const configured = config.voiceRealtimeModel?.trim();
+	if (configured === undefined || configured.length === 0) return defaultModel;
+	if (!realtimeModelMatchesProvider(provider, configured)) return `${defaultModel} (ignoring incompatible override ${configured})`;
+	return configured !== defaultModel ? `${configured} (configured override; default ${defaultModel})` : configured;
 }
 
 function defaultRealtimeModelForProvider(provider: VoiceRealtimeProvider): string {
 	if (provider === "local") return DEFAULT_LOCAL_VOICE_LLM_MODEL;
 	return provider === "xai" ? "grok-voice-2" : "gpt-realtime";
+}
+
+function realtimeModelMatchesProvider(provider: VoiceRealtimeProvider, model: string): boolean {
+	if (provider === "local") return true;
+	const normalized = model.trim().toLowerCase();
+	return provider === "xai" ? normalized.startsWith("grok-") : normalized.startsWith("gpt-") || normalized.startsWith("o");
 }
 
 function defaultRealtimeVoice(config: ClankyConfig): string {
@@ -7773,10 +8161,19 @@ async function discoverDevServerHost(): Promise<DiscoveredHost | undefined> {
 	if (record === undefined || !isPidAlive(record.pid)) return undefined;
 	const host = normalizeHost(record.url);
 	if (host === undefined) return undefined;
-	return {
-		host,
-		source: `.eve/dev-server.json pid ${record.pid}${record.updatedAt === undefined ? "" : ` updated ${record.updatedAt}`}`,
-	};
+	const source = `.eve/dev-server.json pid ${record.pid}${record.updatedAt === undefined ? "" : ` updated ${record.updatedAt}`}`;
+	const initialState = await probe(host);
+	if (initialState === "healthy" || initialState === "reachable") return { host, record, source, state: initialState };
+
+	const graceMs = devServerRecordStartupGraceMs(record);
+	if (graceMs <= 0) return undefined;
+	const deadline = Date.now() + graceMs;
+	while (Date.now() < deadline && isPidAlive(record.pid)) {
+		await new Promise((resolve) => setTimeout(resolve, Math.min(DEV_SERVER_RECORD_REPROBE_MS, Math.max(0, deadline - Date.now()))));
+		const state = await probe(host);
+		if (state === "healthy" || state === "reachable") return { host, record, source, state };
+	}
+	return undefined;
 }
 
 async function readDevServerRecord(): Promise<DevServerRecord | undefined> {
@@ -7819,6 +8216,55 @@ function normalizeHost(value: string): string | undefined {
 	} catch {
 		return undefined;
 	}
+}
+
+async function waitForDiscoveredDevServerHealth(discovered: DiscoveredHost): Promise<boolean> {
+	const graceMs = Math.max(DEV_SERVER_UNHEALTHY_SETTLE_MS, devServerRecordStartupGraceMs(discovered.record));
+	return await waitForHostHealth(discovered.host, graceMs, () => isPidAlive(discovered.record.pid));
+}
+
+async function waitForHostHealth(host: string, timeoutMs: number, shouldContinue: () => boolean = () => true): Promise<boolean> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline && shouldContinue()) {
+		await new Promise((resolve) => setTimeout(resolve, Math.min(DEV_SERVER_RECORD_REPROBE_MS, Math.max(0, deadline - Date.now()))));
+		if ((await probe(host)) === "healthy") return true;
+	}
+	return false;
+}
+
+function devServerRecordStartupGraceMs(record: DevServerRecord): number {
+	if (record.updatedAt === undefined) return 0;
+	const updatedAt = Date.parse(record.updatedAt);
+	if (!Number.isFinite(updatedAt)) return 0;
+	const ageMs = Math.max(0, Date.now() - updatedAt);
+	return Math.max(0, DEV_SERVER_RECORD_STARTUP_GRACE_MS - ageMs);
+}
+
+async function stopDevServerRecord(record: DevServerRecord, reason: "unhealthy"): Promise<void> {
+	if (record.pid === process.pid) return;
+	try {
+		process.kill(record.pid, "SIGTERM");
+	} catch {
+		return;
+	}
+	if (await waitForPidExit(record.pid, SERVER_STOP_TIMEOUT_MS)) return;
+	process.stderr.write(`  \x1b[33m${reason} Eve dev server pid ${record.pid} did not exit after SIGTERM; forcing stop\x1b[39m\n`);
+	try {
+		process.kill(record.pid, "SIGKILL");
+	} catch {
+		return;
+	}
+	await waitForPidExit(record.pid, SERVER_KILL_TIMEOUT_MS);
+}
+
+async function waitForPidExit(pid: number, timeoutMs: number): Promise<boolean> {
+	if (!isPidAlive(pid)) return true;
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		if (!isPidAlive(pid)) return true;
+	}
+	return false;
 }
 
 async function startServer(): Promise<void> {
@@ -7933,11 +8379,15 @@ async function ensureServer(): Promise<boolean> {
 	const discovered = await discoverDevServerHost();
 	if (discovered !== undefined) {
 		brainHost = discovered.host;
-		const state = await probe(brainHost);
-		if (state === "healthy") return false;
-		if (state === "reachable") {
-			process.stdout.write(`  \x1b[2mdev server ${brainHost} is reachable but not ready; attaching anyway.\x1b[22m\n`);
-			return false;
+		if (discovered.state === "healthy") return false;
+		if (discovered.state === "reachable") {
+			process.stdout.write(`  \x1b[2mdev server ${brainHost} is reachable but not ready; waiting...\x1b[22m\n`);
+			if (await waitForDiscoveredDevServerHealth(discovered)) return false;
+			process.stdout.write(`  \x1b[33mdev server ${brainHost} stayed unhealthy; restarting ${discovered.source} for this face.\x1b[39m\n`);
+			await stopDevServerRecord(discovered.record, "unhealthy");
+			await startServer();
+			await waitForHealth();
+			return true;
 		}
 	}
 
@@ -7946,13 +8396,10 @@ async function ensureServer(): Promise<boolean> {
 	if (initial === "healthy") return false;
 	if (initial === "reachable") {
 		process.stdout.write(`  \x1b[2ma server is on ${HOST} but not ready yet; waiting...\x1b[22m\n`);
-		const deadline = Date.now() + 20_000;
-		while (Date.now() < deadline) {
-			await new Promise((resolve) => setTimeout(resolve, 800));
-			if ((await probe(HOST)) === "healthy") return false;
+		if (await waitForHostHealth(HOST, DEV_SERVER_UNHEALTHY_SETTLE_MS)) {
+			return false;
 		}
-		process.stdout.write(`  \x1b[33m${HOST} is up but unhealthy. Restart the eve server that owns it; attaching anyway.\x1b[39m\n`);
-		return false;
+		throw new Error(`${HOST} is reachable but unhealthy, and no live ${DEV_SERVER_FILE} process was available to restart`);
 	}
 
 	await startServer();

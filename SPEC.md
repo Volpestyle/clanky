@@ -144,14 +144,15 @@ eve provides Clanky's durable runtime primitives:
 | Voice in/out | `agent/channels/voice.ts` + ClankVox media |
 | Durable session state | eve sessions + `continuationToken` |
 | Scheduled/autonomous runs | `agent/schedules/*.ts` (cron) |
-| Visible face | custom face on `eve/client` (`pnpm face`); `eve dev` for debugging |
+| Visible face | custom face on `eve/client` (`clanky dev` while editing, `pnpm face` direct); `eve dev` for debugging |
 | Memory | eve session context + Clanky memory lib |
 
 **Clanky's face is a custom client on `eve/client`.** `eve dev`'s slash-command
 set is fixed and non-extensible, so Clanky's visible face (`scripts/clanky.ts`,
-`pnpm face`) is our own terminal UI built on the public `eve/client`. It owns a
-headless `eve dev --no-ui` brain (same sessions, memory, tools), starts a
-session over the default eve HTTP channel (`POST /eve/v1/session`,
+run through `clanky dev` while editing or `pnpm face` directly) is our own
+terminal UI built on the public `eve/client`. It owns a headless
+`eve dev --no-ui` brain (same sessions, memory, tools), starts a session over
+the default eve HTTP channel (`POST /eve/v1/session`,
 `POST /eve/v1/session/:id`, `GET /eve/v1/session/:id/stream`), and renders the
 streamed events (`message.appended`, `reasoning.completed`, `actions.requested`,
 `action.result`, `turn.failed`, …) closely mirroring `eve dev`'s look — gutter
@@ -220,15 +221,18 @@ readable history, and `events.jsonl` records timestamped output chunks. Any
 agent in the same Herdr session can read it with `clanky transcript read
 clanky:<slug> --lines N`. `herdr_read` defaults to `source: "auto"`, which
 prefers this transcript when available and falls back to Herdr recent-unwrapped
-output. Explicit `source: "visible"` and `source: "recent"` still read Herdr for
-current screen/debugging state.
+output. Explicit Herdr sources (`visible`, `recent`, `recent_unwrapped`) still
+read Herdr for current screen/debugging state. `source: "full"` is an optional
+Herdr capability; with vanilla Herdr builds that do not expose it, Clanky falls
+back to capped `recent_unwrapped` output instead of depending on a private fork.
 
 A worker has a transcript **iff** it was launched under `clanky transcript-run`;
 sharing Clanky's `HERDR_SESSION` only grants read access to transcripts that
-already exist. Capture must sit in the pipe because Herdr exposes only bounded
-scrollback snapshots, with no lossless follow stream — so there is no way to
-transcribe a pane after the fact. Every spawn entry point therefore funnels
-through one wrapping seam (`wrapTranscriptArgv` in `agent/tools/herdr_spawn.ts`):
+already exist. Capture must sit in the pipe because Herdr exposes bounded
+retained scrollback snapshots and attach-time live byte streams, not a
+retroactive lossless transcript — so there is no way to transcribe a pane after
+the fact. Every spawn entry point therefore funnels through one wrapping seam
+(`wrapTranscriptArgv` in `agent/tools/herdr_spawn.ts`):
 the eve `herdr_spawn` tool, the `clanky-herdr-operator` `spawn.sh`, and the relay
 `start` op all launch performers under `clanky transcript-run` with a pinned
 `HERDR_SESSION`/`CLANKY_HOME`. New spawn surfaces (a TUI `/spawn` slash command,
@@ -242,6 +246,7 @@ starts an unwrapped pane with no transcript.
 | Send text or keys | Herdr |
 | Current TUI screen | Herdr `visible` |
 | Recent terminal screen buffer | Herdr `recent` / `recent_unwrapped` |
+| Full retained terminal scrollback | Herdr `full` when supported; otherwise transcript capture for Clanky-spawned panes |
 | Historical worker output | Clanky transcript |
 | Cross-agent audit trail | Clanky transcript |
 
@@ -305,21 +310,25 @@ flowchart LR
   the phone typing straight into a pane and seeing it live — the relay adds a
   held-open `attach` stream and a raw `write` op:
   - `attach {pane, source?="visible", format?="ansi", strip_ansi?=false, lines?, interval_ms?=180}`
-    opens a per-pane stream. Each frame is a **full** ANSI-preserving snapshot of
-    the rendered screen — `{id, ok:true, stream:true, body:{type:"pane.output",
-    pane_id, source, format, full:true, text}}` — emitted only when the content
-    changes. The client replaces its buffer (it is not a delta). `detach {pane?}`
-    ends one stream (or all). A peer may hold one `events` subscription plus one
-    `attach:<pane>` stream per open pane concurrently.
+    where `source:"full"` requests all terminal history still retained by Herdr's
+    scrollback buffer when that Herdr build supports it. Vanilla Herdr builds
+    without `full` fall back to capped `recent_unwrapped` output; `recent`
+    remains bounded by `lines`.
+    opens a per-pane stream. The relay first sends a **full** ANSI-preserving
+    snapshot of the requested source —
+    `{id, ok:true, stream:true, body:{type:"pane.output", pane_id, source, format, full:true, text}}`
+    — then forwards herdr-native raw PTY chunks as base64 deltas:
+    `{id, ok:true, stream:true, body:{type:"pane.output", pane_id, source:"stream", format:"ansi", full:false, encoding:"base64", data, seq}}`.
+    The client replaces its buffer for `full:true` frames and appends bytes for
+    `full:false` frames. If the running herdr does not support native
+    `pane.attach`, the relay falls back to the old snapshot poller and emits
+    changed full frames. `detach {pane?}` ends one stream (or all). A peer may
+    hold one `events` subscription plus one `attach:<pane>` stream per open pane
+    concurrently.
   - `write {pane, text}` → herdr `pane.send_text`, writing verbatim bytes to the
     PTY master with **no** trailing Enter (unlike `run`/`send`). Typed text,
     control sequences (Ctrl-C as `\x03`), and arrow-key escapes (`\x1b[A`) all pass
     through, so the client owns keystroke encoding and newlines.
-  - **Phase 1 (current):** the relay manufactures the live feed by re-reading the
-    pane's visible screen and diffing — herdr exposes only bounded snapshots, no
-    follow stream. **Phase 2 (fidelity):** a herdr-native per-pane byte broadcast
-    backs the same `attach` op + frame envelope (`type:"pane.output"` carrying raw
-    bytes), so the iOS client never changes. See §11.
 - The brain is just another herdr pane — the lead pane — which is why lifecycle
   (SSH) sits below it and interaction (relay) sits inside it.
 - herdr stays vanilla; the glue is TypeScript inside the Clanky eve app.
@@ -778,18 +787,15 @@ tool, is a binding change, not an edit to the persona.
 
 ## 11. Open decisions
 
-- **Relay transport fit — RESOLVED (Phase 1): snapshot `attach`.** A raw eve WS
-  channel carries live terminal screens via the `attach` op (§4.4): the relay
-  re-reads the pane's ANSI `visible` screen on an interval and pushes full frames
-  on change. Good enough for the iOS live terminal because performer panes are
-  full-screen TUIs. **Phase 2 (open): byte-perfect follow stream.** herdr today
-  has no lossless follow stream, but the raw PTY bytes already flow through one
-  seam (`herdr/src/pty/actor.rs` `on_read` → `herdr/src/pane.rs`). Tee them into a
-  per-pane `tokio::broadcast` and add a held-open `pane.attach` method (modeled on
-  `events.subscribe`, `herdr/src/api/server.rs`) plus `pane.write_bytes`; the relay
-  `attach` op swaps from snapshot-poll to byte-stream behind the same frame
-  envelope, so the iOS client is unaffected. This keeps herdr vanilla-ish (one
-  additive method) rather than forking it.
+- **Relay transport fit — RESOLVED (Phase 2): native `pane.attach` with
+  snapshot fallback.** A raw eve WS channel carries live terminal screens via
+  the `attach` op (§4.4). When Herdr exposes a native per-pane raw byte stream,
+  the relay attaches to it, sends an initial `pane.read` snapshot, then forwards
+  base64 PTY chunks as incremental `pane.output` frames. With vanilla Herdr
+  builds that do not expose native attach or uncapped `full` reads, the relay
+  falls back to snapshot polling over supported read sources. This keeps Herdr
+  vanilla at runtime; upstream Herdr can add richer sources without forcing a
+  Clanky-specific fork.
 - **Face surface — RESOLVED: custom face.** eve's stock TUI has a fixed,
   non-extensible slash-command set, so the face is `scripts/clanky.ts` (`pnpm
   face`) on the public eve/client: it renders eve's event stream through pi-tui

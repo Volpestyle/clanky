@@ -129,13 +129,19 @@ export function renderClankyCommandTypeahead(
 	}
 	if (state.matches.length === 0) return [theme.dim(fit(`No command matches ${state.query}`, usableWidth))];
 
-	const windowed = windowAroundSelection(state.matches, state.selectedIndex, visibleRows);
+	const initialWindow = windowAroundSelection(state.matches, state.selectedIndex, visibleRows);
 	const invocationWidth = Math.min(
-		Math.max(16, ...windowed.items.map((command) => visibleWidth(commandInvocationWithAliases(command)))) + 2,
+		Math.max(16, ...initialWindow.items.map((command) => visibleWidth(commandInvocationWithAliases(command)))) + 2,
 		Math.max(16, Math.floor(usableWidth * 0.58)),
 	);
+	const selectedCommand = state.matches[state.selectedIndex];
+	const selectedDetailLines = selectedCommand === undefined || !commandDescriptionIsTruncated(selectedCommand, usableWidth, invocationWidth)
+		? []
+		: wrapSelectedCommandDescription(selectedCommand, theme, usableWidth);
+	const commandRows = Math.max(1, visibleRows - selectedDetailLines.length);
+	const windowed = windowAroundSelection(state.matches, state.selectedIndex, commandRows);
 
-	return windowed.items.map((command, index) => {
+	const rows = windowed.items.map((command, index) => {
 		const absoluteIndex = windowed.start + index;
 		const selected = absoluteIndex === state.selectedIndex;
 		const pointer = selected ? "> " : "  ";
@@ -145,6 +151,7 @@ export function renderClankyCommandTypeahead(
 		const left = padVisible(fit(`${commandText}${theme.dim(aliases)}`, invocationWidth), invocationWidth);
 		return fit(`${left}${theme.dim(command.description)}`, usableWidth);
 	});
+	return [...selectedDetailLines, ...rows].slice(0, visibleRows);
 }
 
 export type ClankyCommandTypeaheadPanelOptions = {
@@ -423,6 +430,18 @@ function findCommand(
 function commandInvocationWithAliases(command: ClankyAutocompleteCommand): string {
 	const aliases = command.aliases.length === 0 ? "" : ` ${command.aliases.map((alias) => `(/${alias})`).join(" ")}`;
 	return `/${command.name}${aliases}`;
+}
+
+function commandDescriptionIsTruncated(command: ClankyAutocompleteCommand, width: number, invocationWidth: number): boolean {
+	return visibleWidth(command.description) > Math.max(0, width - invocationWidth);
+}
+
+function wrapSelectedCommandDescription(
+	command: ClankyAutocompleteCommand,
+	theme: ClankyCommandUiTheme,
+	width: number,
+): string[] {
+	return wrapTextWithAnsi(theme.yellow(command.description), Math.max(1, width)).map((line) => fit(line, width));
 }
 
 function normalizeWorkbenchFilter(filter: string): string {

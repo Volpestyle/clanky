@@ -118,27 +118,46 @@ const currentRows = currentPrompt.render(72).map(stripAnsi);
 assert(currentRows.some((line) => line.includes("local (current)")), "single select should mark the current value");
 assert(currentRows.some((line) => line.includes("> local (current)")), "single select should hover the current initial value");
 
-const descriptionActionPrompt = new InteractiveSelectPrompt({
-	kind: "single",
-	message: "Choose a setting.",
-	onCancel: () => undefined,
-	onRender: () => undefined,
-	onSubmit: () => undefined,
-	options: [
-		{ value: "setting", label: "setting", description: "normal row" },
-		{ value: "details", label: "", description: "show details" },
-	],
-	theme,
-});
-const descriptionActionRows = descriptionActionPrompt.render(72).map(stripAnsi);
-const normalDetailRow = descriptionActionRows.find((line) => line.includes("normal row"));
-const statusToggleRow = descriptionActionRows.find((line) => line.includes("show details"));
-assert(normalDetailRow !== undefined, "description action fixture should render a normal detail row");
-assert(statusToggleRow !== undefined, "description action should render its action text");
-assert(
-	statusToggleRow.indexOf("show details") === normalDetailRow.indexOf("normal row"),
-	"description action should align with the detail column instead of the option-label column",
-);
+	const labeledActionPrompt = new InteractiveSelectPrompt({
+		initialValue: "details",
+		kind: "single",
+		message: "Current status\n\nChoose a setting.",
+		onCancel: () => undefined,
+		onRender: () => undefined,
+		onSubmit: () => undefined,
+		options: [
+			{ value: "setting", label: "setting", description: "normal row" },
+		],
+		statusActions: [{ value: "details", label: "▶", description: "show details" }],
+		theme: {
+			...theme,
+			selectedPrefix: (text) => `\x1b[36m${text}\x1b[39m`,
+			selectedText: (text) => `\x1b[1m${text}\x1b[22m`,
+		},
+	});
+	const rawLabeledActionRows = labeledActionPrompt.render(72);
+	const labeledActionRows = rawLabeledActionRows.map(stripAnsi);
+	const normalDetailRowIndex = labeledActionRows.findIndex((line) => line.includes("normal row"));
+	const statusSummaryRowIndex = labeledActionRows.findIndex((line) => line.includes("Current status"));
+	const promptRowIndex = labeledActionRows.findIndex((line) => line.includes("Choose a setting."));
+	const statusToggleRowIndex = labeledActionRows.findIndex((line) => line.includes("show details"));
+	const normalDetailRow = labeledActionRows[normalDetailRowIndex];
+	const statusSummaryRow = labeledActionRows[statusSummaryRowIndex];
+	const rawStatusToggleRow = rawLabeledActionRows[statusToggleRowIndex];
+	const statusToggleRow = labeledActionRows[statusToggleRowIndex];
+	assert(normalDetailRow !== undefined, "description action fixture should render a normal detail row");
+	assert(statusSummaryRow !== undefined, "description action fixture should render a status summary row");
+	assert(statusToggleRow !== undefined, "details action should render its action text");
+	assert(statusSummaryRowIndex >= 0 && statusToggleRowIndex === statusSummaryRowIndex + 1, "details action should render tightly under the status summary");
+	assert(statusToggleRowIndex < promptRowIndex && promptRowIndex < normalDetailRowIndex, "details action should render above the prompt and outside the option list");
+	assert(!statusToggleRow.includes(">"), "active details action should use highlight instead of a second caret");
+	assert(statusToggleRow.indexOf("▶") === statusSummaryRow.indexOf("Current status"), "details action disclosure icon should align flush with the status margin");
+	assert(rawStatusToggleRow?.includes("\x1b[36m") === true, "active details action should receive selected-prefix color");
+	assert(
+		statusToggleRow.indexOf("▶") < statusToggleRow.indexOf("show details")
+			&& statusToggleRow.indexOf("show details") === normalDetailRow.indexOf("normal row"),
+		"details action should keep the disclosure icon in the label column and action text in the detail column",
+	);
 
 let multiSelected: readonly string[] | undefined;
 const multiPrompt = new InteractiveSelectPrompt({

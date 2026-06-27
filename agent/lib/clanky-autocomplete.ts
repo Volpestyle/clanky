@@ -315,7 +315,7 @@ function formatCommandSuggestionLines(items: readonly (AutocompleteItem | Clanky
 }
 
 function commandCategory(commandName: string): string {
-	if (["model", "auth", "local", "effort", "image-model", "video-model", "vision-model", "login"].includes(commandName)) return "model/auth";
+	if (["model", "auth", "profile", "effort", "image-model", "video-model", "vision-model", "login"].includes(commandName)) return "model/auth";
 	if (["harness", "spawn", "agents", "approvals", "trace", "layout", "status", "new", "clear", "exit"].includes(commandName)) return "runtime";
 	if (["mcp", "integrations", "browser"].includes(commandName)) return "tools";
 	if (["discord-token", "discord-scope", "voice"].includes(commandName)) return "discord";
@@ -331,12 +331,15 @@ function staticArgumentSpec(commandName: string, context: ArgumentContext): Stat
 			return modelArguments(context);
 		case "auth":
 			return authArguments(context);
-		case "local":
-			return values(["status", "tiered", "single"], [
-				"/local status",
-				"/local tiered",
-				"/local tiered qwen3-vl:8b",
-				"/local single",
+		case "profile":
+			return values(["status", "local-tiered", "local-single", "api", "local-api", "api-local"], [
+				"/profile status",
+				"/profile local-tiered",
+				"/profile local-tiered qwen3-vl:8b",
+				"/profile local-single",
+				"/profile api",
+				"/profile local-api",
+				"/profile api-local qwen3-vl:8b",
 			]);
 		case "effort":
 			return values(["status", "minimal", "low", "medium", "high", "xhigh", "unset"], [

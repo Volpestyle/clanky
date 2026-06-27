@@ -39,8 +39,62 @@ function rec(v: unknown): Record<string, unknown> {
 	return v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 }
 
+const VANILLA_HERDR_FALLBACK_LINES = 1000;
+
 function requestId(id: RelayRequest["id"]): string {
 	return id === undefined ? `relay_${Date.now().toString(36)}` : String(id);
+}
+
+function isUnsupportedFullSourceError(error: unknown): boolean {
+	const message = error instanceof Error ? error.message : String(error);
+	return (
+		message.includes("unknown variant `full`") ||
+		message.includes("unknown variant 'full'") ||
+		message.includes("invalid read source: full")
+	);
+}
+
+function annotateFullFallback(result: unknown, fallbackReason: string): unknown {
+	const envelope = rec(result);
+	const read = rec(envelope.read);
+	if (Object.keys(read).length === 0) {
+		return {
+			source: "herdr-recent-unwrapped",
+			fallback: true,
+			fallbackReason,
+			text: herdrText(result),
+			herdr: result,
+		};
+	}
+	return {
+		...envelope,
+		fallback: true,
+		fallbackReason,
+		requested_source: "full",
+		read: {
+			...read,
+			source: "recent_unwrapped",
+			truncated: true,
+		},
+	};
+}
+
+async function herdrReadWithFullFallback(
+	method: "pane.read" | "agent.read",
+	params: Record<string, unknown>,
+): Promise<unknown> {
+	try {
+		return await herdrRequest(method, params);
+	} catch (error) {
+		if (params.source !== "full" || !isUnsupportedFullSourceError(error)) throw error;
+		const fallbackParams = {
+			...params,
+			source: "recent_unwrapped",
+			lines: VANILLA_HERDR_FALLBACK_LINES,
+		};
+		const fallback = await herdrRequest(method, fallbackParams);
+		return annotateFullFallback(fallback, (error as Error).message);
+	}
 }
 
 // Map a relay op to a herdr socket API request. Returns the decoded result.
@@ -68,19 +122,21 @@ async function dispatch(op: string, args: Record<string, unknown>): Promise<unkn
 		case "read": {
 			if (!target) throw new Error("read requires agent or pane");
 			const source = str(args.source) ?? "auto";
-			const lines = num(args.lines, 80);
-			if (!args.pane && source === "transcript") return readTranscript(target, { lines });
+			const requestedLines = num(args.lines, 80);
+			const herdrLines = source === "full" ? undefined : requestedLines;
+			const format = str(args.format);
+			if (!args.pane && source === "transcript") return readTranscript(target, { lines: requestedLines });
 			if (!args.pane && source === "auto") {
 				try {
-					return await readTranscript(target, { lines });
+					return await readTranscript(target, { lines: requestedLines });
 				} catch (error) {
-					const result = await herdrRequest("agent.read", { target, source: "recent_unwrapped", lines });
+					const result = await herdrRequest("agent.read", { target, source: "recent_unwrapped", lines: requestedLines });
 					return {
 						source: "herdr-recent-unwrapped",
 						fallback: true,
 						fallbackReason: (error as Error).message,
 						agent: target,
-						lines,
+						lines: requestedLines,
 						text: herdrText(result),
 						herdr: result,
 					};
@@ -88,20 +144,24 @@ async function dispatch(op: string, args: Record<string, unknown>): Promise<unkn
 			}
 			if (args.pane && source === "transcript") throw new Error("transcript reads require an agent name");
 			if (args.pane && source === "auto") {
-				const result = await herdrRequest("pane.read", { pane_id: target, source: "recent_unwrapped", lines });
+				const result = await herdrRequest("pane.read", { pane_id: target, source: "recent_unwrapped", lines: requestedLines });
 				return {
 					source: "herdr-recent-unwrapped",
 					fallback: true,
 					fallbackReason: "transcript reads require an agent name",
 					pane: target,
-					lines,
+					lines: requestedLines,
 					text: herdrText(result),
 					herdr: result,
 				};
 			}
+			const params: Record<string, unknown> = args.pane ? { pane_id: target, source } : { target, source };
+			if (herdrLines !== undefined) params.lines = herdrLines;
+			if (format !== undefined) params.format = format;
+			if (args.strip_ansi === true) params.strip_ansi = true;
 			return args.pane
-				? herdrRequest("pane.read", { pane_id: target, source, lines })
-				: herdrRequest("agent.read", { target, source, lines });
+				? herdrReadWithFullFallback("pane.read", params)
+				: herdrReadWithFullFallback("agent.read", params);
 		}
 		case "send": {
 			const text = str(args.text);
@@ -267,13 +327,102 @@ function subscribe(peer: WebSocketPeer, req: RelayRequest): void {
 	registerStream(peer, "events", { close: () => stream.close() });
 }
 
-// Live terminal stream (SPEC.md §4.3, Phase 1). herdr exposes only bounded
-// scrollback snapshots — no lossless follow stream — so the relay manufactures a
-// live feed by re-reading the pane's visible screen (ANSI-preserving) and pushing
-// a frame whenever the rendered content changes. The frame is a FULL snapshot
-// (`full: true`); the client replaces its buffer rather than appending. Phase 2
-// swaps this implementation for a herdr-native per-pane byte broadcast behind the
-// same `attach` op + frame envelope, so the client never changes.
+interface PaneOutputFrame {
+	type: "pane.output";
+	pane_id: string;
+	source: string;
+	format: string;
+	full: boolean;
+	text?: string;
+	encoding?: "base64";
+	data?: string;
+	seq?: number;
+	fallback?: boolean;
+	fallbackReason?: string;
+}
+
+interface PaneSnapshot {
+	text: string;
+	source: string;
+	fallback: boolean;
+	fallbackReason?: string;
+}
+
+function errorMessageFromEnvelope(envelope: Record<string, unknown>): string | undefined {
+	const error = rec(envelope.error);
+	const message = str(error.message);
+	const code = str(error.code);
+	if (message) return message;
+	if (code) return code;
+	return undefined;
+}
+
+function paneAttachAccepted(envelope: Record<string, unknown>): boolean {
+	const result = rec(envelope.result);
+	return result.type === "pane_attached";
+}
+
+function paneAttachChunkFrame(envelope: Record<string, unknown>, pane: string): PaneOutputFrame | undefined {
+	if (envelope.stream !== true) return undefined;
+	const chunk = rec(envelope.chunk);
+	if (chunk.encoding !== "base64") return undefined;
+	const data = str(chunk.data);
+	if (!data) return undefined;
+	const chunkPane = str(chunk.pane_id) ?? pane;
+	const seq = typeof chunk.seq === "number" && Number.isFinite(chunk.seq) ? chunk.seq : undefined;
+	return {
+		type: "pane.output",
+		pane_id: chunkPane,
+		source: "stream",
+		format: "ansi",
+		full: false,
+		encoding: "base64",
+		data,
+		...(seq === undefined ? {} : { seq }),
+	};
+}
+
+function snapshotText(result: unknown): string {
+	const read = (result as { read?: { text?: unknown } })?.read ?? result;
+	return typeof (read as { text?: unknown })?.text === "string" ? (read as { text: string }).text : herdrText(result);
+}
+
+async function readPaneSnapshot(
+	pane: string,
+	source: string,
+	format: string,
+	stripAnsi: boolean,
+	lines: number | undefined,
+): Promise<PaneSnapshot> {
+	const params: Record<string, unknown> = { pane_id: pane, source, format, strip_ansi: stripAnsi };
+	if (lines !== undefined) params.lines = lines;
+	try {
+		const result = await herdrRequest("pane.read", params);
+		return { text: snapshotText(result), source, fallback: false };
+	} catch (error) {
+		if (source !== "full" || !isUnsupportedFullSourceError(error)) throw error;
+		const fallbackSource = "recent_unwrapped";
+		const fallbackParams: Record<string, unknown> = {
+			pane_id: pane,
+			source: fallbackSource,
+			format,
+			strip_ansi: stripAnsi,
+			lines: lines ?? VANILLA_HERDR_FALLBACK_LINES,
+		};
+		const result = await herdrRequest("pane.read", fallbackParams);
+		return {
+			text: snapshotText(result),
+			source: fallbackSource,
+			fallback: true,
+			fallbackReason: (error as Error).message,
+		};
+	}
+}
+
+// Live terminal stream (SPEC.md §4.3, Phase 2). Prefer herdr's native
+// `pane.attach` byte stream: attach first, read one ANSI snapshot for initial
+// state, then forward raw PTY chunks as base64 deltas. Older herdr builds fall
+// back to the Phase 1 snapshot poller behind the same relay op.
 function attach(peer: WebSocketPeer, req: RelayRequest): void {
 	const args = req.args ?? {};
 	const pane = str(args.pane);
@@ -286,39 +435,131 @@ function attach(peer: WebSocketPeer, req: RelayRequest): void {
 	const key = `attach:${pane}`;
 
 	let closed = false;
+	let nativeStream: HerdrStream | undefined;
 	let last: string | undefined;
 	let timer: ReturnType<typeof setTimeout> | undefined;
+	let nativeAcked = false;
+	let snapshotReady = false;
+	let fallbackStarted = false;
+	let pendingChunks: PaneOutputFrame[] = [];
 
-	const tick = async (): Promise<void> => {
+	const sendFrame = (body: PaneOutputFrame): void => {
+		reply(peer, { id: req.id, ok: true, stream: true, body });
+	};
+
+	const startPolling = (fallbackReason: string): void => {
+		if (closed || fallbackStarted) return;
+		fallbackStarted = true;
+		nativeStream?.close();
+		nativeStream = undefined;
+		const tick = async (): Promise<void> => {
+			if (closed) return;
+			try {
+				const snapshot = await readPaneSnapshot(pane, source, format, stripAnsi, lines);
+				if (!closed && snapshot.text !== last) {
+					last = snapshot.text;
+					sendFrame({
+						type: "pane.output",
+						pane_id: pane,
+						source: snapshot.source,
+						format,
+						full: true,
+						text: snapshot.text,
+						fallback: true,
+						fallbackReason: snapshot.fallbackReason ?? fallbackReason,
+					});
+				}
+			} catch (error) {
+				if (!closed) reply(peer, { id: req.id, ok: false, stream: true, error: (error as Error).message });
+			}
+			if (!closed) timer = setTimeout(() => void tick(), intervalMs);
+		};
+		void tick();
+	};
+
+	const sendInitialSnapshot = async (): Promise<void> => {
 		if (closed) return;
 		try {
-			const params: Record<string, unknown> = { pane_id: pane, source, format, strip_ansi: stripAnsi };
-			if (lines !== undefined) params.lines = lines;
-			const result = await herdrRequest("pane.read", params);
-			const read = (result as { read?: { text?: unknown } })?.read ?? result;
-			const text = typeof (read as { text?: unknown })?.text === "string" ? (read as { text: string }).text : herdrText(result);
-			if (!closed && text !== last) {
-				last = text;
-				reply(peer, {
-					id: req.id,
-					ok: true,
-					stream: true,
-					body: { type: "pane.output", pane_id: pane, source, format, full: true, text },
-				});
+			const snapshot = await readPaneSnapshot(pane, source, format, stripAnsi, lines);
+			if (closed) return;
+			last = snapshot.text;
+			sendFrame({
+				type: "pane.output",
+				pane_id: pane,
+				source: snapshot.source,
+				format,
+				full: true,
+				text: snapshot.text,
+				...(snapshot.fallback ? { fallback: true, fallbackReason: snapshot.fallbackReason } : {}),
+			});
+			snapshotReady = true;
+			for (const frame of pendingChunks) {
+				if (closed) return;
+				sendFrame(frame);
 			}
+			pendingChunks = [];
 		} catch (error) {
-			if (!closed) reply(peer, { id: req.id, ok: false, stream: true, error: (error as Error).message });
+			startPolling((error as Error).message);
 		}
-		if (!closed) timer = setTimeout(() => void tick(), intervalMs);
 	};
 
 	registerStream(peer, key, {
 		close: () => {
 			closed = true;
+			nativeStream?.close();
 			if (timer) clearTimeout(timer);
 		},
 	});
-	void tick();
+
+	nativeStream = herdrStreamLines(
+		{ id: requestId(req.id), method: "pane.attach", params: { pane_id: pane } },
+		(line) => {
+			if (closed || fallbackStarted) return;
+			let envelope: Record<string, unknown>;
+			try {
+				envelope = rec(JSON.parse(line));
+			} catch {
+				startPolling("pane.attach returned invalid JSON");
+				return;
+			}
+
+			if (!nativeAcked) {
+				const error = errorMessageFromEnvelope(envelope);
+				if (error) {
+					startPolling(error);
+					return;
+				}
+				if (paneAttachAccepted(envelope)) {
+					nativeAcked = true;
+					void sendInitialSnapshot();
+					return;
+				}
+				startPolling("pane.attach returned an unexpected acknowledgement");
+				return;
+			}
+
+			const frame = paneAttachChunkFrame(envelope, pane);
+			if (!frame) return;
+			if (!snapshotReady) {
+				if (pendingChunks.length >= 2048) {
+					startPolling("pane.attach produced too many chunks before initial snapshot");
+					return;
+				}
+				pendingChunks.push(frame);
+				return;
+			}
+			sendFrame(frame);
+		},
+		(error) => {
+			if (!closed && !fallbackStarted) startPolling(error.message);
+		},
+		() => {
+			if (!closed && !fallbackStarted) {
+				const reason = nativeAcked ? "pane.attach stream closed" : "pane.attach closed before acknowledgement";
+				startPolling(reason);
+			}
+		},
+	);
 }
 
 export default defineChannel({

@@ -104,12 +104,19 @@ pnpm clanky:install
 
 Then use `clanky` from anywhere:
 
+- **`clanky` / `clanky dev`** — default development loop. It starts or attaches
+  the headless Eve brain, runs the custom face under Node watch mode, and
+  supervises owned Eve processes. If Eve is reachable but stuck unhealthy
+  during editing, Clanky waits through the short hot-reload window, then
+  restarts the recorded `.eve/dev-server.json` process instead of leaving the
+  face on `eve unavailable 503`.
 - **`clanky face`** — Clanky's custom face (`scripts/clanky.ts`): a pi-tui client
-  that renders eve's `eve/client` event stream, owns/attaches the headless brain,
+  that renders eve's `eve/client` event stream, owns/attaches the headless brain
+  once without watch mode,
   and adds the slash commands eve can't — `/token <token> [--user-token] [--voice]`,
   `/model <codex|claude> [id]`, `/harness allow ...`,
   `/harness <clanky|claude|codex|opencode|custom> [default|ollama] [model]`,
-  `/new`, `/status`, `/help`, `/exit`. Config commands rewrite `.env.local`
+  `/n`, `/new`, `/status`, `/help`, `/exit`. Config commands rewrite `.env.local`
   and restart the brain. Default port 2000
   (`CLANKY_EVE_PORT`).
 - **`clanky up` / `clanky status` / `clanky down`** — manage the persistent
@@ -123,7 +130,8 @@ Then use `clanky` from anywhere:
 Repo-local alternatives:
 
 - **`pnpm dev`** — eve's stock dev TUI (fixed slash-command set).
-- **`pnpm face`** — repo-local equivalent of `clanky face`.
+- **`pnpm face`** — repo-local equivalent of `clanky face`; for code-editing
+  sessions, prefer `clanky dev` so the face and owned brain are both supervised.
 
 ## Status
 

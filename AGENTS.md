@@ -32,13 +32,28 @@
 
 ## Custom Face / TUI
 
-- Clanky's face is the custom TUI at `scripts/clanky.ts` (`pnpm face`): it renders the public `eve/client` event stream through `@earendil-works/pi-tui` components. We own the face because eve's dev TUI has a fixed, non-extensible slash-command set and is not exposed as a reusable library. pi-tui is the rendering toolkit; `eve/client` is the only eve coupling.
+- Clanky's face is the custom TUI at `scripts/clanky.ts`; use `clanky dev` while editing so the face runs under watch mode and the owned `eve dev --no-ui` brain is supervised. `pnpm face` / `clanky face` are direct one-shot face entrypoints. The face renders the public `eve/client` event stream through `@earendil-works/pi-tui` components. We own the face because eve's dev TUI has a fixed, non-extensible slash-command set and is not exposed as a reusable library. pi-tui is the rendering toolkit; `eve/client` is the only eve coupling.
 - **The only eve surface the face depends on is the public `eve/client` API** — events down (`message.appended`, `actions.requested`, `input.requested`, `step.completed`, …), `send()` / `inputResponses` up. Do NOT import eve's compiled `node_modules/eve/dist/.../cli/dev/tui/` internals and do NOT parse eve's terminal frame protocol; both are removed. eve's TUI source (installed package, or a local `../eve` checkout) may be consulted as an optional appearance reference only — never imported.
 - Clanky owns its own look via pi-tui components; matching eve's visual language is optional, not a requirement. Keep intentional Clanky divergences and skip Vercel-specific surfaces: do not render Vercel warnings/tips, `/login`, `/vc`, `/channels`, `/deploy`, or pending-deploy indicators unless Clanky explicitly adopts that integration.
 - Keep Clanky's slash-command set extensible in the shared `COMMANDS` registry so the typeahead, `/help`, and handler never drift. Clanky commands may intentionally differ from eve's fixed registry; model configuration should stay centered on Codex and Claude subscription-backed providers rather than eve's Vercel-oriented flow.
 - Default models for every provider must be the latest version of that provider's flagship model (e.g. Claude `claude-opus-4-8`, Codex `gpt-5.5`, Gemini `gemini-3-pro`, xAI `grok-4`) — never a smaller or older tier (Sonnet/Haiku, Flash, a prior version). When a newer flagship ships, bump the `DEFAULT_*_MODEL` constants in `agent/lib/model-selection.ts` and `scripts/clanky.ts` together and front the picker/autocomplete options with it.
 - Preserve Clanky branding: the header identifies Clanky and its eve-backed brain. The face attaches to a running eve server or spawns/owns a headless `eve dev --no-ui` (eve allows one dev server per agent); default port 2000.
 - A turn that produces no assistant text must stay legible (spinner while thinking, an explicit no-reply note) — never leave the user staring at silence.
+
+## TUI Design
+
+- Richly format TUI text with color, brightness, and emphasis to make dense output easy to scan.
+- Visually differentiate secondary or qualifying text from primary text. Parenthetical notes should use a distinct style, such as dimmer or lower-contrast text, instead of inheriting the surrounding text style: `(ignoring incompatible override qwen3.6:27b-mlx)`.
+- In slash-command typeahead, keep the list compact, but when the selected row's description would truncate, render the full description above the list as accented wrapped text.
+
+## TUI Menus
+
+- Settings slash commands that open a modal, including `/model`, should render the current state inside the modal above the prompt. Users should see what they are changing from without selecting a separate status option that exits the menu.
+- Keep direct `/<command> status` commands for non-interactive/scriptable output and scrollback. In an interactive menu, status is contextual modal content; it is not the primary action.
+- Keep modal status compact by default: show the active/configured value, important mismatches, and auth or live-gate warnings. Do not dump every saved field, env var, or diagnostic line into the default menu view.
+- When status details are useful but dense, use the collapsed/expanded details pattern: show a short summary by default, then render the details toggle outside the option list, tight under the status summary and above the prompt. Use a large disclosure triangle flush with the status left margin and `show details` / `hide details` as the description text. The active details row should change highlight color but not show the normal `>` row selector. Toggle the same modal in place. The details toggle must not write config, restart the brain, or close the menu.
+- Back navigation is hierarchical. In a modal opened from a parent menu, Left/Esc from a child prompt should return `undefined` to the parent `settingsLoop` so the previous menu reopens. Only backing out of the root modal should produce a `/command cancelled` message. Direct one-shot slash commands may still treat Back/Esc as cancellation because there is no parent menu.
+- Prefer the shared `settingsLoop` `renderStatus` / `collapsibleMenuStatus` path for new settings menus so `/model`, media model pickers, harness, layout, approvals, and future menus keep the same status and expand-details behavior.
 
 ## Verification
 

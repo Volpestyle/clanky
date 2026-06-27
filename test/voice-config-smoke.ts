@@ -39,6 +39,16 @@ check("OpenAI realtime default model is gpt-realtime", openai.connect.model === 
 check("native TTS requests realtime audio output", openai.connect.responseOutputModality === "audio");
 check("voice eve session is enabled by default", openai.eveSessionHost === "http://127.0.0.1:2000");
 
+const openaiWithStaleLocalModel = buildVoiceRuntimeSettings(
+	env({ OPENAI_API_KEY: "openai-key", CLANKY_VOICE_REALTIME_MODEL: "qwen3.6:27b-mlx" }),
+);
+check("OpenAI realtime ignores stale local model overrides", openaiWithStaleLocalModel.connect.model === "gpt-realtime");
+
+const openaiWithHostedOverride = buildVoiceRuntimeSettings(
+	env({ OPENAI_API_KEY: "openai-key", CLANKY_VOICE_REALTIME_MODEL: "gpt-4o-realtime-preview" }),
+);
+check("OpenAI realtime preserves hosted model overrides", openaiWithHostedOverride.connect.model === "gpt-4o-realtime-preview");
+
 const localVoice = buildVoiceRuntimeSettings(
 	env({
 		CLANKY_VOICE_REALTIME_PROVIDER: "local",
@@ -87,6 +97,11 @@ check("voice status summary includes ElevenLabs output format", xaiVoiceSummary.
 check("voice status summary includes Eve session state", xaiVoiceSummary.eveSessionEnabled);
 check("voice status summary reports memory context enabled", xaiVoiceSummary.memoryContextEnabled);
 check("voice status summary reports default memory context limit", xaiVoiceSummary.memoryContextLimit === 16);
+
+const xaiWithStaleLocalModel = buildVoiceRuntimeSettings(
+	env({ CLANKY_VOICE_REALTIME_PROVIDER: "xai", XAI_API_KEY: "xai-key", CLANKY_VOICE_REALTIME_MODEL: "qwen3.6:27b-mlx" }),
+);
+check("xAI realtime ignores stale local model overrides", xaiWithStaleLocalModel.connect.model === "grok-voice-2");
 
 const previousHome = process.env.CLANKY_HOME;
 const voiceMemoryHome = await mkdtemp(join(tmpdir(), "clanky-voice-memory-"));

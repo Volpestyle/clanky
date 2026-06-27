@@ -70,10 +70,12 @@ export function herdrStreamLines(
 	request: HerdrRequest,
 	onLine: (line: string) => void,
 	onError: (error: Error) => void,
+	onClose?: () => void,
 ): HerdrStream {
 	const socket: Socket = createConnection(herdrSocketPath());
 	let buffer = "";
 	let closed = false;
+	let errored = false;
 	const close = () => {
 		if (closed) return;
 		closed = true;
@@ -93,11 +95,13 @@ export function herdrStreamLines(
 		}
 	});
 	socket.on("error", (error) => {
+		errored = true;
 		if (!closed) onError(error);
 	});
 	socket.on("close", () => {
+		const shouldNotify = !closed && !errored;
 		closed = true;
+		if (shouldNotify) onClose?.();
 	});
 	return { close };
 }
-

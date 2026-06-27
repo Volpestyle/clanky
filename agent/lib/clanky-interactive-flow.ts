@@ -35,6 +35,7 @@ export type InteractiveSelectPromptOptions = {
 	readonly kind: "multi" | "single";
 	readonly message: string;
 	readonly options: readonly InteractivePromptOption[];
+	readonly statusActions?: readonly InteractivePromptOption[];
 	readonly initialValue?: string;
 	readonly initialValues?: readonly string[];
 	readonly currentValue?: string;
@@ -50,6 +51,7 @@ export type InteractiveSelectPromptOptions = {
 type IndexedOption = {
 	readonly index: number;
 	readonly option: InteractivePromptOption;
+	readonly placement: "menu" | "status";
 };
 
 const MAX_VISIBLE_OPTIONS = 12;
@@ -127,7 +129,7 @@ export class InteractiveSelectPrompt implements Component, Focusable {
 		this.currentValues = new Set(options.kind === "multi" ? options.currentValues ?? [] : options.currentValue === undefined ? [] : [options.currentValue]);
 		const initialValue = options.initialValue;
 		if (options.kind === "single" && initialValue !== undefined) {
-			const index = options.options.findIndex((option) => option.value === initialValue);
+			const index = this.allOptions().findIndex((item) => item.option.value === initialValue);
 			if (index >= 0) this.cursorIndex = index;
 		}
 	}
@@ -216,47 +218,72 @@ export class InteractiveSelectPrompt implements Component, Focusable {
 	render(width: number): string[] {
 		const contentWidth = Math.max(1, width - 4);
 		const filtered = this.filteredOptions();
+		this.cursorIndex = clamp(this.cursorIndex, 0, Math.max(0, filtered.length - 1));
+		const active = filtered[this.cursorIndex];
+		const statusActions = filtered.filter((item) => item.placement === "status");
+		const menuItems = filtered.filter((item) => item.placement === "menu");
+		const visibleMenuItems = this.visibleMenuItems(menuItems, active);
+		const labelWidth = optionLabelWidth([...visibleMenuItems.items, ...statusActions], contentWidth, this.options.kind, this.currentValues);
+		const statusActionLines = statusActions.map((item) => this.renderItem(item, item === active, contentWidth, labelWidth, "none"));
 		const lines = [
-			...promptHeader(selectPromptTitle(this.options.message, this.options.kind), this.options.message, contentWidth),
-			...this.statusLines(filtered.length, contentWidth),
+			...promptHeader(selectPromptTitle(this.options.message, this.options.kind), this.options.message, contentWidth, statusActionLines),
+			...this.statusLines(filtered.length, this.allOptions().length, contentWidth),
 			...(this.error === undefined ? [] : [errorLine(this.error)]),
 			"",
-			...this.renderItems(filtered, contentWidth),
+			...this.renderMenuItems(visibleMenuItems, active, menuItems.length, statusActions.length > 0, contentWidth, labelWidth),
 			...this.renderCurrentDetail(filtered, contentWidth),
 		];
 		return boxLines(lines, width);
 	}
 
+	private allOptions(): IndexedOption[] {
+		return [
+			...this.options.options.map((option, index) => ({ index, option, placement: "menu" as const })),
+			...(this.options.statusActions ?? []).map((option, index) => ({ index, option, placement: "status" as const })),
+		];
+	}
+
 	private filteredOptions(): IndexedOption[] {
 		const normalized = this.filter.trim().toLowerCase();
-		const indexed = this.options.options.map((option, index) => ({ index, option }));
+		const indexed = this.allOptions();
 		if (normalized.length === 0) return indexed;
 		return indexed.filter(({ option }) => optionSearchText(option).includes(normalized));
 	}
 
-	private renderItems(items: readonly IndexedOption[], width: number): string[] {
-		if (items.length === 0) return [this.options.theme.noMatch("  No options match this filter")];
-		this.cursorIndex = clamp(this.cursorIndex, 0, items.length - 1);
+	private visibleMenuItems(items: readonly IndexedOption[], active: IndexedOption | undefined): { readonly items: readonly IndexedOption[]; readonly startIndex: number } {
+		if (items.length === 0) return { items, startIndex: 0 };
 		const maxVisible = Math.min(MAX_VISIBLE_OPTIONS, items.length);
-		const startIndex = clamp(this.cursorIndex - Math.floor(maxVisible / 2), 0, Math.max(0, items.length - maxVisible));
-		const visible = items.slice(startIndex, startIndex + maxVisible);
-		const labelWidth = optionLabelWidth(visible, width, this.options.kind, this.currentValues);
-		const rows = visible.map((item, visibleIndex) => this.renderItem(item, startIndex + visibleIndex === this.cursorIndex, width, labelWidth));
-		if (items.length > maxVisible) {
-			rows.push(this.options.theme.scrollInfo(`  Showing ${startIndex + 1}-${startIndex + visible.length} of ${items.length}`));
+		const cursorMenuIndex = active?.placement === "menu" ? items.findIndex((item) => item === active) : 0;
+		const startIndex = clamp(cursorMenuIndex - Math.floor(maxVisible / 2), 0, Math.max(0, items.length - maxVisible));
+		return { items: items.slice(startIndex, startIndex + maxVisible), startIndex };
+	}
+
+	private renderMenuItems(
+		visible: { readonly items: readonly IndexedOption[]; readonly startIndex: number },
+		active: IndexedOption | undefined,
+		totalMenuItems: number,
+		hasStatusActions: boolean,
+		width: number,
+		labelWidth: number,
+	): string[] {
+		if (totalMenuItems === 0) return hasStatusActions ? [] : [this.options.theme.noMatch("  No options match this filter")];
+		const rows = visible.items.map((item) => this.renderItem(item, item === active, width, labelWidth));
+		if (totalMenuItems > visible.items.length) {
+			rows.push(this.options.theme.scrollInfo(`  Showing ${visible.startIndex + 1}-${visible.startIndex + visible.items.length} of ${totalMenuItems}`));
 		}
 		return rows;
 	}
 
-	private renderItem(item: IndexedOption, active: boolean, width: number, labelWidth: number): string {
+	private renderItem(item: IndexedOption, active: boolean, width: number, labelWidth: number, prefixMode: "normal" | "none" = "normal"): string {
 		const selected = this.selectedValues.has(item.option.value);
 		const current = this.currentValues.has(item.option.value);
 		const label = optionLabelText(item.option, this.options.kind, selected, current);
 		const paddedLabel = padVisible(truncateToWidth(label, labelWidth, ""), labelWidth);
 		const details = [item.option.hint, item.option.description].filter((part): part is string => part !== undefined && part.length > 0).join(" - ");
-		const prefix = active ? "> " : "  ";
+		const prefix = prefixMode === "none" ? "" : active ? "> " : "  ";
 		const available = Math.max(1, width - prefix.length);
-		const detailText = details.length === 0 ? "" : `  ${this.options.theme.description(details)}`;
+		const detailGap = prefixMode === "none" ? "    " : "  ";
+		const detailText = details.length === 0 ? "" : `${detailGap}${this.options.theme.description(details)}`;
 		const row = truncateToWidth(`${paddedLabel}${detailText}`, available, "");
 		if (!active) return `${prefix}${row}`;
 		// Hovered row gets the accent color highlight plus bold; the trailing dim detail keeps its own style.
@@ -274,14 +301,14 @@ export class InteractiveSelectPrompt implements Component, Focusable {
 		return ["", ...wrapped.slice(0, 4).map((line) => dim(`  ${line}`))];
 	}
 
-	private statusLines(filteredCount: number, width: number): string[] {
+	private statusLines(filteredCount: number, totalCount: number, width: number): string[] {
 		const cursor = this.focused ? CURSOR_MARKER : "";
 		const selected = this.options.kind === "multi" && this.selectedValues.size > 0 ? `${this.selectedValues.size} selected` : undefined;
 		const back = this.options.allowBack === true ? "← Back" : "Esc cancels";
 		let line: string;
 		if (this.filter.length > 0) {
 			line = compactParts([
-				`Showing ${filteredCount} of ${this.options.options.length}`,
+				`Showing ${filteredCount} of ${totalCount}`,
 				selected,
 				`filter "${this.filter}"${cursor}`,
 				"Ctrl+U clears",
@@ -352,17 +379,46 @@ export class InteractiveSelectPrompt implements Component, Focusable {
 	}
 }
 
-function promptHeader(title: string, message: string, width: number): string[] {
-	return [bold(truncateToWidth(title, width, "")), "", ...wrapPromptMessage(message, width)];
+function promptHeader(title: string, message: string, width: number, statusActions: readonly string[] = []): string[] {
+	return [bold(truncateToWidth(title, width, "")), "", ...wrapPromptMessage(message, width, statusActions)];
 }
 
-function wrapPromptMessage(message: string, width: number): string[] {
+function wrapPromptMessage(message: string, width: number, statusActions: readonly string[] = []): string[] {
 	const lines: string[] = [];
-	for (const raw of message.split("\n")) {
+	for (const raw of messageLinesWithStatusActions(message, statusActions)) {
 		const wrapped = wrapTextWithAnsi(raw, width);
 		lines.push(...(wrapped.length === 0 ? [""] : wrapped));
 	}
 	return lines;
+}
+
+function messageLinesWithStatusActions(message: string, statusActions: readonly string[]): string[] {
+	if (statusActions.length === 0) return message.split("\n");
+	const rawLines = message.split("\n");
+	const insertionIndex = finalParagraphStart(rawLines);
+	const before = trimTrailingBlankLines(rawLines.slice(0, insertionIndex));
+	const after = rawLines.slice(insertionIndex);
+	return [...before, ...statusActions, "", ...after];
+}
+
+function finalParagraphStart(lines: readonly string[]): number {
+	let lastNonEmpty = -1;
+	for (let index = lines.length - 1; index >= 0; index -= 1) {
+		if (lines[index]?.trim().length !== 0) {
+			lastNonEmpty = index;
+			break;
+		}
+	}
+	if (lastNonEmpty < 0) return lines.length;
+	let start = lastNonEmpty;
+	while (start > 0 && lines[start - 1]?.trim().length !== 0) start -= 1;
+	return start;
+}
+
+function trimTrailingBlankLines(lines: readonly string[]): readonly string[] {
+	let end = lines.length;
+	while (end > 0 && lines[end - 1]?.trim().length === 0) end -= 1;
+	return lines.slice(0, end);
 }
 
 function boxLines(lines: readonly string[], width: number): string[] {

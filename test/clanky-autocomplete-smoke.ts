@@ -28,6 +28,10 @@ function assertFits(lines: readonly string[], width: number, label: string): voi
 	}
 }
 
+function stripAnsi(text: string): string {
+	return text.replace(/\x1b\[[0-9;:?]*[ -/]*[@-~]/gu, "");
+}
+
 const theme = {
 	bold: (text: string) => text,
 	cyan: (text: string) => text,
@@ -37,7 +41,24 @@ const theme = {
 	yellow: (text: string) => text,
 };
 
+const accentTheme = {
+	...theme,
+	yellow: (text: string) => `\x1b[33m${text}\x1b[39m`,
+};
+
 const commands: ClankyAutocompleteCommand[] = [
+	{
+		name: "n",
+		aliases: [],
+		description: "Start a fresh session and clear the transcript",
+		takesArgument: false,
+	},
+	{
+		name: "new",
+		aliases: [],
+		description: "Start a fresh session and clear the transcript",
+		takesArgument: false,
+	},
 	{
 		name: "discord-token",
 		aliases: ["token"],
@@ -74,10 +95,10 @@ const commands: ClankyAutocompleteCommand[] = [
 		takesArgument: true,
 	},
 	{
-		name: "local",
-		aliases: ["local-stack"],
-		description: "Apply an all-local tiered model stack (conductor + voice)",
-		argumentHint: "[status|tiered|single] [voice-model]",
+		name: "profile",
+		aliases: [],
+		description: "Switch between an all-local stack and hosted API providers",
+		argumentHint: "[status|local-tiered|local-single|api|local-api|api-local] [model]",
 		takesArgument: true,
 	},
 	{
@@ -156,9 +177,22 @@ const exactAliasState = clankyCommandTypeaheadFor(commands, "/token");
 assert(exactAliasState !== undefined, "exact alias should produce typeahead state");
 assert(selectedClankyCommandTypeahead(exactAliasState)?.name === "discord-token", "exact alias should keep the aliased command selected");
 assert(inlineClankyCommandHint(exactAliasState) === "[status|<token>] [--user-token] [--voice]", "exact alias should collapse to the command argument hint");
+const shortNewState = clankyCommandTypeaheadFor(commands, "/n");
+assert(shortNewState !== undefined, "new shortcut should produce typeahead state");
+assert(selectedClankyCommandTypeahead(shortNewState)?.name === "n", "new shortcut should be its own command");
+assert(clankyCommandCompletion(selectedClankyCommandTypeahead(shortNewState)!) === "/n", "new shortcut completion should keep /n");
 
 const rootState = clankyCommandTypeaheadFor(commands, "/");
 assert(rootState !== undefined, "bare slash should produce command typeahead state");
+const rootRows = renderClankyCommandTypeahead(rootState, theme, 72);
+assert(rootRows.some((line) => line.includes("/n")), "bare slash typeahead should show /n as its own command row");
+assert(rootRows.some((line) => line.includes("/new")) && rootRows.every((line) => !line.includes("/new (/n)")), "bare slash typeahead should not show /n only as a /new alias");
+const narrowRootRows = renderClankyCommandTypeahead(rootState, accentTheme, 64);
+assert(stripAnsi(narrowRootRows[0] ?? "") === "Start a fresh session and clear the transcript", "truncated selected descriptions should render in full above the list");
+assert(narrowRootRows[0]?.startsWith("\x1b[33m") === true, "expanded selected description should use accent color");
+assertFits(narrowRootRows, 64, "selected description preview");
+const wideRootRows = renderClankyCommandTypeahead(rootState, theme, 140);
+assert(wideRootRows[0]?.includes("/n") === true, "typeahead should skip the selected description preview when the row description fits");
 assert(renderClankyCommandTypeahead(rootState, theme, 72, 2).length === 2, "typeahead should respect a short row budget");
 assert(renderClankyCommandTypeahead(rootState, theme, 72, 0).length === 0, "typeahead should hide when no row budget remains");
 const wrappedState = moveClankyCommandTypeaheadSelection(rootState, -1);
@@ -209,9 +243,12 @@ const voiceRouteSuggestions = await provider.getSuggestions(["/voice mode l"], 0
 assert(voiceRouteSuggestions !== null, "voice mode value query should produce suggestions");
 assert(voiceRouteSuggestions.items.some((item) => item.value === "local"), "voice mode completion should include local");
 
-const localStackSuggestions = await provider.getSuggestions(["/local ti"], 0, 9, { signal });
-assert(localStackSuggestions !== null, "local stack query should produce profile suggestions");
-assert(localStackSuggestions.items.some((item) => item.value === "tiered"), "local argument completion should include tiered");
+const profileStackSuggestions = await provider.getSuggestions(["/profile local-t"], 0, 16, { signal });
+assert(profileStackSuggestions !== null, "profile query should produce profile suggestions");
+assert(profileStackSuggestions.items.some((item) => item.value === "local-tiered"), "profile argument completion should include local-tiered");
+const profileApiSuggestions = await provider.getSuggestions(["/profile api-l"], 0, 14, { signal });
+assert(profileApiSuggestions !== null, "profile api query should produce profile suggestions");
+assert(profileApiSuggestions.items.some((item) => item.value === "api-local"), "profile argument completion should include api-local");
 
 const layoutSuggestions = await provider.getSuggestions(["/layout in"], 0, 10, { signal });
 assert(layoutSuggestions !== null, "layout setting query should produce suggestions");
