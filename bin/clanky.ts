@@ -1,12 +1,21 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { watch } from "node:fs";
 import { lstat, mkdir, readlink, rm, symlink } from "node:fs/promises";
 import { readFile, stat } from "node:fs/promises";
+import { hostname } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseEnv } from "node:util";
+import QRCode from "qrcode";
 import { Client } from "eve/client";
 import { serializeCommandLine } from "../agent/lib/coding-harness.ts";
+import { buildEveDevServerEnv } from "../agent/lib/eve-dev-env.ts";
+import {
+	LOCAL_CONTEXT_TOKENS_ENV,
+	parseLocalContextWindowTokens,
+	resolveOllamaContextWindowTokens,
+} from "../agent/lib/local-context.ts";
 import {
 	appendTranscriptChunk,
 	createTranscriptRun,
@@ -21,9 +30,29 @@ const CLI_PATH = fileURLToPath(import.meta.url);
 const REPO = resolve(dirname(CLI_PATH), "..");
 const INSTALL_DIR = join(process.env.HOME ?? "", ".local/bin");
 const INSTALL_PATH = join(INSTALL_DIR, "clanky");
+const ENV_PATH = join(REPO, ".env.local");
+const DEV_SERVER_FILE = join(REPO, ".eve", "dev-server.json");
+const DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:11434/v1";
+const DEFAULT_LOCAL_MODEL = "qwen3-coder-next";
+const BRAIN_HEALTH_TIMEOUT_MS = 180_000;
+const BRAIN_OUTPUT_LIMIT = 8_000;
+const SERVER_STOP_TIMEOUT_MS = 5_000;
+const SERVER_KILL_TIMEOUT_MS = 2_000;
 
 type CommandResult = {
 	code: number;
+};
+
+type DevBrain = {
+	readonly child?: ChildProcess;
+	readonly host: string;
+	readonly owned: boolean;
+};
+
+type DevServerRecord = {
+	readonly pid: number;
+	readonly updatedAt?: string;
+	readonly url: string;
 };
 
 type EveEvent = {
@@ -32,7 +61,7 @@ type EveEvent = {
 };
 
 const args = process.argv.slice(2);
-const command = args[0] ?? "face";
+const command = args[0] ?? "dev";
 const rest = args.slice(1);
 
 function resolvePort(value: string | undefined, fallback: number): number {
@@ -61,12 +90,17 @@ async function runCommand(commandName: string, commandArgs: string[]): Promise<C
 		case "--help":
 			printHelp();
 			return { code: 0 };
+		case "dev":
+			return await runDev(commandArgs);
 		case "face":
+			assertInteractiveFaceTty();
 			return await runNodeScript("scripts/clanky.ts", commandArgs);
 		case "up":
 		case "status":
 		case "down":
 			return await runNodeScript("scripts/clanky-up.ts", [commandName, ...commandArgs]);
+		case "pair":
+			return await runPair(commandArgs);
 		case "worker":
 			return await runWorker(commandArgs);
 		case "transcript":
@@ -90,10 +124,12 @@ function printHelp(): void {
 	process.stdout.write(`Usage: clanky <command> [args]
 
 Commands:
-  face              Start the interactive Clanky face
+  dev               Start a hot-reloadable Clanky dev loop (default)
+  face              Start the interactive Clanky face once, without watch mode
   up                Ensure the Herdr session and headless Eve brain are running
   status            Print lifecycle status as JSON
   down              Stop the headless Eve brain pane
+  pair              Print a QR (or --link) the Clanky iOS app scans to connect
   worker <prompt>   Send one task to the running Clanky Eve brain and stream text
   transcript        List, read, tail, or print paths for worker transcripts
   transcript-run    Run a performer under Clanky's transcript capture
@@ -101,12 +137,356 @@ Commands:
   update            Fast-forward this checkout, install deps, and refresh the binary
   help              Show this help
 
-Default command: face
+Default command: dev
 `);
 }
 
 async function runNodeScript(relativePath: string, scriptArgs: readonly string[]): Promise<CommandResult> {
 	return await runProcess(process.execPath, [join(REPO, relativePath), ...scriptArgs], { cwd: REPO });
+}
+
+async function runDev(commandArgs: readonly string[]): Promise<CommandResult> {
+	assertInteractiveFaceTty();
+	const brain = await ensureDevBrain();
+	const removeExitCleanup = installDevBrainExitCleanup(brain.child);
+	try {
+		return await runWatchedFace(commandArgs);
+	} finally {
+		removeExitCleanup();
+		if (brain.owned && brain.child !== undefined) await stopDevBrain(brain.child);
+	}
+}
+
+async function ensureDevBrain(): Promise<DevBrain> {
+	const discovered = await discoverDevServerHost();
+	if (discovered !== undefined) return { host: discovered, owned: false };
+
+	const host = clankyHost();
+	const state = await probeHost(host);
+	if (state !== "down") return { host, owned: false };
+
+	return await startDevBrain();
+}
+
+async function runWatchedFace(commandArgs: readonly string[]): Promise<CommandResult> {
+	const nodeArgs = [
+		"--watch",
+		"--watch-preserve-output",
+		join(REPO, "scripts/clanky.ts"),
+		...commandArgs,
+	];
+	return await new Promise<CommandResult>((resolvePromise, reject) => {
+		const child = spawn(process.execPath, nodeArgs, { cwd: REPO, stdio: "inherit" });
+		let interrupted = false;
+		let settled = false;
+		const cleanup = (): void => {
+			process.off("SIGINT", onSignal);
+			process.off("SIGTERM", onSignal);
+		};
+		const finish = (result: CommandResult | Error): void => {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			if (result instanceof Error) reject(result);
+			else resolvePromise(result);
+		};
+		const onSignal = (signal: NodeJS.Signals): void => {
+			interrupted = true;
+			if (!hasChildExited(child)) child.kill(signal);
+		};
+		process.once("SIGINT", onSignal);
+		process.once("SIGTERM", onSignal);
+		child.once("error", finish);
+		child.once("close", (code, signal) => {
+			if (signal !== null) {
+				if (interrupted && (signal === "SIGINT" || signal === "SIGTERM")) {
+					finish({ code: 0 });
+					return;
+				}
+				finish(new Error(`${process.execPath} exited from signal ${signal}`));
+				return;
+			}
+			finish({ code: code ?? 1 });
+		});
+	});
+}
+
+async function startDevBrain(): Promise<DevBrain> {
+	const host = clankyHost();
+	const output: string[] = [];
+	const appendOutput = (chunk: Buffer): void => {
+		output.push(chunk.toString("utf8"));
+		while (output.join("").length > BRAIN_OUTPUT_LIMIT) output.shift();
+	};
+	const child = spawn(join(REPO, "node_modules", ".bin", "eve"), ["dev", "--no-ui", "--port", String(clankyPort())], {
+		cwd: REPO,
+		env: await buildDevBrainEnv(),
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	child.stdout?.on("data", appendOutput);
+	child.stderr?.on("data", appendOutput);
+	await waitForDevBrainHealth(child, host, () => output.join(""));
+	return { child, host, owned: true };
+}
+
+async function buildDevBrainEnv(): Promise<NodeJS.ProcessEnv> {
+	const env = buildEveDevServerEnv(process.env, clankyHost(), clankyPort());
+	const localEnv = await readLocalEnv();
+	const explicitContextTokens =
+		parseLocalContextWindowTokens(env[LOCAL_CONTEXT_TOKENS_ENV]) ??
+		parseLocalContextWindowTokens(localEnv[LOCAL_CONTEXT_TOKENS_ENV]);
+	if (explicitContextTokens !== undefined) return env;
+
+	const provider = process.env.CLANKY_MODEL_PROVIDER ?? localEnv.CLANKY_MODEL_PROVIDER ?? "codex";
+	if (provider !== "local") return env;
+	const contextTokens = await resolveOllamaContextWindowTokens({
+		baseURL: process.env.CLANKY_LOCAL_BASE_URL ?? localEnv.CLANKY_LOCAL_BASE_URL ?? DEFAULT_LOCAL_BASE_URL,
+		modelId: process.env.CLANKY_LOCAL_MODEL ?? localEnv.CLANKY_LOCAL_MODEL ?? DEFAULT_LOCAL_MODEL,
+	});
+	return contextTokens === undefined ? env : { ...env, [LOCAL_CONTEXT_TOKENS_ENV]: String(contextTokens) };
+}
+
+async function readLocalEnv(): Promise<Record<string, string>> {
+	try {
+		const parsed = parseEnv(await readFile(ENV_PATH, "utf8"));
+		const env: Record<string, string> = {};
+		for (const [key, value] of Object.entries(parsed)) {
+			if (value !== undefined) env[key] = value;
+		}
+		return env;
+	} catch {
+		return {};
+	}
+}
+
+// `clanky pair` — the QR source for the iOS app's one-time pairing (SPEC §4.4).
+// Encodes the tailnet relay URL + bearer token into a `clanky://connect` deep
+// link and renders it as a scannable terminal QR. After one scan the phone
+// stores the credentials in Keychain and auto-reconnects over Tailscale on every
+// launch. `--link` prints just the URL (AirDrop / tap it instead of scanning).
+async function runPair(commandArgs: readonly string[]): Promise<CommandResult> {
+	const flags = new Set(commandArgs.filter((arg) => arg.startsWith("--")));
+	const linkOnly = flags.has("--link");
+	const useHttps = flags.has("--https");
+	const hostArg = readFlagValue(commandArgs, "--host");
+	const portArg = readFlagValue(commandArgs, "--port");
+
+	const localEnv = await readLocalEnv();
+	const token = process.env.CLANKY_RELAY_TOKEN ?? localEnv.CLANKY_RELAY_TOKEN ?? "";
+	if (token.length === 0) {
+		process.stderr.write(
+			"clanky pair: no CLANKY_RELAY_TOKEN set. The relay is fail-closed without one — set it in .env.local or the environment first.\n",
+		);
+		return { code: 1 };
+	}
+
+	const port = resolvePort(portArg ?? process.env.CLANKY_EVE_PORT ?? localEnv.CLANKY_EVE_PORT, 2000);
+	const host = hostArg ?? (await resolvePairHost(process.env.CLANKY_EVE_HOST ?? localEnv.CLANKY_EVE_HOST));
+	const scheme = useHttps ? "https" : "http";
+	const relayUrl = `${scheme}://${host}:${port}`;
+
+	const params = new URLSearchParams({ relayUrl, token, mode: "tailnet" });
+	const url = `clanky://connect?${params.toString()}`;
+
+	if (linkOnly) {
+		process.stdout.write(`${url}\n`);
+		return { code: 0 };
+	}
+
+	const qr = await QRCode.toString(url, { type: "terminal", small: true });
+	process.stdout.write(`\nScan with the Clanky iOS app to pair (relay ${relayUrl}):\n\n`);
+	process.stdout.write(`${qr}\n`);
+	process.stdout.write(`Or open this link on the phone:\n  ${url}\n\n`);
+	return { code: 0 };
+}
+
+function readFlagValue(argv: readonly string[], flag: string): string | undefined {
+	const idx = argv.indexOf(flag);
+	if (idx === -1) return undefined;
+	const value = argv[idx + 1];
+	return value !== undefined && !value.startsWith("--") ? value : undefined;
+}
+
+// Pick the address the phone can actually reach: an explicit non-wildcard
+// CLANKY_EVE_HOST, else the Tailscale IPv4, else the machine hostname.
+async function resolvePairHost(configured: string | undefined): Promise<string> {
+	const trimmed = configured?.trim();
+	if (trimmed && !isWildcardHost(trimmed)) return trimmed;
+	const tailscaleIp = await tailscaleIPv4();
+	if (tailscaleIp) return tailscaleIp;
+	return hostname();
+}
+
+function isWildcardHost(host: string): boolean {
+	return (
+		host === "0.0.0.0" || host === "::" || host === "127.0.0.1" || host === "localhost" || host === "::1"
+	);
+}
+
+function tailscaleIPv4(): Promise<string | undefined> {
+	return new Promise((resolvePromise) => {
+		execFile("tailscale", ["ip", "-4"], { timeout: 3000 }, (error, stdout) => {
+			if (error) {
+				resolvePromise(undefined);
+				return;
+			}
+			const first = stdout
+				.split("\n")
+				.map((line) => line.trim())
+				.find((line) => line.length > 0);
+			resolvePromise(first);
+		});
+	});
+}
+
+async function waitForDevBrainHealth(
+	child: ChildProcess,
+	host: string,
+	output: () => string,
+	timeoutMs = BRAIN_HEALTH_TIMEOUT_MS,
+): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	for (;;) {
+		if (hasChildExited(child)) throw new Error(devBrainExitMessage(child, output()));
+		if ((await probeHost(host)) === "healthy") return;
+		if (Date.now() > deadline) throw new Error(`Clanky brain did not become healthy on ${host}`);
+		await sleep(500);
+	}
+}
+
+async function discoverDevServerHost(): Promise<string | undefined> {
+	const record = await readDevServerRecord();
+	if (record === undefined || !isPidAlive(record.pid)) return undefined;
+	const host = normalizeHost(record.url);
+	if (host === undefined) return undefined;
+	return (await probeHost(host)) === "down" ? undefined : host;
+}
+
+async function readDevServerRecord(): Promise<DevServerRecord | undefined> {
+	let text: string;
+	try {
+		text = await readFile(DEV_SERVER_FILE, "utf8");
+	} catch {
+		return undefined;
+	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(text);
+	} catch {
+		return undefined;
+	}
+	if (!isRecord(parsed)) return undefined;
+	if (typeof parsed.pid !== "number" || !Number.isSafeInteger(parsed.pid)) return undefined;
+	if (typeof parsed.url !== "string" || parsed.url.trim().length === 0) return undefined;
+	return {
+		pid: parsed.pid,
+		updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : undefined,
+		url: parsed.url,
+	};
+}
+
+async function probeHost(host: string): Promise<"healthy" | "reachable" | "down"> {
+	try {
+		const response = await fetch(`${host}/eve/v1/info`);
+		return response.ok ? "healthy" : "reachable";
+	} catch {
+		return "down";
+	}
+}
+
+function clankyPort(): number {
+	return resolvePort(process.env.CLANKY_EVE_PORT, 2000);
+}
+
+function clankyHost(): string {
+	return `http://127.0.0.1:${clankyPort()}`;
+}
+
+function normalizeHost(value: string): string | undefined {
+	try {
+		const url = new URL(value);
+		if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
+		return url.origin;
+	} catch {
+		return undefined;
+	}
+}
+
+function isPidAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return typeof error === "object" && error !== null && "code" in error && String(error.code) === "EPERM";
+	}
+}
+
+function installDevBrainExitCleanup(child: ChildProcess | undefined): () => void {
+	if (child === undefined) return () => {};
+	const cleanup = (): void => {
+		if (!hasChildExited(child)) child.kill("SIGTERM");
+	};
+	process.once("beforeExit", cleanup);
+	process.once("exit", cleanup);
+	return () => {
+		process.off("beforeExit", cleanup);
+		process.off("exit", cleanup);
+	};
+}
+
+async function stopDevBrain(child: ChildProcess): Promise<void> {
+	if (hasChildExited(child)) return;
+	child.kill("SIGTERM");
+	if (await waitForChildExit(child, SERVER_STOP_TIMEOUT_MS)) return;
+	child.kill("SIGKILL");
+	await waitForChildExit(child, SERVER_KILL_TIMEOUT_MS);
+}
+
+function hasChildExited(child: ChildProcess): boolean {
+	return child.exitCode !== null || child.signalCode !== null;
+}
+
+async function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+	if (hasChildExited(child)) return true;
+	return await new Promise<boolean>((resolvePromise) => {
+		let settled = false;
+		const finish = (exited: boolean): void => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timeout);
+			child.off("exit", onExit);
+			child.off("error", onError);
+			resolvePromise(exited);
+		};
+		const onExit = (): void => finish(true);
+		const onError = (): void => finish(true);
+		const timeout = setTimeout(() => finish(false), timeoutMs);
+		child.once("exit", onExit);
+		child.once("error", onError);
+		if (hasChildExited(child)) finish(true);
+	});
+}
+
+function devBrainExitMessage(child: ChildProcess, output: string): string {
+	const status =
+		child.exitCode !== null
+			? `exit code ${child.exitCode}`
+			: child.signalCode !== null
+				? `signal ${child.signalCode}`
+				: "unknown status";
+	const recent = output.trim();
+	return recent.length === 0
+		? `Eve dev server exited before becoming healthy (${status})`
+		: `Eve dev server exited before becoming healthy (${status}). Recent output:\n${recent}`;
+}
+
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
+}
+
+function assertInteractiveFaceTty(): void {
+	if (process.stdin.isTTY === true && process.stdout.isTTY === true) return;
+	throw new Error("interactive Clanky face requires a TTY; use `clanky worker ...` or `clanky status` for noninteractive use");
 }
 
 async function runProcess(
@@ -434,6 +814,10 @@ function parsePositiveInteger(value: string | undefined, label: string): number 
 function requiredValue(value: string | undefined, label: string): string {
 	if (value === undefined || value.length === 0) throw new Error(`${label} requires a value`);
 	return value;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function textFromEvent(event: EveEvent): string | undefined {

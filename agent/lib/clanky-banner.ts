@@ -28,6 +28,10 @@ export type BannerFields = {
 	harness?: string;
 	cwd?: string;
 	server?: string;
+	/** Where this face sits: a `{session} · pane {pane}` summary, or "none". */
+	stage?: string;
+	/** The row label for `stage` — the detected multiplexer ("herdr"/"tmux"). */
+	stageLabel?: string;
 	hint?: string;
 };
 
@@ -79,7 +83,15 @@ export function renderClankyBanner(
 		lines.push("");
 		lines.push(` ${paint(fields.hint, { fg: "dim" }, caps)}`);
 	}
+	lines.push(renderRule(caps));
 	return lines;
+}
+
+/** A full-width colored rule that underlines the header block. */
+function renderRule(caps: BannerCapabilities): string {
+	const width = Math.max(1, caps.columns - 2);
+	const glyph = caps.unicode ? "─" : "-";
+	return ` ${paint(glyph.repeat(width), { fg: "accent" }, caps)}`;
 }
 
 function buildFeedLines(
@@ -98,6 +110,7 @@ function buildFeedLines(
 			["harness", fields.harness],
 			["cwd", fields.cwd],
 			["eve server", fields.server],
+			[fields.stageLabel ?? "stage", fields.stage],
 		] as const
 	).filter(([, value]) => value !== undefined && value.length > 0);
 	const labelWidth = Math.max(8, ...rows.map(([label]) => label.length + 1));
@@ -123,6 +136,7 @@ function renderCondensed(
 	if (fields.hint !== undefined && fields.hint.length > 0) {
 		lines.push(` ${paint(fields.hint, { fg: "dim" }, caps)}`);
 	}
+	lines.push(renderRule(caps));
 	return lines;
 }
 

@@ -19,6 +19,7 @@ import {
 } from "./elevenLabsTtsClient.ts";
 import { bindVoiceEveSession, type VoiceEveSessionBinding, type VoiceEveSessionConfig } from "./eve-session.ts";
 import { type JsonRecord, stringValue } from "./json.ts";
+import { LocalRealtimeClient, type LocalRealtimeClientOptions } from "./localRealtimeClient.ts";
 import { OpenAiRealtimeClient, type OpenAiRealtimeConnectOptions } from "./openAiRealtimeClient.ts";
 import type { OpenAiRealtimeTranscript } from "./openAiRealtimeClient.ts";
 import { executeVoiceControl, type VoiceControlInput, type VoiceControlResult } from "./control.ts";
@@ -34,14 +35,30 @@ import { XAiRealtimeClient } from "./xAiRealtimeClient.ts";
 import { getActiveGoLive } from "../discord/golive.ts";
 import { buildMemoryContext } from "../memory.ts";
 
-export type VoiceRealtimeProvider = "openai" | "xai";
+export type VoiceRealtimeProvider = "openai" | "xai" | "local";
 export type VoiceTtsProvider = "realtime" | "elevenlabs";
 
-export interface VoiceRealtimeConfig {
-	provider: VoiceRealtimeProvider;
+export interface HostedVoiceRealtimeConfig {
+	provider: Exclude<VoiceRealtimeProvider, "local">;
 	apiKey: string;
 	baseUrl?: string;
 }
+
+export interface LocalVoiceRealtimeConfig {
+	provider: "local";
+	asrCommand?: string;
+	asrModelPath: string;
+	asrLanguage?: string;
+	audioSampleRate?: number;
+	llmBaseUrl?: string;
+	llmApiKey?: string;
+	llmModel: string;
+	ttsEngine?: LocalRealtimeClientOptions["ttsEngine"];
+	ttsCommand?: string;
+	ttsSampleRate?: number;
+}
+
+export type VoiceRealtimeConfig = HostedVoiceRealtimeConfig | LocalVoiceRealtimeConfig;
 
 export interface VoiceElevenLabsTtsConfig {
 	provider: "elevenlabs";
@@ -264,6 +281,20 @@ export function summarizeVoiceRuntimeConfig(config: VoiceRuntimeSummaryInput): V
 export function createVoiceRealtimeClient(config: VoiceRealtimeConfig): VoiceRealtimeClient {
 	if (config.provider === "xai") {
 		return new XAiRealtimeClient({ apiKey: config.apiKey, baseUrl: config.baseUrl });
+	}
+	if (config.provider === "local") {
+		return new LocalRealtimeClient({
+			asrCommand: config.asrCommand,
+			asrModelPath: config.asrModelPath,
+			asrLanguage: config.asrLanguage,
+			audioSampleRate: config.audioSampleRate,
+			llmBaseUrl: config.llmBaseUrl,
+			llmApiKey: config.llmApiKey,
+			llmModel: config.llmModel,
+			ttsEngine: config.ttsEngine,
+			ttsCommand: config.ttsCommand,
+			ttsSampleRate: config.ttsSampleRate,
+		});
 	}
 	return new OpenAiRealtimeClient({ apiKey: config.apiKey, baseUrl: config.baseUrl });
 }

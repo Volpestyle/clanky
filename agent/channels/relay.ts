@@ -15,6 +15,8 @@ import { defineChannel, GET, WS } from "eve/channels";
 import type { WebSocketMessage, WebSocketPeer } from "eve/channels";
 import { isFrontdoorAuthorized } from "../lib/frontdoor-auth.ts";
 import { herdrRequest, herdrStreamLines, type HerdrStream } from "../lib/herdr-socket.ts";
+import { registerPushDevice, unregisterPushDevice } from "../lib/push-registry.ts";
+import { ensurePushWatcher } from "../lib/push-watcher.ts";
 import { newTranscriptRunId, readTranscript } from "../lib/transcripts.ts";
 import { wrapTranscriptArgv } from "../tools/herdr_spawn.ts";
 
@@ -144,6 +146,34 @@ async function dispatch(op: string, args: Record<string, unknown>): Promise<unkn
 			if (!pane) throw new Error("close requires pane");
 			return herdrRequest("pane.close", { pane_id: pane });
 		}
+		case "register-push": {
+			// The phone registers its APNs device token after pairing so Clanky can
+			// push when an agent goes blocked/done/error. Starts the watcher lazily.
+			const token = str(args.token);
+			if (!token) throw new Error("register-push requires token");
+			const events = Array.isArray(args.events) ? (args.events as unknown[]).map(String) : [];
+			const platform = str(args.platform) ?? "ios";
+			await registerPushDevice({ token, platform, events });
+			ensurePushWatcher();
+			return { ok: true, registered: true };
+		}
+		case "unregister-push": {
+			const token = str(args.token);
+			if (!token) throw new Error("unregister-push requires token");
+			await unregisterPushDevice(token);
+			return { ok: true, unregistered: true };
+		}
+		case "write": {
+			// Raw verbatim input — the keystroke path for the iOS live terminal
+			// (SPEC.md §4.3). herdr's pane.send_text writes the bytes to the PTY
+			// master unchanged, so typed text, control sequences (Ctrl-C as ),
+			// and arrow-key escapes ([A) all pass through faithfully. Unlike
+			// `run`/`send`, this appends NO trailing Enter — the client owns newlines.
+			const pane = str(args.pane);
+			const text = typeof args.text === "string" ? args.text : undefined;
+			if (!pane || text === undefined) throw new Error("write requires pane and text");
+			return herdrRequest("pane.send_text", { pane_id: pane, text });
+		}
 		default:
 			throw new Error(`unknown op '${op}'`);
 	}
@@ -166,18 +196,49 @@ function reply(peer: WebSocketPeer, body: Record<string, unknown>): void {
 	peer.send(JSON.stringify(body));
 }
 
-const activeStreams = new WeakMap<WebSocketPeer, HerdrStream>();
+// A peer may now hold several concurrent streams — one `events` subscription
+// for swarm status plus one live `attach:<pane>` terminal stream per open pane —
+// so streams are keyed rather than the old one-per-peer model.
+interface StreamHandle {
+	close(): void;
+}
 
-function closeStream(peer: WebSocketPeer): void {
-	activeStreams.get(peer)?.close();
-	activeStreams.delete(peer);
+const peerStreams = new WeakMap<WebSocketPeer, Map<string, StreamHandle>>();
+
+function streamsFor(peer: WebSocketPeer): Map<string, StreamHandle> {
+	let map = peerStreams.get(peer);
+	if (!map) {
+		map = new Map();
+		peerStreams.set(peer, map);
+	}
+	return map;
+}
+
+function registerStream(peer: WebSocketPeer, key: string, handle: StreamHandle): void {
+	const map = streamsFor(peer);
+	map.get(key)?.close();
+	map.set(key, handle);
+}
+
+function closeStream(peer: WebSocketPeer, key?: string): void {
+	const map = peerStreams.get(peer);
+	if (!map) return;
+	if (key === undefined) {
+		for (const handle of map.values()) handle.close();
+		map.clear();
+		return;
+	}
+	const handle = map.get(key);
+	if (handle) {
+		handle.close();
+		map.delete(key);
+	}
 }
 
 function subscribe(peer: WebSocketPeer, req: RelayRequest): void {
 	const subscriptions = Array.isArray(req.args?.subscriptions) ? req.args.subscriptions : [];
 	if (subscriptions.length === 0) throw new Error("subscribe requires subscriptions[]");
-	closeStream(peer);
-	const stream = herdrStreamLines(
+	const stream: HerdrStream = herdrStreamLines(
 		{
 			id: requestId(req.id),
 			method: "events.subscribe",
@@ -192,7 +253,61 @@ function subscribe(peer: WebSocketPeer, req: RelayRequest): void {
 		},
 		(error) => reply(peer, { id: req.id, ok: false, stream: true, error: error.message }),
 	);
-	activeStreams.set(peer, stream);
+	registerStream(peer, "events", { close: () => stream.close() });
+}
+
+// Live terminal stream (SPEC.md §4.3, Phase 1). herdr exposes only bounded
+// scrollback snapshots — no lossless follow stream — so the relay manufactures a
+// live feed by re-reading the pane's visible screen (ANSI-preserving) and pushing
+// a frame whenever the rendered content changes. The frame is a FULL snapshot
+// (`full: true`); the client replaces its buffer rather than appending. Phase 2
+// swaps this implementation for a herdr-native per-pane byte broadcast behind the
+// same `attach` op + frame envelope, so the client never changes.
+function attach(peer: WebSocketPeer, req: RelayRequest): void {
+	const args = req.args ?? {};
+	const pane = str(args.pane);
+	if (!pane) throw new Error("attach requires pane");
+	const source = str(args.source) ?? "visible";
+	const format = str(args.format) ?? "ansi";
+	const stripAnsi = args.strip_ansi === true;
+	const lines = typeof args.lines === "number" ? args.lines : undefined;
+	const intervalMs = Math.min(2000, Math.max(80, num(args.interval_ms, 180)));
+	const key = `attach:${pane}`;
+
+	let closed = false;
+	let last: string | undefined;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+
+	const tick = async (): Promise<void> => {
+		if (closed) return;
+		try {
+			const params: Record<string, unknown> = { pane_id: pane, source, format, strip_ansi: stripAnsi };
+			if (lines !== undefined) params.lines = lines;
+			const result = await herdrRequest("pane.read", params);
+			const read = (result as { read?: { text?: unknown } })?.read ?? result;
+			const text = typeof (read as { text?: unknown })?.text === "string" ? (read as { text: string }).text : herdrText(result);
+			if (!closed && text !== last) {
+				last = text;
+				reply(peer, {
+					id: req.id,
+					ok: true,
+					stream: true,
+					body: { type: "pane.output", pane_id: pane, source, format, full: true, text },
+				});
+			}
+		} catch (error) {
+			if (!closed) reply(peer, { id: req.id, ok: false, stream: true, error: (error as Error).message });
+		}
+		if (!closed) timer = setTimeout(() => void tick(), intervalMs);
+	};
+
+	registerStream(peer, key, {
+		close: () => {
+			closed = true;
+			if (timer) clearTimeout(timer);
+		},
+	});
+	void tick();
 }
 
 export default defineChannel({
@@ -232,8 +347,18 @@ export default defineChannel({
 						return;
 					}
 					if (req.op === "unsubscribe") {
-						closeStream(peer);
+						closeStream(peer, "events");
 						reply(peer, { id: req.id, ok: true, unsubscribed: true });
+						return;
+					}
+					if (req.op === "attach") {
+						attach(peer, req);
+						return;
+					}
+					if (req.op === "detach") {
+						const pane = str(req.args?.pane);
+						closeStream(peer, pane ? `attach:${pane}` : undefined);
+						reply(peer, { id: req.id, ok: true, detached: true });
 						return;
 					}
 					const result = await dispatch(req.op, req.args ?? {});

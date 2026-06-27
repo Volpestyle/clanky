@@ -12,6 +12,7 @@ export * from "./elevenLabsTtsClient.ts";
 export * from "./eve-session.ts";
 export * from "./liveValidation.ts";
 export * from "./liveValidationResult.ts";
+export * from "./localRealtimeClient.ts";
 export * from "./memory.ts";
 export * from "./openAiRealtimeClient.ts";
 export * from "./realtime-tools.ts";

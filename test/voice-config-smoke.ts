@@ -39,6 +39,20 @@ check("OpenAI realtime default model is gpt-realtime", openai.connect.model === 
 check("native TTS requests realtime audio output", openai.connect.responseOutputModality === "audio");
 check("voice eve session is enabled by default", openai.eveSessionHost === "http://127.0.0.1:2000");
 
+const localVoice = buildVoiceRuntimeSettings(
+	env({
+		CLANKY_VOICE_REALTIME_PROVIDER: "local",
+		CLANKY_VOICE_ASR_MODEL: "/tmp/ggml-large-v3-turbo.bin",
+		CLANKY_VOICE_LOCAL_BASE_URL: "http://127.0.0.1:11434/v1",
+	}),
+);
+check("local realtime provider is selectable", localVoice.realtime.provider === "local");
+check("local voice default model is qwen3.6:27b-mlx", localVoice.connect.model === "qwen3.6:27b-mlx");
+check("local voice default TTS voice is Samantha", localVoice.connect.voice === "Samantha");
+check("local voice uses native realtime audio output", localVoice.connect.responseOutputModality === "audio");
+check("local voice preserves ASR model path", localVoice.realtime.provider === "local" && localVoice.realtime.asrModelPath === "/tmp/ggml-large-v3-turbo.bin");
+check("local voice preserves local LLM endpoint", localVoice.realtime.provider === "local" && localVoice.realtime.llmBaseUrl === "http://127.0.0.1:11434/v1");
+
 const voiceWithSpeaker = buildVoiceRuntimeSettings(env({ OPENAI_API_KEY: "openai-key" }), {
 	userId: "u-voice",
 	userName: "Morgan",

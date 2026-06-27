@@ -2,6 +2,7 @@ import type { HandleMessageStreamEvent, InputRequest, InputResponse } from "eve/
 import { NoReplyTracker, NO_ASSISTANT_REPLY_NOTICE } from "./tui-no-reply.ts";
 
 export type FaceBlockHandle = {
+	remove?(): void;
 	setMarkdown(markdown: string): void;
 };
 

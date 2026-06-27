@@ -7,6 +7,7 @@
  */
 import type { Guild } from "discord.js";
 import type { VoiceRuntime } from "../../channels/voice.ts";
+import { resolveClankyDataPath } from "../paths.ts";
 import type { ClankvoxGuildLike } from "../voice/clankvoxIpcClient.ts";
 import {
 	parseElevenLabsPcmOutputFormat,
@@ -29,6 +30,10 @@ const DEFAULT_VOICE_INSTRUCTIONS = [
 	"needs real work (web, code, builds, lookups), delegate rather than stalling",
 	"the conversation. Stay quiet when nothing needs saying.",
 ].join(" ");
+const DEFAULT_LOCAL_VOICE_LLM_MODEL = "qwen3.6:27b-mlx";
+const DEFAULT_LOCAL_VOICE_LLM_BASE_URL = "http://127.0.0.1:11434/v1";
+const DEFAULT_LOCAL_VOICE_ASR_MODEL = "models/voice/whisper/ggml-large-v3-turbo.bin";
+const DEFAULT_LOCAL_VOICE = "Samantha";
 
 function toClankvoxGuild(guild: Guild): ClankvoxGuildLike {
 	return {
@@ -57,7 +62,7 @@ export function buildVoiceRuntimeSettings(env: NodeJS.ProcessEnv, memorySpeaker?
 	const outputModality: OpenAiRealtimeOutputModality = ttsProvider === "elevenlabs" ? "text" : "audio";
 	const connect: OpenAiRealtimeConnectOptions = {
 		model: resolveRealtimeModel(realtimeProvider, env),
-		voice: env.CLANKY_VOICE_REALTIME_VOICE ?? "marin",
+		voice: env.CLANKY_VOICE_REALTIME_VOICE ?? defaultLocalVoiceValue(realtimeProvider),
 		instructions: env.CLANKY_VOICE_INSTRUCTIONS ?? DEFAULT_VOICE_INSTRUCTIONS,
 		toolChoice: "auto",
 		responseOutputModality: outputModality,
@@ -98,6 +103,29 @@ function resolveGuildVoiceSpeaker(
 }
 
 function buildRealtimeConfig(provider: VoiceRealtimeProvider, env: NodeJS.ProcessEnv): VoiceRealtimeConfig {
+	if (provider === "local") {
+		const config: VoiceRealtimeConfig = {
+			provider,
+			asrModelPath: env.CLANKY_VOICE_ASR_MODEL?.trim() || resolveClankyDataPath(DEFAULT_LOCAL_VOICE_ASR_MODEL, env),
+			llmModel: resolveRealtimeModel(provider, env),
+			llmBaseUrl: env.CLANKY_VOICE_LOCAL_BASE_URL?.trim() || env.CLANKY_LOCAL_BASE_URL?.trim() || DEFAULT_LOCAL_VOICE_LLM_BASE_URL,
+		};
+		const asrCommand = env.CLANKY_VOICE_ASR_COMMAND?.trim();
+		if (asrCommand !== undefined && asrCommand.length > 0) config.asrCommand = asrCommand;
+		const asrLanguage = env.CLANKY_VOICE_ASR_LANGUAGE?.trim();
+		if (asrLanguage !== undefined && asrLanguage.length > 0) config.asrLanguage = asrLanguage;
+		const llmApiKey = env.CLANKY_VOICE_LOCAL_API_KEY?.trim();
+		if (llmApiKey !== undefined && llmApiKey.length > 0) config.llmApiKey = llmApiKey;
+		const audioSampleRate = parsePositiveInteger(env.CLANKY_VOICE_AUDIO_SAMPLE_RATE);
+		if (audioSampleRate !== undefined) config.audioSampleRate = audioSampleRate;
+		const ttsEngine = parseLocalTtsEngine(env.CLANKY_VOICE_LOCAL_TTS_ENGINE);
+		if (ttsEngine !== undefined) config.ttsEngine = ttsEngine;
+		const ttsCommand = env.CLANKY_VOICE_LOCAL_TTS_COMMAND?.trim();
+		if (ttsCommand !== undefined && ttsCommand.length > 0) config.ttsCommand = ttsCommand;
+		const ttsSampleRate = parsePositiveInteger(env.CLANKY_VOICE_TTS_SAMPLE_RATE);
+		if (ttsSampleRate !== undefined) config.ttsSampleRate = ttsSampleRate;
+		return config;
+	}
 	if (provider === "xai") {
 		const apiKey = env.CLANKY_XAI_API_KEY?.trim() || env.XAI_API_KEY?.trim();
 		if (apiKey === undefined || apiKey.length === 0) {
@@ -143,11 +171,13 @@ function resolveRealtimeModel(provider: VoiceRealtimeProvider, env: NodeJS.Proce
 	if (env.CLANKY_VOICE_REALTIME_MODEL !== undefined && env.CLANKY_VOICE_REALTIME_MODEL.trim().length > 0) {
 		return env.CLANKY_VOICE_REALTIME_MODEL.trim();
 	}
+	if (provider === "local") return DEFAULT_LOCAL_VOICE_LLM_MODEL;
 	return provider === "xai" ? "grok-voice-2" : "gpt-realtime";
 }
 
 function parseRealtimeProvider(value: string | undefined): VoiceRealtimeProvider {
 	const normalized = value?.trim().toLowerCase();
+	if (normalized === "local") return "local";
 	return normalized === "xai" || normalized === "grok" ? "xai" : "openai";
 }
 
@@ -164,11 +194,28 @@ function parsePositiveNumber(value: string | undefined): number | undefined {
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
+function parsePositiveInteger(value: string | undefined): number | undefined {
+	if (value === undefined) return undefined;
+	const parsed = Number.parseInt(value, 10);
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function parseLocalTtsEngine(value: string | undefined): "say" | "command" | undefined {
+	const normalized = value?.trim().toLowerCase();
+	if (normalized === "say" || normalized === "macos") return "say";
+	if (normalized === "command" || normalized === "cmd") return "command";
+	return undefined;
+}
+
 function parseMemoryContextLimit(value: string | undefined): number | undefined {
 	if (value === undefined) return undefined;
 	const parsed = Number.parseInt(value, 10);
 	if (!Number.isFinite(parsed)) return undefined;
 	return Math.max(0, Math.min(50, parsed));
+}
+
+export function defaultLocalVoiceValue(provider: VoiceRealtimeProvider): string {
+	return provider === "local" ? DEFAULT_LOCAL_VOICE : "marin";
 }
 
 function resolveVoiceEveSessionHost(env: NodeJS.ProcessEnv): string | undefined {

@@ -95,6 +95,13 @@ const commands: ClankyAutocompleteCommand[] = [
 		takesArgument: true,
 	},
 	{
+		name: "spawn",
+		aliases: [],
+		description: "Spawn a herdr worker pane through the transcript seam",
+		argumentHint: "[--harness id|auto] [--performer id|auto] [--cwd path] <slug> <task>",
+		takesArgument: true,
+	},
+	{
 		name: "trace",
 		aliases: [],
 		description: "Show compact per-turn stream traces",
@@ -173,6 +180,10 @@ const browserSuggestions = await provider.getSuggestions(["/browser in"], 0, 11,
 assert(browserSuggestions !== null, "browser argument query should produce suggestions");
 assert(browserSuggestions.items.some((item) => item.value === "install"), "browser argument completion should include install");
 
+const spawnHarnessSuggestions = await provider.getSuggestions(["/spawn --harness c"], 0, 18, { signal });
+assert(spawnHarnessSuggestions !== null, "spawn harness argument query should produce suggestions");
+assert(spawnHarnessSuggestions.items.some((item) => item.value === "codex"), "spawn harness completion should include codex");
+
 const mcpActionSuggestions = await provider.getSuggestions(["/mcp a"], 0, 6, { signal });
 assert(mcpActionSuggestions !== null, "mcp action query should produce action suggestions");
 assert(mcpActionSuggestions.items.some((item) => item.value === "auth"), "mcp action completion should include auth");
@@ -247,5 +258,7 @@ assert(inspector.includes("**/mcp"), "inspector should identify the active comma
 assert(inspector.includes("Valid next args:"), "inspector should show valid next args");
 assert(inspector.includes("/mcp auth linear"), "inspector should show useful examples");
 assert(!inspector.includes("Warning: unknown first arg"), "partial valid arguments should not warn while the user is typing");
+const spawnInspector = formatClankyCommandInspector("/spawn docs-review", commands);
+assert(!spawnInspector.includes("Warning: unknown first arg"), "spawn slugs should not warn as unknown first args");
 
 console.log("clanky-autocomplete-smoke: ok");

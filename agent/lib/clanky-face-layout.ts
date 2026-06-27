@@ -55,6 +55,53 @@ export function resolveClankyTranscriptMouseTarget(
 	};
 }
 
+export type ClankyChromeBand = "banner" | "status" | "typeahead";
+
+export type ClankyChromeMouseTargetOptions = {
+	readonly bannerRows: number;
+	readonly transcriptRows: number;
+	readonly statusRows: number;
+	readonly typeaheadRows: number;
+	readonly editorRows: number;
+	readonly terminalRows: number;
+	readonly mouseRow: number;
+	readonly mouseCol: number;
+};
+
+export type ClankyChromeMouseTarget = {
+	readonly band: ClankyChromeBand;
+	readonly row: number;
+	readonly col: number;
+};
+
+// Map an absolute 1-based terminal cell to a selectable chrome band (banner
+// header or status/typeahead footer) and a band-local row. The face stacks
+// banner, transcript, status, typeahead, and editor top-to-bottom and the
+// terminal shows the bottom `terminalRows` lines. Returns null when the cell
+// falls in the transcript band (which owns its own selection), in the editor,
+// or outside the frame.
+export function resolveClankyChromeMouseTarget(
+	options: ClankyChromeMouseTargetOptions,
+): ClankyChromeMouseTarget | null {
+	const totalRows =
+		options.bannerRows + options.transcriptRows + options.statusRows + options.typeaheadRows + options.editorRows;
+	const viewportTop = Math.max(0, totalRows - options.terminalRows);
+	const flat = options.mouseRow - 1 + viewportTop;
+	const col = Math.max(0, options.mouseCol - 1);
+	const statusStart = options.bannerRows + options.transcriptRows;
+	const typeaheadStart = statusStart + options.statusRows;
+	if (flat >= 0 && flat < options.bannerRows) {
+		return { band: "banner", col, row: flat };
+	}
+	if (flat >= statusStart && flat < statusStart + options.statusRows) {
+		return { band: "status", col, row: flat - statusStart };
+	}
+	if (flat >= typeaheadStart && flat < typeaheadStart + options.typeaheadRows) {
+		return { band: "typeahead", col, row: flat - typeaheadStart };
+	}
+	return null;
+}
+
 function clampNumber(value: number, min: number, max: number): number {
 	return Math.min(max, Math.max(min, value));
 }

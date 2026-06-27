@@ -277,15 +277,49 @@ flowchart LR
   sock --- herdr
 ```
 
-- **Lifecycle (SSH).** The app runs `scripts/clanky-up.ts` over SSH to ensure the
-  `clankies` session exists and Clanky's brain (`eve dev --no-ui`) runs as a
-  pane. Auth: an ed25519 key the app generates and holds in the iOS Keychain.
-  Modes: `up` / `status` / `down`, each emitting JSON the app parses.
+- **Pairing (QR).** The primary connect path: `clanky pair` prints a
+  `clanky://connect?relayUrl=…&token=…&mode=tailnet` deep link as a terminal QR
+  (resolving the tailnet host via `tailscale ip -4`). The app scans it once,
+  stores the relay URL + token in Keychain, and auto-reconnects over Tailscale on
+  every launch (`restoreConnection`). `clanky pair --link` prints just the link
+  for AirDrop. The token stays the credential; Tailscale is the transport.
+- **Lifecycle (SSH, Advanced).** Still available under the app's Advanced
+  disclosure for remote cold-start: the app runs `scripts/clanky-up.ts` over SSH
+  to ensure the `clankies` session exists and Clanky's brain (`eve dev --no-ui`)
+  runs as a pane. Auth: an ed25519 key the app generates and holds in the iOS
+  Keychain. Modes: `up` / `status` / `down`, each emitting JSON the app parses.
+- **Push (relay `register-push` + APNs).** After pairing, the phone registers its
+  APNs device token (`register-push {token, events?, platform}`), persisted in
+  `~/.config/clanky/push-tokens.json`. A poll-and-diff watcher (`pane.list` every
+  5s) pushes an alert when an agent transitions to blocked/done/error, carrying
+  the pane/workspace ids so a tap deep-links into that pane's live terminal.
+  APNs uses token-based auth (ES256 JWT over a .p8 key, `node:crypto` + `http2`),
+  gated on `CLANKY_APNS_KEY_PATH` / `CLANKY_APNS_KEY_ID` / `CLANKY_APNS_TEAM_ID`
+  (+ `CLANKY_APNS_BUNDLE_ID`, `CLANKY_APNS_ENV`); a no-op when unset.
 - **Interaction (relay).** The relay is a raw WS route, so it bypasses eve's
   session framing and carries terminal scrollback, status, and input injection
   faithfully. It adds explicit `start`/`close` ops alongside transcript-aware
   `read`/`send`/`run`/`keys`/`subscribe` and a raw `api` passthrough.
   Chat-with-Clanky uses eve's session routes (`/eve/v1/session`).
+- **Live terminal (relay `attach`/`write`).** For a true interactive terminal —
+  the phone typing straight into a pane and seeing it live — the relay adds a
+  held-open `attach` stream and a raw `write` op:
+  - `attach {pane, source?="visible", format?="ansi", strip_ansi?=false, lines?, interval_ms?=180}`
+    opens a per-pane stream. Each frame is a **full** ANSI-preserving snapshot of
+    the rendered screen — `{id, ok:true, stream:true, body:{type:"pane.output",
+    pane_id, source, format, full:true, text}}` — emitted only when the content
+    changes. The client replaces its buffer (it is not a delta). `detach {pane?}`
+    ends one stream (or all). A peer may hold one `events` subscription plus one
+    `attach:<pane>` stream per open pane concurrently.
+  - `write {pane, text}` → herdr `pane.send_text`, writing verbatim bytes to the
+    PTY master with **no** trailing Enter (unlike `run`/`send`). Typed text,
+    control sequences (Ctrl-C as `\x03`), and arrow-key escapes (`\x1b[A`) all pass
+    through, so the client owns keystroke encoding and newlines.
+  - **Phase 1 (current):** the relay manufactures the live feed by re-reading the
+    pane's visible screen and diffing — herdr exposes only bounded snapshots, no
+    follow stream. **Phase 2 (fidelity):** a herdr-native per-pane byte broadcast
+    backs the same `attach` op + frame envelope (`type:"pane.output"` carrying raw
+    bytes), so the iOS client never changes. See §11.
 - The brain is just another herdr pane — the lead pane — which is why lifecycle
   (SSH) sits below it and interaction (relay) sits inside it.
 - herdr stays vanilla; the glue is TypeScript inside the Clanky eve app.
@@ -744,9 +778,18 @@ tool, is a binding change, not an edit to the persona.
 
 ## 11. Open decisions
 
-- **Relay transport fit** — confirm a raw eve WS channel carries live terminal
-  scrollback cleanly before relying on it. Fallback: upstream the herdr bridge
-  subcommand and let eve be a client of it.
+- **Relay transport fit — RESOLVED (Phase 1): snapshot `attach`.** A raw eve WS
+  channel carries live terminal screens via the `attach` op (§4.4): the relay
+  re-reads the pane's ANSI `visible` screen on an interval and pushes full frames
+  on change. Good enough for the iOS live terminal because performer panes are
+  full-screen TUIs. **Phase 2 (open): byte-perfect follow stream.** herdr today
+  has no lossless follow stream, but the raw PTY bytes already flow through one
+  seam (`herdr/src/pty/actor.rs` `on_read` → `herdr/src/pane.rs`). Tee them into a
+  per-pane `tokio::broadcast` and add a held-open `pane.attach` method (modeled on
+  `events.subscribe`, `herdr/src/api/server.rs`) plus `pane.write_bytes`; the relay
+  `attach` op swaps from snapshot-poll to byte-stream behind the same frame
+  envelope, so the iOS client is unaffected. This keeps herdr vanilla-ish (one
+  additive method) rather than forking it.
 - **Face surface — RESOLVED: custom face.** eve's stock TUI has a fixed,
   non-extensible slash-command set, so the face is `scripts/clanky.ts` (`pnpm
   face`) on the public eve/client: it renders eve's event stream through pi-tui
