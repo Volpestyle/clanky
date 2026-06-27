@@ -27,6 +27,7 @@ export type BannerFields = {
 	model?: string;
 	harness?: string;
 	cwd?: string;
+	server?: string;
 	hint?: string;
 };
 
@@ -91,14 +92,18 @@ function buildFeedLines(
 	lines.push(`${mascot}  ${name}`);
 	lines.push(paint(fields.tagline, { fg: "dim" }, caps));
 	lines.push("");
-	for (const [label, value] of [
-		["model", fields.model],
-		["harness", fields.harness],
-		["cwd", fields.cwd],
-	] as const) {
-		if (value === undefined || value.length === 0) continue;
+	const rows = (
+		[
+			["model", fields.model],
+			["harness", fields.harness],
+			["cwd", fields.cwd],
+			["eve server", fields.server],
+		] as const
+	).filter(([, value]) => value !== undefined && value.length > 0);
+	const labelWidth = Math.max(8, ...rows.map(([label]) => label.length + 1));
+	for (const [label, value] of rows) {
 		lines.push(
-			`${paint(label.padEnd(8), { fg: "label" }, caps)}${paint(value, {}, caps)}`,
+			`${paint(label.padEnd(labelWidth), { fg: "label" }, caps)}${paint(value ?? "", {}, caps)}`,
 		);
 	}
 	return lines;

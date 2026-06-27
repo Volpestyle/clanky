@@ -42,14 +42,21 @@ const commands: ClankyAutocompleteCommand[] = [
 		name: "discord-token",
 		aliases: ["token"],
 		description: "Set the Discord credential and restart Clanky",
-		argumentHint: "<token> [--user-token] [--voice]",
+		argumentHint: "[status|<token>] [--user-token] [--voice]",
 		takesArgument: true,
 	},
 	{
 		name: "model",
 		aliases: [],
 		description: "Configure Codex or Claude subscription-backed model",
-		argumentHint: "[codex|claude|local] [id] [effort]",
+		argumentHint: "[status|codex|claude|local] [id] [effort]",
+		takesArgument: true,
+	},
+	{
+		name: "effort",
+		aliases: [],
+		description: "Set reasoning effort for the active provider",
+		argumentHint: "[status|minimal|low|medium|high|xhigh|unset]",
 		takesArgument: true,
 	},
 	{
@@ -57,6 +64,20 @@ const commands: ClankyAutocompleteCommand[] = [
 		aliases: ["images"],
 		description: "Set OpenAI image generation model",
 		argumentHint: "[model-id|status|unset]",
+		takesArgument: true,
+	},
+	{
+		name: "voice",
+		aliases: [],
+		description: "Configure Discord voice runtime",
+		argumentHint: "[status|provider|model|realtime-voice|tts|elevenlabs|memory|eve-session] [value]",
+		takesArgument: true,
+	},
+	{
+		name: "integrations",
+		aliases: [],
+		description: "Bind integration roles to connections",
+		argumentHint: "[status|role] [connection|unset]",
 		takesArgument: true,
 	},
 	{
@@ -106,7 +127,7 @@ assert(inlineClankyCommandHint(exactMcpState) === "[status|list|add|remove|enabl
 const exactAliasState = clankyCommandTypeaheadFor(commands, "/token");
 assert(exactAliasState !== undefined, "exact alias should produce typeahead state");
 assert(selectedClankyCommandTypeahead(exactAliasState)?.name === "discord-token", "exact alias should keep the aliased command selected");
-assert(inlineClankyCommandHint(exactAliasState) === "<token> [--user-token] [--voice]", "exact alias should collapse to the command argument hint");
+assert(inlineClankyCommandHint(exactAliasState) === "[status|<token>] [--user-token] [--voice]", "exact alias should collapse to the command argument hint");
 
 const rootState = clankyCommandTypeaheadFor(commands, "/");
 assert(rootState !== undefined, "bare slash should produce command typeahead state");
@@ -124,10 +145,29 @@ assert(clankyCommandTypeaheadFor(commands, "", rootState) === undefined, "backsp
 const modelSuggestions = await provider.getSuggestions(["/model c"], 0, 8, { signal });
 assert(modelSuggestions !== null, "model argument query should produce provider suggestions");
 assert(modelSuggestions.items.some((item) => item.value === "codex"), "model argument completion should include codex");
+const modelStatusSuggestions = await provider.getSuggestions(["/model st"], 0, 9, { signal });
+assert(modelStatusSuggestions !== null, "model status query should produce suggestions");
+assert(modelStatusSuggestions.items.some((item) => item.value === "status"), "model argument completion should include status");
+
+const effortSuggestions = await provider.getSuggestions(["/effort st"], 0, 10, { signal });
+assert(effortSuggestions !== null, "effort status query should produce suggestions");
+assert(effortSuggestions.items.some((item) => item.value === "status"), "effort argument completion should include status");
+
+const tokenStatusSuggestions = await provider.getSuggestions(["/discord-token st"], 0, 17, { signal });
+assert(tokenStatusSuggestions !== null, "discord-token status query should produce suggestions");
+assert(tokenStatusSuggestions.items.some((item) => item.value === "status"), "discord-token argument completion should include status");
 
 const imageModelSuggestions = await provider.getSuggestions(["/image-model st"], 0, 15, { signal });
 assert(imageModelSuggestions !== null, "image model argument query should produce suggestions");
 assert(imageModelSuggestions.items.some((item) => item.value === "status"), "image model argument completion should include status");
+
+const voiceStatusSuggestions = await provider.getSuggestions(["/voice st"], 0, 9, { signal });
+assert(voiceStatusSuggestions !== null, "voice status query should produce suggestions");
+assert(voiceStatusSuggestions.items.some((item) => item.value === "status"), "voice argument completion should include status");
+
+const integrationStatusSuggestions = await provider.getSuggestions(["/integrations st"], 0, 16, { signal });
+assert(integrationStatusSuggestions !== null, "integration status query should produce suggestions");
+assert(integrationStatusSuggestions.items.some((item) => item.value === "status"), "integration argument completion should include status");
 
 const browserSuggestions = await provider.getSuggestions(["/browser in"], 0, 11, { signal });
 assert(browserSuggestions !== null, "browser argument query should produce suggestions");

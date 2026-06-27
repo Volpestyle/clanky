@@ -17,6 +17,7 @@ import {
 	CODING_RUNTIMES,
 	PERFORMERS,
 	type CodingHarnessId,
+	type CodingRuntime,
 	ollamaCodexHome,
 	type Performer,
 	resolveCodingHarness,
@@ -95,6 +96,19 @@ interface HerdrAgent {
 	tab_id: string;
 	workspace_id: string;
 	agent_status?: string;
+}
+
+/** A row from `herdr agent list` (richer than the `agent start`/`get` envelope). */
+export interface HerdrAgentInfo {
+	agent: string;
+	agentStatus: string;
+	cwd: string;
+	foregroundCwd: string;
+	focused: boolean;
+	paneId: string;
+	tabId: string;
+	workspaceId: string;
+	terminalId: string;
 }
 
 async function herdr(args: string[]): Promise<string> {
@@ -181,6 +195,148 @@ function parseAgent(stdout: string): HerdrAgent | null {
 	}
 }
 
+interface HerdrAgentListRow {
+	agent?: string;
+	agent_status?: string;
+	cwd?: string;
+	foreground_cwd?: string;
+	focused?: boolean;
+	pane_id?: string;
+	tab_id?: string;
+	workspace_id?: string;
+	terminal_id?: string;
+}
+
+/** Read the herdr stage's live agent roster (`herdr agent list`). */
+export async function listHerdrAgents(): Promise<HerdrAgentInfo[]> {
+	const stdout = await herdr(["agent", "list"]);
+	let rows: HerdrAgentListRow[];
+	try {
+		const env = JSON.parse(stdout) as { result?: { agents?: HerdrAgentListRow[] } };
+		rows = env.result?.agents ?? [];
+	} catch {
+		return [];
+	}
+	return rows
+		.filter((row): row is HerdrAgentListRow & { agent: string; pane_id: string } =>
+			typeof row.agent === "string" && typeof row.pane_id === "string",
+		)
+		.map((row) => ({
+			agent: row.agent,
+			agentStatus: row.agent_status ?? "unknown",
+			cwd: row.cwd ?? "",
+			foregroundCwd: row.foreground_cwd ?? row.cwd ?? "",
+			focused: row.focused === true,
+			paneId: row.pane_id,
+			tabId: row.tab_id ?? "",
+			workspaceId: row.workspace_id ?? "",
+			terminalId: row.terminal_id ?? "",
+		}));
+}
+
+export interface SpawnClankyWorkerInput {
+	slug: string;
+	task: string;
+	harness?: CodingHarnessId;
+	performer?: Performer;
+	codingRuntime?: CodingRuntime;
+	cwd?: string;
+	command?: readonly string[];
+	transcript?: boolean;
+	/** Env used for harness resolution and transcript session/home pinning. */
+	env?: NodeJS.ProcessEnv;
+}
+
+export interface SpawnClankyWorkerResult {
+	agent: string;
+	paneId: string | null;
+	tabId: string | null;
+	workspaceId: string | null;
+	performer: ResolvedPerformer;
+	harness: CodingHarnessId;
+	harnessLabel: string;
+	codingRuntime: CodingRuntime;
+	transcript: {
+		enabled: boolean;
+		runId: string | null;
+		path: string | null;
+		readCommand: string | null;
+	};
+	started: true;
+}
+
+/**
+ * The single spawn funnel (SPEC.md §4.3, §5.2): validate, resolve the harness,
+ * wrap the performer in `clanky transcript-run`, and start a visible herdr pane.
+ * Every spawn surface (the eve `herdr_spawn` tool, the face `/spawn` command, the
+ * operator skill, the relay) must route through here so workers always get a
+ * durable transcript and a consistent pane identity.
+ */
+export async function spawnClankyWorker(input: SpawnClankyWorkerInput): Promise<SpawnClankyWorkerResult> {
+	const { slug, task, harness, performer, codingRuntime, cwd, command, transcript = true } = input;
+	const env = input.env ?? process.env;
+	if (!SLUG_RE.test(slug)) {
+		throw new Error(`invalid slug '${slug}' (use lowercase letters, digits, hyphens)`);
+	}
+	const agent = `clanky:${slug}`;
+
+	// Refuse to clobber an existing worker of the same name.
+	const exists = await herdr(["agent", "get", agent]).then(
+		() => true,
+		() => false,
+	);
+	if (exists) {
+		throw new Error(`a worker named ${agent} already exists; pick a different slug`);
+	}
+
+	const paneCwd = await resolvePaneCwd(cwd);
+	const kickoff = buildWorkerKickoff({ agent, task, cwd: paneCwd });
+	const harnessProfile = resolveCodingHarness({
+		harness: harness as CodingHarnessId | undefined,
+		performer,
+		command,
+		runtime: codingRuntime,
+		env,
+	});
+	// Ollama-launched codex reroutes its config dir; isolate that home so it
+	// can't clobber the subscription codex worker's ~/.codex.
+	if (harnessProfile.launcher === "ollama" && harnessProfile.performer === "codex") {
+		await mkdir(ollamaCodexHome(env), { recursive: true });
+	}
+	const resolved = resolvePerformerArgv({
+		performer: harnessProfile.performer,
+		task: kickoff,
+		command: harnessProfile.command,
+	});
+	const runId = transcript ? newTranscriptRunId() : undefined;
+	const transcriptPath = runId === undefined ? undefined : resolveTranscriptRunPath({ agent, runId, env });
+	const launchArgv =
+		runId === undefined
+			? resolved.argv
+			: wrapTranscriptArgv({ agent, cwd: paneCwd, runId, argv: resolved.argv, env });
+	const startArgs = ["agent", "start", agent];
+	startArgs.push("--cwd", paneCwd, "--no-focus", "--", ...launchArgv);
+
+	const started = parseAgent(await herdr(startArgs));
+	return {
+		agent,
+		paneId: started?.pane_id ?? null,
+		tabId: started?.tab_id ?? null,
+		workspaceId: started?.workspace_id ?? null,
+		performer: resolved.performer,
+		harness: harnessProfile.id,
+		harnessLabel: harnessProfile.label,
+		codingRuntime: harnessProfile.runtime,
+		transcript: {
+			enabled: runId !== undefined,
+			runId: runId ?? null,
+			path: transcriptPath ?? null,
+			readCommand: runId === undefined ? null : `clanky transcript read ${agent} --lines 300`,
+		},
+		started: true,
+	};
+}
+
 export default defineTool({
 	needsApproval: never(),
 	description:
@@ -214,65 +370,15 @@ export default defineTool({
 			.describe("wrap the performer in Clanky's local transcript runner; defaults to true, set false only for debugging"),
 	}),
 	async execute(input) {
-		const { slug, task, harness, performer, codingRuntime, cwd, command, transcript = true } = input;
-		if (!SLUG_RE.test(slug)) {
-			throw new Error(`invalid slug '${slug}' (use lowercase letters, digits, hyphens)`);
-		}
-		const agent = `clanky:${slug}`;
-
-		// Refuse to clobber an existing worker of the same name.
-		const exists = await herdr(["agent", "get", agent]).then(
-			() => true,
-			() => false,
-		);
-		if (exists) {
-			throw new Error(`a worker named ${agent} already exists; pick a different slug`);
-		}
-
-		const paneCwd = await resolvePaneCwd(cwd);
-		const kickoff = buildWorkerKickoff({ agent, task, cwd: paneCwd });
-		const harnessProfile = resolveCodingHarness({
-			harness: harness as CodingHarnessId | undefined,
-			performer,
-			command,
-			runtime: codingRuntime,
+		return await spawnClankyWorker({
+			slug: input.slug,
+			task: input.task,
+			harness: input.harness as CodingHarnessId | undefined,
+			performer: input.performer,
+			codingRuntime: input.codingRuntime,
+			cwd: input.cwd,
+			command: input.command,
+			transcript: input.transcript,
 		});
-		// Ollama-launched codex reroutes its config dir; isolate that home so it
-		// can't clobber the subscription codex worker's ~/.codex.
-		if (harnessProfile.launcher === "ollama" && harnessProfile.performer === "codex") {
-			await mkdir(ollamaCodexHome(), { recursive: true });
-		}
-		const resolved = resolvePerformerArgv({
-			performer: harnessProfile.performer,
-			task: kickoff,
-			command: harnessProfile.command,
-		});
-		const runId = transcript ? newTranscriptRunId() : undefined;
-		const transcriptPath = runId === undefined ? undefined : resolveTranscriptRunPath({ agent, runId });
-		const launchArgv =
-			runId === undefined
-				? resolved.argv
-				: wrapTranscriptArgv({ agent, cwd: paneCwd, runId, argv: resolved.argv });
-		const startArgs = ["agent", "start", agent];
-		startArgs.push("--cwd", paneCwd, "--no-focus", "--", ...launchArgv);
-
-		const started = parseAgent(await herdr(startArgs));
-		return {
-			agent,
-			paneId: started?.pane_id ?? null,
-			tabId: started?.tab_id ?? null,
-			workspaceId: started?.workspace_id ?? null,
-			performer: resolved.performer,
-			harness: harnessProfile.id,
-			harnessLabel: harnessProfile.label,
-			codingRuntime: harnessProfile.runtime,
-			transcript: {
-				enabled: runId !== undefined,
-				runId: runId ?? null,
-				path: transcriptPath ?? null,
-				readCommand: runId === undefined ? null : `clanky transcript read ${agent} --lines 300`,
-			},
-			started: true,
-		};
 	},
 });

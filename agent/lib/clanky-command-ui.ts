@@ -226,10 +226,7 @@ export class ClankyCommandWorkbench implements Component, Focusable {
 	render(width: number): string[] {
 		const renderWidth = Math.max(24, width);
 		const usableWidth = Math.max(20, renderWidth - 4);
-		const header = fit(
-			`${this.theme.bold("Command workbench")} ${this.theme.dim(`${this.items.length}/${this.commands.length}`)}`,
-			usableWidth,
-		);
+		const header = fit(this.theme.bold("Command workbench"), usableWidth);
 		const cursor = this.focused ? CURSOR_MARKER : "";
 		const filterLine = fit(
 			`${this.theme.dim("filter")} /${this.filter}${cursor}  ${this.theme.dim("type to search names, aliases, descriptions")}`,

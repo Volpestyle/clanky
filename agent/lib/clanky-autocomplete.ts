@@ -318,10 +318,13 @@ function commandCategory(commandName: string): string {
 
 function staticArgumentSpec(commandName: string, context: ArgumentContext): StaticArgumentSpec {
 	switch (commandName) {
+		case "discord-token":
+			return values(["status", "--user-token", "--voice"], ["/discord-token status"]);
 		case "model":
 			return modelArguments(context);
 		case "effort":
-			return values(["minimal", "low", "medium", "high", "xhigh", "unset"], [
+			return values(["status", "minimal", "low", "medium", "high", "xhigh", "unset"], [
+				"/effort status",
 				"/effort high",
 				"/effort unset",
 			]);
@@ -356,6 +359,7 @@ function staticArgumentSpec(commandName: string, context: ArgumentContext): Stat
 
 function modelArguments(context: ArgumentContext): StaticArgumentSpec {
 	const provider = context.args[0]?.toLowerCase();
+	if (provider === "status") return { values: [], examples: ["/model status"] };
 	if (provider === "codex") {
 		return values(
 			["gpt-5.5", "gpt-5.4", "gpt-5.3-codex-spark", "minimal", "low", "medium", "high", "xhigh"],
@@ -368,7 +372,7 @@ function modelArguments(context: ArgumentContext): StaticArgumentSpec {
 	if (provider === "local") {
 		return { values: [], examples: ["/model local qwen3-coder:30b", "/model local qwen3-coder:30b http://127.0.0.1:11434/v1"] };
 	}
-	return values(["codex", "claude", "local"], ["/model codex gpt-5.5 high", "/model claude", "/model local qwen3-coder"]);
+	return values(["status", "codex", "claude", "local"], ["/model status", "/model codex gpt-5.5 high", "/model claude", "/model local qwen3-coder"]);
 }
 
 function mcpArguments(context: ArgumentContext): StaticArgumentSpec {
@@ -425,8 +429,9 @@ function discordScopeArguments(context: ArgumentContext): StaticArgumentSpec {
 }
 
 function integrationArguments(context: ArgumentContext): StaticArgumentSpec {
-	if (context.args.length > 0) return values(["unset"], ["/integrations issue-tracker linear"]);
-	return values(["issue-tracker", "design", "browser", "code-host"], ["/integrations issue-tracker linear"]);
+	if (context.args[0]?.toLowerCase() === "status") return { values: [], examples: ["/integrations status"] };
+	if (context.args.length > 1) return values(["unset"], ["/integrations issue-tracker linear"]);
+	return values(["status", "issue-tracker", "design", "browser", "code-host"], ["/integrations status", "/integrations issue-tracker linear"]);
 }
 
 function values(valuesList: readonly string[], examples: readonly string[]): StaticArgumentSpec {

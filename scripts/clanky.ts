@@ -108,12 +108,15 @@ import {
 	ALL_CODING_HARNESSES,
 	BUILTIN_CODING_HARNESSES,
 	CLANKY_CODING_HARNESS_ENV,
+	CODING_HARNESS_IDS,
 	LAUNCHABLE_CODING_HARNESS_IDS,
+	PERFORMERS,
 	type CodingHarnessEnv,
 	type CodingHarnessId,
 	type CodingHarnessLauncher,
 	type CodingRuntime,
 	type LaunchableCodingHarnessId,
+	type Performer,
 	codingHarnessLauncherEnvKey,
 	codingHarnessModelEnvKey,
 	defaultCodingRuntimeForHarness,
@@ -123,6 +126,7 @@ import {
 	parseCodingRuntime,
 	parseHarnessCommand,
 	parseLaunchableCodingHarnessId,
+	parsePerformer,
 	resolveCodingHarness,
 	serializeCommandLine,
 	splitCommandLine,
@@ -138,6 +142,11 @@ import {
 	roleLabel,
 	setRoleBinding,
 } from "../agent/lib/integration-roles.ts";
+import {
+	type HerdrAgentInfo,
+	listHerdrAgents,
+	spawnClankyWorker,
+} from "../agent/tools/herdr_spawn.ts";
 import { installBrowserBridge } from "../packages/clanky-browser-bridge/src/install.ts";
 import {
 	listMcpServerConfigs,
@@ -267,6 +276,8 @@ type ClankyExtensionCommandName =
 	| "trace"
 	| "pet"
 	| "header"
+	| "agents"
+	| "spawn"
 	| "status";
 type ClankyExtensionCommand = {
 	type: "extension";
@@ -343,6 +354,9 @@ type SetupFlowController = SetupFlow & {
 };
 
 type SubscriptionProvider = "codex" | "claude";
+const DEFAULT_CODEX_MODEL = "gpt-5.4";
+const DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-5";
+const DEFAULT_LOCAL_MODEL = "qwen3-coder-next";
 const DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:11434/v1";
 const DISCORD_SCOPE_ENV = {
 	guilds: "CLANKY_DISCORD_ALLOWED_GUILD_IDS",
@@ -382,6 +396,9 @@ type ClankyConfig = {
 	elevenLabsTtsModel?: string;
 	voiceMemoryContextLimit?: string;
 	voiceEveSession?: string;
+	discordCredentialKind?: string;
+	discordVoice?: string;
+	discordTokenPresent?: boolean;
 	discordAllowedGuildIds?: string;
 	discordAllowedChannelIds?: string;
 	discordAllowDms?: string;
@@ -469,6 +486,10 @@ const EFFORT_OPTIONS: readonly MenuOption[] = [
 	{ value: "xhigh", label: "xhigh", hint: "deepest" },
 	{ value: "keep-current", label: "keep current" },
 ];
+const EFFORT_STATUS_OPTIONS: readonly MenuOption[] = [
+	{ value: "status", label: "status", hint: "show current effort" },
+	...EFFORT_OPTIONS,
+];
 const LOCAL_EFFORT_OPTIONS: readonly MenuOption[] = [
 	{ value: "low", label: "low" },
 	{ value: "medium", label: "medium" },
@@ -476,7 +497,12 @@ const LOCAL_EFFORT_OPTIONS: readonly MenuOption[] = [
 	{ value: "unset", label: "unset", hint: "no reasoning_effort / server default" },
 	{ value: "keep-current", label: "keep current" },
 ];
+const LOCAL_EFFORT_STATUS_OPTIONS: readonly MenuOption[] = [
+	{ value: "status", label: "status", hint: "show current effort" },
+	...LOCAL_EFFORT_OPTIONS,
+];
 const VOICE_SETTING_OPTIONS: readonly MenuOption[] = [
+	{ value: "status", label: "status", hint: "show current voice config" },
 	{ value: "realtime-provider", label: "realtime provider", hint: "OpenAI or xAI" },
 	{ value: "realtime-model", label: "realtime model", hint: "gpt-realtime / grok-voice-2" },
 	{ value: "realtime-voice", label: "realtime voice", hint: "native provider voice" },
@@ -505,6 +531,10 @@ const DISCORD_CREDENTIAL_KIND_OPTIONS: readonly MenuOption[] = [
 const DISCORD_TOKEN_VOICE_OPTIONS: readonly MenuOption[] = [
 	{ value: "off", label: "chat only" },
 	{ value: "on", label: "chat + voice", hint: "enable Discord voice runtime" },
+];
+const DISCORD_TOKEN_ACTION_OPTIONS: readonly MenuOption[] = [
+	{ value: "status", label: "status", hint: "show credential + voice state" },
+	{ value: "set", label: "set credential", hint: "paste token and restart Clanky" },
 ];
 const APPROVAL_OPTIONS: readonly MenuOption[] = [
 	{ value: "status", label: "view current mode" },
@@ -857,7 +887,7 @@ function buildClankyPromptCommands(): ClankyPromptCommandSpec[] {
 			name: "discord-token",
 			aliases: ["token"],
 			description: "Set the Discord credential and restart Clanky",
-			argumentHint: "<token> [--user-token] [--voice]",
+			argumentHint: "[status|<token>] [--user-token] [--voice]",
 			takesArgument: true,
 			build: (argument) => ({ type: "extension", name: "discord-token", argument }),
 		},
@@ -873,7 +903,7 @@ function buildClankyPromptCommands(): ClankyPromptCommandSpec[] {
 			name: "model",
 			aliases: [],
 			description: "Configure Codex or Claude subscription-backed model",
-			argumentHint: "[codex|claude|local] [id] [effort]",
+			argumentHint: "[status|codex|claude|local] [id] [effort]",
 			takesArgument: true,
 			build: (argument) => ({ type: "extension", name: "model", argument }),
 		},
@@ -884,6 +914,22 @@ function buildClankyPromptCommands(): ClankyPromptCommandSpec[] {
 			argumentHint: "[allow|clanky|claude|codex|opencode|custom|status] [default|ollama] [model]",
 			takesArgument: true,
 			build: (argument) => ({ type: "extension", name: "harness", argument }),
+		},
+		{
+			name: "agents",
+			aliases: ["workers"],
+			description: "List Clanky's herdr workers and their live status",
+			argumentHint: "[all]",
+			takesArgument: true,
+			build: (argument) => ({ type: "extension", name: "agents", argument }),
+		},
+		{
+			name: "spawn",
+			aliases: [],
+			description: "Spawn a herdr worker pane through the transcript seam",
+			argumentHint: "[--harness id] [--performer id] [--cwd path] <slug> <task>",
+			takesArgument: true,
+			build: (argument) => ({ type: "extension", name: "spawn", argument }),
 		},
 		{
 			name: "login",
@@ -897,7 +943,7 @@ function buildClankyPromptCommands(): ClankyPromptCommandSpec[] {
 			name: "effort",
 			aliases: [],
 			description: "Set reasoning effort for the active provider",
-			argumentHint: "[codex: minimal|low|medium|high|xhigh] [local: low|medium|high]",
+			argumentHint: "[status|minimal|low|medium|high|xhigh|unset]",
 			takesArgument: true,
 			build: (argument) => ({ type: "extension", name: "effort", argument }),
 		},
@@ -944,7 +990,7 @@ function buildClankyPromptCommands(): ClankyPromptCommandSpec[] {
 			name: "voice",
 			aliases: [],
 			description: "Configure Discord voice runtime",
-			argumentHint: "[provider|model|realtime-voice|tts|elevenlabs|memory|eve-session] [value]",
+			argumentHint: "[status|provider|model|realtime-voice|tts|elevenlabs|memory|eve-session] [value]",
 			takesArgument: true,
 			build: (argument) => ({ type: "extension", name: "voice", argument }),
 		},
@@ -952,7 +998,7 @@ function buildClankyPromptCommands(): ClankyPromptCommandSpec[] {
 			name: "integrations",
 			aliases: [],
 			description: "Bind integration roles to connections",
-			argumentHint: "[role] [connection|unset]",
+			argumentHint: "[status|role] [connection|unset]",
 			takesArgument: true,
 			build: (argument) => ({ type: "extension", name: "integrations", argument }),
 		},
@@ -1399,10 +1445,7 @@ function slashCommandLabel(prompt: string): string {
 function commandResultBodyLines(message: string): string[] {
 	const normalized = message.trim().replace(/\n{3,}/gu, "\n\n");
 	if (normalized.length === 0) return [];
-	const lines = normalized.split(/\r?\n/u);
-	const maxLines = 8;
-	if (lines.length <= maxLines) return lines;
-	return [...lines.slice(0, maxLines - 1), ansi.dim(`... ${lines.length - maxLines + 1} more lines`)];
+	return normalized.split(/\r?\n/u);
 }
 
 function styleCommandResultLine(line: string): string {
@@ -1492,9 +1535,6 @@ async function handleSlashPrompt(prompt: string): Promise<void> {
 	}
 	if (outcome.message !== undefined && outcome.message.length > 0) {
 		insertCommandResult(prompt, outcome.message, outcome.message.toLowerCase().includes("unknown ") ? "error" : "success");
-	}
-	if (outcome.clearTranscript === true) {
-		insertCommandResult(prompt, "Transcript cleared.", "success");
 	}
 	if (outcome.newSession === true) {
 		if (isResponding) {
@@ -1657,6 +1697,10 @@ async function handleExtensionCommand(command: ClankyExtensionCommand, renderer:
 			return { message: await configureTrace(command.argument, renderer.setupFlow) };
 		case "header":
 			return { message: configureHeader(command.argument) };
+		case "agents":
+			return { message: await listClankyAgentsText(command.argument) };
+		case "spawn":
+			return { message: await spawnWorkerFromFace(command.argument) };
 		case "status":
 			return { message: await statusText() };
 	}
@@ -1700,6 +1744,7 @@ function buildBannerFields(info: AgentInfoResult | undefined): BannerFields {
 	const modelId = bannerModelId(info);
 	if (modelId !== undefined) fields.model = modelId;
 	fields.cwd = displayHomePath(REPO);
+	fields.server = brainHost.replace(/^https?:\/\//u, "");
 	return fields;
 }
 
@@ -1817,7 +1862,6 @@ function formatStatusText(label: string): string {
 		model,
 		formatContextUsage(faceRenderer.lastUsage, currentContextSize),
 		`events ${faceRenderer.eventCount}`,
-		brainHost.replace(/^https?:\/\//u, ""),
 	]
 		.filter((part) => part.length > 0)
 		.map((part) => ansi.dim(part));
@@ -1889,11 +1933,15 @@ function disableClankyMouseTracking(): void {
 
 async function setDiscordToken(argument: string, flow: SetupFlow | undefined): Promise<string> {
 	const args = splitArgs(argument);
+	const config = await readConfig();
+	const first = args[0]?.toLowerCase();
+	if (first === "status" || first === "show") return formatDiscordCredentialStatus(config);
 	const token = args.find((arg) => !arg.startsWith("--"));
 	if (token === undefined) {
-		if (flow === undefined) return "Usage: /discord-token <token> [--user-token] [--voice]";
-		const update = await promptDiscordToken(flow);
+		if (flow === undefined) return `${formatDiscordCredentialStatus(config)}\n\nUsage: /discord-token [status|<token>] [--user-token] [--voice]`;
+		const update = await promptDiscordToken(flow, config);
 		if (update === undefined) return "/discord-token cancelled.";
+		if (typeof update === "string") return update;
 		await writeEnv(update.updates);
 		return await restartBrainMessage(update.message);
 	}
@@ -1903,9 +1951,13 @@ async function setDiscordToken(argument: string, flow: SetupFlow | undefined): P
 	return await restartBrainMessage(update.message);
 }
 
-async function promptDiscordToken(flow: SetupFlow): Promise<DiscordTokenUpdate | undefined> {
+async function promptDiscordToken(flow: SetupFlow, config: ClankyConfig): Promise<DiscordTokenUpdate | string | undefined> {
 	flow.begin("Set Discord credential");
 	try {
+		flow.renderOutput(formatDiscordCredentialStatus(config));
+		const action = await selectOne(flow, "Choose the Discord credential action.", DISCORD_TOKEN_ACTION_OPTIONS, "status");
+		if (action === "status") return formatDiscordCredentialStatus(config);
+		if (action !== "set") return undefined;
 		const kind = await selectOne(flow, "Choose the Discord credential kind.", DISCORD_CREDENTIAL_KIND_OPTIONS, "bot-token");
 		if (kind !== "bot-token" && kind !== "user-token") return undefined;
 		const voiceValue = await selectOne(flow, "Enable Discord voice with this credential?", DISCORD_TOKEN_VOICE_OPTIONS, "off");
@@ -1920,6 +1972,18 @@ async function promptDiscordToken(flow: SetupFlow): Promise<DiscordTokenUpdate |
 	} finally {
 		flow.end({ preserveDiagnostics: false });
 	}
+}
+
+function formatDiscordCredentialStatus(config: ClankyConfig): string {
+	const tokenState = config.discordTokenPresent === true ? "set" : "unset";
+	const credentialKind = config.discordCredentialKind === "user-token" ? "user-token" : "bot-token";
+	const voiceEnabled = parseVoiceToggle(config.discordVoice) === true;
+	return [
+		"Discord credential:",
+		`token: ${tokenState}`,
+		`kind: ${credentialKind}`,
+		`voice runtime: ${voiceEnabled ? "on" : "off"}`,
+	].join("\n");
 }
 
 function buildDiscordTokenUpdate(token: string, kind: "bot-token" | "user-token", voice: boolean): DiscordTokenUpdate {
@@ -2301,15 +2365,17 @@ function uniqueStrings(values: readonly string[]): string[] {
 async function configureLogin(argument: string, flow: SetupFlow | undefined): Promise<string> {
 	const args = splitArgs(argument);
 	const first = args[0]?.toLowerCase();
-	if (first === "status") return await loginStatusText();
+	if (first === "status" || first === "show") return await loginStatusText();
 	let provider = parseSubscriptionProvider(first);
 	if (first !== undefined && provider === undefined) {
 		return `Unknown login target "${args[0]}". Use claude, codex, or status.`;
 	}
 	if (provider === undefined) {
 		if (flow === undefined) return `${await loginStatusText()}\n\nUsage: /login [claude|codex|status]`;
-		provider = await selectLoginProvider(flow);
-		if (provider === undefined) return "/login cancelled.";
+		const selectedProvider = await selectLoginProvider(flow);
+		if (selectedProvider === "status") return await loginStatusText();
+		if (selectedProvider === undefined) return "/login cancelled.";
+		provider = selectedProvider;
 	}
 	if (flow === undefined) {
 		return `/login ${provider} needs an interactive terminal. Run pnpm ${provider}:login instead.`;
@@ -2317,18 +2383,21 @@ async function configureLogin(argument: string, flow: SetupFlow | undefined): Pr
 	return await runLogin(provider, flow);
 }
 
-async function selectLoginProvider(flow: SetupFlow): Promise<SubscriptionProvider | undefined> {
+async function selectLoginProvider(flow: SetupFlow): Promise<SubscriptionProvider | "status" | undefined> {
 	flow.begin("Authorize a subscription provider");
 	try {
+		flow.renderOutput(await loginStatusText());
 		const selected = await selectOne(
 			flow,
 			"Choose the subscription provider to authorize.",
 			[
+				{ value: "status", label: "status", hint: "show current auth state" },
 				{ value: "codex", label: "codex", hint: "OpenAI ChatGPT subscription" },
 				{ value: "claude", label: "claude", hint: "Claude Pro/Max subscription" },
 			],
-			undefined,
+			"status",
 		);
+		if (selected === "status") return "status";
 		return parseSubscriptionProvider(selected);
 	} finally {
 		flow.end({ preserveDiagnostics: false });
@@ -2411,19 +2480,23 @@ function formatCredStatus(status: { present: boolean; expiresMs?: number }): str
 async function configureModel(argument: string, flow: SetupFlow | undefined): Promise<string> {
 	const args = splitArgs(argument);
 	const existing = await readConfig();
+	const first = args[0]?.toLowerCase();
+	if (first === "status" || first === "show") return formatModelStatus(existing);
 	let provider = parseProvider(args[0]);
 	let modelId = provider === undefined ? undefined : args[1];
 	let effort = provider === undefined ? undefined : args[2];
 	const baseUrl = provider === "local" ? args[2] : undefined;
 
 	if (provider === undefined && args.length > 0) {
-		return `Unknown model provider "${args[0]}". Use codex, claude, or local.`;
+		return `Unknown model provider "${args[0]}". Use codex, claude, local, or status.`;
 	}
 
 	if (provider === undefined) {
-		if (flow === undefined) return "Usage: /model [codex|claude|local] [id] [effort|baseUrl]";
-		provider = await selectProvider(flow, existing.provider);
-		if (provider === undefined) return "/model cancelled.";
+		if (flow === undefined) return `${formatModelStatus(existing)}\n\nUsage: /model [status|codex|claude|local] [id] [effort|baseUrl]`;
+		const selectedProvider = await selectProvider(flow, "status");
+		if (selectedProvider === "status") return formatModelStatus(existing);
+		if (selectedProvider === undefined) return "/model cancelled.";
+		provider = selectedProvider;
 		modelId = await selectModel(flow, provider, existing);
 		if (modelId === undefined) return "/model cancelled.";
 		if (modelId === "keep-current") modelId = undefined;
@@ -2450,6 +2523,19 @@ async function configureModel(argument: string, flow: SetupFlow | undefined): Pr
 
 	await writeEnv(updates);
 	return await restartBrainMessage(`Model provider set to ${provider}${modelId ? ` (${modelId})` : ""}`);
+}
+
+function formatModelStatus(config: ClankyConfig): string {
+	return [
+		"Current model config:",
+		`provider: ${formatProviderSummary(config)}`,
+		`codex model: ${config.codexModel ?? DEFAULT_CODEX_MODEL}`,
+		`codex effort: ${config.codexEffort ?? "(backend default)"}`,
+		`claude model: ${config.claudeModel ?? DEFAULT_CLAUDE_MODEL}`,
+		`local model: ${config.localModel ?? DEFAULT_LOCAL_MODEL}`,
+		`local base URL: ${config.localBaseUrl ?? DEFAULT_LOCAL_BASE_URL}`,
+		`local effort: ${config.localEffort ?? "(server default)"}`,
+	].join("\n");
 }
 
 type HarnessUpdate = {
@@ -2913,16 +2999,19 @@ function harnessUsage(): string {
 
 async function configureEffort(argument: string, flow: SetupFlow | undefined): Promise<string> {
 	const existing = await readConfig();
+	const requested = splitArgs(argument)[0]?.toLowerCase();
+	if (requested === "status" || requested === "show") return formatEffortStatus(existing);
 	if (existing.provider === "claude") {
-		return "Reasoning effort is not configurable for the claude provider (it uses a different thinking mechanism).";
+		return formatEffortStatus(existing);
 	}
 	if (existing.provider === "local") {
-		let effort: string | undefined = splitArgs(argument)[0];
+		let effort: string | undefined = requested;
 		const isClear = (value: string | undefined): boolean => value === "unset" || value === "none" || value === "off";
 		if (effort === undefined || (!isLocalEffortLevel(effort) && !isClear(effort))) {
 			if (argument.trim().length > 0) return `Unknown local effort "${argument.trim()}". Use low, medium, high, or unset.`;
-			if (flow === undefined) return "Usage: /effort [low|medium|high|unset]";
-			effort = await selectLocalEffort(flow, existing.localEffort);
+			if (flow === undefined) return `${formatEffortStatus(existing)}\n\nUsage: /effort [status|low|medium|high|unset]`;
+			effort = await selectLocalEffort(flow, existing.localEffort, true);
+			if (effort === "status") return formatEffortStatus(existing);
 			if (effort === undefined || effort === "keep-current") return "/effort cancelled.";
 		}
 		if (isClear(effort)) {
@@ -2933,16 +3022,27 @@ async function configureEffort(argument: string, flow: SetupFlow | undefined): P
 		return await restartBrainMessage(`Local reasoning effort set to ${effort}`);
 	}
 
-	let effort: string | undefined = splitArgs(argument)[0];
+	let effort: string | undefined = requested;
 	if (effort === undefined || !isEffortLevel(effort)) {
 		if (argument.trim().length > 0) return `Unknown Codex effort "${argument.trim()}".`;
-		if (flow === undefined) return "Usage: /effort [minimal|low|medium|high|xhigh]";
-		effort = await selectEffort(flow, existing.codexEffort);
+		if (flow === undefined) return `${formatEffortStatus(existing)}\n\nUsage: /effort [status|minimal|low|medium|high|xhigh]`;
+		effort = await selectEffort(flow, existing.codexEffort, true);
+		if (effort === "status") return formatEffortStatus(existing);
 		if (effort === undefined || effort === "keep-current") return "/effort cancelled.";
 	}
 
 	await writeEnv({ CLANKY_CODEX_EFFORT: effort });
 	return await restartBrainMessage(`Codex reasoning effort set to ${effort}`);
+}
+
+function formatEffortStatus(config: ClankyConfig): string {
+	if (config.provider === "claude") {
+		return "Reasoning effort: not configurable for the active claude provider.";
+	}
+	if (config.provider === "local") {
+		return `Local reasoning effort: ${config.localEffort ?? "(server default)"}. Usage: /effort [status|low|medium|high|unset]`;
+	}
+	return `Codex reasoning effort: ${config.codexEffort ?? "(backend default)"}. Usage: /effort [status|minimal|low|medium|high|xhigh]`;
 }
 
 async function configureApprovals(argument: string, flow: SetupFlow | undefined): Promise<string> {
@@ -3066,9 +3166,10 @@ async function configureImageModelInteractive(flow: SetupFlow, config: ClankyCon
 			flow,
 			"Choose the OpenAI image generation model.",
 			imageModelOptions(config),
-			config.imageModel ?? DEFAULT_OPENAI_IMAGE_MODEL,
+			"status",
 		);
 		if (selected === undefined) return "/image-model cancelled.";
+		if (selected === "status") return formatImageModelStatus(config);
 		if (selected === CLEAR_IMAGE_MODEL_OPTION) {
 			update = {
 				removals: ["CLANKY_OPENAI_IMAGE_MODEL"],
@@ -3107,7 +3208,7 @@ async function saveOpenAiImageModel(rawModel: string): Promise<string> {
 
 function imageModelOptions(config: ClankyConfig): readonly MenuOption[] {
 	const current = config.imageModel?.trim();
-	const options: MenuOption[] = [];
+	const options: MenuOption[] = [{ value: "status", label: "status", hint: "show current image model" }];
 	if (current !== undefined && current.length > 0 && current !== DEFAULT_OPENAI_IMAGE_MODEL) {
 		options.push({ value: current, label: current, hint: "current" });
 	}
@@ -3165,13 +3266,15 @@ async function configureVisionModelInteractive(flow: SetupFlow, config: ClankyCo
 			flow,
 			"Choose the vision setting to change.",
 			[
+				{ value: "status", label: "status", hint: "show current vision models" },
 				{ value: "local", label: "local vision model", hint: config.localVisionModel ?? "active local model" },
 				{ value: "openai", label: "OpenAI fallback model", hint: config.openAiVisionModel ?? "gpt-5.4-mini" },
 				{ value: "clear-local", label: "clear local override", hint: "use active local model when it supports vision" },
 			],
-			"local",
+			"status",
 		);
 		if (action === undefined) return "/vision-model cancelled.";
+		if (action === "status") return formatVisionModelStatus(config);
 		if (action === "clear-local") {
 			update = { removals: ["CLANKY_LOCAL_VISION_MODEL"], message: "Local vision model override cleared" };
 		} else {
@@ -3453,9 +3556,11 @@ async function configureIntegrations(argument: string, flow: SetupFlow | undefin
 	const available = await listAvailableConnections();
 	const current = await resolveRoleBindings();
 	const args = splitArgs(argument);
+	const first = args[0]?.toLowerCase();
+	if (first === "status" || first === "show") return formatIntegrationTable(current, available);
 	const role = parseIntegrationRole(args[0]);
 	if (args[0] !== undefined && role === undefined) {
-		return `Unknown integration role "${args[0]}". Available roles: ${INTEGRATION_ROLES.map((entry) => entry.label).join(", ")}.`;
+		return `Unknown integration role "${args[0]}". Use status or one of: ${INTEGRATION_ROLES.map((entry) => entry.label).join(", ")}.`;
 	}
 	if (role !== undefined && args[1] !== undefined) {
 		const binding = parseIntegrationBinding(args[1], available);
@@ -3464,24 +3569,27 @@ async function configureIntegrations(argument: string, flow: SetupFlow | undefin
 		return integrationSavedMessage(role, binding);
 	}
 	if (flow === undefined) {
-		return `${formatIntegrationTable(current, available)}\n\nUsage: /integrations [role] [connection|unset]`;
+		return `${formatIntegrationTable(current, available)}\n\nUsage: /integrations [status|role] [connection|unset]`;
 	}
 
 	flow.begin("Configure integration roles");
 	try {
 		flow.renderOutput(formatIntegrationTable(current, available));
-		const selectedRole = parseIntegrationRole(
-			await selectOne(
-				flow,
-				"Choose the integration role to bind.",
-				INTEGRATION_ROLES.map((entry) => ({
+		const selectedRoleValue = await selectOne(
+			flow,
+			"Choose the integration role to bind.",
+			[
+				{ value: "status", label: "status", hint: "show current bindings" },
+				...INTEGRATION_ROLES.map((entry) => ({
 					value: entry.key,
 					label: entry.label,
 					hint: current[entry.key] ?? "unset",
 				})),
-				role,
-			),
+			],
+			role ?? "status",
 		);
+		if (selectedRoleValue === "status") return formatIntegrationTable(current, available);
+		const selectedRole = parseIntegrationRole(selectedRoleValue);
 		if (selectedRole === undefined) return "/integrations cancelled.";
 		const selectedBinding = await selectOne(
 			flow,
@@ -4410,6 +4518,111 @@ async function statusText(): Promise<string> {
 	return lines.join("\n");
 }
 
+async function listClankyAgentsText(argument: string): Promise<string> {
+	const showAll = splitArgs(argument)[0]?.toLowerCase() === "all";
+	let agents: HerdrAgentInfo[];
+	try {
+		agents = await listHerdrAgents();
+	} catch (error) {
+		return `Could not read the herdr stage: ${error instanceof Error ? error.message : String(error)}`;
+	}
+	// herdr can report the same pane under multiple agent sources; keep one row each.
+	const deduped = [...new Map(agents.map((agent) => [agent.paneId, agent])).values()];
+	const workers = deduped.filter((agent) => agent.agent.startsWith("clanky:"));
+	const others = deduped.filter((agent) => !agent.agent.startsWith("clanky:"));
+	const lines = ["**Clanky workers**", ""];
+	if (workers.length === 0) {
+		lines.push("_No Clanky workers on the stage. Spawn one with `/spawn <slug> <task>`._");
+	} else {
+		for (const agent of workers.sort((a, b) => a.agent.localeCompare(b.agent))) {
+			lines.push(formatClankyAgentLine(agent));
+		}
+	}
+	if (showAll && others.length > 0) {
+		lines.push("", "**Other herdr agents**", "");
+		for (const agent of others.sort((a, b) => a.agent.localeCompare(b.agent))) {
+			lines.push(formatClankyAgentLine(agent));
+		}
+	} else if (others.length > 0) {
+		lines.push("", `_${others.length} other herdr agent(s) on the stage; \`/agents all\` to include them._`);
+	}
+	return lines.join("\n");
+}
+
+function formatClankyAgentLine(agent: HerdrAgentInfo): string {
+	const role = agent.agent === "clanky:main" ? " (conductor)" : "";
+	const focus = agent.focused ? " · focused" : "";
+	const cwd = agent.cwd.length === 0 ? "" : ` · ${displayHomePath(agent.cwd)}`;
+	return `- \`${agent.agent}\`${role} — ${agentStatusLabel(agent.agentStatus)} · pane ${agent.paneId}${cwd}${focus}`;
+}
+
+function agentStatusLabel(status: string): string {
+	switch (status) {
+		case "working":
+			return "working";
+		case "idle":
+			return "idle";
+		case "blocked":
+			return "blocked";
+		case "done":
+			return "done";
+		default:
+			return status.length === 0 ? "unknown" : status;
+	}
+}
+
+async function spawnWorkerFromFace(argument: string): Promise<string> {
+	const tokens = splitArgs(argument);
+	let harnessArg: string | undefined;
+	let performerArg: string | undefined;
+	let cwdArg: string | undefined;
+	let index = 0;
+	// Leading --flags are options; the first bare token is the slug and the rest is
+	// the verbatim task brief (so task words are never mistaken for flags).
+	while (index < tokens.length && tokens[index].startsWith("--")) {
+		const flag = tokens[index];
+		const value = tokens[index + 1];
+		if (value === undefined) return `Missing value for ${flag}. ${SPAWN_USAGE}`;
+		if (flag === "--harness") harnessArg = value;
+		else if (flag === "--performer") performerArg = value;
+		else if (flag === "--cwd") cwdArg = value;
+		else return `Unknown flag ${flag}. ${SPAWN_USAGE}`;
+		index += 2;
+	}
+	const slug = tokens[index];
+	const task = tokens.slice(index + 1).join(" ");
+	if (slug === undefined || task.length === 0) return SPAWN_USAGE;
+
+	const harness = harnessArg === undefined ? undefined : parseCodingHarnessId(harnessArg);
+	if (harnessArg !== undefined && harness === undefined) {
+		return `Unknown harness '${harnessArg}'. Allowed: ${CODING_HARNESS_IDS.join(", ")}.`;
+	}
+	const performer: Performer | undefined = performerArg === undefined ? undefined : parsePerformer(performerArg);
+	if (performerArg !== undefined && performer === undefined) {
+		return `Unknown performer '${performerArg}'. Allowed: ${PERFORMERS.join(", ")}.`;
+	}
+
+	const config = await readConfig();
+	// Feed the configured harness allowlist/launch settings to the seam so /spawn
+	// resolves the same harness the eve brain would, then pin transcript home/session.
+	const env: NodeJS.ProcessEnv = { ...process.env, ...codingHarnessEnv(config) };
+	try {
+		const result = await spawnClankyWorker({ slug, task, harness, performer, cwd: cwdArg, env });
+		const pane = result.paneId ?? "(pane unknown)";
+		const lines = [
+			`Spawned \`${result.agent}\` — ${result.harnessLabel} (${result.performer} · ${result.codingRuntime}) · pane ${pane}.`,
+		];
+		if (result.transcript.readCommand !== null) lines.push(`Transcript: \`${result.transcript.readCommand}\``);
+		lines.push("Watch it with `/agents`.");
+		return lines.join("\n");
+	} catch (error) {
+		return `Spawn failed: ${error instanceof Error ? error.message : String(error)}`;
+	}
+}
+
+const SPAWN_USAGE =
+	"Usage: /spawn [--harness id] [--performer id] [--cwd path] <slug> <task>. Slug is kebab-case; the pane is clanky:<slug>.";
+
 function formatBrainHealthSummary(health: BrainHealthState): string {
 	switch (health.state) {
 		case "unknown":
@@ -4461,14 +4674,19 @@ function parseToggle(value: string | undefined): boolean | undefined {
 
 async function selectProvider(
 	flow: SetupFlow,
-	initialValue: ClankyConfig["provider"],
-): Promise<ClankyConfig["provider"] | undefined> {
+	initialValue: ClankyConfig["provider"] | "status",
+): Promise<ClankyConfig["provider"] | "status" | undefined> {
 	flow.begin("Configure Clanky model");
 	try {
 		const selected = await selectOne(
 			flow,
 			"Choose the subscription provider Clanky should use.",
 			[
+				{
+					value: "status",
+					label: "status",
+					hint: "show current model config",
+				},
 				{
 					value: "codex",
 					label: "codex",
@@ -4487,6 +4705,7 @@ async function selectProvider(
 			],
 			initialValue,
 		);
+		if (selected === "status") return "status";
 		return parseProvider(selected);
 	} finally {
 		flow.end({ preserveDiagnostics: false });
@@ -4535,10 +4754,11 @@ async function localModelOptions(baseUrl: string): Promise<readonly MenuOption[]
 async function selectEffort(
 	flow: SetupFlow,
 	currentEffort: string | undefined,
+	includeStatus = false,
 ): Promise<string | undefined> {
 	flow.begin("Configure Codex reasoning effort");
 	try {
-		return await selectOne(flow, "Choose the Codex reasoning effort.", EFFORT_OPTIONS, currentEffort);
+		return await selectOne(flow, "Choose the Codex reasoning effort.", includeStatus ? EFFORT_STATUS_OPTIONS : EFFORT_OPTIONS, includeStatus ? "status" : currentEffort);
 	} finally {
 		flow.end({ preserveDiagnostics: false });
 	}
@@ -4547,10 +4767,11 @@ async function selectEffort(
 async function selectLocalEffort(
 	flow: SetupFlow,
 	currentEffort: string | undefined,
+	includeStatus = false,
 ): Promise<string | undefined> {
 	flow.begin("Configure local reasoning effort");
 	try {
-		return await selectOne(flow, "Choose the local reasoning effort.", LOCAL_EFFORT_OPTIONS, currentEffort);
+		return await selectOne(flow, "Choose the local reasoning effort.", includeStatus ? LOCAL_EFFORT_STATUS_OPTIONS : LOCAL_EFFORT_OPTIONS, includeStatus ? "status" : currentEffort);
 	} finally {
 		flow.end({ preserveDiagnostics: false });
 	}
@@ -4579,7 +4800,12 @@ function formatVoiceStatusLines(config: ClankyConfig): string[] {
 	const realtimeProvider = parseVoiceRealtimeProvider(config.voiceRealtimeProvider) ?? "openai";
 	const memoryLimit = parseVoiceMemoryLimit(config.voiceMemoryContextLimit ?? "16") ?? 16;
 	const eveSessionEnabled = parseVoiceToggle(config.voiceEveSession) ?? true;
+	const discordVoiceEnabled = parseVoiceToggle(config.discordVoice) === true;
+	const discordCredentialKind = config.discordCredentialKind === "user-token" ? "user-token" : "bot-token";
+	const discordCredential = config.discordTokenPresent === true ? discordCredentialKind : "unset";
 	return [
+		`discord voice runtime: ${discordVoiceEnabled ? "on" : "off"}`,
+		`discord credential: ${discordCredential}`,
 		`voice realtime: ${realtimeProvider} / ${config.voiceRealtimeModel ?? defaultRealtimeModel(config)} / voice ${config.voiceRealtimeVoice ?? "marin"}`,
 		`voice tts: ${inferredVoiceTtsProvider(config)}`,
 		`elevenlabs voice id: ${config.elevenLabsVoiceId ?? "(unset)"}`,
@@ -4765,12 +4991,15 @@ async function readConfig(): Promise<ClankyConfig> {
 	const voiceRealtimeVoice = get("CLANKY_VOICE_REALTIME_VOICE");
 	const voiceTtsProvider = get("CLANKY_VOICE_TTS_PROVIDER");
 	const elevenLabsVoiceId = get("CLANKY_ELEVENLABS_VOICE_ID");
-	const elevenLabsTtsModel = get("CLANKY_ELEVENLABS_TTS_MODEL");
-	const voiceMemoryContextLimit = get("CLANKY_VOICE_MEMORY_CONTEXT_LIMIT");
-	const voiceEveSession = get("CLANKY_VOICE_EVE_SESSION");
-	const discordAllowedGuildIds = get(DISCORD_SCOPE_ENV.guilds);
-	const discordAllowedChannelIds = get(DISCORD_SCOPE_ENV.channels);
-	const discordAllowDms = get(DISCORD_SCOPE_ENV.dms);
+		const elevenLabsTtsModel = get("CLANKY_ELEVENLABS_TTS_MODEL");
+		const voiceMemoryContextLimit = get("CLANKY_VOICE_MEMORY_CONTEXT_LIMIT");
+		const voiceEveSession = get("CLANKY_VOICE_EVE_SESSION");
+		const discordCredentialKind = get("CLANKY_DISCORD_CREDENTIAL_KIND");
+		const discordVoice = get("CLANKY_DISCORD_VOICE");
+		const discordToken = get("CLANKY_DISCORD_TOKEN") ?? get("DISCORD_BOT_TOKEN");
+		const discordAllowedGuildIds = get(DISCORD_SCOPE_ENV.guilds);
+		const discordAllowedChannelIds = get(DISCORD_SCOPE_ENV.channels);
+		const discordAllowDms = get(DISCORD_SCOPE_ENV.dms);
 	if (codexModel !== undefined) config.codexModel = codexModel;
 	if (claudeModel !== undefined) config.claudeModel = claudeModel;
 	if (codexEffort !== undefined) config.codexEffort = codexEffort;
@@ -4798,10 +5027,13 @@ async function readConfig(): Promise<ClankyConfig> {
 	if (voiceRealtimeVoice !== undefined) config.voiceRealtimeVoice = voiceRealtimeVoice;
 	if (voiceTtsProvider !== undefined) config.voiceTtsProvider = voiceTtsProvider;
 	if (elevenLabsVoiceId !== undefined) config.elevenLabsVoiceId = elevenLabsVoiceId;
-	if (elevenLabsTtsModel !== undefined) config.elevenLabsTtsModel = elevenLabsTtsModel;
-	if (voiceMemoryContextLimit !== undefined) config.voiceMemoryContextLimit = voiceMemoryContextLimit;
-	if (voiceEveSession !== undefined) config.voiceEveSession = voiceEveSession;
-	if (discordAllowedGuildIds !== undefined) config.discordAllowedGuildIds = discordAllowedGuildIds;
+		if (elevenLabsTtsModel !== undefined) config.elevenLabsTtsModel = elevenLabsTtsModel;
+		if (voiceMemoryContextLimit !== undefined) config.voiceMemoryContextLimit = voiceMemoryContextLimit;
+		if (voiceEveSession !== undefined) config.voiceEveSession = voiceEveSession;
+		if (discordCredentialKind !== undefined) config.discordCredentialKind = discordCredentialKind;
+		if (discordVoice !== undefined) config.discordVoice = discordVoice;
+		if (discordToken !== undefined) config.discordTokenPresent = discordToken.trim().length > 0;
+		if (discordAllowedGuildIds !== undefined) config.discordAllowedGuildIds = discordAllowedGuildIds;
 	if (discordAllowedChannelIds !== undefined) config.discordAllowedChannelIds = discordAllowedChannelIds;
 	if (discordAllowDms !== undefined) config.discordAllowDms = discordAllowDms;
 	return config;
