@@ -23,6 +23,7 @@ import {
 	type VoiceRealtimeConfig,
 	type VoiceSession,
 	type VoiceSpeakerResolver,
+	type VoiceControlInput,
 	summarizeVoiceRuntimeConfig,
 } from "../lib/voice/index.ts";
 
@@ -91,6 +92,11 @@ export function recordActiveVoiceStreamWatchConnect(): void {
 	session?.recordStreamWatchConnect();
 }
 
+export async function executeActiveVoiceControl(input: VoiceControlInput): Promise<unknown> {
+	if (!session) throw new Error("no active voice session; join a voice channel first");
+	return await session.control(input);
+}
+
 interface VoiceRequest {
 	id?: string | number;
 	op: string;
@@ -122,6 +128,9 @@ async function dispatch(op: string, args: Record<string, unknown>): Promise<unkn
 			await leaveVoice();
 			return { left: true };
 		}
+		case "control": {
+			return await executeActiveVoiceControl(parseVoiceControlArgs(args));
+		}
 		case "delegate": {
 			// Hand watchable voice work to a visible herdr pane.
 			const slug = str(args.slug);
@@ -141,6 +150,49 @@ async function dispatch(op: string, args: Record<string, unknown>): Promise<unkn
 		default:
 			throw new Error(`unknown voice op '${op}'`);
 	}
+}
+
+function parseVoiceControlArgs(args: Record<string, unknown>): VoiceControlInput {
+	const op = str(args.op);
+	if (!isVoiceControlOp(op)) throw new Error("control requires a valid voice op");
+	return {
+		op,
+		...optionalString(args.url, "url"),
+		...optionalString(args.preferredRegion, "preferredRegion"),
+		...optionalString(args.visualizerMode, "visualizerMode"),
+		...optionalString(args.streamKey, "streamKey"),
+		...optionalNumber(args.volume, "volume"),
+		...optionalNumber(args.fadeMs, "fadeMs"),
+		...(typeof args.resolvedDirectUrl === "boolean" ? { resolvedDirectUrl: args.resolvedDirectUrl } : {}),
+	};
+}
+
+function optionalString<T extends string>(value: unknown, key: T): { [K in T]?: string } {
+	return typeof value === "string" && value.trim().length > 0 ? ({ [key]: value.trim() } as { [K in T]?: string }) : {};
+}
+
+function optionalNumber<T extends string>(value: unknown, key: T): { [K in T]?: number } {
+	return typeof value === "number" && Number.isFinite(value) ? ({ [key]: value } as { [K in T]?: number }) : {};
+}
+
+function isVoiceControlOp(value: string | undefined): value is VoiceControlInput["op"] {
+	return (
+		value === "status" ||
+		value === "music_play" ||
+		value === "music_stop" ||
+		value === "music_pause" ||
+		value === "music_resume" ||
+		value === "music_volume" ||
+		value === "video_play" ||
+		value === "video_visualizer" ||
+		value === "video_stop" ||
+		value === "video_pause" ||
+		value === "video_resume" ||
+		value === "golive_start" ||
+		value === "golive_stop" ||
+		value === "golive_pause" ||
+		value === "golive_resume"
+	);
 }
 
 export default defineChannel({

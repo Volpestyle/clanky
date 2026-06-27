@@ -54,6 +54,12 @@ export class GoLiveController {
 		return this.discovery.listStreams();
 	}
 
+	findOwnStream(): DiscoveredDiscordStream | undefined {
+		const self = this.selfUserId?.();
+		if (self === undefined) return undefined;
+		return this.discovery.listStreams().find((stream) => stream.userId === self);
+	}
+
 	/** Start watching a discovered stream by fuzzy target (user id, channel, key). */
 	watch(target?: string): DiscoveredDiscordStream {
 		const stream = this.discovery.findStream(target);

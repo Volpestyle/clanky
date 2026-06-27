@@ -21,6 +21,8 @@ import { bindVoiceEveSession, type VoiceEveSessionBinding, type VoiceEveSessionC
 import { type JsonRecord, stringValue } from "./json.ts";
 import { OpenAiRealtimeClient, type OpenAiRealtimeConnectOptions } from "./openAiRealtimeClient.ts";
 import type { OpenAiRealtimeTranscript } from "./openAiRealtimeClient.ts";
+import { executeVoiceControl, type VoiceControlInput, type VoiceControlResult } from "./control.ts";
+import { appendVoiceRealtimeTools, bindRealtimeVoiceTools, type RealtimeVoiceToolBinding } from "./realtime-tools.ts";
 import {
 	bindVoiceTranscriptMemory,
 	isVoiceInputTranscript,
@@ -29,6 +31,7 @@ import {
 	type VoiceTranscriptSpeakerContext,
 } from "./memory.ts";
 import { XAiRealtimeClient } from "./xAiRealtimeClient.ts";
+import { getActiveGoLive } from "../discord/golive.ts";
 import { buildMemoryContext } from "../memory.ts";
 
 export type VoiceRealtimeProvider = "openai" | "xai";
@@ -91,6 +94,8 @@ export interface VoiceRealtimeClient {
 	appendInputVideoFrame(input: { mimeType: string; dataBase64: string }): void;
 	sendFunctionCallOutput(input: { callId: string; output: unknown }): void;
 	close(): Promise<void>;
+	off?(event: "transcript", listener: (transcript: OpenAiRealtimeTranscript) => void): unknown;
+	off?(event: "event", listener: (event: JsonRecord) => void): unknown;
 	on(event: "audio_delta", listener: (pcmBase64: string) => void): unknown;
 	on(event: "transcript", listener: (transcript: OpenAiRealtimeTranscript) => void): unknown;
 	on(event: "event", listener: (event: JsonRecord) => void): unknown;
@@ -149,6 +154,7 @@ export interface VoiceSession {
 	realtime: VoiceRealtimeClient;
 	turnBuffer: DiscordVoiceTurnBuffer;
 	recordStreamWatchConnect(): void;
+	control(input: VoiceControlInput): Promise<VoiceControlResult>;
 	status(): VoiceSessionStatus;
 	stop(): Promise<void>;
 }
@@ -168,6 +174,7 @@ export async function startVoiceSession(config: VoiceSessionConfig): Promise<Voi
 	bindRealtimeStats(realtime, stats);
 	const memoryBinding = bindVoiceMemory(config, realtime, stats, speakerTracker);
 	const eveSessionBinding = bindVoiceSessionMirror(config, realtime, stats, speakerTracker);
+	const realtimeToolBinding = bindRealtimeVoiceControl(config, realtime, vox, speakerTracker);
 	const turnBuffer = bindClankvoxRealtimeBridge({
 		vox,
 		realtime,
@@ -184,6 +191,7 @@ export async function startVoiceSession(config: VoiceSessionConfig): Promise<Voi
 		// Realtime connect failed (expired key, network, etc.) after ClankVox and
 		// the bindings were already spawned; tear them down so no ClankVox process
 		// or Discord voice adapter is left running with no session to stop it.
+		realtimeToolBinding.dispose();
 		eveSessionBinding.dispose();
 		memoryBinding.dispose();
 		ttsBinding.dispose();
@@ -200,6 +208,14 @@ export async function startVoiceSession(config: VoiceSessionConfig): Promise<Voi
 		recordStreamWatchConnect() {
 			stats.streamWatchConnectCount += 1;
 		},
+		async control(input) {
+			return await executeVoiceControl(input, {
+				guildId: config.guildId,
+				channelId: config.channelId,
+				vox,
+				goLive: getActiveGoLive(),
+			});
+		},
 		status() {
 			return {
 				realtimeProvider: config.realtime.provider,
@@ -210,6 +226,7 @@ export async function startVoiceSession(config: VoiceSessionConfig): Promise<Voi
 			};
 		},
 		async stop() {
+			realtimeToolBinding.dispose();
 			eveSessionBinding.dispose();
 			memoryBinding.dispose();
 			ttsBinding.dispose();
@@ -253,7 +270,8 @@ export function createVoiceRealtimeClient(config: VoiceRealtimeConfig): VoiceRea
 
 export async function buildVoiceConnectOptions(config: VoiceSessionConfig): Promise<OpenAiRealtimeConnectOptions> {
 	const limit = config.memoryContextLimit ?? DEFAULT_VOICE_MEMORY_CONTEXT_LIMIT;
-	if (limit <= 0) return config.connect;
+	const connect = { ...config.connect, tools: appendVoiceRealtimeTools({ tools: config.connect.tools }) };
+	if (limit <= 0) return connect;
 	const memoryContext = await buildMemoryContext({
 		limit,
 		discordServerId: config.guildId,
@@ -261,8 +279,8 @@ export async function buildVoiceConnectOptions(config: VoiceSessionConfig): Prom
 		discordUserName: config.memorySpeaker?.userName,
 		includeMainUser: false,
 	});
-	if (memoryContext.length === 0) return config.connect;
-	return { ...config.connect, instructions: `${config.connect.instructions}\n\n${memoryContext}` };
+	if (memoryContext.length === 0) return connect;
+	return { ...connect, instructions: `${connect.instructions}\n\n${memoryContext}` };
 }
 
 function initialVoiceSessionStats(): VoiceSessionStats {
@@ -390,6 +408,28 @@ function bindVoiceSessionMirror(
 		stats,
 		speakResponse(message) {
 			realtime.requestTextUtterance?.(message);
+		},
+	});
+}
+
+function bindRealtimeVoiceControl(
+	config: VoiceSessionConfig,
+	realtime: VoiceRealtimeClient,
+	vox: ClankvoxIpcClient,
+	speakerTracker: VoiceTurnSpeakerTracker,
+): RealtimeVoiceToolBinding {
+	return bindRealtimeVoiceTools({
+		realtime,
+		guildId: config.guildId,
+		channelId: config.channelId,
+		resolveSpeakerContext: speakerTracker.resolveTranscriptSpeakerContext,
+		executeControl(input) {
+			return executeVoiceControl(input, {
+				guildId: config.guildId,
+				channelId: config.channelId,
+				vox,
+				goLive: getActiveGoLive(),
+			});
 		},
 	});
 }
