@@ -18,6 +18,7 @@ import { resolveClankyFacePanePlacement, startHerdrAgentNearPlacement, type Herd
 import { herdrRequest, herdrStreamLines, type HerdrStream } from "../lib/herdr-socket.ts";
 import { registerPushDevice, unregisterPushDevice } from "../lib/push-registry.ts";
 import { ensurePushWatcher } from "../lib/push-watcher.ts";
+import { apnsConfigured } from "../lib/apns.ts";
 import { newTranscriptRunId, readTranscript } from "../lib/transcripts.ts";
 import { wrapTranscriptArgv } from "../tools/herdr_spawn.ts";
 
@@ -226,7 +227,7 @@ async function dispatch(op: string, args: Record<string, unknown>): Promise<unkn
 			const platform = str(args.platform) ?? "ios";
 			await registerPushDevice({ token, platform, events });
 			ensurePushWatcher();
-			return { ok: true, registered: true };
+			return { ok: true, registered: true, apnsConfigured: apnsConfigured() };
 		}
 		case "unregister-push": {
 			const token = str(args.token);
@@ -275,6 +276,15 @@ interface StreamHandle {
 }
 
 const peerStreams = new WeakMap<WebSocketPeer, Map<string, StreamHandle>>();
+
+// Live TUI faces attached via a `face-attach` op. Presence = connection alive;
+// a face dropping (crash or quit) clears on the WS `close` hook. Surfaced in
+// `/relay/health` as `face` so the iOS app can show headless vs face-attached.
+const facePeers = new Set<WebSocketPeer>();
+
+function facePresence(): { attached: boolean; count: number } {
+	return { attached: facePeers.size > 0, count: facePeers.size };
+}
 
 function streamsFor(peer: WebSocketPeer): Map<string, StreamHandle> {
 	let map = peerStreams.get(peer);
@@ -568,7 +578,7 @@ export default defineChannel({
 			if (!isFrontdoorAuthorized(req)) return new Response("unauthorized", { status: 401 });
 			try {
 				const result = await herdrRequest("ping");
-				return Response.json({ ok: true, herdr: result });
+				return Response.json({ ok: true, herdr: result, face: facePresence() });
 			} catch (error) {
 				return Response.json({ ok: false, error: (error as Error).message }, { status: 502 });
 			}
@@ -613,6 +623,16 @@ export default defineChannel({
 						reply(peer, { id: req.id, ok: true, detached: true });
 						return;
 					}
+					if (req.op === "face-attach") {
+						facePeers.add(peer);
+						reply(peer, { id: req.id, ok: true, face: "attached" });
+						return;
+					}
+					if (req.op === "face-detach") {
+						facePeers.delete(peer);
+						reply(peer, { id: req.id, ok: true, face: "detached" });
+						return;
+					}
 					const result = await dispatch(req.op, req.args ?? {});
 					reply(peer, { id: req.id, ok: true, result });
 				} catch (error) {
@@ -620,6 +640,7 @@ export default defineChannel({
 				}
 			},
 			close(peer: WebSocketPeer) {
+				facePeers.delete(peer);
 				closeStream(peer);
 			},
 		})),

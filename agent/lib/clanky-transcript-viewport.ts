@@ -31,12 +31,16 @@ export type ClankyTranscriptBlockHandle = {
 };
 
 export type ClankyTranscriptBlockOptions = {
+	readonly clickToggle?: boolean;
 	readonly collapsed?: boolean;
 	readonly collapsible?: boolean;
 	readonly id?: string;
+	readonly pin?: "bottom";
 };
 
 type TranscriptBlock = {
+	bottomPinned: boolean;
+	clickToggle: boolean;
 	readonly component: Component;
 	readonly id: string;
 	collapsed: boolean;
@@ -106,16 +110,23 @@ export class ClankyTranscriptViewport implements Component, Focusable {
 
 	addChild(component: Component, options: ClankyTranscriptBlockOptions = {}): ClankyTranscriptBlockHandle {
 		const wasAtBottom = this.scrollbackRows === 0;
+		const wasEmpty = this.blocks.length === 0;
 		const block: TranscriptBlock = {
+			bottomPinned: options.pin === "bottom",
+			clickToggle: options.clickToggle === true,
 			collapsed: options.collapsed === true,
 			collapsible: options.collapsible !== false,
 			component,
 			id: options.id ?? `block-${this.nextBlockId++}`,
 		};
-		this.blocks.push(block);
-		if (wasAtBottom || this.blocks.length === 1) {
-			this.selectedIndex = this.blocks.length - 1;
+		const bottomPinnedIndex = this.blocks.findIndex((entry) => entry.bottomPinned);
+		const insertIndex = block.bottomPinned || bottomPinnedIndex < 0 ? this.blocks.length : bottomPinnedIndex;
+		this.blocks.splice(insertIndex, 0, block);
+		if (wasAtBottom || wasEmpty) {
+			this.selectedIndex = insertIndex;
 			this.scrollToBottom();
+		} else if (this.selectedIndex >= insertIndex) {
+			this.selectedIndex += 1;
 		}
 		return this.handleFor(block);
 	}
@@ -285,6 +296,16 @@ export class ClankyTranscriptViewport implements Component, Focusable {
 		this.selection = null;
 	}
 
+	toggleCollapsedAt(row: number): boolean {
+		const hit = this.blockAt(row);
+		if (hit === undefined || !hit.block.collapsible || !hit.block.clickToggle) return false;
+		this.selectedIndex = hit.index;
+		hit.block.collapsed = !hit.block.collapsed;
+		this.selection = null;
+		this.ensureSelectedVisible();
+		return true;
+	}
+
 	getSelectedText(): string {
 		if (this.selection === null) return "";
 		const [first, last] = orderSelectionPoints(this.selection.anchor, this.selection.head);
@@ -301,6 +322,15 @@ export class ClankyTranscriptViewport implements Component, Focusable {
 	private pointAt(row: number, col: number): SelectionPoint {
 		const line = clamp(this.lastWindowStart + row - this.lastTopPad, 0, Math.max(0, this.lastFlattened.length - 1));
 		return { col: Math.max(0, col), line };
+	}
+
+	private blockAt(row: number): { readonly block: TranscriptBlock; readonly index: number } | undefined {
+		const flatIndex = this.lastWindowStart + row - this.lastTopPad;
+		if (flatIndex < 0) return undefined;
+		const rendered = this.renderBlocks(this.lastWidth);
+		const index = rendered.findIndex((block) => flatIndex >= block.start && flatIndex < block.end);
+		const renderedBlock = index < 0 ? undefined : rendered[index];
+		return renderedBlock === undefined ? undefined : { block: renderedBlock.block, index };
 	}
 
 	private applyHighlight(line: string, flatIndex: number): string {
@@ -447,9 +477,17 @@ function stripAnsi(text: string): string {
 function collapsedLines(lines: readonly string[], width: number, theme: ClankyTranscriptViewportTheme): string[] {
 	if (lines.length <= 1) return [...lines];
 	const first = lines[0] ?? "";
-	const hidden = lines.length - 1;
+	if (lines.length === 2) {
+		return [
+			truncateToWidth(first, width, "", true),
+			theme.dim(truncateToWidth("... 1 hidden lines", width, "", true)),
+		];
+	}
+	const preview = lines.slice(1).find((line) => stripAnsi(line).trim().length > 0);
+	const visible = preview === undefined ? [first] : [first, preview];
+	const hidden = lines.length - visible.length;
 	return [
-		truncateToWidth(first, width, "", true),
+		...visible.map((line) => truncateToWidth(line, width, "", true)),
 		theme.dim(truncateToWidth(`... ${hidden} hidden lines`, width, "", true)),
 	];
 }

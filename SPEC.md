@@ -159,7 +159,7 @@ streamed events (`message.appended`, `reasoning.completed`, `actions.requested`,
 glyphs, a yellow phase-aware working spinner, and a persistent bottom status
 line (model · effort · tokens · endpoint). On top it adds the config slash
 commands `eve dev` can't: `/discord-token`, `/model`, `/harness`, `/effort`,
-`/approvals` (they rewrite `.env.local` and restart the brain). The stock
+`/approvals`, `/push` (they rewrite `.env.local` and restart the brain). The stock
 `eve dev` TUI stays available as a local dev/debug interface against the same
 runtime.
 
@@ -295,12 +295,16 @@ flowchart LR
   Keychain. Modes: `up` / `status` / `down`, each emitting JSON the app parses.
 - **Push (relay `register-push` + APNs).** After pairing, the phone registers its
   APNs device token (`register-push {token, events?, platform}`), persisted in
-  `~/.config/clanky/push-tokens.json`. A poll-and-diff watcher (`pane.list` every
-  5s) pushes an alert when an agent transitions to blocked/done/error, carrying
-  the pane/workspace ids so a tap deep-links into that pane's live terminal.
-  APNs uses token-based auth (ES256 JWT over a .p8 key, `node:crypto` + `http2`),
-  gated on `CLANKY_APNS_KEY_PATH` / `CLANKY_APNS_KEY_ID` / `CLANKY_APNS_TEAM_ID`
-  (+ `CLANKY_APNS_BUNDLE_ID`, `CLANKY_APNS_ENV`); a no-op when unset.
+  `~/.config/clanky/push-tokens.json`; the relay returns `{ok, registered,
+  apnsConfigured}` so clients can distinguish token registration from send-ready
+  APNs configuration. A poll-and-diff watcher (`pane.list` every 5s) pushes an
+  alert when an agent transitions to blocked/done/error, carrying the
+  pane/workspace ids so a tap deep-links into that pane's live terminal. APNs uses
+  token-based auth (ES256 JWT over a .p8 key, `node:crypto` + `http2`), gated on
+  `CLANKY_APNS_KEY_PATH` / `CLANKY_APNS_KEY_ID` / `CLANKY_APNS_TEAM_ID` (+
+  `CLANKY_APNS_BUNDLE_ID`, `CLANKY_APNS_ENV`); a no-op when unset. The face's
+  `/push` command is the local APNs setup surface: it stores only the `.p8` path,
+  shows masked registered device tokens, and can send a test notification.
 - **Interaction (relay).** The relay is a raw WS route, so it bypasses eve's
   session framing and carries terminal scrollback, status, and input injection
   faithfully. It adds explicit `start`/`close` ops alongside transcript-aware

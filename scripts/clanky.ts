@@ -7,7 +7,8 @@
  * Run: pnpm face   (CLANKY_EVE_PORT to change the port, default 2000)
  */
 import { type ChildProcess, execFile, execFileSync, spawn } from "node:child_process";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import { access, readFile, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
 import { join, resolve } from "node:path";
 import { parseEnv, promisify } from "node:util";
@@ -41,8 +42,10 @@ import {
 	type StreamOptions,
 } from "eve/client";
 import { applyEnvRemovals, applyEnvUpserts } from "../agent/lib/discord/env-file.ts";
+import { apnsConfigFromEnv, sendApns } from "../agent/lib/apns.ts";
 import { browserBridgeStatus } from "../agent/lib/browser-bridge.ts";
 import { buildEveDevServerEnv } from "../agent/lib/eve-dev-env.ts";
+import { startFacePresence, stopFacePresence } from "../agent/lib/face-presence.ts";
 import { buildPairingLink, type PairingLink, renderPairingQr } from "../agent/lib/pairing.ts";
 import {
 	appendPromptHistoryEntry,
@@ -71,6 +74,7 @@ import {
 } from "../agent/lib/agent-md.ts";
 import { isPetEnabledValue } from "../agent/lib/pet.ts";
 import { resolveClankyDataPath } from "../agent/lib/paths.ts";
+import { listPushDevices, type PushDevice } from "../agent/lib/push-registry.ts";
 import { buildTuiAttachmentMessage, createDroppedPathPasteRewriter } from "../agent/lib/tui-attachments.ts";
 import { createClankyFaceAnsiTheme } from "../agent/lib/clanky-face-theme.ts";
 import {
@@ -174,6 +178,10 @@ import {
 	formatWorkerRosterForBrain,
 	TuiLedger,
 } from "../agent/lib/clanky-tui-ledger.ts";
+import {
+	clankyNewSessionCommandOutcome,
+	shouldAnnounceNewSessionCommand,
+} from "../agent/lib/clanky-command-result.ts";
 import { installBrowserBridge } from "../packages/clanky-browser-bridge/src/install.ts";
 import {
 	listMcpServerConfigs,
@@ -340,6 +348,7 @@ type ClankyExtensionCommandName =
 	| "video-model"
 	| "vision-model"
 	| "voice"
+	| "push"
 	| "integrations"
 	| "mcp"
 	| "browser"
@@ -357,7 +366,7 @@ type ClankyExtensionCommand = {
 };
 type NativePromptCommand =
 	| { type: "help" }
-	| { type: "new" }
+	| { type: "new"; quiet?: boolean }
 	| { type: "clear" }
 	| { type: "exit" };
 type ClankyPromptCommand = NativePromptCommand | ClankyExtensionCommand;
@@ -375,6 +384,7 @@ type PromptCommandOutcome = {
 	readonly exit?: boolean;
 	readonly message?: string;
 	readonly newSession?: boolean;
+	readonly announceNewSession?: boolean;
 };
 type CommandLogTone = "error" | "success";
 
@@ -473,6 +483,16 @@ const DISCORD_SCOPE_ENV = {
 	channels: "CLANKY_DISCORD_ALLOWED_CHANNEL_IDS",
 	dms: "CLANKY_DISCORD_ALLOW_DMS",
 } as const;
+const PUSH_APNS_ENV = {
+	keyPath: "CLANKY_APNS_KEY_PATH",
+	keyAlias: "CLANKY_APNS_KEY",
+	keyId: "CLANKY_APNS_KEY_ID",
+	teamId: "CLANKY_APNS_TEAM_ID",
+	bundleId: "CLANKY_APNS_BUNDLE_ID",
+	environment: "CLANKY_APNS_ENV",
+} as const;
+const DEFAULT_APNS_BUNDLE_ID = "io.clanky.ios";
+const DEFAULT_APNS_ENVIRONMENT = "sandbox";
 
 type ClankyConfig = {
 	provider: "codex" | "claude" | "local" | "xai" | "gemini";
@@ -534,6 +554,11 @@ type ClankyConfig = {
 	discordAllowedGuildIds?: string;
 	discordAllowedChannelIds?: string;
 	discordAllowDms?: string;
+	apnsKeyPath?: string;
+	apnsKeyId?: string;
+	apnsTeamId?: string;
+	apnsBundleId?: string;
+	apnsEnvironment?: string;
 };
 
 type BrainHealthState =
@@ -663,6 +688,8 @@ type SubscriptionLoginPromptResult =
 	| { readonly state: "skip" }
 	| { readonly state: "cancelled"; readonly message: string };
 type McpCommandAction = "status" | "list" | "add" | "remove" | "enable" | "disable" | "auth" | "install" | "connections" | "help";
+type PushCommandAction = "status" | "key-path" | "key-id" | "team-id" | "bundle-id" | "env" | "test" | "clear" | "help";
+type PushApnsEnvironment = "sandbox" | "production";
 const MODEL_OPTIONS: Record<SubscriptionProvider, readonly MenuOption[]> = {
 	codex: [
 		{ value: "gpt-5.5", label: "gpt-5.5" },
@@ -969,6 +996,19 @@ const MCP_TRANSPORT_OPTIONS: readonly MenuOption[] = [
 	{ value: "streamable-http", label: "streamable-http", hint: "HTTP MCP endpoint" },
 	{ value: "sse", label: "sse", hint: "SSE MCP endpoint" },
 ];
+const PUSH_ACTION_OPTIONS: readonly MenuOption[] = [
+	{ value: "key-path", label: "APNs key path", hint: "AuthKey_XXXX.p8 file path" },
+	{ value: "key-id", label: "APNs key ID", hint: "10-character Apple key id" },
+	{ value: "team-id", label: "Apple team ID", hint: "10-character developer team id" },
+	{ value: "bundle-id", label: "bundle id", hint: `default ${DEFAULT_APNS_BUNDLE_ID}` },
+	{ value: "env", label: "APNs environment", hint: "sandbox/development or production" },
+	{ value: "test", label: "send test notification", hint: "push to registered iOS devices" },
+	{ value: "clear", label: "clear APNs config", hint: "remove saved APNs env vars" },
+];
+const PUSH_APNS_ENV_OPTIONS: readonly MenuOption[] = [
+	{ value: "sandbox", label: "sandbox", hint: "Debug/development APNs" },
+	{ value: "production", label: "production", hint: "Release/TestFlight/App Store APNs" },
+];
 const SETTINGS_STATUS_TOGGLE_VALUE = "__settings_status_toggle__";
 const SETTINGS_STATUS_EXPAND_ICON = "▲";
 const SETTINGS_STATUS_COLLAPSE_ICON = "▶";
@@ -991,6 +1031,8 @@ let brainHealthMonitor: ReturnType<typeof setInterval> | undefined;
 let brainHealthRefreshRunning = false;
 let brainRestartInProgress = false;
 let brainHealthGeneration = 0;
+let herdrSessionNameCache: string | undefined;
+let herdrWorkspaceNameCache: string | null | undefined;
 let uiReady = false;
 let turnTraceMode = parseTurnTraceMode(process.env.CLANKY_TURN_TRACE) ?? DEFAULT_TURN_TRACE_MODE;
 let headerVisible = parseBooleanFlag(process.env.CLANKY_HEADER) ?? true;
@@ -1007,6 +1049,8 @@ let currentStatusLabel = "starting";
 let connectionAuthPendingCount = 0;
 let mouseTrackingEnabled = false;
 let transcriptSelectionActive = false;
+let transcriptSelectionDragged = false;
+let transcriptClickTarget: { readonly col: number; readonly row: number } | undefined;
 let chromeSelectionActive = false;
 const chromeSelection = new ClankyChromeSelection();
 const selectableOverlays: SelectableOverlayEntry[] = [];
@@ -1154,7 +1198,7 @@ tui.addInputListener((data) => {
 			setupFlow.handleSubmit("/cancel");
 			return { consume: true };
 		}
-		void shutdown(0);
+		void shutdown(0, { abortTurn: true, waitForTurn: false });
 		return { consume: true };
 	}
 	if (matchesKey(data, Key.escape) && setupFlow.isWaitingForInput()) {
@@ -1172,6 +1216,9 @@ tui.addInputListener((data) => {
 });
 uiReady = true;
 startBrainHealthMonitor();
+// Announce this face to the brain so the iOS app can show headless vs attached.
+// Reconnects across brain restarts and host changes via the getters.
+startFacePresence({ host: () => brainHost, token: resolveRelayTokenSync, pid: process.pid });
 refreshStatus("ready");
 tui.start();
 enableClankyMouseTracking();
@@ -1180,6 +1227,16 @@ const handleProcessShutdownSignal = (): void => {
 };
 process.once("SIGINT", handleProcessShutdownSignal);
 process.once("SIGTERM", handleProcessShutdownSignal);
+
+function resolveRelayTokenSync(): string {
+	const fromEnv = process.env.CLANKY_RELAY_TOKEN;
+	if (fromEnv !== undefined && fromEnv.trim().length > 0) return fromEnv;
+	try {
+		return parseEnv(readFileSync(ENV_PATH, "utf8")).CLANKY_RELAY_TOKEN ?? "";
+	} catch {
+		return "";
+	}
+}
 
 function createAttachmentAwareClient(client: Client): Client {
 	const wrapped = {
@@ -1239,7 +1296,7 @@ function buildClankyPromptCommands(): ClankyPromptCommandSpec[] {
 			aliases: [],
 			description: "Start a fresh session and clear the transcript",
 			takesArgument: false,
-			build: () => ({ type: "new" }),
+			build: () => ({ type: "new", quiet: true }),
 		},
 		{
 			name: "new",
@@ -1390,6 +1447,14 @@ function buildClankyPromptCommands(): ClankyPromptCommandSpec[] {
 			argumentHint: "[status|mode|model|realtime-voice|tts|elevenlabs|memory|eve-session] [value]",
 			takesArgument: true,
 			build: (argument) => ({ type: "extension", name: "voice", argument }),
+		},
+		{
+			name: "push",
+			aliases: ["notifications", "apns"],
+			description: "Configure iOS push notifications and APNs credentials",
+			argumentHint: "[status|test|key-path|key-id|team-id|bundle-id|env|clear] [value]",
+			takesArgument: true,
+			build: (argument) => ({ type: "extension", name: "push", argument }),
 		},
 		{
 			name: "integrations",
@@ -1565,6 +1630,8 @@ function handleSelectionMouse(mouse: ClankySgrMouseEvent): void {
 		if (modal !== null) {
 			transcriptViewport.clearSelection();
 			transcriptSelectionActive = false;
+			transcriptSelectionDragged = false;
+			transcriptClickTarget = undefined;
 			chromeSelection.press("modal", modal.row, modal.col);
 			chromeSelectionActive = true;
 		} else {
@@ -1574,9 +1641,13 @@ function handleSelectionMouse(mouse: ClankySgrMouseEvent): void {
 				chromeSelectionActive = false;
 				transcriptViewport.selectionPress(transcript.row, transcript.col);
 				transcriptSelectionActive = true;
+				transcriptSelectionDragged = false;
+				transcriptClickTarget = { col: transcript.col, row: transcript.row };
 			} else {
 				transcriptViewport.clearSelection();
 				transcriptSelectionActive = false;
+				transcriptSelectionDragged = false;
+				transcriptClickTarget = undefined;
 				const chrome = chromeMouseTarget(mouse);
 				if (chrome !== null) {
 					chromeSelection.press(chrome.band, chrome.row, chrome.col);
@@ -1592,6 +1663,7 @@ function handleSelectionMouse(mouse: ClankySgrMouseEvent): void {
 	}
 	if (mouse.kind === "drag") {
 		if (transcriptSelectionActive) {
+			transcriptSelectionDragged = true;
 			const transcript = transcriptMouseTarget(mouse);
 			transcriptViewport.selectionDrag(transcript.row, transcript.col);
 			tui.requestRender();
@@ -1612,8 +1684,18 @@ function handleSelectionMouse(mouse: ClankySgrMouseEvent): void {
 	// release
 	if (transcriptSelectionActive) {
 		transcriptSelectionActive = false;
-		if (transcriptViewport.hasSelection()) void copyTranscriptSelection();
-		else transcriptViewport.clearSelection();
+		if (transcriptViewport.hasSelection()) {
+			void copyTranscriptSelection();
+		} else if (!transcriptSelectionDragged && transcriptClickTarget !== undefined) {
+			const release = transcriptMouseTarget(mouse);
+			if (!release.inside || release.row !== transcriptClickTarget.row || !transcriptViewport.toggleCollapsedAt(transcriptClickTarget.row)) {
+				transcriptViewport.clearSelection();
+			}
+		} else {
+			transcriptViewport.clearSelection();
+		}
+		transcriptSelectionDragged = false;
+		transcriptClickTarget = undefined;
 		tui.requestRender();
 		return;
 	}
@@ -1982,7 +2064,7 @@ function toInteractivePromptOption(option: MenuOption): InteractivePromptOption 
 	};
 }
 
-function insertMarkdown(text: string): FaceBlockHandle {
+function insertMarkdown(text: string, options?: ClankyTranscriptBlockOptions): FaceBlockHandle {
 	const component = new ClankyTranscriptMarkdownBlock(text, {
 		bold: ansi.bold,
 		cyan: ansi.cyan,
@@ -1992,7 +2074,7 @@ function insertMarkdown(text: string): FaceBlockHandle {
 		red: ansi.red,
 		yellow: ansi.yellow,
 	});
-	const block = insertTranscript(component);
+	const block = insertTranscript(component, options);
 	tui.requestRender();
 	return {
 		remove(): void {
@@ -2199,7 +2281,9 @@ async function handleSlashPrompt(prompt: string): Promise<void> {
 	if (outcome.newSession === true) {
 		session = client.session();
 		faceRenderer.resetSession();
-		insertCommandResult(prompt, "New session started.", "success");
+		if (shouldAnnounceNewSessionCommand(outcome)) {
+			insertCommandResult(prompt, "New session started.", "success");
+		}
 	}
 	if (outcome.exit === true) await shutdown(0);
 }
@@ -2211,7 +2295,7 @@ async function submitPrompt(prompt: string): Promise<void> {
 	const userBlock = insertMarkdown(`**You**\n\n${prompt}`);
 	const loader = new Loader(tui, ansi.cyan, ansi.dim, "Thinking...");
 	activeLoader = loader;
-	const loaderBlock = insertTranscript(loader, { collapsible: false });
+	const loaderBlock = insertTranscript(loader, { collapsible: false, pin: "bottom" });
 	const turn: ActivePromptTurn = {
 		controller,
 		loader,
@@ -2389,7 +2473,7 @@ async function handleClankyCommand(command: ClankyPromptCommand, renderer: Comma
 		case "help":
 			return { message: formatHelp() };
 		case "new":
-			return { clearTranscript: true, newSession: true };
+			return clankyNewSessionCommandOutcome({ quiet: command.quiet === true });
 		case "clear":
 			return { clearTranscript: true };
 		case "exit":
@@ -2432,6 +2516,8 @@ async function handleExtensionCommand(command: ClankyExtensionCommand, renderer:
 			return { message: await configurePet(command.argument, renderer.setupFlow) };
 		case "voice":
 			return { message: await configureVoice(command.argument, renderer.setupFlow) };
+		case "push":
+			return { message: await configurePush(command.argument, renderer.setupFlow) };
 		case "integrations":
 			return { message: await configureIntegrations(command.argument, renderer.setupFlow) };
 		case "mcp":
@@ -2470,6 +2556,10 @@ function formatHelp(): string {
 
 function statusLabelForEvent(event: HandleMessageStreamEvent): string {
 	switch (event.type) {
+		case "actions.requested": {
+			const skill = skillLoadStatusLabel(event.data.actions);
+			return skill ?? "streaming";
+		}
 		case "step.started":
 			return `step ${event.data.stepIndex + 1}`;
 		case "step.completed":
@@ -2483,6 +2573,19 @@ function statusLabelForEvent(event: HandleMessageStreamEvent): string {
 		default:
 			return "streaming";
 	}
+}
+
+function skillLoadStatusLabel(
+	actions: Extract<HandleMessageStreamEvent, { type: "actions.requested" }>["data"]["actions"],
+): string | undefined {
+	for (const action of actions) {
+		const isSkillLoad = action.kind === "load-skill" || (action.kind === "tool-call" && action.toolName === "load_skill");
+		if (!isSkillLoad) continue;
+		const input = action.input;
+		const name = isRecord(input) && typeof input.skill === "string" && input.skill.trim().length > 0 ? input.skill.trim() : undefined;
+		return name === undefined ? "loading skill" : `loading skill ${name}`;
+	}
+	return undefined;
 }
 
 function buildBannerFields(info: AgentInfoResult | undefined): BannerFields {
@@ -2515,7 +2618,8 @@ function bannerStage(): { label: string; value: string } {
 
 function bannerHerdrStage(): { label: string; value: string } | undefined {
 	if (process.env.HERDR_ENV !== "1") return undefined;
-	return { label: "herdr", value: stageValue(process.env.HERDR_SESSION, process.env.HERDR_PANE_ID) };
+	const workspaceName = herdrWorkspaceName(process.env.HERDR_WORKSPACE_ID ?? process.env.CLANKY_FACE_HERDR_WORKSPACE_ID);
+	return { label: "herdr", value: herdrStageValue(herdrSessionName(), workspaceName, process.env.HERDR_PANE_ID) };
 }
 
 function bannerTmuxStage(): { label: string; value: string } | undefined {
@@ -2531,6 +2635,74 @@ function stageValue(session: string | undefined, pane: string | undefined): stri
 	if (sessionName !== undefined && sessionName.length > 0) parts.push(sessionName);
 	if (paneId !== undefined && paneId.length > 0) parts.push(`pane ${paneId}`);
 	return parts.length > 0 ? parts.join(" · ") : "none";
+}
+
+function herdrStageValue(session: string, workspace: string | undefined, pane: string | undefined): string {
+	const parts = [session];
+	const workspaceName = workspace?.trim();
+	const paneId = pane?.trim();
+	if (workspaceName !== undefined && workspaceName.length > 0) parts.push(workspaceName);
+	if (paneId !== undefined && paneId.length > 0) parts.push(paneId);
+	return parts.join(" · ");
+}
+
+function herdrSessionName(): string {
+	const envSession = process.env.HERDR_SESSION?.trim();
+	if (envSession !== undefined && envSession.length > 0) return envSession;
+	if (herdrSessionNameCache !== undefined) return herdrSessionNameCache;
+	const socketPath = process.env.HERDR_SOCKET_PATH?.trim();
+	try {
+		const output = execFileSync("herdr", ["session", "list", "--json"], {
+			encoding: "utf8",
+			timeout: 1000,
+			stdio: ["ignore", "pipe", "ignore"],
+		});
+		herdrSessionNameCache = parseHerdrSessionName(JSON.parse(output) as unknown, socketPath) ?? "default";
+	} catch {
+		herdrSessionNameCache = "default";
+	}
+	return herdrSessionNameCache;
+}
+
+function parseHerdrSessionName(payload: unknown, socketPath: string | undefined): string | undefined {
+	if (!isRecord(payload) || !Array.isArray(payload.sessions)) return undefined;
+	const sessions = payload.sessions.filter(isRecord);
+	const matched =
+		socketPath === undefined
+			? sessions.find((session) => session.running === true && session.default === true) ??
+				sessions.find((session) => session.running === true)
+			: sessions.find((session) => session.socket_path === socketPath) ??
+				sessions.find((session) => session.running === true && session.default === true);
+	const name = typeof matched?.name === "string" ? matched.name.trim() : "";
+	return name.length > 0 ? name : undefined;
+}
+
+function herdrWorkspaceName(workspaceId: string | undefined): string | undefined {
+	if (herdrWorkspaceNameCache !== undefined) return herdrWorkspaceNameCache ?? undefined;
+	const trimmedWorkspaceId = workspaceId?.trim();
+	try {
+		const output = execFileSync("herdr", ["workspace", "list"], {
+			encoding: "utf8",
+			timeout: 1000,
+			stdio: ["ignore", "pipe", "ignore"],
+		});
+		herdrWorkspaceNameCache = parseHerdrWorkspaceName(JSON.parse(output) as unknown, trimmedWorkspaceId) ?? trimmedWorkspaceId ?? null;
+	} catch {
+		herdrWorkspaceNameCache = trimmedWorkspaceId ?? null;
+	}
+	return herdrWorkspaceNameCache ?? undefined;
+}
+
+function parseHerdrWorkspaceName(payload: unknown, workspaceId: string | undefined): string | undefined {
+	if (!isRecord(payload) || !isRecord(payload.result) || !Array.isArray(payload.result.workspaces)) return undefined;
+	const workspaces = payload.result.workspaces.filter(isRecord);
+	const matched =
+		workspaceId === undefined
+			? workspaces.find((workspace) => workspace.focused === true)
+			: workspaces.find((workspace) => workspace.workspace_id === workspaceId) ??
+				workspaces.find((workspace) => workspace.focused === true);
+	const label = typeof matched?.label === "string" ? matched.label.trim() : "";
+	return label.length > 0 ? label : undefined;
 }
 
 /** tmux exposes the pane via `TMUX_PANE` but not the session name; ask tmux. */
@@ -2652,7 +2824,6 @@ function formatStatusText(label: string): string {
 	const focusState = transcriptViewport.focused ? "transcript nav" : "";
 	const brainState = formatBrainHealthStatus(brainHealth);
 	const parts = [
-		"Clanky",
 		label,
 		responseState,
 		setupState,
@@ -2663,11 +2834,17 @@ function formatStatusText(label: string): string {
 	]
 		.filter((part) => part.length > 0)
 		.map((part) => ansi.dim(part));
-	if (brainState.length > 0) parts.splice(2, 0, brainState);
+	const showStatusBrand = !headerVisible;
+	if (showStatusBrand) parts.unshift(formatStatusBrand());
+	if (brainState.length > 0) parts.splice(showStatusBrand ? 2 : 1, 0, brainState);
 	const statusLine = parts.join("  ·  ");
 	if (layoutSettings.inputPlacement === "bottom" && layoutSettings.statusPlacement === "above-input") return `\n${statusLine}`;
 	if (layoutSettings.inputPlacement === "top" && layoutSettings.statusPlacement === "below-input") return `${statusLine}\n`;
 	return statusLine;
+}
+
+function formatStatusBrand(): string {
+	return ansi.bold(ansi.accent("clanky"));
 }
 
 function formatSingleStatusRow(text: string, width: number): string {
@@ -2714,12 +2891,13 @@ async function reportClankyFaceToHerdr(state: "idle" | "working" | "blocked" | "
 }
 
 async function shutdown(exitCode: number, options: ShutdownOptions = {}): Promise<void> {
-	if (shutdownStarted) return;
+	if (shutdownStarted) process.exit(exitCode);
 	shutdownStarted = true;
 	try {
 		if (options.abortTurn === true) activeTurn?.controller.abort();
 		if (options.waitForTurn !== false && runningTurn !== undefined) await runningTurn.catch(() => undefined);
 		stopBrainHealthMonitor();
+		stopFacePresence();
 		disableClankyMouseTracking();
 		tui.stop();
 		await reportClankyFaceToHerdr("unknown", "Clanky face stopped");
@@ -3206,6 +3384,374 @@ function parseDiscordScopeIdText(raw: string, allowEmpty: boolean): string[] | s
 function validateDiscordScopeIdText(raw: string, allowEmpty: boolean): string | undefined {
 	const parsed = parseDiscordScopeIdText(raw, allowEmpty);
 	return typeof parsed === "string" ? parsed : undefined;
+}
+
+type PushConfigField = "key-path" | "key-id" | "team-id" | "bundle-id" | "env";
+type PushConfigUpdate = {
+	updates: Record<string, string>;
+	removals: readonly string[];
+	message: string;
+};
+
+async function configurePush(argument: string, flow: SetupFlow | undefined): Promise<string> {
+	let args: string[];
+	try {
+		args = splitCommandLine(argument);
+	} catch (error) {
+		return `Invalid /push command: ${error instanceof Error ? error.message : String(error)}`;
+	}
+	const command = args[0];
+	const normalized = command === undefined ? undefined : normalizeCommandToken(command);
+	const config = await readConfig();
+	if (command === undefined || normalized === "interactive" || normalized === "configure" || normalized === "edit") {
+		if (flow === undefined) return `${await pushStatusText(config)}\n\n${pushUsage()}`;
+		return await configurePushInteractive(flow, config);
+	}
+	const action = parsePushCommandAction(command);
+	if (action === undefined) return `Unknown /push option "${command}". Use status, test, key-path, key-id, team-id, bundle-id, env, or clear.`;
+	if (action === "status") return await pushStatusText(config);
+	if (action === "help") return pushUsage();
+	if (action === "test") return await sendPushTestNotification();
+	if (action === "clear") return await savePushConfigUpdate(buildPushClearUpdate());
+	if (args[1] === undefined) {
+		if (flow === undefined) return `Usage: /push ${action} <value>\n\n${await pushStatusText(config)}`;
+		const update = await promptPushConfigField(flow, config, action);
+		return update === undefined ? "/push cancelled." : await savePushConfigUpdate(update);
+	}
+	const update = buildPushSetUpdate(action, args.slice(1).join(" "));
+	return typeof update === "string" ? update : await savePushConfigUpdate(update);
+}
+
+async function configurePushInteractive(flow: SetupFlow, config: ClankyConfig): Promise<string> {
+	const devices = await safeListPushDevices();
+	const status = await formatPushMenuStatus(config, devices);
+	flow.begin("Configure push notifications");
+	try {
+		const result = await settingsLoop(flow, {
+			title: "Choose the push notification setting to change.",
+			options: () => PUSH_ACTION_OPTIONS,
+			renderStatus: () => status,
+			initial: "key-path",
+			dispatch: async (action) => {
+				const parsed = parsePushCommandAction(action);
+				if (parsed === "test") return await sendPushTestNotification();
+				if (parsed === "clear") return await savePushConfigUpdate(buildPushClearUpdate());
+				if (parsed === "status" || parsed === "help" || parsed === undefined) return undefined;
+				const update = await promptPushConfigField(flow, config, parsed);
+				return update === undefined ? undefined : await savePushConfigUpdate(update);
+			},
+		});
+		return result ?? "/push cancelled.";
+	} finally {
+		flow.end({ preserveDiagnostics: false });
+	}
+}
+
+async function promptPushConfigField(
+	flow: SetupFlow,
+	config: ClankyConfig,
+	field: PushConfigField,
+): Promise<PushConfigUpdate | undefined> {
+	if (field === "env") {
+		const selected = await selectOne(
+			flow,
+			"Choose which APNs endpoint Clanky should send to.",
+			PUSH_APNS_ENV_OPTIONS,
+			parsePushApnsEnvironment(config.apnsEnvironment) ?? DEFAULT_APNS_ENVIRONMENT,
+			true,
+		);
+		return selected === undefined ? undefined : buildPushSetUpdate("env", selected) as PushConfigUpdate;
+	}
+	const value = await flow.readText({
+		message: pushFieldPrompt(field),
+		defaultValue: pushFieldCurrentValue(config, field),
+		placeholder: pushFieldPlaceholder(field),
+		allowBack: true,
+		validate: pushFieldValidator(field),
+	});
+	if (value === undefined) return undefined;
+	const update = buildPushSetUpdate(field, value);
+	return typeof update === "string" ? undefined : update;
+}
+
+function parsePushCommandAction(value: string | undefined): PushCommandAction | undefined {
+	if (value === undefined) return undefined;
+	const normalized = normalizeCommandToken(value);
+	if (normalized === "show" || normalized === "view") return "status";
+	if (normalized === "status") return "status";
+	if (normalized === "test" || normalized === "sendtest") return "test";
+	if (normalized === "keypath" || normalized === "path" || normalized === "key") return "key-path";
+	if (normalized === "keyid" || normalized === "kid") return "key-id";
+	if (normalized === "teamid" || normalized === "team") return "team-id";
+	if (normalized === "bundleid" || normalized === "bundle" || normalized === "topic") return "bundle-id";
+	if (normalized === "env" || normalized === "environment" || normalized === "apnsenv") return "env";
+	if (normalized === "clear" || normalized === "reset" || normalized === "unset") return "clear";
+	if (normalized === "help") return "help";
+	return undefined;
+}
+
+function buildPushSetUpdate(field: PushConfigField, rawValue: string): PushConfigUpdate | string {
+	const value = rawValue.trim();
+	if (isClearSettingValue(value)) return buildPushFieldClearUpdate(field);
+	const validation = pushFieldValidator(field)(value);
+	if (validation !== undefined) return validation;
+	switch (field) {
+		case "key-path":
+			return {
+				updates: { [PUSH_APNS_ENV.keyPath]: value },
+				removals: [PUSH_APNS_ENV.keyAlias],
+				message: `APNs key path set to ${displayHomePath(value)}`,
+			};
+		case "key-id":
+			return { updates: { [PUSH_APNS_ENV.keyId]: value.toUpperCase() }, removals: [], message: "APNs key ID saved" };
+		case "team-id":
+			return { updates: { [PUSH_APNS_ENV.teamId]: value.toUpperCase() }, removals: [], message: "Apple team ID saved" };
+		case "bundle-id":
+			return { updates: { [PUSH_APNS_ENV.bundleId]: value }, removals: [], message: `APNs bundle id set to ${value}` };
+		case "env": {
+			const environment = parsePushApnsEnvironment(value);
+			if (environment === undefined) return "Use sandbox/development or production.";
+			return { updates: { [PUSH_APNS_ENV.environment]: environment }, removals: [], message: `APNs environment set to ${environment}` };
+		}
+	}
+}
+
+function buildPushFieldClearUpdate(field: PushConfigField): PushConfigUpdate {
+	switch (field) {
+		case "key-path":
+			return { updates: {}, removals: [PUSH_APNS_ENV.keyPath, PUSH_APNS_ENV.keyAlias], message: "APNs key path cleared" };
+		case "key-id":
+			return { updates: {}, removals: [PUSH_APNS_ENV.keyId], message: "APNs key ID cleared" };
+		case "team-id":
+			return { updates: {}, removals: [PUSH_APNS_ENV.teamId], message: "Apple team ID cleared" };
+		case "bundle-id":
+			return { updates: {}, removals: [PUSH_APNS_ENV.bundleId], message: `APNs bundle id cleared (default ${DEFAULT_APNS_BUNDLE_ID})` };
+		case "env":
+			return { updates: {}, removals: [PUSH_APNS_ENV.environment], message: `APNs environment cleared (default ${DEFAULT_APNS_ENVIRONMENT})` };
+	}
+}
+
+function buildPushClearUpdate(): PushConfigUpdate {
+	return {
+		updates: {},
+		removals: Object.values(PUSH_APNS_ENV),
+		message: "APNs push configuration cleared",
+	};
+}
+
+async function savePushConfigUpdate(update: PushConfigUpdate): Promise<string> {
+	await updateEnv(update.updates, update.removals);
+	const message = await restartBrainMessage(update.message);
+	return `${message}\n${await pushStatusText(await readConfig())}`;
+}
+
+async function pushStatusText(config?: ClankyConfig): Promise<string> {
+	const effectiveConfig = config ?? await readConfig();
+	return formatPushStatus(effectiveConfig, await safeListPushDevices(), await pushKeyPathStatus(effectiveConfig.apnsKeyPath));
+}
+
+async function formatPushMenuStatus(config: ClankyConfig, devices: readonly PushDevice[]): Promise<SettingsMenuStatus> {
+	const collapsed = formatPushSummary(config, devices);
+	const expanded = formatPushStatus(config, devices, await pushKeyPathStatus(config.apnsKeyPath));
+	return collapsibleMenuStatus(collapsed, expanded);
+}
+
+function formatPushSummary(config: ClankyConfig, devices: readonly PushDevice[]): string {
+	const configured = pushApnsConfigured(config);
+	return [
+		statusTitle("Push notifications"),
+		[
+			statusInline("APNs", configured ? "configured" : "missing credentials", configured ? "ok" : "warn"),
+			statusInline("env", parsePushApnsEnvironment(config.apnsEnvironment) ?? DEFAULT_APNS_ENVIRONMENT, "muted"),
+			statusInline("devices", String(devices.length), devices.length > 0 ? "ok" : "warn"),
+		].join("; "),
+	].join("\n");
+}
+
+function formatPushStatus(
+	config: ClankyConfig,
+	devices: readonly PushDevice[],
+	keyPathStatus: "unset" | "readable" | "unreadable",
+): string {
+	const configured = pushApnsConfigured(config);
+	const keyPath = config.apnsKeyPath;
+	const environment = parsePushApnsEnvironment(config.apnsEnvironment) ?? DEFAULT_APNS_ENVIRONMENT;
+	const deviceList = devices.length === 0 ? "(none)" : devices.map((device) => `${maskPushToken(device.token)} ${device.platform}`).join(", ");
+	const lines = [
+		statusTitle("Push notifications"),
+		statusLine("APNs", configured ? "configured" : "missing credentials", configured ? "ok" : "warn"),
+		statusLine(
+			"key path",
+			keyPath === undefined ? "(unset)" : displayHomePath(keyPath),
+			keyPathStatus === "readable" ? "ok" : keyPathStatus === "unreadable" ? "bad" : "warn",
+		),
+		statusLine("key id", config.apnsKeyId === undefined ? "(unset)" : config.apnsKeyId, config.apnsKeyId === undefined ? "warn" : "ok"),
+		statusLine("team id", config.apnsTeamId === undefined ? "(unset)" : config.apnsTeamId, config.apnsTeamId === undefined ? "warn" : "ok"),
+		statusLine("bundle id", config.apnsBundleId ?? DEFAULT_APNS_BUNDLE_ID, config.apnsBundleId === undefined ? "muted" : "ok"),
+		statusLine("environment", environment, environment === "sandbox" ? "muted" : "active"),
+		statusLine("registered devices", `${devices.length}${devices.length === 0 ? "" : ` (${deviceList})`}`, devices.length > 0 ? "ok" : "warn"),
+	];
+	if (!configured) {
+		lines.push("", "Run /push to set APNs key path, key id, and team id. Store only the .p8 file path, not the key contents.");
+	}
+	if (devices.length === 0) {
+		lines.push("", "Register an iPhone from Clanky iOS Settings -> Enable notifications, then run /push test.");
+	}
+	return lines.join("\n");
+}
+
+async function sendPushTestNotification(): Promise<string> {
+	const config = await readConfig();
+	const env = await readPushEnv();
+	const apns = apnsConfigFromEnv(env);
+	const devices = await safeListPushDevices();
+	if (apns === undefined) return `${await pushStatusText(config)}\n\nAPNs is not configured; set key path, key id, and team id first.`;
+	if (devices.length === 0) return `${await pushStatusText(config)}\n\nNo registered iOS devices. Enable notifications in the app first.`;
+	const note = {
+		title: "Clanky test",
+		body: "Push notifications are wired.",
+		collapseId: `clanky-test-${Date.now()}`,
+		data: { status: "test", test: "1" },
+	};
+	const results = await Promise.all(
+		devices.map(async (device) => ({ device, result: await sendApns(device.token, note, apns) })),
+	);
+	const okCount = results.filter((entry) => entry.result.ok).length;
+	const lines = [
+		statusTitle("Push test"),
+		statusLine("APNs host", apns.host, "muted"),
+		statusLine("sent", `${okCount}/${results.length}`, okCount === results.length ? "ok" : "warn"),
+		...results.map(({ device, result }) =>
+			statusLine(
+				maskPushToken(device.token),
+				result.ok ? "ok" : `${result.reason ?? `HTTP ${result.status ?? "?"}`}`,
+				result.ok ? "ok" : "bad",
+			),
+		),
+	];
+	return lines.join("\n");
+}
+
+async function readPushEnv(): Promise<NodeJS.ProcessEnv> {
+	const content = await readFile(ENV_PATH, "utf8").catch(() => "");
+	const fileEnv = content.trim().length === 0 ? {} : parseEnv(content);
+	return { ...process.env, ...fileEnv };
+}
+
+async function safeListPushDevices(): Promise<readonly PushDevice[]> {
+	try {
+		return await listPushDevices();
+	} catch {
+		return [];
+	}
+}
+
+async function pushKeyPathStatus(keyPath: string | undefined): Promise<"unset" | "readable" | "unreadable"> {
+	if (keyPath === undefined || keyPath.trim().length === 0) return "unset";
+	try {
+		await access(keyPath);
+		return "readable";
+	} catch {
+		return "unreadable";
+	}
+}
+
+function pushApnsConfigured(config: ClankyConfig): boolean {
+	return [config.apnsKeyPath, config.apnsKeyId, config.apnsTeamId].every((value) => value !== undefined && value.trim().length > 0);
+}
+
+function pushFieldPrompt(field: PushConfigField): string {
+	switch (field) {
+		case "key-path":
+			return "Path to the Apple APNs AuthKey_XXXX.p8 file. Do not paste the key contents.";
+		case "key-id":
+			return "Apple APNs key ID.";
+		case "team-id":
+			return "Apple Developer Team ID.";
+		case "bundle-id":
+			return "APNs topic / iOS bundle id.";
+		case "env":
+			return "APNs environment.";
+	}
+}
+
+function pushFieldPlaceholder(field: PushConfigField): string {
+	switch (field) {
+		case "key-path":
+			return "/path/to/AuthKey_XXXXXXXXXX.p8";
+		case "key-id":
+			return "XXXXXXXXXX";
+		case "team-id":
+			return "XXXXXXXXXX";
+		case "bundle-id":
+			return DEFAULT_APNS_BUNDLE_ID;
+		case "env":
+			return DEFAULT_APNS_ENVIRONMENT;
+	}
+}
+
+function pushFieldCurrentValue(config: ClankyConfig, field: PushConfigField): string | undefined {
+	switch (field) {
+		case "key-path":
+			return config.apnsKeyPath;
+		case "key-id":
+			return config.apnsKeyId;
+		case "team-id":
+			return config.apnsTeamId;
+		case "bundle-id":
+			return config.apnsBundleId ?? DEFAULT_APNS_BUNDLE_ID;
+		case "env":
+			return parsePushApnsEnvironment(config.apnsEnvironment) ?? DEFAULT_APNS_ENVIRONMENT;
+	}
+}
+
+function pushFieldValidator(field: PushConfigField): (value: string) => string | undefined {
+	return (value) => {
+		const trimmed = value.trim();
+		if (isClearSettingValue(trimmed)) return undefined;
+		if (trimmed.length === 0) return "Enter a value, or use /push clear to remove APNs config.";
+		if (field === "key-path") {
+			if (/BEGIN\s+(?:EC\s+)?PRIVATE\s+KEY/u.test(trimmed) || trimmed.includes("\n")) return "Enter a filesystem path, not .p8 key contents.";
+			return undefined;
+		}
+		if ((field === "key-id" || field === "team-id") && !/^[A-Za-z0-9]{10}$/u.test(trimmed)) return "Apple APNs key/team ids are 10 alphanumeric characters.";
+		if (field === "bundle-id" && !/^[A-Za-z0-9][A-Za-z0-9.-]+$/u.test(trimmed)) return "Enter a valid bundle id, e.g. io.clanky.ios.";
+		if (field === "env" && parsePushApnsEnvironment(trimmed) === undefined) return "Use sandbox/development or production.";
+		return undefined;
+	};
+}
+
+function parsePushApnsEnvironment(value: string | undefined): PushApnsEnvironment | undefined {
+	const normalized = value?.trim().toLowerCase();
+	if (normalized === "sandbox" || normalized === "development" || normalized === "debug" || normalized === "dev") return "sandbox";
+	if (normalized === "production" || normalized === "release" || normalized === "prod") return "production";
+	return undefined;
+}
+
+function isClearSettingValue(value: string): boolean {
+	const normalized = value.trim().toLowerCase();
+	return normalized === "clear" || normalized === "unset" || normalized === "none" || normalized === "default";
+}
+
+function maskPushToken(token: string): string {
+	const trimmed = token.trim();
+	if (trimmed.length <= 10) return trimmed.length === 0 ? "(empty-token)" : trimmed;
+	return `${trimmed.slice(0, 4)}…${trimmed.slice(-6)}`;
+}
+
+function pushUsage(): string {
+	return [
+		"Usage:",
+		"/push",
+		"/push status",
+		"/push key-path /path/to/AuthKey_XXXXXXXXXX.p8",
+		"/push key-id XXXXXXXXXX",
+		"/push team-id XXXXXXXXXX",
+		`/push bundle-id ${DEFAULT_APNS_BUNDLE_ID}`,
+		"/push env sandbox|production",
+		"/push test",
+		"/push clear",
+	].join("\n");
 }
 
 function parseOnOff(value: string | undefined): boolean | undefined {
@@ -5053,7 +5599,10 @@ async function configureTraceInteractive(flow: SetupFlow): Promise<string> {
 }
 
 function formatTraceStatus(): string {
-	return `Turn trace: ${turnTraceMode}. Use /trace off|no-reply|all.`;
+	const state = session.state;
+	const sessionStatus =
+		state.sessionId === undefined ? "session none" : `session ${state.sessionId}; stream index ${state.streamIndex}`;
+	return `Turn trace: ${turnTraceMode}. ${sessionStatus}. Use /trace off|no-reply|all.`;
 }
 
 async function configureLayout(argument: string, flow: SetupFlow | undefined): Promise<string> {
@@ -5130,7 +5679,7 @@ async function saveHeaderVisible(next: boolean): Promise<string> {
 function applyHeaderVisible(visible: boolean): void {
 	headerVisible = visible;
 	banner.setVisible(visible);
-	tui.requestRender();
+	refreshStatusView();
 }
 
 function formatHeaderStatus(): string {
@@ -8112,6 +8661,11 @@ async function readConfig(): Promise<ClankyConfig> {
 		const discordAllowedGuildIds = get(DISCORD_SCOPE_ENV.guilds);
 		const discordAllowedChannelIds = get(DISCORD_SCOPE_ENV.channels);
 		const discordAllowDms = get(DISCORD_SCOPE_ENV.dms);
+		const apnsKeyPath = get(PUSH_APNS_ENV.keyPath) ?? get(PUSH_APNS_ENV.keyAlias) ?? process.env[PUSH_APNS_ENV.keyPath] ?? process.env[PUSH_APNS_ENV.keyAlias];
+		const apnsKeyId = get(PUSH_APNS_ENV.keyId) ?? process.env[PUSH_APNS_ENV.keyId];
+		const apnsTeamId = get(PUSH_APNS_ENV.teamId) ?? process.env[PUSH_APNS_ENV.teamId];
+		const apnsBundleId = get(PUSH_APNS_ENV.bundleId) ?? process.env[PUSH_APNS_ENV.bundleId];
+		const apnsEnvironment = get(PUSH_APNS_ENV.environment) ?? process.env[PUSH_APNS_ENV.environment];
 	if (codexModel !== undefined) config.codexModel = codexModel;
 	if (claudeModel !== undefined) config.claudeModel = claudeModel;
 	if (codexEffort !== undefined) config.codexEffort = codexEffort;
@@ -8170,6 +8724,11 @@ async function readConfig(): Promise<ClankyConfig> {
 		if (discordAllowedGuildIds !== undefined) config.discordAllowedGuildIds = discordAllowedGuildIds;
 	if (discordAllowedChannelIds !== undefined) config.discordAllowedChannelIds = discordAllowedChannelIds;
 	if (discordAllowDms !== undefined) config.discordAllowDms = discordAllowDms;
+	if (apnsKeyPath !== undefined) config.apnsKeyPath = apnsKeyPath;
+	if (apnsKeyId !== undefined) config.apnsKeyId = apnsKeyId;
+	if (apnsTeamId !== undefined) config.apnsTeamId = apnsTeamId;
+	if (apnsBundleId !== undefined) config.apnsBundleId = apnsBundleId;
+	if (apnsEnvironment !== undefined) config.apnsEnvironment = apnsEnvironment;
 	return config;
 }
 

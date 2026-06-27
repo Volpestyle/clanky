@@ -28,7 +28,7 @@ export type BannerFields = {
 	harness?: string;
 	cwd?: string;
 	server?: string;
-	/** Where this face sits: a `{session} · pane {pane}` summary, or "none". */
+	/** Where this face sits inside the detected terminal multiplexer, or "none". */
 	stage?: string;
 	/** The row label for `stage` — the detected multiplexer ("herdr"/"tmux"). */
 	stageLabel?: string;

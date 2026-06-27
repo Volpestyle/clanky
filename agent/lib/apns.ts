@@ -14,7 +14,7 @@ import { createPrivateKey, sign as cryptoSign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import http2 from "node:http2";
 
-interface ApnsConfig {
+export interface ApnsConfig {
 	keyPath: string;
 	keyId: string;
 	teamId: string;
@@ -22,19 +22,23 @@ interface ApnsConfig {
 	host: string;
 }
 
-export function apnsConfig(): ApnsConfig | undefined {
-	const keyPath = process.env.CLANKY_APNS_KEY_PATH ?? process.env.CLANKY_APNS_KEY;
-	const keyId = process.env.CLANKY_APNS_KEY_ID;
-	const teamId = process.env.CLANKY_APNS_TEAM_ID;
+export function apnsConfigFromEnv(env: NodeJS.ProcessEnv = process.env): ApnsConfig | undefined {
+	const keyPath = env.CLANKY_APNS_KEY_PATH ?? env.CLANKY_APNS_KEY;
+	const keyId = env.CLANKY_APNS_KEY_ID;
+	const teamId = env.CLANKY_APNS_TEAM_ID;
 	if (!keyPath || !keyId || !teamId) return undefined;
-	const bundleId = process.env.CLANKY_APNS_BUNDLE_ID ?? "io.clanky.ios";
-	const env = (process.env.CLANKY_APNS_ENV ?? "sandbox").toLowerCase();
-	const host = env === "production" ? "api.push.apple.com" : "api.sandbox.push.apple.com";
+	const bundleId = env.CLANKY_APNS_BUNDLE_ID ?? "io.clanky.ios";
+	const apnsEnv = (env.CLANKY_APNS_ENV ?? "sandbox").toLowerCase();
+	const host = apnsEnv === "production" ? "api.push.apple.com" : "api.sandbox.push.apple.com";
 	return { keyPath, keyId, teamId, bundleId, host };
 }
 
-export function apnsConfigured(): boolean {
-	return apnsConfig() !== undefined;
+export function apnsConfig(): ApnsConfig | undefined {
+	return apnsConfigFromEnv();
+}
+
+export function apnsConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
+	return apnsConfigFromEnv(env) !== undefined;
 }
 
 export interface ApnsNotification {
@@ -56,23 +60,23 @@ function base64url(input: Buffer | string): string {
 
 // APNs requires the provider token be refreshed at least hourly and reused at
 // least 20 min; cache for 30 min.
-let cachedToken: { jwt: string; iat: number } | undefined;
+let cachedToken: { jwt: string; iat: number; cacheKey: string } | undefined;
 
 function providerToken(config: ApnsConfig): string {
 	const now = Math.floor(Date.now() / 1000);
-	if (cachedToken && now - cachedToken.iat < 1800) return cachedToken.jwt;
+	const cacheKey = `${config.keyPath}\0${config.keyId}\0${config.teamId}`;
+	if (cachedToken && cachedToken.cacheKey === cacheKey && now - cachedToken.iat < 1800) return cachedToken.jwt;
 	const key = createPrivateKey(readFileSync(config.keyPath));
 	const header = base64url(JSON.stringify({ alg: "ES256", kid: config.keyId }));
 	const claims = base64url(JSON.stringify({ iss: config.teamId, iat: now }));
 	const signingInput = `${header}.${claims}`;
 	const signature = cryptoSign("SHA256", Buffer.from(signingInput), { key, dsaEncoding: "ieee-p1363" });
 	const jwt = `${signingInput}.${base64url(signature)}`;
-	cachedToken = { jwt, iat: now };
+	cachedToken = { jwt, iat: now, cacheKey };
 	return jwt;
 }
 
-export function sendApns(token: string, note: ApnsNotification): Promise<ApnsResult> {
-	const config = apnsConfig();
+export function sendApns(token: string, note: ApnsNotification, config = apnsConfig()): Promise<ApnsResult> {
 	if (!config) return Promise.resolve({ ok: false, reason: "apns_unconfigured" });
 
 	let jwt: string;

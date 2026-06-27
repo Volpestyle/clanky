@@ -6,8 +6,14 @@ export type FaceBlockHandle = {
 	setMarkdown(markdown: string): void;
 };
 
+export type FaceBlockOptions = {
+	readonly clickToggle?: boolean;
+	readonly collapsed?: boolean;
+	readonly collapsible?: boolean;
+};
+
 export type FaceRenderSink = {
-	insertMarkdown(markdown: string): FaceBlockHandle;
+	insertMarkdown(markdown: string, options?: FaceBlockOptions): FaceBlockHandle;
 	setLoaderMessage(message: string): void;
 	setStatus(message: string): void;
 };
@@ -34,6 +40,7 @@ type SubagentCalledEvent = Extract<HandleMessageStreamEvent, { type: "subagent.c
 const STREAM_RENDER_THROTTLE_MS = 50;
 const MAX_CODE_BLOCK_LINE_CHARS = 72;
 const JSON_BLOCK_MAX_CHARS = 4_000;
+const COLLAPSED_TOOL_BLOCK_OPTIONS: FaceBlockOptions = { clickToggle: true, collapsed: true };
 
 type TurnStats = {
 	assistantTextChars: number;
@@ -58,6 +65,8 @@ export class ClankyFaceRenderer {
 	private pendingReasoningMarkdown: string | undefined;
 	private streamFlushTimer: ReturnType<typeof setTimeout> | undefined;
 	private readonly actionBlocksByCallId = new Map<string, FaceBlockHandle>();
+	private readonly actionInputsByBlockKey = new Map<string, unknown>();
+	private readonly actionNamesByBlockKey = new Map<string, string>();
 	private readonly authorizationBlocksByName = new Map<string, FaceBlockHandle>();
 	private readonly failureBlocksByKey = new Map<string, FaceBlockHandle>();
 	private readonly inputApprovalTitlePrefixByRequestId = new Map<string, string>();
@@ -100,6 +109,8 @@ export class ClankyFaceRenderer {
 		this.reasoningText = "";
 		this.pendingReasoningMarkdown = undefined;
 		this.actionBlocksByCallId.clear();
+		this.actionInputsByBlockKey.clear();
+		this.actionNamesByBlockKey.clear();
 		this.authorizationBlocksByName.clear();
 		this.failureBlocksByKey.clear();
 		this.inputApprovalTitlePrefixByRequestId.clear();
@@ -154,7 +165,7 @@ export class ClankyFaceRenderer {
 				for (const action of event.data.actions) this.insertActionRequest(action);
 				break;
 			case "action.result":
-				this.stats.toolResults.push(actionResultName(event.data.result));
+				this.stats.toolResults.push(this.actionNameForResult(event.data.result));
 				this.upsertActionResult(event.data.result, event.data.status, event.data.error);
 				break;
 			case "input.requested":
@@ -285,16 +296,28 @@ export class ClankyFaceRenderer {
 
 	private insertActionRequest(action: ActionRequest): void {
 		this.closeStreamingBlocks();
-		const block = this.sink.insertMarkdown(sanitizeTerminalText(formatActionRequestBlock(action)));
+		this.actionInputsByBlockKey.set(action.callId, action.input);
+		const name = actionRequestName(action);
+		this.actionNamesByBlockKey.set(action.callId, name);
+		const title = isSkillLoadRequest(action) ? `Skill: ${name} - running` : `Tool: ${name} - running`;
+		const block = this.sink.insertMarkdown(sanitizeTerminalText(formatActionRequestBlock(action, title)), COLLAPSED_TOOL_BLOCK_OPTIONS);
 		this.actionBlocksByCallId.set(action.callId, block);
 	}
 
 	private upsertActionResult(result: ActionResult, status: ActionResultStatus, error: ActionResultError): void {
 		this.closeStreamingBlocks();
-		const markdown = formatActionResultBlock(result, status, error);
+		const outcome = actionOutcome(result, status);
+		const kind = isSkillLoadResult(result) ? "Skill" : "Tool";
+		const markdown = formatActionResultBlock(
+			result,
+			status,
+			error,
+			`${kind}: ${this.actionNameForResult(result)} - ${outcome}`,
+			this.actionInputsByBlockKey.get(result.callId),
+		);
 		const block = this.actionBlocksByCallId.get(result.callId);
 		if (block === undefined) {
-			this.sink.insertMarkdown(sanitizeTerminalText(markdown));
+			this.sink.insertMarkdown(sanitizeTerminalText(markdown), COLLAPSED_TOOL_BLOCK_OPTIONS);
 			return;
 		}
 		block.setMarkdown(sanitizeTerminalText(markdown));
@@ -417,7 +440,7 @@ export class ClankyFaceRenderer {
 				for (const action of childEvent.data.actions) this.insertSubagentActionRequest(parentCallId, subagentName, action);
 				return [];
 			case "action.result":
-				this.stats.toolResults.push(`${subagentName}/${actionResultName(childEvent.data.result)}`);
+				this.stats.toolResults.push(`${subagentName}/${this.actionNameForResult(childEvent.data.result, subagentActionKey(parentCallId, childEvent.data.result.callId))}`);
 				this.upsertSubagentActionResult(parentCallId, subagentName, childEvent.data.result, childEvent.data.status, childEvent.data.error);
 				return [];
 			case "input.requested":
@@ -465,10 +488,14 @@ export class ClankyFaceRenderer {
 	private insertSubagentActionRequest(parentCallId: string, subagentName: string, action: ActionRequest): void {
 		this.closeStreamingBlocks();
 		this.markSubagentVisibleChildContent(parentCallId);
+		const actionKey = subagentActionKey(parentCallId, action.callId);
+		this.actionInputsByBlockKey.set(actionKey, action.input);
+		this.actionNamesByBlockKey.set(actionKey, actionRequestName(action));
 		const block = this.sink.insertMarkdown(
 			sanitizeTerminalText(formatActionRequestBlock(action, `Subagent tool: ${subagentName} / ${actionRequestName(action)} - running`)),
+			COLLAPSED_TOOL_BLOCK_OPTIONS,
 		);
-		this.actionBlocksByCallId.set(subagentActionKey(parentCallId, action.callId), block);
+		this.actionBlocksByCallId.set(actionKey, block);
 	}
 
 	private upsertSubagentActionResult(
@@ -481,13 +508,24 @@ export class ClankyFaceRenderer {
 		this.closeStreamingBlocks();
 		this.markSubagentVisibleChildContent(parentCallId);
 		const outcome = actionOutcome(result, status);
-		const markdown = formatActionResultBlock(result, status, error, `Subagent tool: ${subagentName} / ${actionResultName(result)} - ${outcome}`);
-		const block = this.actionBlocksByCallId.get(subagentActionKey(parentCallId, result.callId));
+		const actionKey = subagentActionKey(parentCallId, result.callId);
+		const markdown = formatActionResultBlock(
+			result,
+			status,
+			error,
+			`Subagent tool: ${subagentName} / ${this.actionNameForResult(result, actionKey)} - ${outcome}`,
+			this.actionInputsByBlockKey.get(actionKey),
+		);
+		const block = this.actionBlocksByCallId.get(actionKey);
 		if (block === undefined) {
-			this.sink.insertMarkdown(sanitizeTerminalText(markdown));
+			this.sink.insertMarkdown(sanitizeTerminalText(markdown), COLLAPSED_TOOL_BLOCK_OPTIONS);
 			return;
 		}
 		block.setMarkdown(sanitizeTerminalText(markdown));
+	}
+
+	private actionNameForResult(result: ActionResult, blockKey = result.callId): string {
+		return this.actionNamesByBlockKey.get(blockKey) ?? actionResultName(result);
 	}
 
 	private upsertSubagentInputRequests(parentCallId: string, subagentName: string, requests: readonly InputRequest[]): void {
@@ -694,6 +732,12 @@ function formatActionRequestBlock(action: ActionRequest, title = `Tool: ${action
 		`**${title}**`,
 		"",
 		summary.length === 0 ? `call ${action.callId}` : summary,
+		"",
+		`call: ${action.callId}`,
+		"input:",
+		"```json",
+		formatJsonBlock(action.input),
+		"```",
 	].join("\n");
 }
 
@@ -702,14 +746,26 @@ function formatActionResultBlock(
 	status: ActionResultStatus,
 	error: ActionResultError,
 	title = `Tool: ${actionResultName(result)} - ${actionOutcome(result, status)}`,
+	input?: unknown,
 ): string {
 	const outcome = actionOutcome(result, status);
 	const detail = error === undefined ? summarizeToolResult(result.output) : `${error.code}: ${error.message}`;
-	return [
+	const lines = [
 		`**${title}**`,
 		"",
 		`${outcome === "completed" ? "->" : "!"} ${detail}`,
-	].join("\n");
+		"",
+		`call: ${result.callId}`,
+		`status: ${status}`,
+	];
+	if (input !== undefined) {
+		lines.push("", "input:", "```json", formatJsonBlock(input), "```");
+	}
+	if (error !== undefined) {
+		lines.push("", "error:", "```json", formatJsonBlock(error), "```");
+	}
+	lines.push("", "output:", "```json", formatJsonBlock(result.output), "```");
+	return lines.join("\n");
 }
 
 function formatInputRequestBlock(request: InputRequest, title?: string): string {
@@ -832,13 +888,14 @@ function formatJsonBlock(value: unknown, maxChars = JSON_BLOCK_MAX_CHARS): strin
 function actionRequestName(action: ActionRequest): string {
 	switch (action.kind) {
 		case "tool-call":
+			if (action.toolName === "load_skill") return loadSkillNameFromInput(action.input) ?? action.toolName;
 			return action.toolName;
 		case "subagent-call":
 			return action.subagentName;
 		case "remote-agent-call":
 			return action.remoteAgentName;
 		case "load-skill":
-			return "load_skill";
+			return loadSkillNameFromInput(action.input) ?? "load_skill";
 	}
 }
 
@@ -851,6 +908,20 @@ function actionResultName(result: ActionResult): string {
 		case "load-skill-result":
 			return result.name ?? "load_skill";
 	}
+}
+
+function loadSkillNameFromInput(input: unknown): string | undefined {
+	if (!isRecord(input)) return undefined;
+	const skill = input.skill;
+	return typeof skill === "string" && skill.trim().length > 0 ? skill.trim() : undefined;
+}
+
+function isSkillLoadRequest(action: ActionRequest): boolean {
+	return action.kind === "load-skill" || (action.kind === "tool-call" && action.toolName === "load_skill");
+}
+
+function isSkillLoadResult(result: ActionResult): boolean {
+	return result.kind === "load-skill-result" || (result.kind === "tool-result" && result.toolName === "load_skill");
 }
 
 function mergeUsage(current: StepUsage | undefined, next: StepUsage | undefined): StepUsage | undefined {

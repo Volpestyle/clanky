@@ -3,6 +3,7 @@ import {
 	ClankyFaceRenderer,
 	formatContextUsage,
 	formatTokenFlow,
+	type FaceBlockOptions,
 	type FaceBlockHandle,
 	type FaceRenderSink,
 } from "../agent/lib/clanky-face-renderer.ts";
@@ -13,9 +14,11 @@ function assert(condition: boolean, message: string): asserts condition {
 
 class CapturedBlock implements FaceBlockHandle {
 	markdown: string;
+	readonly options: FaceBlockOptions | undefined;
 
-	constructor(markdown: string) {
+	constructor(markdown: string, options?: FaceBlockOptions) {
 		this.markdown = markdown;
+		this.options = options;
 	}
 
 	setMarkdown(markdown: string): void {
@@ -27,8 +30,8 @@ const blocks: CapturedBlock[] = [];
 const statuses: string[] = [];
 const loaderMessages: string[] = [];
 const sink: FaceRenderSink = {
-	insertMarkdown(markdown: string): FaceBlockHandle {
-		const block = new CapturedBlock(markdown);
+	insertMarkdown(markdown: string, options?: FaceBlockOptions): FaceBlockHandle {
+		const block = new CapturedBlock(markdown, options);
 		blocks.push(block);
 		return block;
 	},
@@ -136,7 +139,14 @@ for (const event of events) {
 assert(blocks.some((block) => block.markdown === "**Clanky**\n\nHello"), "assistant stream should render once with replay deduped");
 assert(!blocks.some((block) => block.markdown.includes("HelloHello")), "replayed assistant prefix should not duplicate text");
 assert(blocks.some((block) => block.markdown.includes("**Reasoning**") && block.markdown.includes("Need a tool.")), "reasoning block should render");
-assert(blocks.some((block) => block.markdown.includes("**Tool: bash - completed**") && block.markdown.includes("-> ok")), "tool block should update with compact result");
+const completedToolBlock = blocks.find((block) => block.markdown.includes("**Tool: bash - completed**"));
+assert(completedToolBlock !== undefined && completedToolBlock.markdown.includes("-> ok"), "tool block should update with compact result");
+assert(completedToolBlock.options?.collapsed === true, "tool blocks should start collapsed");
+assert(completedToolBlock.options?.clickToggle === true, "tool blocks should opt into click expand/collapse");
+assert(completedToolBlock.markdown.includes("input:"), "expanded tool detail should include the request input");
+assert(completedToolBlock.markdown.includes('"command": "printf ok"'), "expanded tool detail should show the request JSON");
+assert(completedToolBlock.markdown.includes("output:"), "expanded tool detail should include the result output");
+assert(completedToolBlock.markdown.includes('"stdout": "ok"'), "expanded tool detail should show the result JSON");
 assert(!blocks.some((block) => block.markdown.includes("**Actions requested**")), "tool requests should not render as raw request batches");
 assert(blocks.some((block) => block.markdown.includes("**Input requested**") && block.markdown.includes("Continue?")), "input request block should render");
 const questionBlock = blocks.find((block) => block.markdown.includes("**Input requested**") && block.markdown.includes("input-1"));
@@ -153,6 +163,74 @@ assert(loaderMessages.includes("Step 1 running..."), "step start should update l
 assert(formatTokenFlow(renderer.lastUsage, 100_000) === "↑ 12K ↓ 67 ctx 12%", "token flow should include context percent");
 assert(formatContextUsage(renderer.lastUsage, 100_000) === "↑ 12K ↓ 67 ctx 12%", "context usage should include token flow after usage");
 assert(renderer.noticeForCompletedTurn("no-reply") === undefined, "assistant text should suppress no-reply notice");
+
+const skillBlocks: CapturedBlock[] = [];
+const skillRenderer = new ClankyFaceRenderer({
+	insertMarkdown(markdown: string): FaceBlockHandle {
+		const block = new CapturedBlock(markdown);
+		skillBlocks.push(block);
+		return block;
+	},
+	setLoaderMessage(): void {},
+	setStatus(): void {},
+});
+skillRenderer.renderEvent({
+	type: "actions.requested",
+	data: {
+		actions: [{ callId: "skill-call", input: { skill: "herdr" }, kind: "load-skill" }],
+		sequence: 1,
+		stepIndex: 0,
+		turnId: "turn-skill",
+	},
+});
+const skillBlock = skillBlocks.find((block) => block.markdown.includes("**Skill: herdr - running**"));
+assert(skillBlock !== undefined, "load-skill request should render a Skill block with the requested skill name");
+skillRenderer.renderEvent({
+	type: "action.result",
+	data: {
+		result: { callId: "skill-call", isError: false, kind: "load-skill-result", output: { text: "# Herdr Host Control" } },
+		sequence: 2,
+		status: "completed",
+		stepIndex: 0,
+		turnId: "turn-skill",
+	},
+});
+assert(skillBlock.markdown.includes("**Skill: herdr - completed**"), "load-skill result should preserve the requested skill name when Eve omits result.name");
+assert(!skillBlock.markdown.includes("load_skill"), "load-skill lifecycle should not fall back to the generic load_skill label when the request named a skill");
+
+const frameworkSkillBlocks: CapturedBlock[] = [];
+const frameworkSkillRenderer = new ClankyFaceRenderer({
+	insertMarkdown(markdown: string): FaceBlockHandle {
+		const block = new CapturedBlock(markdown);
+		frameworkSkillBlocks.push(block);
+		return block;
+	},
+	setLoaderMessage(): void {},
+	setStatus(): void {},
+});
+frameworkSkillRenderer.renderEvent({
+	type: "actions.requested",
+	data: {
+		actions: [{ callId: "framework-skill-call", input: { skill: "herdr" }, kind: "tool-call", toolName: "load_skill" }],
+		sequence: 1,
+		stepIndex: 0,
+		turnId: "turn-framework-skill",
+	},
+});
+const frameworkSkillBlock = frameworkSkillBlocks.find((block) => block.markdown.includes("**Skill: herdr - running**"));
+assert(frameworkSkillBlock !== undefined, "framework load_skill tool-call should render a Skill block with the requested skill name");
+frameworkSkillRenderer.renderEvent({
+	type: "action.result",
+	data: {
+		result: { callId: "framework-skill-call", isError: false, kind: "tool-result", output: "# Herdr Host Control", toolName: "load_skill" },
+		sequence: 2,
+		status: "completed",
+		stepIndex: 0,
+		turnId: "turn-framework-skill",
+	},
+});
+assert(frameworkSkillBlock.markdown.includes("**Skill: herdr - completed**"), "framework load_skill result should preserve the requested skill name");
+assert(!frameworkSkillBlock.markdown.includes("load_skill"), "framework load_skill lifecycle should not render the generic tool name when the request named a skill");
 
 renderer.resetSession();
 assert(formatContextUsage(renderer.lastUsage, 100_000) === "ctx 0%", "new session should reset context usage to zero percent");

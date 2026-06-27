@@ -29,6 +29,7 @@ type TranscriptBlockTone =
 	| "notice"
 	| "question"
 	| "reasoning"
+	| "skill"
 	| "subagent"
 	| "system"
 	| "tool"
@@ -103,6 +104,13 @@ export function parseTranscriptMarkdown(markdown: string): ParsedTranscriptMarkd
 }
 
 function renderTitle(title: string, tone: TranscriptBlockTone, theme: ClankyTranscriptBlockTheme): string {
+	const skill = /^Skill: (.+?) - (.+)$/u.exec(title);
+	if (skill !== null) {
+		const name = skill[1] ?? "skill";
+		const status = skill[2] ?? "";
+		const label = status.toLowerCase() === "running" ? "loading skill" : "skill";
+		return `${skillStatusGlyph(status, theme)} ${theme.bold(name)} ${theme.yellow(label)} ${theme.dim(status)}`;
+	}
 	const tool = /^Tool: (.+?) - (.+)$/u.exec(title);
 	if (tool !== null) {
 		const name = tool[1] ?? "tool";
@@ -152,6 +160,7 @@ function titlePrefix(title: string, tone: TranscriptBlockTone): string {
 	if (tone === "reasoning") return "○ Reasoning";
 	if (tone === "notice") return "· Notice";
 	if (tone === "question") return "? Input";
+	if (tone === "skill") return "✦ Skill";
 	if (tone === "subagent") return "◆ Subagent";
 	if (tone === "tool") return "● Tool";
 	if (tone === "error") return "⨯ Error";
@@ -183,6 +192,8 @@ function stylePrefix(prefix: string, tone: TranscriptBlockTone, theme: ClankyTra
 			return theme.cyan(prefix);
 		case "reasoning":
 			return theme.yellow(prefix);
+		case "skill":
+			return theme.yellow(prefix);
 		case "subagent":
 			return theme.cyan(prefix);
 		case "tool":
@@ -204,6 +215,7 @@ function toneForTitle(title: string): TranscriptBlockTone {
 	if (normalized.startsWith("command")) return "command";
 	if (normalized.startsWith("input")) return "question";
 	if (normalized.startsWith("notice")) return "notice";
+	if (normalized.startsWith("skill:")) return "skill";
 	if (normalized.startsWith("subagent")) return "subagent";
 	if (normalized.startsWith("tool:") || normalized.includes("tool")) return "tool";
 	if (normalized.includes("reasoning")) return "reasoning";
@@ -221,4 +233,12 @@ function subagentStatusGlyph(status: string, theme: ClankyTranscriptBlockTheme):
 	if (normalized === "completed" || normalized === "done") return theme.green("◆");
 	if (normalized === "failed" || normalized === "error") return theme.red("◆");
 	return theme.cyan("◆");
+}
+
+function skillStatusGlyph(status: string, theme: ClankyTranscriptBlockTheme): string {
+	const normalized = status.toLowerCase();
+	if (normalized === "completed" || normalized === "done") return theme.green("✦");
+	if (normalized === "failed" || normalized === "error") return theme.red("✦");
+	if (normalized === "rejected" || normalized === "denied") return theme.yellow("✦");
+	return theme.yellow("✦");
 }

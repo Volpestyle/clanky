@@ -177,6 +177,17 @@ unspacedViewport.addChild(new LineComponent(["You", "hi"]));
 unspacedViewport.addChild(new LineComponent(["Clanky", "hello"]));
 assert(plain(unspacedViewport.render(80)).join("|") === "||You|hi|Clanky|hello", "default spacing should keep blocks adjacent");
 
+const pinnedLoaderViewport = new ClankyTranscriptViewport(() => 9, { dim: (text) => text, selected: (text) => text }, { blockSpacing: 1 });
+pinnedLoaderViewport.addChild(new LineComponent(["You"]));
+pinnedLoaderViewport.addChild(new LineComponent(["Step 1 running..."]), { collapsible: false, pin: "bottom" });
+pinnedLoaderViewport.addChild(new LineComponent(["Clanky", "hello"]));
+pinnedLoaderViewport.addChild(new LineComponent(["Tool", "done"]));
+const pinnedLoaderRows = plain(pinnedLoaderViewport.render(80));
+assert(
+	pinnedLoaderRows.join("|") === "You||Clanky|hello||Tool|done||Step 1 running...",
+	"bottom-pinned loader should stay below later transcript blocks",
+);
+
 const topAlignedViewport = new ClankyTranscriptViewport(() => 4, { dim: (text) => text, selected: (text) => text }, { underfilledAlignment: "top" });
 topAlignedViewport.addChild(new LineComponent(["near input", "second"]));
 assert(plain(topAlignedViewport.render(80)).join("|") === "near input|second||", "top-aligned underfilled transcripts should put blank rows after content");
@@ -193,5 +204,18 @@ focusedSelection.render(80);
 focusedSelection.selectionPress(0, 0);
 focusedSelection.selectionDrag(0, 7);
 assert(focusedSelection.getSelectedText() === "hello", "focused selection should exclude the block prefix gutter");
+
+const clickToggleViewport = new ClankyTranscriptViewport(() => 4, { dim: (text) => text, selected: (text) => text }, { underfilledAlignment: "top" });
+clickToggleViewport.addChild(new LineComponent(["tool", "summary", "detail"]), { clickToggle: true, collapsed: true });
+assert(plain(clickToggleViewport.render(80)).some((line) => line.includes("hidden lines")), "click-toggle blocks can start collapsed");
+assert(clickToggleViewport.toggleCollapsedAt(0), "clicking a click-toggle block row should expand it");
+assert(plain(clickToggleViewport.render(80)).includes("detail"), "expanded click-toggle block should show hidden detail");
+assert(clickToggleViewport.toggleCollapsedAt(1), "clicking another visible row in the block should collapse it");
+assert(plain(clickToggleViewport.render(80)).some((line) => line.includes("hidden lines")), "second click should collapse the block again");
+
+const inertClickViewport = new ClankyTranscriptViewport(() => 3, { dim: (text) => text, selected: (text) => text }, { underfilledAlignment: "top" });
+inertClickViewport.addChild(new LineComponent(["plain", "body"]), { collapsed: true });
+inertClickViewport.render(80);
+assert(!inertClickViewport.toggleCollapsedAt(0), "plain collapsed blocks should ignore mouse toggles unless opted in");
 
 console.log("clanky-transcript-viewport-smoke: ok");

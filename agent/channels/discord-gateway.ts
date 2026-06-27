@@ -58,6 +58,19 @@ type DiscordGatewayState = {
 type DiscordGatewayLock =
 	| { status: "acquired"; path: string; ownerPid: number }
 	| { status: "held"; path: string; ownerPid?: number };
+type DiscordGatewayStatus = {
+	pid: number;
+	repo: string;
+	startedAt: string;
+	updatedAt: string;
+	state: "starting" | "ready" | "failed";
+	ready: boolean;
+	credentialKind: "bot-token" | "user-token";
+	voice: boolean;
+	scope: ReturnType<typeof resolveDiscordScopeOptions>;
+	sessions: { channelId: string; sessionId: string }[];
+	error?: string;
+};
 const DISCORD_GATEWAY_STATE_KEY = "__clankyDiscordGatewayState" as const;
 type DiscordGatewayGlobal = typeof globalThis & { [DISCORD_GATEWAY_STATE_KEY]?: DiscordGatewayState };
 const discordGatewayState = ((globalThis as DiscordGatewayGlobal)[DISCORD_GATEWAY_STATE_KEY] ??= {
@@ -65,6 +78,7 @@ const discordGatewayState = ((globalThis as DiscordGatewayGlobal)[DISCORD_GATEWA
 	startError: null,
 	lock: null,
 });
+const discordGatewayStartedAt = new Date().toISOString();
 
 function eveHost(): string {
 	return process.env.CLANKY_EVE_HOST ?? "http://127.0.0.1:2000";
@@ -115,6 +129,53 @@ function readDiscordGatewayLockOwner(path: string): number | undefined {
 	} catch {
 		return undefined;
 	}
+}
+
+function discordGatewayStatusPath(lockPath: string): string {
+	return join(lockPath, "status.json");
+}
+
+function writeDiscordGatewayStatus(
+	lock: DiscordGatewayLock | null,
+	status: {
+		state: DiscordGatewayStatus["state"];
+		ready: boolean;
+		credentialKind: DiscordGatewayStatus["credentialKind"];
+		voice: boolean;
+		sessions: DiscordGatewayStatus["sessions"];
+		error?: string;
+	},
+): void {
+	if (lock?.status !== "acquired") return;
+	const snapshot: DiscordGatewayStatus = {
+		pid: process.pid,
+		repo: process.env.CLANKY_REPO_DIR ?? process.cwd(),
+		startedAt: discordGatewayStartedAt,
+		updatedAt: new Date().toISOString(),
+		state: status.state,
+		ready: status.ready,
+		credentialKind: status.credentialKind,
+		voice: status.voice,
+		scope: resolveDiscordScopeOptions(process.env),
+		sessions: status.sessions,
+		...(status.error === undefined ? {} : { error: status.error }),
+	};
+	writeFileSync(discordGatewayStatusPath(lock.path), JSON.stringify(snapshot, null, 2));
+}
+
+function readDiscordGatewayStatus(lock: DiscordGatewayLock | null): DiscordGatewayStatus | null {
+	if (lock === null) return null;
+	try {
+		const parsed = JSON.parse(readFileSync(discordGatewayStatusPath(lock.path), "utf8")) as unknown;
+		if (!isRecord(parsed)) return null;
+		return parsed as DiscordGatewayStatus;
+	} catch {
+		return null;
+	}
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -221,12 +282,30 @@ function ensureStarted(): void {
 		}
 	}
 	const voiceEnabled = process.env.CLANKY_DISCORD_VOICE === "1";
+	const credentialKind = resolveDiscordCredentialKind(process.env);
+	const sessions = new Map<string, string>();
+	const writeStatus = (status: {
+		state: DiscordGatewayStatus["state"];
+		ready: boolean;
+		error?: string;
+	}): void =>
+		writeDiscordGatewayStatus(discordGatewayState.lock, {
+			...status,
+			credentialKind,
+			voice: voiceEnabled,
+			sessions: [...sessions].map(([channelId, sessionId]) => ({ channelId, sessionId })),
+		});
+	writeStatus({ state: "starting", ready: false });
 	const presence: DiscordPresenceHost = new DiscordPresenceHost({
 		token,
-		credentialKind: resolveDiscordCredentialKind(process.env),
+		credentialKind,
 		eveHost: eveHost(),
 		voice: voiceEnabled,
-		onPresenceSession: ({ channelId, sessionId }) => spawnPaneMirror(channelId, sessionId),
+		onPresenceSession: async ({ channelId, sessionId }) => {
+			sessions.set(channelId, sessionId);
+			writeStatus({ state: "ready", ready: presence.discordGateway.isReady() });
+			await spawnPaneMirror(channelId, sessionId);
+		},
 		onBridgeToMain: (command) =>
 			routeBridgeToMain(command).catch((error: unknown) => console.error("discord bridge-to-main failed:", error)),
 		onVoiceIntent: voiceEnabled
@@ -237,13 +316,20 @@ function ensureStarted(): void {
 			: undefined,
 	});
 	discordGatewayState.host = presence;
-	presence.start().catch((error: unknown) => {
-		discordGatewayState.startError = (error as Error).message;
-		discordGatewayState.host = null;
-		releaseDiscordGatewayLock(discordGatewayState.lock);
-		discordGatewayState.lock = null;
-		console.error("discord presence failed to start:", error);
-	});
+	presence
+		.start()
+		.then(() => {
+			writeStatus({ state: "ready", ready: presence.discordGateway.isReady() });
+		})
+		.catch((error: unknown) => {
+			const message = (error as Error).message;
+			discordGatewayState.startError = message;
+			discordGatewayState.host = null;
+			writeStatus({ state: "failed", ready: false, error: message });
+			releaseDiscordGatewayLock(discordGatewayState.lock);
+			discordGatewayState.lock = null;
+			console.error("discord presence failed to start:", error);
+		});
 }
 
 // Guarded boot: connects only in the always-on runtime, never during build/info.
@@ -253,6 +339,7 @@ export default defineChannel({
 	routes: [
 		GET("/discord-gateway/health", async () => {
 			ensureStarted();
+			const status = readDiscordGatewayStatus(discordGatewayState.lock);
 			const owner =
 				discordGatewayState.host !== null
 					? "this-context"
@@ -264,11 +351,12 @@ export default defineChannel({
 			return Response.json({
 				ok: discordGatewayState.startError === null,
 				running: owner !== "none",
-				ready: discordGatewayState.host?.discordGateway.isReady() ?? (owner === "other-context" ? null : false),
+				ready: discordGatewayState.host?.discordGateway.isReady() ?? status?.ready ?? (owner === "other-context" ? null : false),
 				owner,
 				lock: discordGatewayState.lock,
 				scope: resolveDiscordScopeOptions(process.env),
 				error: discordGatewayState.startError,
+				status,
 			});
 		}),
 	],

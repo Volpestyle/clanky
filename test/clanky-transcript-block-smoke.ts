@@ -61,6 +61,13 @@ const subagentRows = subagentBlock.render(48).map((line) => line.trimEnd());
 assert(subagentRows[0] === "◆ Planner subagent running", "subagent blocks should render compact lifecycle headers");
 assert(subagentRows.some((line) => line.startsWith("│ ") && line.includes("spawned by codex")), "subagent bodies should use a rule gutter");
 
+const skillParsed = parseTranscriptMarkdown("**Skill: herdr - running**\n\nloading");
+assert(skillParsed.tone === "skill", "parser should classify skill titles distinctly from tools");
+const skillBlock = new ClankyTranscriptMarkdownBlock("**Skill: herdr - running**\n\nloading", theme);
+assert(skillBlock.render(48)[0]?.trimEnd() === "✦ herdr loading skill running", "skill loads should render a distinct loading-skill header");
+const skillDoneBlock = new ClankyTranscriptMarkdownBlock("**Skill: herdr - completed**\n\nloaded", theme);
+assert(skillDoneBlock.render(48)[0]?.trimEnd() === "✦ herdr skill completed", "completed skill loads should render a skill header");
+
 const subagentToolBlock = new ClankyTranscriptMarkdownBlock("**Subagent tool: Planner / bash - completed**\n\n-> ok", theme);
 assert(
 	subagentToolBlock.render(48)[0]?.trimEnd() === "│ ✓ bash Planner completed",
