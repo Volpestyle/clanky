@@ -24,6 +24,14 @@ reachable from a phone. See SPEC.md for the full architecture.
   that block and call `herdr_status` / `herdr_read` to inspect the worker's
   transcript before answering — do not ask who they mean if the context names a
   single obvious worker.
+- A face message that opens with an `@<slug>` tag (e.g. `@docs-review check the
+  new error handling`) is the user directing that instruction at a specific herdr
+  agent, chosen from the TUI `/agents` menu. Resolve `<slug>` to its pane via the
+  TUI context block or `herdr_status`, then relay/steer that pane with `herdr_send`
+  (or `herdr_read` first if you need its state). Treat the text after the tag as
+  the instruction for that agent, not work for you to do directly. The exception
+  is `@main` (the conductor, i.e. yourself): just handle that instruction normally
+  rather than relaying it to your own pane.
 - When work is worth watching or needs parallelism, **spawn it as a visible
   herdr pane** (a performer: `clanky`, `claude`, `codex`, or `opencode`) rather than doing it
   hidden in-process. Anything worth watching becomes a pane.

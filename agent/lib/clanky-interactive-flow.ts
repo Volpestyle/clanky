@@ -8,6 +8,7 @@ import {
 	type Component,
 	type Focusable,
 	type SelectListTheme,
+	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { renderClankyOutline } from "./clanky-outline.ts";
@@ -24,6 +25,7 @@ export type InteractiveTextPromptOptions = {
 	readonly defaultValue?: string;
 	readonly placeholder?: string;
 	readonly error?: string;
+	readonly allowBack?: boolean;
 	readonly onCancel: () => void;
 	readonly onRender: () => void;
 	readonly onSubmit: (value: string) => void;
@@ -35,7 +37,10 @@ export type InteractiveSelectPromptOptions = {
 	readonly options: readonly InteractivePromptOption[];
 	readonly initialValue?: string;
 	readonly initialValues?: readonly string[];
+	readonly currentValue?: string;
+	readonly currentValues?: readonly string[];
 	readonly required?: boolean;
+	readonly allowBack?: boolean;
 	readonly theme: SelectListTheme;
 	readonly onCancel: () => void;
 	readonly onRender: () => void;
@@ -47,8 +52,19 @@ type IndexedOption = {
 	readonly option: InteractivePromptOption;
 };
 
-const FILTER_HINT = "Type to filter. Enter accepts. Esc cancels.";
-const MULTI_FILTER_HINT = "Type to filter. Space toggles. Ctrl+A selects all. Enter accepts. Esc cancels.";
+const MAX_VISIBLE_OPTIONS = 12;
+const TITLE_WORD_OVERRIDES: Record<string, string> = {
+	api: "API",
+	asr: "ASR",
+	dm: "DM",
+	dms: "DMs",
+	id: "ID",
+	ids: "IDs",
+	mcp: "MCP",
+	openai: "OpenAI",
+	tts: "TTS",
+	xai: "xAI",
+};
 
 export class InteractiveTextPrompt implements Component, Focusable {
 	private readonly input = new Input();
@@ -90,7 +106,7 @@ export class InteractiveTextPrompt implements Component, Focusable {
 			...(this.options.error === undefined ? [] : [errorLine(this.options.error)]),
 			"",
 			...this.input.render(contentWidth),
-			dim("Enter accepts. Esc cancels."),
+			dim(this.options.allowBack === true ? "Enter accepts. Esc goes back." : "Enter accepts. Esc cancels."),
 		];
 		return boxLines(lines, width);
 	}
@@ -99,6 +115,7 @@ export class InteractiveTextPrompt implements Component, Focusable {
 export class InteractiveSelectPrompt implements Component, Focusable {
 	private readonly options: InteractiveSelectPromptOptions;
 	private readonly selectedValues: Set<string>;
+	private readonly currentValues: Set<string>;
 	focused = false;
 	private cursorIndex = 0;
 	private filter = "";
@@ -107,6 +124,7 @@ export class InteractiveSelectPrompt implements Component, Focusable {
 	constructor(options: InteractiveSelectPromptOptions) {
 		this.options = options;
 		this.selectedValues = new Set(options.kind === "multi" ? options.initialValues ?? [] : []);
+		this.currentValues = new Set(options.kind === "multi" ? options.currentValues ?? [] : options.currentValue === undefined ? [] : [options.currentValue]);
 		const initialValue = options.initialValue;
 		if (options.kind === "single" && initialValue !== undefined) {
 			const index = options.options.findIndex((option) => option.value === initialValue);
@@ -123,7 +141,11 @@ export class InteractiveSelectPrompt implements Component, Focusable {
 			this.options.onCancel();
 			return;
 		}
-		if (matchesKey(data, Key.enter) || data === "\n" || data === "\r") {
+		if (this.options.allowBack === true && matchesKey(data, Key.left)) {
+			this.options.onCancel();
+			return;
+		}
+		if (matchesKey(data, Key.enter) || matchesKey(data, Key.right) || data === "\n" || data === "\r") {
 			this.submit();
 			return;
 		}
@@ -194,10 +216,9 @@ export class InteractiveSelectPrompt implements Component, Focusable {
 	render(width: number): string[] {
 		const contentWidth = Math.max(1, width - 4);
 		const filtered = this.filteredOptions();
-		const hint = this.options.kind === "multi" ? MULTI_FILTER_HINT : FILTER_HINT;
 		const lines = [
-			...promptHeader(this.options.kind === "multi" ? "Select values" : "Select value", this.options.message, contentWidth),
-			dim(this.filterStatusLine(filtered.length, hint)),
+			...promptHeader(selectPromptTitle(this.options.message, this.options.kind), this.options.message, contentWidth),
+			...this.statusLines(filtered.length, contentWidth),
 			...(this.error === undefined ? [] : [errorLine(this.error)]),
 			"",
 			...this.renderItems(filtered, contentWidth),
@@ -214,26 +235,32 @@ export class InteractiveSelectPrompt implements Component, Focusable {
 	}
 
 	private renderItems(items: readonly IndexedOption[], width: number): string[] {
-		if (items.length === 0) return [this.options.theme.noMatch("  No matching options")];
+		if (items.length === 0) return [this.options.theme.noMatch("  No options match this filter")];
 		this.cursorIndex = clamp(this.cursorIndex, 0, items.length - 1);
-		const maxVisible = Math.min(12, items.length);
+		const maxVisible = Math.min(MAX_VISIBLE_OPTIONS, items.length);
 		const startIndex = clamp(this.cursorIndex - Math.floor(maxVisible / 2), 0, Math.max(0, items.length - maxVisible));
 		const visible = items.slice(startIndex, startIndex + maxVisible);
-		const rows = visible.map((item, visibleIndex) => this.renderItem(item, startIndex + visibleIndex === this.cursorIndex, width));
-		if (items.length > maxVisible) rows.push(this.options.theme.scrollInfo(`  (${this.cursorIndex + 1}/${items.length})`));
+		const labelWidth = optionLabelWidth(visible, width, this.options.kind, this.currentValues);
+		const rows = visible.map((item, visibleIndex) => this.renderItem(item, startIndex + visibleIndex === this.cursorIndex, width, labelWidth));
+		if (items.length > maxVisible) {
+			rows.push(this.options.theme.scrollInfo(`  Showing ${startIndex + 1}-${startIndex + visible.length} of ${items.length}`));
+		}
 		return rows;
 	}
 
-	private renderItem(item: IndexedOption, active: boolean, width: number): string {
+	private renderItem(item: IndexedOption, active: boolean, width: number, labelWidth: number): string {
 		const selected = this.selectedValues.has(item.option.value);
-		const marker = this.options.kind === "multi" ? (selected ? "[x]" : "[ ]") : `${item.index + 1}.`;
-		const label = `${marker} ${item.option.label}`;
+		const current = this.currentValues.has(item.option.value);
+		const label = optionLabelText(item.option, this.options.kind, selected, current);
+		const paddedLabel = padVisible(truncateToWidth(label, labelWidth, ""), labelWidth);
 		const details = [item.option.hint, item.option.description].filter((part): part is string => part !== undefined && part.length > 0).join(" - ");
 		const prefix = active ? "> " : "  ";
 		const available = Math.max(1, width - prefix.length);
-		const detailText = details.length === 0 ? "" : `  ${details}`;
-		const row = truncateToWidth(`${label}${detailText}`, available, "");
-		return active ? this.options.theme.selectedText(`${prefix}${row}`) : `${prefix}${row}`;
+		const detailText = details.length === 0 ? "" : `  ${this.options.theme.description(details)}`;
+		const row = truncateToWidth(`${paddedLabel}${detailText}`, available, "");
+		if (!active) return `${prefix}${row}`;
+		// Hovered row gets the accent color highlight plus bold; the trailing dim detail keeps its own style.
+		return this.options.theme.selectedText(this.options.theme.selectedPrefix(`${prefix}${row}`));
 	}
 
 	private renderCurrentDetail(items: readonly IndexedOption[], width: number): string[] {
@@ -241,16 +268,32 @@ export class InteractiveSelectPrompt implements Component, Focusable {
 		if (current === undefined) return [];
 		const details = [current.hint, current.description].filter((part): part is string => part !== undefined && part.length > 0);
 		if (details.length === 0) return [];
+		const inline = `${current.label}  ${details.join(" - ")}`;
+		if (visibleWidth(inline) <= Math.max(1, width - 2)) return [];
 		const wrapped = details.flatMap((detail) => wrapTextWithAnsi(detail, Math.max(1, width - 4)));
 		return ["", ...wrapped.slice(0, 4).map((line) => dim(`  ${line}`))];
 	}
 
-	private filterStatusLine(filteredCount: number, hint: string): string {
+	private statusLines(filteredCount: number, width: number): string[] {
 		const cursor = this.focused ? CURSOR_MARKER : "";
-		const count = `${filteredCount}/${this.options.options.length}`;
-		const selected = this.options.kind === "multi" ? ` | ${this.selectedValues.size} selected` : "";
-		if (this.filter.length === 0) return `${count}${selected}${cursor} | ${hint}`;
-		return `${count}${selected} | Filter: ${this.filter}${cursor} | Ctrl+U clears`;
+		const selected = this.options.kind === "multi" && this.selectedValues.size > 0 ? `${this.selectedValues.size} selected` : undefined;
+		const back = this.options.allowBack === true ? "← Back" : "Esc cancels";
+		let line: string;
+		if (this.filter.length > 0) {
+			line = compactParts([
+				`Showing ${filteredCount} of ${this.options.options.length}`,
+				selected,
+				`filter "${this.filter}"${cursor}`,
+				"Ctrl+U clears",
+				back,
+			]);
+			return wrapTextWithAnsi(line, width).map(dim);
+		}
+		const movement = "Up/down move";
+		const action = this.options.kind === "multi" ? "Space toggles" : "Enter/→ chooses";
+		const finish = this.options.kind === "multi" ? "Enter/→ saves" : undefined;
+		line = compactParts([selected, movement, action, finish, `type to filter${cursor}`, back]);
+		return wrapTextWithAnsi(line, width).map(dim);
 	}
 
 	private moveCursor(delta: number): void {
@@ -310,7 +353,7 @@ export class InteractiveSelectPrompt implements Component, Focusable {
 }
 
 function promptHeader(title: string, message: string, width: number): string[] {
-	return [bold(title), "", ...wrapPromptMessage(message, width)];
+	return [bold(truncateToWidth(title, width, "")), "", ...wrapPromptMessage(message, width)];
 }
 
 function wrapPromptMessage(message: string, width: number): string[] {
@@ -328,6 +371,63 @@ function boxLines(lines: readonly string[], width: number): string[] {
 
 function optionSearchText(option: InteractivePromptOption): string {
 	return [option.value, option.label, option.hint ?? "", option.description ?? ""].join(" ").toLowerCase();
+}
+
+function selectPromptTitle(message: string, kind: InteractiveSelectPromptOptions["kind"]): string {
+	const candidate = selectPromptTitleCandidate(message);
+	if (candidate === undefined) return kind === "multi" ? "Choose Options" : "Choose One";
+	const normalized = candidate
+		.replace(/^(choose|select|pick)\s+(which\s+|the\s+)?/iu, "")
+		.replace(/^toggle\s+which\s+/iu, "")
+		.replace(/\s+setting\s+to\s+change$/iu, " settings")
+		.replace(/\s+to\s+(change|remove)$/iu, "")
+		.replace(/\s+clanky\s+may\s+use\s+for\s+worker\s+panes$/iu, "")
+		.replace(/\s+/gu, " ")
+		.trim();
+	if (normalized.length === 0) return kind === "multi" ? "Choose Options" : "Choose One";
+	return titleCasePromptTitle(normalized);
+}
+
+function selectPromptTitleCandidate(message: string): string | undefined {
+	const lines = message
+		.split("\n")
+		.map((line) => line.trim().replace(/[.?!]+$/u, ""))
+		.filter((line) => line.length > 0);
+	return lines.findLast((line) => /^(choose|select|pick|toggle)\b/iu.test(line)) ?? lines[0];
+}
+
+function titleCasePromptTitle(text: string): string {
+	return text
+		.split(/\s+/u)
+		.map((word) => {
+			const normalized = word.toLowerCase();
+			const override = TITLE_WORD_OVERRIDES[normalized];
+			if (override !== undefined) return override;
+			if (word !== normalized) return word;
+			return `${word.slice(0, 1).toUpperCase()}${word.slice(1)}`;
+		})
+		.join(" ");
+}
+
+function optionLabelWidth(items: readonly IndexedOption[], width: number, kind: InteractiveSelectPromptOptions["kind"], currentValues: ReadonlySet<string>): number {
+	const labels = items.map((item) => visibleWidth(optionLabelText(item.option, kind, false, currentValues.has(item.option.value))));
+	const longest = Math.max(0, ...labels);
+	const detailColumnTarget = Math.max(16, Math.floor(width * 0.44));
+	return clamp(longest, 0, Math.max(0, width - detailColumnTarget));
+}
+
+function optionLabelText(option: InteractivePromptOption, kind: InteractiveSelectPromptOptions["kind"], selected: boolean, current: boolean): string {
+	const currentSuffix = current ? " (current)" : "";
+	return kind === "multi" ? `${selected ? "[x]" : "[ ]"} ${option.label}${currentSuffix}` : `${option.label}${currentSuffix}`;
+}
+
+function padVisible(text: string, width: number): string {
+	const padding = width - visibleWidth(text);
+	return padding <= 0 ? text : `${text}${" ".repeat(padding)}`;
+}
+
+function compactParts(parts: readonly (string | undefined)[]): string {
+	return parts.filter((part): part is string => part !== undefined && part.length > 0).join(" | ");
 }
 
 function printableInput(data: string): string | undefined {

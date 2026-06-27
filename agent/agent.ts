@@ -1,6 +1,6 @@
 import { defineAgent } from "eve";
 import { localContextWindowTokensFromEnv } from "./lib/local-context.ts";
-import { createClankyModelFromEnv } from "./lib/model-selection.ts";
+import { brainContextWindowTokensFromEnv, createClankyModelFromEnv } from "./lib/model-selection.ts";
 
 // Clanky's conductor model runs on one of the user's AI subscriptions via OAuth
 // (SPEC.md §4.6). Default: OpenAI Codex. CLANKY_MODEL_PROVIDER selects another:
@@ -18,7 +18,8 @@ import { createClankyModelFromEnv } from "./lib/model-selection.ts";
 // Local models aren't in eve's AI Gateway catalog, so eve can't resolve their
 // context window to compile compaction. The face auto-injects this env var from
 // Ollama metadata when it owns the server; direct eve starts keep a 32K fallback.
-const modelContextWindowTokens = localContextWindowTokensFromEnv(process.env);
+// xAI/Gemini brains are also off-catalog, so supply their context window too.
+const modelContextWindowTokens = localContextWindowTokensFromEnv(process.env) ?? brainContextWindowTokensFromEnv(process.env);
 
 export default defineAgent(
 	modelContextWindowTokens === undefined

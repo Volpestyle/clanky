@@ -7,14 +7,58 @@ import { createXaiModel } from "./xai-model.ts";
 
 const CODEX_EFFORTS: readonly CodexReasoningEffort[] = ["minimal", "low", "medium", "high", "xhigh"];
 
-export const DEFAULT_CODEX_MODEL = "gpt-5.4";
-export const DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-5";
+export const DEFAULT_CODEX_MODEL = "gpt-5.5";
+export const DEFAULT_CLAUDE_MODEL = "claude-opus-4-8";
 export const DEFAULT_LOCAL_MODEL = "qwen3-coder-next";
 export const DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:11434/v1";
 export const DEFAULT_XAI_MODEL = "grok-4";
-export const DEFAULT_GEMINI_MODEL = "gemini-2.5-pro";
+export const DEFAULT_GEMINI_MODEL = "gemini-3-pro";
 
 export type ClankyModelProvider = "claude" | "codex" | "local" | "xai" | "gemini";
+
+// xAI and Gemini brains aren't in eve's AI Gateway catalog, so eve can't resolve
+// their context window to compile compaction (same gap as local models). Supply a
+// conservative per-model context window, env-overridable via CLANKY_XAI_CONTEXT_TOKENS /
+// CLANKY_GEMINI_CONTEXT_TOKENS. Conservative-low is safe: it triggers compaction
+// earlier rather than overflowing the real window.
+const DEFAULT_XAI_CONTEXT_TOKENS = 131_072;
+const DEFAULT_GEMINI_CONTEXT_TOKENS = 1_048_576;
+const XAI_CONTEXT_TOKENS: Record<string, number> = {
+	"grok-4": 256_000,
+	"grok-4-fast": 256_000,
+	"grok-3": 131_072,
+};
+const GEMINI_CONTEXT_TOKENS: Record<string, number> = {
+	"gemini-2.5-pro": 1_048_576,
+	"gemini-2.5-flash": 1_048_576,
+	"gemini-3-pro": 1_048_576,
+};
+
+function parsePositiveTokens(value: string | undefined): number | undefined {
+	const raw = value?.trim();
+	if (raw === undefined || !/^\d+$/.test(raw)) return undefined;
+	const parsed = Number.parseInt(raw, 10);
+	return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+/**
+ * Context window (tokens) for the selected brain when eve can't resolve it from
+ * the AI Gateway catalog. Returns a value only for xai/gemini; local is handled
+ * by localContextWindowTokensFromEnv and catalog providers (codex/claude) return
+ * undefined so eve uses its own metadata.
+ */
+export function brainContextWindowTokensFromEnv(env: NodeJS.ProcessEnv = process.env): number | undefined {
+	const provider = env.CLANKY_MODEL_PROVIDER ?? "codex";
+	if (provider === "xai") {
+		const modelId = env.CLANKY_XAI_MODEL ?? DEFAULT_XAI_MODEL;
+		return parsePositiveTokens(env.CLANKY_XAI_CONTEXT_TOKENS) ?? XAI_CONTEXT_TOKENS[modelId] ?? DEFAULT_XAI_CONTEXT_TOKENS;
+	}
+	if (provider === "gemini") {
+		const modelId = env.CLANKY_GEMINI_MODEL ?? DEFAULT_GEMINI_MODEL;
+		return parsePositiveTokens(env.CLANKY_GEMINI_CONTEXT_TOKENS) ?? GEMINI_CONTEXT_TOKENS[modelId] ?? DEFAULT_GEMINI_CONTEXT_TOKENS;
+	}
+	return undefined;
+}
 
 /** Resolve the xAI API key (shared with Discord voice realtime). */
 export function resolveXaiApiKey(env: NodeJS.ProcessEnv = process.env): string | undefined {

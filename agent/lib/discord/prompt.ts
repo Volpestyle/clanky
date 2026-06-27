@@ -10,6 +10,12 @@ export interface DiscordHistoryEntry {
 	text: string;
 }
 
+export type DiscordPresencePromptMode = "full" | "compact";
+
+const FULL_HISTORY_LIMIT = 20;
+const COMPACT_HISTORY_LIMIT = 6;
+const MIRROR_PREVIEW_LIMIT = 220;
+
 export function acceptanceReasonForPrompt(reason: DiscordAcceptanceReason): string {
 	switch (reason) {
 		case "bound_conversation":
@@ -35,13 +41,56 @@ export function formatPresencePrompt(
 	sender: string,
 	history: readonly DiscordHistoryEntry[] = [],
 ): string {
+	return formatDiscordPresencePrompt(message, reason, sender, history, "full");
+}
+
+export function formatCompactPresencePrompt(
+	message: DiscordInboundMessage,
+	reason: DiscordAcceptanceReason,
+	sender: string,
+	history: readonly DiscordHistoryEntry[] = [],
+): string {
+	return formatDiscordPresencePrompt(message, reason, sender, history, "compact");
+}
+
+export function summarizePresencePromptForMirror(prompt: string): string | null {
+	if (!prompt.startsWith("Discord conversation update:") && !prompt.startsWith("Discord follow-up:")) return null;
+	const kind = readListValue(prompt, "kind");
+	const sender = readLineValue(prompt, "From");
+	const rawText = readPromptText(prompt);
+	const text = previewText(rawText.length === 0 ? "(no text)" : rawText, MIRROR_PREVIEW_LIMIT);
+	const prefix = kind.length === 0 ? "Discord" : `Discord ${kind}`;
+	return sender.length === 0 ? `${prefix}: ${text}` : `${prefix} ${sender}: ${text}`;
+}
+
+function formatDiscordPresencePrompt(
+	message: DiscordInboundMessage,
+	reason: DiscordAcceptanceReason,
+	sender: string,
+	history: readonly DiscordHistoryEntry[],
+	mode: DiscordPresencePromptMode,
+): string {
 	const text = message.text.trim() || "(no text)";
-	const historyBlock = history
-		.slice(-20)
-		.map((entry) => `- ${entry.author}: ${entry.text}`)
-		.join("\n");
+	const historyLimit = mode === "full" ? FULL_HISTORY_LIMIT : message.kind === "dm" ? 0 : COMPACT_HISTORY_LIMIT;
+	const historyBlock = formatHistoryBlock(history, historyLimit);
 	const attachmentBlock = formatAttachmentBlock(message);
 	const embedBlock = formatEmbedBlock(message);
+	if (mode === "compact") {
+		return [
+			"Discord follow-up:",
+			`- context: ${acceptanceReasonForPrompt(reason)}`,
+			...formatConversationLines(message),
+			"- reply policy: continue the existing Discord presence contract; answer only when useful, otherwise reply exactly [SKIP].",
+			"- do not call discord_read_messages just to re-read this channel.",
+			"",
+			...(historyBlock.length > 0 ? ["Recent gateway context:", historyBlock, ""] : []),
+			...(attachmentBlock.length > 0 ? ["Discord attachments on the newest message:", attachmentBlock, ""] : []),
+			...(embedBlock.length > 0 ? ["Discord embeds/previews on the newest message:", embedBlock, ""] : []),
+			"Newest Discord message:",
+			`From: ${sender}`,
+			`Text: ${text}`,
+		].join("\n");
+	}
 	return [
 		"Discord conversation update:",
 		"",
@@ -56,13 +105,7 @@ export function formatPresencePrompt(
 		"For heavy work (web, code, builds, research) delegate with herdr_spawn instead of blocking this reply; use herdr_status/herdr_read to see what main Clanky and other panes are doing.",
 		"",
 		"Discord conversation:",
-		`- kind: ${message.kind}`,
-		`- channelId: ${message.channelId}`,
-		...(message.threadId === undefined ? [] : [`- threadId: ${message.threadId}`]),
-		...(message.guildId === undefined ? [] : [`- serverId: ${message.guildId}`]),
-		`- newestMessageId: ${message.externalMessageId}`,
-		`- authorId: ${message.authorId}`,
-		...(message.authorName === undefined ? [] : [`- authorName: ${message.authorName}`]),
+		...formatConversationLines(message),
 		"",
 		...(historyBlock.length > 0 ? ["Recent chat before the newest message:", historyBlock, ""] : []),
 		...(attachmentBlock.length > 0 ? ["Discord attachments on the newest message:", attachmentBlock, ""] : []),
@@ -71,6 +114,26 @@ export function formatPresencePrompt(
 		`From: ${sender}`,
 		`Text: ${text}`,
 	].join("\n");
+}
+
+function formatHistoryBlock(history: readonly DiscordHistoryEntry[], limit: number): string {
+	if (limit <= 0) return "";
+	return history
+		.slice(-limit)
+		.map((entry) => `- ${entry.author}: ${entry.text}`)
+		.join("\n");
+}
+
+function formatConversationLines(message: DiscordInboundMessage): string[] {
+	return [
+		`- kind: ${message.kind}`,
+		`- channelId: ${message.channelId}`,
+		...(message.threadId === undefined ? [] : [`- threadId: ${message.threadId}`]),
+		...(message.guildId === undefined ? [] : [`- serverId: ${message.guildId}`]),
+		`- newestMessageId: ${message.externalMessageId}`,
+		`- authorId: ${message.authorId}`,
+		...(message.authorName === undefined ? [] : [`- authorName: ${message.authorName}`]),
+	];
 }
 
 function formatAttachmentBlock(message: DiscordInboundMessage): string {
@@ -90,6 +153,32 @@ function formatAttachmentBlock(message: DiscordInboundMessage): string {
 			return `- attachment ${index + 1}: ${details.join("; ")}`;
 		})
 		.join("\n");
+}
+
+function readListValue(prompt: string, key: string): string {
+	const match = new RegExp(`^- ${key}: (.*)$`, "m").exec(prompt);
+	return match?.[1]?.trim() ?? "";
+}
+
+function readLineValue(prompt: string, key: string): string {
+	const match = new RegExp(`^${key}: (.*)$`, "m").exec(prompt);
+	return match?.[1]?.trim() ?? "";
+}
+
+function readPromptText(prompt: string): string {
+	const marker = "\nText: ";
+	const index = prompt.lastIndexOf(marker);
+	if (index === -1) return "";
+	const rest = prompt.slice(index + marker.length);
+	const inlineMarker = "\n\nInline visual attachment transfer:";
+	const inlineIndex = rest.indexOf(inlineMarker);
+	return (inlineIndex === -1 ? rest : rest.slice(0, inlineIndex)).trim();
+}
+
+function previewText(value: string, limit: number): string {
+	const compact = value.replace(/\s+/g, " ").trim();
+	if (compact.length <= limit) return compact;
+	return `${compact.slice(0, Math.max(0, limit - 3))}...`;
 }
 
 function formatEmbedBlock(message: DiscordInboundMessage): string {

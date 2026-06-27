@@ -1,6 +1,6 @@
 import { resolveClankyChromeMouseTarget } from "../agent/lib/clanky-face-layout.ts";
 import { ClankyChromeSelectableComponent, ClankyChromeSelection } from "../agent/lib/clanky-chrome-selection.ts";
-import type { Component } from "@earendil-works/pi-tui";
+import type { Component, Focusable } from "@earendil-works/pi-tui";
 
 function assert(condition: boolean, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -62,5 +62,32 @@ assert(selection.getSelectedText() === "", "a bare click copies nothing");
 selection.clear();
 assert(!selection.isActive(), "clearing drops the selection");
 assert(wrapped.render(80).every((line) => !line.includes("\x1b[7m")), "cleared selection renders without highlight");
+
+let handledInput = "";
+let invalidated = false;
+const focusableInner: Component & Focusable = {
+	focused: false,
+	handleInput(data: string): void {
+		handledInput += data;
+	},
+	invalidate(): void {
+		invalidated = true;
+	},
+	render: () => ["choose codex", "choose claude"],
+};
+const modal = new ClankyChromeSelectableComponent(focusableInner, "modal", selection);
+modal.focused = true;
+assert(focusableInner.focused, "selectable wrapper forwards focus to focusable modal content");
+modal.handleInput("x");
+assert(handledInput === "x", "selectable wrapper forwards input to modal content");
+modal.invalidate();
+assert(invalidated, "selectable wrapper forwards invalidation to modal content");
+
+modal.render(80);
+selection.press("modal", 0, 0);
+selection.drag("modal", 1, 13);
+assert(selection.getSelectedText() === "choose codex\nchoose claude", "modal selection copies rendered menu text");
+selection.clearBand("modal");
+assert(!selection.isActive(), "clearing the modal band drops modal selection");
 
 console.log("clanky-chrome-selection-smoke: ok");

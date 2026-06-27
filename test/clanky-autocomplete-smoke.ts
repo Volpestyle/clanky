@@ -48,8 +48,15 @@ const commands: ClankyAutocompleteCommand[] = [
 	{
 		name: "model",
 		aliases: [],
-		description: "Configure Codex or Claude subscription-backed model",
-		argumentHint: "[status|codex|claude|local] [id] [effort]",
+		description: "Choose Clanky's brain route, model, and required route auth",
+		argumentHint: "[status|codex|claude|local|xai|gemini] [id] [effort]",
+		takesArgument: true,
+	},
+	{
+		name: "auth",
+		aliases: ["credentials", "creds", "keys"],
+		description: "Manage subscription logins, API keys, and service credentials",
+		argumentHint: "[status|codex|claude|xai|gemini|openai|discord|mcp|elevenlabs|relay|local-voice]",
 		takesArgument: true,
 	},
 	{
@@ -67,10 +74,17 @@ const commands: ClankyAutocompleteCommand[] = [
 		takesArgument: true,
 	},
 	{
+		name: "local",
+		aliases: ["local-stack"],
+		description: "Apply an all-local tiered model stack (conductor + voice)",
+		argumentHint: "[status|tiered|single] [voice-model]",
+		takesArgument: true,
+	},
+	{
 		name: "voice",
 		aliases: [],
 		description: "Configure Discord voice runtime",
-		argumentHint: "[status|provider|model|realtime-voice|tts|elevenlabs|memory|eve-session] [value]",
+		argumentHint: "[status|mode|model|realtime-voice|tts|elevenlabs|memory|eve-session] [value]",
 		takesArgument: true,
 	},
 	{
@@ -108,6 +122,13 @@ const commands: ClankyAutocompleteCommand[] = [
 		argumentHint: "[status|off|no-reply|all]",
 		takesArgument: true,
 	},
+	{
+		name: "layout",
+		aliases: ["header", "banner"],
+		description: "Configure header, chat input, and status bar placement",
+		argumentHint: "[status|input top|input bottom|status above|status below|header on|header off]",
+		takesArgument: true,
+	},
 ];
 
 const provider = createClankyAutocompleteProvider(commands, process.cwd(), {
@@ -141,7 +162,7 @@ assert(rootState !== undefined, "bare slash should produce command typeahead sta
 assert(renderClankyCommandTypeahead(rootState, theme, 72, 2).length === 2, "typeahead should respect a short row budget");
 assert(renderClankyCommandTypeahead(rootState, theme, 72, 0).length === 0, "typeahead should hide when no row budget remains");
 const wrappedState = moveClankyCommandTypeaheadSelection(rootState, -1);
-assert(selectedClankyCommandTypeahead(wrappedState)?.name === "trace", "typeahead selection should wrap when moving up from the first row");
+assert(selectedClankyCommandTypeahead(wrappedState)?.name === "layout", "typeahead selection should wrap when moving up from the first row");
 const dismissedState = dismissClankyCommandTypeahead(rootState);
 const sameDismissed = clankyCommandTypeaheadFor(commands, "/", dismissedState);
 assert(sameDismissed?.dismissed === true, "dismissed typeahead should stay dismissed for the same query");
@@ -155,6 +176,16 @@ assert(modelSuggestions.items.some((item) => item.value === "codex"), "model arg
 const modelStatusSuggestions = await provider.getSuggestions(["/model st"], 0, 9, { signal });
 assert(modelStatusSuggestions !== null, "model status query should produce suggestions");
 assert(modelStatusSuggestions.items.some((item) => item.value === "status"), "model argument completion should include status");
+
+const authSuggestions = await provider.getSuggestions(["/auth st"], 0, 8, { signal });
+assert(authSuggestions !== null, "auth status query should produce suggestions");
+assert(authSuggestions.items.some((item) => item.value === "status"), "auth argument completion should include status");
+const authProviderSuggestions = await provider.getSuggestions(["/auth xa"], 0, 8, { signal });
+assert(authProviderSuggestions !== null, "auth provider query should produce suggestions");
+assert(authProviderSuggestions.items.some((item) => item.value === "xai"), "auth argument completion should include xai");
+const authMcpSuggestions = await provider.getSuggestions(["/auth mcp li"], 0, 12, { signal });
+assert(authMcpSuggestions !== null, "auth mcp query should produce dynamic connection suggestions");
+assert(authMcpSuggestions.items.some((item) => item.value === "linear"), "auth mcp completion should include dynamic connection names");
 
 const effortSuggestions = await provider.getSuggestions(["/effort st"], 0, 10, { signal });
 assert(effortSuggestions !== null, "effort status query should produce suggestions");
@@ -171,6 +202,26 @@ assert(imageModelSuggestions.items.some((item) => item.value === "status"), "ima
 const voiceStatusSuggestions = await provider.getSuggestions(["/voice st"], 0, 9, { signal });
 assert(voiceStatusSuggestions !== null, "voice status query should produce suggestions");
 assert(voiceStatusSuggestions.items.some((item) => item.value === "status"), "voice argument completion should include status");
+const voiceModeSuggestions = await provider.getSuggestions(["/voice mo"], 0, 9, { signal });
+assert(voiceModeSuggestions !== null, "voice mode query should produce suggestions");
+assert(voiceModeSuggestions.items.some((item) => item.value === "mode"), "voice argument completion should include mode");
+const voiceRouteSuggestions = await provider.getSuggestions(["/voice mode l"], 0, 14, { signal });
+assert(voiceRouteSuggestions !== null, "voice mode value query should produce suggestions");
+assert(voiceRouteSuggestions.items.some((item) => item.value === "local"), "voice mode completion should include local");
+
+const localStackSuggestions = await provider.getSuggestions(["/local ti"], 0, 9, { signal });
+assert(localStackSuggestions !== null, "local stack query should produce profile suggestions");
+assert(localStackSuggestions.items.some((item) => item.value === "tiered"), "local argument completion should include tiered");
+
+const layoutSuggestions = await provider.getSuggestions(["/layout in"], 0, 10, { signal });
+assert(layoutSuggestions !== null, "layout setting query should produce suggestions");
+assert(layoutSuggestions.items.some((item) => item.value === "input"), "layout argument completion should include input");
+const layoutInputSuggestions = await provider.getSuggestions(["/layout input t"], 0, 15, { signal });
+assert(layoutInputSuggestions !== null, "layout input placement query should produce suggestions");
+assert(layoutInputSuggestions.items.some((item) => item.value === "top"), "layout input completion should include top");
+const layoutStatusSuggestions = await provider.getSuggestions(["/layout status b"], 0, 16, { signal });
+assert(layoutStatusSuggestions !== null, "layout status placement query should produce suggestions");
+assert(layoutStatusSuggestions.items.some((item) => item.value === "below"), "layout status completion should include below");
 
 const integrationStatusSuggestions = await provider.getSuggestions(["/integrations st"], 0, 16, { signal });
 assert(integrationStatusSuggestions !== null, "integration status query should produce suggestions");

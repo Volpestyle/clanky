@@ -70,6 +70,7 @@ export function herdrStreamLines(
 	request: HerdrRequest,
 	onLine: (line: string) => void,
 	onError: (error: Error) => void,
+	onClose?: () => void,
 ): HerdrStream {
 	const socket: Socket = createConnection(herdrSocketPath());
 	let buffer = "";
@@ -96,7 +97,11 @@ export function herdrStreamLines(
 		if (!closed) onError(error);
 	});
 	socket.on("close", () => {
+		// Notify on a remote-initiated close (herdr restart) so subscribers can
+		// reconnect; skip if we closed locally via `close()`.
+		const wasRemote = !closed;
 		closed = true;
+		if (wasRemote) onClose?.();
 	});
 	return { close };
 }

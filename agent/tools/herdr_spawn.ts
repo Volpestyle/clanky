@@ -23,6 +23,7 @@ import {
 	resolveCodingHarness,
 } from "../lib/coding-harness.ts";
 import { resolveClankyHome } from "../lib/paths.ts";
+import { resolveClankyFacePanePlacement, startHerdrAgentNearPlacement } from "../lib/herdr-placement.ts";
 import { newTranscriptRunId, resolveTranscriptRunPath, resolveTranscriptSession } from "../lib/transcripts.ts";
 
 const run = promisify(execFile);
@@ -185,14 +186,31 @@ export function buildWorkerKickoff(input: {
 	].join("\n");
 }
 
-/** herdr CLI prints a JSON envelope `{ id, result: { agent } }`; pull the agent out. */
-function parseAgent(stdout: string): HerdrAgent | null {
-	try {
-		const env = JSON.parse(stdout) as { result?: { agent?: HerdrAgent } };
-		return env.result?.agent ?? null;
-	} catch {
-		return null;
-	}
+/** herdr socket returns `{ agent }`; pull the agent out defensively. */
+function parseStartedAgent(result: unknown): HerdrAgent | null {
+	const record = asRecord(result);
+	const agent = asRecord(record?.agent);
+	const name = stringField(agent, "name");
+	const paneId = stringField(agent, "pane_id");
+	const tabId = stringField(agent, "tab_id");
+	const workspaceId = stringField(agent, "workspace_id");
+	if (name === undefined || paneId === undefined || tabId === undefined || workspaceId === undefined) return null;
+	return {
+		name,
+		pane_id: paneId,
+		tab_id: tabId,
+		workspace_id: workspaceId,
+		...(typeof agent?.agent_status === "string" ? { agent_status: agent.agent_status } : {}),
+	};
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+	return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+}
+
+function stringField(record: Record<string, unknown> | undefined, key: string): string | undefined {
+	const value = record?.[key];
+	return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 interface HerdrAgentListRow {
@@ -314,10 +332,17 @@ export async function spawnClankyWorker(input: SpawnClankyWorkerInput): Promise<
 		runId === undefined
 			? resolved.argv
 			: wrapTranscriptArgv({ agent, cwd: paneCwd, runId, argv: resolved.argv, env });
-	const startArgs = ["agent", "start", agent];
-	startArgs.push("--cwd", paneCwd, "--no-focus", "--", ...launchArgv);
+	const placement = await resolveClankyFacePanePlacement();
 
-	const started = parseAgent(await herdr(startArgs));
+	const started = parseStartedAgent(
+		await startHerdrAgentNearPlacement({
+			name: agent,
+			cwd: paneCwd,
+			focus: false,
+			argv: launchArgv,
+			placement,
+		}),
+	);
 	return {
 		agent,
 		paneId: started?.pane_id ?? null,

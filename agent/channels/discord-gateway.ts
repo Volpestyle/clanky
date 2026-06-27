@@ -42,7 +42,13 @@ import { type DiscordInboundMessage, resolveDiscordScopeOptions } from "../lib/d
 import { buildGuildVoiceRuntime } from "../lib/discord/voice-runtime.ts";
 import type { VoiceIntent } from "../lib/discord/voice-intent.ts";
 import { herdrRequest } from "../lib/herdr-socket.ts";
-import { getHerdrAgent, nonEmptyString, paneMatchesPlacement, resolveClankyFacePanePlacement } from "../lib/herdr-placement.ts";
+import {
+	getHerdrAgent,
+	nonEmptyString,
+	paneMatchesPlacement,
+	resolveClankyFacePanePlacement,
+	startHerdrAgentNearPlacement,
+} from "../lib/herdr-placement.ts";
 
 type DiscordGatewayState = {
 	host: DiscordPresenceHost | null;
@@ -132,11 +138,11 @@ async function spawnPaneMirror(channelId: string, sessionId: string): Promise<vo
 		if (paneId === undefined) return;
 		await herdrRequest("pane.close", { pane_id: paneId }).catch(() => undefined);
 	}
-	await herdrRequest("agent.start", {
+	await startHerdrAgentNearPlacement({
 		name: agent,
 		focus: false,
-		...placement,
 		argv: [process.execPath, mirrorScriptPath(), eveHost(), sessionId, slug],
+		placement,
 	});
 }
 

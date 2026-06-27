@@ -7,7 +7,7 @@ import { streamText } from "ai";
 import { createCodexModel } from "../agent/lib/codex-model.ts";
 
 const model = createCodexModel({
-	modelId: process.env.CLANKY_CODEX_MODEL ?? "gpt-5.4",
+	modelId: process.env.CLANKY_CODEX_MODEL ?? "gpt-5.5",
 	instructions: "You are a terse test harness. Follow the user exactly.",
 });
 

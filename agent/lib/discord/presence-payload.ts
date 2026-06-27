@@ -7,7 +7,12 @@ import type {
 } from "./acceptance.ts";
 import { guardedFetch } from "../net-guard.ts";
 import { buildDiscordMediaFetchHeaders } from "./media.ts";
-import { formatPresencePrompt, type DiscordHistoryEntry } from "./prompt.ts";
+import {
+	formatCompactPresencePrompt,
+	formatPresencePrompt,
+	type DiscordHistoryEntry,
+	type DiscordPresencePromptMode,
+} from "./prompt.ts";
 
 export interface PresenceSessionMessageOptions {
 	env?: NodeJS.ProcessEnv;
@@ -15,6 +20,7 @@ export interface PresenceSessionMessageOptions {
 	history?: readonly DiscordHistoryEntry[];
 	maxInlineVisualAttachments?: number;
 	maxInlineVisualAttachmentBytes?: number;
+	mode?: DiscordPresencePromptMode;
 }
 
 interface InlineAttachmentResult {
@@ -32,7 +38,10 @@ export async function buildPresenceSessionMessage(
 	options: PresenceSessionMessageOptions = {},
 ): Promise<string | UserContent> {
 	const inline = await inlineVisualAttachments(message.attachments ?? [], options);
-	const prompt = formatPresencePrompt(message, reason, sender, options.history ?? []);
+	const prompt =
+		options.mode === "compact"
+			? formatCompactPresencePrompt(message, reason, sender, options.history ?? [])
+			: formatPresencePrompt(message, reason, sender, options.history ?? []);
 	const text =
 		inline.notes.length === 0
 			? prompt

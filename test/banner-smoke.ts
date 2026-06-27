@@ -96,8 +96,8 @@ assert(
 // Narrow terminal collapses to a condensed header (no wrapped mascot rows).
 const condensed = renderClankyBanner(FIELDS, wide({ columns: 36 }));
 assert(
-	condensed.length <= 2,
-	`condensed banner should be at most 2 lines, got ${condensed.length}`,
+	condensed.length <= 3,
+	`condensed banner should be at most 3 lines, got ${condensed.length}`,
 );
 assert(
 	stripAnsi(condensed[0] ?? "").includes("clanky"),
@@ -113,7 +113,7 @@ for (const line of condensed) {
 // Component form adapts to the render width, not just startup terminal width.
 const component = new ClankyBannerComponent(FIELDS, wide({ columns: 100 }));
 const narrowComponent = component.render(32);
-assert(narrowComponent.length <= 4, "dynamic banner should condense in a narrow render pass");
+assert(narrowComponent.length <= 5, "dynamic banner should condense in a narrow render pass");
 for (const line of narrowComponent) {
 	assert(visibleWidth(line) <= 32, `dynamic banner line should fit narrow width: ${JSON.stringify(line)}`);
 }
@@ -125,6 +125,12 @@ component.setFields({ ...FIELDS, model: "qwen3.6:27b-mlx-bf16 (high effort)" });
 assert(
 	stripAnsi(component.render(100).join("\n")).includes("qwen3.6:27b-mlx-bf16"),
 	"dynamic banner should refresh model fields without recreating the component",
+);
+component.setVerticalPadding({ bottom: 0 });
+const compactComponent = component.render(100);
+assert(
+	stripAnsi(compactComponent[compactComponent.length - 1] ?? "").trimEnd().endsWith("─"),
+	"component banner should support removing bottom padding for compact top chrome",
 );
 
 // Capability detection: non-TTY and NO_COLOR disable color.

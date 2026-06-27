@@ -276,8 +276,10 @@ export class DiscordPresenceHost {
 			);
 
 			await this.gateway.sendTyping(message.channelId);
+			const mode = this.sessions.has(message.channelId) ? "compact" : "full";
 			const prompt = await buildPresenceSessionMessage(message, decision.reason, message.authorName ?? message.authorId, {
 				history,
+				mode,
 			});
 			const session = this.sessionFor(message.channelId);
 			const response = await session.send({ message: prompt });

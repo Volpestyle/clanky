@@ -177,6 +177,12 @@ unspacedViewport.addChild(new LineComponent(["You", "hi"]));
 unspacedViewport.addChild(new LineComponent(["Clanky", "hello"]));
 assert(plain(unspacedViewport.render(80)).join("|") === "||You|hi|Clanky|hello", "default spacing should keep blocks adjacent");
 
+const topAlignedViewport = new ClankyTranscriptViewport(() => 4, { dim: (text) => text, selected: (text) => text }, { underfilledAlignment: "top" });
+topAlignedViewport.addChild(new LineComponent(["near input", "second"]));
+assert(plain(topAlignedViewport.render(80)).join("|") === "near input|second||", "top-aligned underfilled transcripts should put blank rows after content");
+topAlignedViewport.setUnderfilledAlignment("bottom");
+assert(plain(topAlignedViewport.render(80)).join("|") === "||near input|second", "underfilled alignment should be switchable after construction");
+
 const focusedSelection = new ClankyTranscriptViewport(() => 1, {
 	dim: (text) => text,
 	selected: (text) => text,

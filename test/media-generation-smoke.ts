@@ -3,7 +3,7 @@
 // xAI/Gemini brain settings resolution. Actual generation is credential-gated and verified
 // live. Run: pnpm smoke:media
 import { generateGeminiImage, generateXaiImage, generateXaiVideo, mediaBackendStatus } from "../agent/lib/media.ts";
-import { createClankyModel, resolveClankyModelSettings } from "../agent/lib/model-selection.ts";
+import { brainContextWindowTokensFromEnv, createClankyModel, resolveClankyModelSettings } from "../agent/lib/model-selection.ts";
 
 let failures = 0;
 function check(label: string, ok: boolean): void {
@@ -56,7 +56,7 @@ await expectThrow("xai image empty prompt", () => generateXaiImage({ prompt: "  
 	check("xai brain model builds", createClankyModel(xai) !== undefined);
 
 	const gemini = resolveClankyModelSettings({ CLANKY_MODEL_PROVIDER: "gemini", CLANKY_GEMINI_API_KEY: "g" });
-	check("gemini brain default model", gemini.provider === "gemini" && gemini.modelId === "gemini-2.5-pro");
+	check("gemini brain default model", gemini.provider === "gemini" && gemini.modelId === "gemini-3-pro");
 	check("gemini brain model builds", createClankyModel(gemini) !== undefined);
 
 	let threw = false;
@@ -66,6 +66,18 @@ await expectThrow("xai image empty prompt", () => generateXaiImage({ prompt: "  
 		threw = true;
 	}
 	check("xai brain without key throws", threw);
+}
+
+// --- off-catalog brains supply a context window so eve can compile compaction --------------
+{
+	check("codex brain has no override context window", brainContextWindowTokensFromEnv({ CLANKY_MODEL_PROVIDER: "codex" }) === undefined);
+	check("xai grok-4 context window", brainContextWindowTokensFromEnv({ CLANKY_MODEL_PROVIDER: "xai", CLANKY_XAI_MODEL: "grok-4" }) === 256_000);
+	check("xai unknown model falls back", brainContextWindowTokensFromEnv({ CLANKY_MODEL_PROVIDER: "xai", CLANKY_XAI_MODEL: "grok-future" }) === 131_072);
+	check(
+		"xai context window env override wins",
+		brainContextWindowTokensFromEnv({ CLANKY_MODEL_PROVIDER: "xai", CLANKY_XAI_MODEL: "grok-4", CLANKY_XAI_CONTEXT_TOKENS: "99999" }) === 99_999,
+	);
+	check("gemini default context window", brainContextWindowTokensFromEnv({ CLANKY_MODEL_PROVIDER: "gemini" }) === 1_048_576);
 }
 
 console.log(failures === 0 ? "\nALL OK" : `\n${failures} FAILED`);

@@ -8,6 +8,8 @@
  *
  * Usage: node scripts/discord-pane-mirror.ts <eveHost> <sessionId> [label]
  */
+import { summarizePresencePromptForMirror } from "../agent/lib/discord/prompt.ts";
+
 const [, , eveHost, sessionId, label = "discord"] = process.argv;
 
 if (eveHost === undefined || sessionId === undefined) {
@@ -44,9 +46,12 @@ function render(event: StreamEvent): void {
 		case "turn.started":
 			line(CYAN, "▸", "turn started");
 			break;
-		case "message.received":
-			line(CYAN, "‹", str(data.message) || "(inbound)");
+		case "message.received": {
+			const message = str(data.message);
+			const summary = summarizePresencePromptForMirror(message);
+			line(CYAN, "‹", summary ?? (message || "(inbound)"));
 			break;
+		}
 		case "reasoning.completed":
 			line(DIM, "✻", `${DIM}${str(data.text)}${RESET}`);
 			break;

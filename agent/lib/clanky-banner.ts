@@ -39,6 +39,8 @@ export class ClankyBannerComponent implements Component {
 	private readonly caps: BannerCapabilities;
 	private fields: BannerFields;
 	private visible: boolean;
+	private topPaddingRows = 1;
+	private bottomPaddingRows = 1;
 
 	constructor(fields: BannerFields, caps: BannerCapabilities, visible = true) {
 		this.fields = fields;
@@ -54,6 +56,11 @@ export class ClankyBannerComponent implements Component {
 		this.visible = visible;
 	}
 
+	setVerticalPadding(options: { readonly bottom?: number; readonly top?: number }): void {
+		this.topPaddingRows = Math.max(0, Math.floor(options.top ?? this.topPaddingRows));
+		this.bottomPaddingRows = Math.max(0, Math.floor(options.bottom ?? this.bottomPaddingRows));
+	}
+
 	isVisible(): boolean {
 		return this.visible;
 	}
@@ -64,7 +71,11 @@ export class ClankyBannerComponent implements Component {
 		if (!this.visible) return [];
 		const renderWidth = Math.max(1, width);
 		const lines = renderClankyBanner(this.fields, { ...this.caps, columns: renderWidth });
-		return ["", ...lines.map((line) => truncateToWidth(line, renderWidth, "", true)), ""];
+		return [
+			...Array.from({ length: this.topPaddingRows }, () => ""),
+			...lines.map((line) => truncateToWidth(line, renderWidth, "", true)),
+			...Array.from({ length: this.bottomPaddingRows }, () => ""),
+		];
 	}
 }
 

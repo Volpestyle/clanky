@@ -1,4 +1,8 @@
 import {
+	resolveClankyChromeMouseTargetFromBands,
+	resolveClankyOverlayFrame,
+	resolveClankyOverlayMouseTarget,
+	resolveClankyTranscriptMouseTargetFromBands,
 	resolveClankyCommandRows,
 	resolveClankyTranscriptMouseTarget,
 	resolveClankyTranscriptRows,
@@ -45,5 +49,61 @@ assert(!belowBand.inside && belowBand.row === 19, "clicks on the editor fall out
 
 const cramped = resolveClankyTranscriptMouseTarget({ bannerRows: 4, belowRows: 6, terminalRows: 10, mouseCol: 3, mouseRow: 1, transcriptRows: 4 });
 assert(cramped.inside && cramped.row === 0, "when the banner scrolls off the top the transcript starts at screen row 1");
+
+const topInputBands = [
+	{ band: "banner", rows: 3 },
+	{ band: "editor", rows: 2 },
+	{ band: "status", rows: 1 },
+	{ band: "typeahead", rows: 4 },
+	{ band: "transcript", rows: 12 },
+] as const;
+const topInputTranscript = resolveClankyTranscriptMouseTargetFromBands({ bands: topInputBands, terminalRows: 30, mouseCol: 8, mouseRow: 11 });
+assert(topInputTranscript.inside && topInputTranscript.row === 0, "top-pinned input leaves the transcript below the input/status/typeahead cluster");
+const topInputStatus = resolveClankyChromeMouseTargetFromBands({ bands: topInputBands, terminalRows: 30, mouseCol: 3, mouseRow: 6 });
+assert(topInputStatus?.band === "status" && topInputStatus.row === 0, "status below a top-pinned input maps as selectable chrome");
+const topInputEditor = resolveClankyChromeMouseTargetFromBands({ bands: topInputBands, terminalRows: 30, mouseCol: 3, mouseRow: 4 });
+assert(topInputEditor === null, "top-pinned editor rows remain outside chrome selection");
+
+const setupOverlayOptions = {
+	anchor: "center",
+	margin: { bottom: 3, left: 2, right: 2, top: 2 },
+	maxHeight: "70%",
+	minWidth: 48,
+	width: "88%",
+} as const;
+const overlayFrame = resolveClankyOverlayFrame({
+	options: setupOverlayOptions,
+	overlayRows: 10,
+	terminalColumns: 100,
+	terminalRows: 40,
+});
+assert(overlayFrame.width === 88, "setup overlay uses the configured percentage width");
+assert(overlayFrame.row === 14 && overlayFrame.col === 6, "centered setup overlay respects margins");
+assert(overlayFrame.rows === 10, "overlay rows are unchanged when below max height");
+const overlayHit = resolveClankyOverlayMouseTarget({
+	options: setupOverlayOptions,
+	overlayRows: 10,
+	terminalColumns: 100,
+	terminalRows: 40,
+	mouseCol: 7,
+	mouseRow: 15,
+});
+assert(overlayHit?.row === 0 && overlayHit.col === 0, "overlay mouse target maps to modal-local coordinates");
+const overlayMiss = resolveClankyOverlayMouseTarget({
+	options: setupOverlayOptions,
+	overlayRows: 10,
+	terminalColumns: 100,
+	terminalRows: 40,
+	mouseCol: 5,
+	mouseRow: 15,
+});
+assert(overlayMiss === null, "overlay mouse target ignores cells outside the modal frame");
+const clampedOverlay = resolveClankyOverlayFrame({
+	options: setupOverlayOptions,
+	overlayRows: 50,
+	terminalColumns: 100,
+	terminalRows: 40,
+});
+assert(clampedOverlay.rows === 28, "overlay rows are capped by maxHeight");
 
 console.log("clanky-face-layout-smoke: ok");

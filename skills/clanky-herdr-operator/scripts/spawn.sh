@@ -324,10 +324,13 @@ for i in "${!ARGV[@]}"; do
 done
 [ "$HAS_TOKEN" = "1" ] || ARGV+=("$KICKOFF")
 
-WORKSPACE_ID="$(herdr pane list | python3 -c 'import sys,json
+WORKSPACE_ID="${HERDR_WORKSPACE_ID:-}"
+if [ -z "$WORKSPACE_ID" ]; then
+	WORKSPACE_ID="$(herdr pane list | python3 -c 'import sys,json
 panes = json.load(sys.stdin)["result"]["panes"]
 focused = [p for p in panes if p.get("focused")]
 print((focused or panes)[0]["workspace_id"])')"
+fi
 
 TAB_LABEL="clanky:$RUN_ID"
 TAB_ID="$(herdr tab list --workspace "$WORKSPACE_ID" | python3 -c 'import sys,json

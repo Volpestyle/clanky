@@ -50,6 +50,7 @@
 		"smoke:tui:attachments": "node test/tui-attachments-smoke.ts",
 		"smoke:mcp:auth": "node test/mcp-auth-probe-smoke.ts",
 		"smoke:mcp": "node test/mcp-stdio-smoke.ts",
+		"smoke:pairing": "node test/clanky-pairing-smoke.ts",
 		"smoke:port": "node test/port-config-smoke.ts",
 		"smoke:voice:config": "node test/voice-config-smoke.ts",
 		"smoke:approvals": "node test/approvals-smoke.ts",

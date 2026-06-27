@@ -214,6 +214,7 @@ class ClankyAutocompleteProvider implements AutocompleteProvider {
 
 	private async dynamicArgumentItems(commandName: string, context: ArgumentContext): Promise<AutocompleteItem[]> {
 		if (commandName === "mcp") return await this.dynamicMcpItems(context);
+		if (commandName === "auth") return await this.dynamicAuthItems(context);
 		if (commandName === "integrations") return await this.dynamicIntegrationItems(context);
 		return [];
 	}
@@ -229,6 +230,12 @@ class ClankyAutocompleteProvider implements AutocompleteProvider {
 			return namesToItems(names ?? [], "curated MCP connection");
 		}
 		return [];
+	}
+
+	private async dynamicAuthItems(context: ArgumentContext): Promise<AutocompleteItem[]> {
+		if (context.args[0]?.toLowerCase() !== "mcp") return [];
+		const names = await this.options.listMcpConnectionNames?.();
+		return namesToItems(names ?? [], "curated MCP connection");
 	}
 
 	private async dynamicIntegrationItems(context: ArgumentContext): Promise<AutocompleteItem[]> {
@@ -308,8 +315,8 @@ function formatCommandSuggestionLines(items: readonly (AutocompleteItem | Clanky
 }
 
 function commandCategory(commandName: string): string {
-	if (["model", "effort", "image-model", "video-model", "vision-model", "login"].includes(commandName)) return "model/auth";
-	if (["harness", "spawn", "agents", "approvals", "trace", "status", "new", "clear", "exit"].includes(commandName)) return "runtime";
+	if (["model", "auth", "local", "effort", "image-model", "video-model", "vision-model", "login"].includes(commandName)) return "model/auth";
+	if (["harness", "spawn", "agents", "approvals", "trace", "layout", "status", "new", "clear", "exit"].includes(commandName)) return "runtime";
 	if (["mcp", "integrations", "browser"].includes(commandName)) return "tools";
 	if (["discord-token", "discord-scope", "voice"].includes(commandName)) return "discord";
 	if (commandName === "pet") return "desktop";
@@ -322,6 +329,15 @@ function staticArgumentSpec(commandName: string, context: ArgumentContext): Stat
 			return values(["status", "--user-token", "--voice"], ["/discord-token status"]);
 		case "model":
 			return modelArguments(context);
+		case "auth":
+			return authArguments(context);
+		case "local":
+			return values(["status", "tiered", "single"], [
+				"/local status",
+				"/local tiered",
+				"/local tiered qwen3-vl:8b",
+				"/local single",
+			]);
 		case "effort":
 			return values(["status", "minimal", "low", "medium", "high", "xhigh", "unset"], [
 				"/effort status",
@@ -332,6 +348,8 @@ function staticArgumentSpec(commandName: string, context: ArgumentContext): Stat
 			return values(["auto", "prompt", "status"], ["/approvals auto", "/approvals prompt"]);
 		case "trace":
 			return values(["status", "off", "no-reply", "all"], ["/trace no-reply", "/trace all"]);
+		case "layout":
+			return layoutArguments(context);
 		case "mcp":
 			return mcpArguments(context);
 		case "voice":
@@ -371,7 +389,7 @@ function modelArguments(context: ArgumentContext): StaticArgumentSpec {
 		);
 	}
 	if (provider === "claude") {
-		return values(["claude-sonnet-4-6", "claude-opus-4-8"], ["/model claude claude-sonnet-4-6"]);
+		return values(["claude-opus-4-8", "claude-sonnet-4-6"], ["/model claude claude-opus-4-8"]);
 	}
 	if (provider === "local") {
 		return { values: [], examples: ["/model local qwen3-coder:30b", "/model local qwen3-coder:30b http://127.0.0.1:11434/v1"] };
@@ -380,11 +398,44 @@ function modelArguments(context: ArgumentContext): StaticArgumentSpec {
 		return values(["grok-4", "grok-4-fast", "grok-3"], ["/model xai grok-4"]);
 	}
 	if (provider === "gemini") {
-		return values(["gemini-2.5-pro", "gemini-2.5-flash", "gemini-3-pro"], ["/model gemini gemini-2.5-pro"]);
+		return values(["gemini-3-pro", "gemini-2.5-pro", "gemini-2.5-flash"], ["/model gemini gemini-3-pro"]);
 	}
 	return values(
 		["status", "codex", "claude", "local", "xai", "gemini"],
 		["/model status", "/model codex gpt-5.5 high", "/model xai grok-4", "/model gemini gemini-2.5-pro"],
+	);
+}
+
+function authArguments(context: ArgumentContext): StaticArgumentSpec {
+	const action = context.args[0]?.toLowerCase();
+	if (action === "status") return { values: [], examples: ["/auth status"] };
+	if (action === "login") return values(["codex", "claude", "status"], ["/auth login codex", "/auth login claude"]);
+	if (action === "codex" || action === "claude") return values(["status"], [`/auth ${action}`]);
+	if (action === "xai" || action === "gemini" || action === "openai" || action === "elevenlabs" || action === "relay" || action === "local-voice") {
+		return values(["status"], [`/auth ${action}`]);
+	}
+	if (action === "discord") return values(["status", "--user-token", "--voice"], ["/auth discord status", "/auth discord --voice"]);
+	if (action === "mcp") return { values: [], examples: ["/auth mcp linear", "/auth mcp figma"] };
+	return values(
+		["status", "codex", "claude", "xai", "gemini", "openai", "discord", "mcp", "elevenlabs", "relay", "local-voice", "login"],
+		["/auth status", "/auth codex", "/auth xai", "/auth mcp linear"],
+	);
+}
+
+function layoutArguments(context: ArgumentContext): StaticArgumentSpec {
+	const setting = context.args[0]?.toLowerCase();
+	if (setting === "input" || setting === "chat" || setting === "prompt") {
+		return values(["top", "bottom"], ["/layout input top", "/layout input bottom"]);
+	}
+	if (setting === "status" || setting === "footer" || setting === "bar") {
+		return values(["above", "below", "above-input", "below-input"], ["/layout status above", "/layout status below"]);
+	}
+	if (setting === "header" || setting === "banner") {
+		return values(["on", "off", "toggle", "status"], ["/layout header off", "/layout header on"]);
+	}
+	return values(
+		["status", "input", "top", "bottom", "footer", "header"],
+		["/layout input top", "/layout status below", "/layout header off"],
 	);
 }
 
@@ -415,7 +466,9 @@ function mcpArguments(context: ArgumentContext): StaticArgumentSpec {
 
 function voiceArguments(context: ArgumentContext): StaticArgumentSpec {
 	const setting = context.args[0]?.toLowerCase();
-	if (setting === "realtime-provider") return values(["openai", "xai", "local"], ["/voice realtime-provider local"]);
+	if (setting === "mode" || setting === "provider" || setting === "realtime-provider") {
+		return values(["openai", "xai", "local"], ["/voice mode local", "/voice mode openai"]);
+	}
 	if (setting === "tts-provider") return values(["realtime", "elevenlabs"], ["/voice tts-provider realtime"]);
 	if (setting === "local-tts-engine") return values(["say", "command"], ["/voice local-tts-engine say"]);
 	if (setting === "eve-session") return values(["on", "off"], ["/voice eve-session on"]);
@@ -424,8 +477,8 @@ function voiceArguments(context: ArgumentContext): StaticArgumentSpec {
 	return values(
 		[
 			"status",
+			"mode",
 			"local-defaults",
-			"realtime-provider",
 			"realtime-model",
 			"realtime-voice",
 			"tts-provider",
@@ -439,7 +492,7 @@ function voiceArguments(context: ArgumentContext): StaticArgumentSpec {
 			"memory-limit",
 			"eve-session",
 		],
-		["/voice local-defaults", "/voice realtime-provider local", "/voice asr-model ~/.clanky/models/voice/whisper/ggml-large-v3-turbo.bin"],
+		["/voice mode local", "/voice mode openai", "/voice local-defaults"],
 	);
 }
 

@@ -14,6 +14,7 @@
 import { defineChannel, GET, WS } from "eve/channels";
 import type { WebSocketMessage, WebSocketPeer } from "eve/channels";
 import { isFrontdoorAuthorized } from "../lib/frontdoor-auth.ts";
+import { resolveClankyFacePanePlacement, startHerdrAgentNearPlacement, type HerdrPanePlacement } from "../lib/herdr-placement.ts";
 import { herdrRequest, herdrStreamLines, type HerdrStream } from "../lib/herdr-socket.ts";
 import { registerPushDevice, unregisterPushDevice } from "../lib/push-registry.ts";
 import { ensurePushWatcher } from "../lib/push-watcher.ts";
@@ -134,12 +135,22 @@ async function dispatch(op: string, args: Record<string, unknown>): Promise<unkn
 			// unless the client opts out with transcript:false.
 			const launchArgv =
 				args.transcript === false ? argv : wrapTranscriptArgv({ agent: name, cwd, runId: newTranscriptRunId(), argv });
-			const params: Record<string, unknown> = { name, argv: launchArgv, cwd, focus: args.focus === true };
-			if (args.workspace_id) params.workspace_id = args.workspace_id;
-			if (args.tab_id) params.tab_id = args.tab_id;
 			const split = str(args.split);
-			if (split) params.split = split;
-			return herdrRequest("agent.start", params);
+			if (split !== undefined && split !== "right" && split !== "down") throw new Error("start split must be right or down");
+			const explicitPlacement: HerdrPanePlacement = {
+				...(str(args.workspace_id) === undefined ? {} : { workspace_id: str(args.workspace_id) }),
+				...(str(args.tab_id) === undefined ? {} : { tab_id: str(args.tab_id) }),
+				...(str(args.target_pane_id) === undefined ? {} : { target_pane_id: str(args.target_pane_id) }),
+			};
+			const hasExplicitPlacement = Object.keys(explicitPlacement).length > 0;
+			return startHerdrAgentNearPlacement({
+				name,
+				argv: launchArgv,
+				cwd,
+				focus: args.focus === true,
+				...(split === undefined ? {} : { split }),
+				placement: hasExplicitPlacement ? explicitPlacement : await resolveClankyFacePanePlacement(),
+			});
 		}
 		case "close": {
 			const pane = str(args.pane);

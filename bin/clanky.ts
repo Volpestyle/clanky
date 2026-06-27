@@ -1,15 +1,14 @@
 #!/usr/bin/env node
-import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { watch } from "node:fs";
 import { lstat, mkdir, readlink, rm, symlink } from "node:fs/promises";
 import { readFile, stat } from "node:fs/promises";
-import { hostname } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseEnv } from "node:util";
-import QRCode from "qrcode";
 import { Client } from "eve/client";
 import { serializeCommandLine } from "../agent/lib/coding-harness.ts";
+import { buildPairingLink, PAIRING_TOKEN_MISSING_MESSAGE, renderPairingQr } from "../agent/lib/pairing.ts";
 import { buildEveDevServerEnv } from "../agent/lib/eve-dev-env.ts";
 import {
 	LOCAL_CONTEXT_TOKENS_ENV,
@@ -38,9 +37,23 @@ const BRAIN_HEALTH_TIMEOUT_MS = 180_000;
 const BRAIN_OUTPUT_LIMIT = 8_000;
 const SERVER_STOP_TIMEOUT_MS = 5_000;
 const SERVER_KILL_TIMEOUT_MS = 2_000;
+const DEV_BRAIN_SUPERVISE_POLL_MS = 5_000;
+// Consecutive unhealthy polls before the supervisor restarts the owned brain.
+// ~15s tolerates eve's own hot-reload blips (which recover well within that)
+// while still rescuing a wedged worker that returns 503 indefinitely.
+const DEV_BRAIN_SUPERVISE_FAILS = 3;
+const DEV_SERVER_RECORD_STARTUP_GRACE_MS = 15_000;
+const DEV_SERVER_RECORD_REPROBE_MS = 500;
+const CLANKY_STARTUP_MODEL_FALLBACK_PROVIDER_ENV = "CLANKY_STARTUP_MODEL_FALLBACK_PROVIDER";
+const CLANKY_STARTUP_MODEL_FALLBACK_ENV_NAMES_ENV = "CLANKY_STARTUP_MODEL_FALLBACK_ENV_NAMES";
 
 type CommandResult = {
 	code: number;
+};
+
+type StartupModelFallback = {
+	readonly provider: "xai" | "gemini";
+	readonly envNames: string;
 };
 
 type DevBrain = {
@@ -148,18 +161,79 @@ async function runNodeScript(relativePath: string, scriptArgs: readonly string[]
 async function runDev(commandArgs: readonly string[]): Promise<CommandResult> {
 	assertInteractiveFaceTty();
 	const brain = await ensureDevBrain();
-	const removeExitCleanup = installDevBrainExitCleanup(brain.child);
+	const supervisor = superviseDevBrain(brain);
 	try {
 		return await runWatchedFace(commandArgs);
 	} finally {
-		removeExitCleanup();
-		if (brain.owned && brain.child !== undefined) await stopDevBrain(brain.child);
+		await supervisor.shutdown();
 	}
+}
+
+type DevBrainSupervisor = {
+	shutdown(): Promise<void>;
+};
+
+// Keep the owned dev brain alive: eve's dev server can wedge with its HTTP front
+// still listening but the runtime worker dead (every route 503), which the face
+// surfaces but cannot fix because it only attaches to this brain. Poll health and
+// restart the brain process after sustained unhealth or an outright exit. Stays
+// silent — the face owns the TTY and renders the eve status itself. When the brain
+// was discovered rather than started here, do nothing: we neither own nor stop it.
+function superviseDevBrain(initial: DevBrain): DevBrainSupervisor {
+	if (!initial.owned || initial.child === undefined) {
+		return { shutdown: async () => {} };
+	}
+	let child = initial.child;
+	let host = initial.host;
+	let removeExitCleanup = installDevBrainExitCleanup(child);
+	let failures = 0;
+	let restarting = false;
+	let stopped = false;
+
+	const tick = async (): Promise<void> => {
+		if (stopped || restarting) return;
+		const state = hasChildExited(child) ? "down" : await probeHost(host);
+		if (stopped || restarting) return;
+		if (state === "healthy") {
+			failures = 0;
+			return;
+		}
+		if (++failures < DEV_BRAIN_SUPERVISE_FAILS) return;
+		restarting = true;
+		try {
+			removeExitCleanup();
+			if (!hasChildExited(child)) await stopDevBrain(child);
+			const next = await startDevBrain();
+			child = next.child ?? child;
+			host = next.host;
+			removeExitCleanup = installDevBrainExitCleanup(child);
+			failures = 0;
+		} catch {
+			// Restart failed (e.g. health never came up); a later tick retries.
+		} finally {
+			restarting = false;
+		}
+	};
+
+	const timer = setInterval(() => void tick(), DEV_BRAIN_SUPERVISE_POLL_MS);
+	timer.unref();
+
+	return {
+		async shutdown(): Promise<void> {
+			stopped = true;
+			clearInterval(timer);
+			removeExitCleanup();
+			if (!hasChildExited(child)) await stopDevBrain(child);
+		},
+	};
 }
 
 async function ensureDevBrain(): Promise<DevBrain> {
 	const discovered = await discoverDevServerHost();
 	if (discovered !== undefined) return { host: discovered, owned: false };
+
+	const staleRecord = await staleDevServerRecord();
+	if (staleRecord !== undefined) await stopStaleDevServerRecord(staleRecord);
 
 	const host = clankyHost();
 	const state = await probeHost(host);
@@ -232,18 +306,49 @@ async function startDevBrain(): Promise<DevBrain> {
 async function buildDevBrainEnv(): Promise<NodeJS.ProcessEnv> {
 	const env = buildEveDevServerEnv(process.env, clankyHost(), clankyPort());
 	const localEnv = await readLocalEnv();
+	const provider = process.env.CLANKY_MODEL_PROVIDER ?? localEnv.CLANKY_MODEL_PROVIDER ?? "codex";
+	const startupFallback = missingApiKeyStartupFallback(provider, process.env, localEnv);
+	if (startupFallback !== undefined) {
+		process.env[CLANKY_STARTUP_MODEL_FALLBACK_PROVIDER_ENV] = startupFallback.provider;
+		process.env[CLANKY_STARTUP_MODEL_FALLBACK_ENV_NAMES_ENV] = startupFallback.envNames;
+		return {
+			...env,
+			CLANKY_MODEL_PROVIDER: "codex",
+			[CLANKY_STARTUP_MODEL_FALLBACK_PROVIDER_ENV]: startupFallback.provider,
+			[CLANKY_STARTUP_MODEL_FALLBACK_ENV_NAMES_ENV]: startupFallback.envNames,
+		};
+	}
+	delete process.env[CLANKY_STARTUP_MODEL_FALLBACK_PROVIDER_ENV];
+	delete process.env[CLANKY_STARTUP_MODEL_FALLBACK_ENV_NAMES_ENV];
 	const explicitContextTokens =
 		parseLocalContextWindowTokens(env[LOCAL_CONTEXT_TOKENS_ENV]) ??
 		parseLocalContextWindowTokens(localEnv[LOCAL_CONTEXT_TOKENS_ENV]);
 	if (explicitContextTokens !== undefined) return env;
 
-	const provider = process.env.CLANKY_MODEL_PROVIDER ?? localEnv.CLANKY_MODEL_PROVIDER ?? "codex";
 	if (provider !== "local") return env;
 	const contextTokens = await resolveOllamaContextWindowTokens({
 		baseURL: process.env.CLANKY_LOCAL_BASE_URL ?? localEnv.CLANKY_LOCAL_BASE_URL ?? DEFAULT_LOCAL_BASE_URL,
 		modelId: process.env.CLANKY_LOCAL_MODEL ?? localEnv.CLANKY_LOCAL_MODEL ?? DEFAULT_LOCAL_MODEL,
 	});
 	return contextTokens === undefined ? env : { ...env, [LOCAL_CONTEXT_TOKENS_ENV]: String(contextTokens) };
+}
+
+function missingApiKeyStartupFallback(
+	provider: string,
+	env: NodeJS.ProcessEnv,
+	localEnv: Record<string, string>,
+): StartupModelFallback | undefined {
+	if (provider === "xai" && !hasAnyEnvValue(env, localEnv, ["CLANKY_XAI_API_KEY", "XAI_API_KEY"])) {
+		return { provider, envNames: "CLANKY_XAI_API_KEY or XAI_API_KEY" };
+	}
+	if (provider === "gemini" && !hasAnyEnvValue(env, localEnv, ["CLANKY_GEMINI_API_KEY", "GEMINI_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY"])) {
+		return { provider, envNames: "CLANKY_GEMINI_API_KEY, GEMINI_API_KEY, or GOOGLE_GENERATIVE_AI_API_KEY" };
+	}
+	return undefined;
+}
+
+function hasAnyEnvValue(env: NodeJS.ProcessEnv, localEnv: Record<string, string>, keys: readonly string[]): boolean {
+	return keys.some((key) => (env[key]?.trim() ?? localEnv[key]?.trim() ?? "").length > 0);
 }
 
 async function readLocalEnv(): Promise<Record<string, string>> {
@@ -274,26 +379,25 @@ async function runPair(commandArgs: readonly string[]): Promise<CommandResult> {
 	const localEnv = await readLocalEnv();
 	const token = process.env.CLANKY_RELAY_TOKEN ?? localEnv.CLANKY_RELAY_TOKEN ?? "";
 	if (token.length === 0) {
-		process.stderr.write(
-			"clanky pair: no CLANKY_RELAY_TOKEN set. The relay is fail-closed without one — set it in .env.local or the environment first.\n",
-		);
+		process.stderr.write(`clanky pair: ${PAIRING_TOKEN_MISSING_MESSAGE}\n`);
 		return { code: 1 };
 	}
 
 	const port = resolvePort(portArg ?? process.env.CLANKY_EVE_PORT ?? localEnv.CLANKY_EVE_PORT, 2000);
-	const host = hostArg ?? (await resolvePairHost(process.env.CLANKY_EVE_HOST ?? localEnv.CLANKY_EVE_HOST));
-	const scheme = useHttps ? "https" : "http";
-	const relayUrl = `${scheme}://${host}:${port}`;
-
-	const params = new URLSearchParams({ relayUrl, token, mode: "tailnet" });
-	const url = `clanky://connect?${params.toString()}`;
+	const { relayUrl, url } = await buildPairingLink({
+		token,
+		port,
+		host: hostArg,
+		configuredHost: process.env.CLANKY_EVE_HOST ?? localEnv.CLANKY_EVE_HOST,
+		https: useHttps,
+	});
 
 	if (linkOnly) {
 		process.stdout.write(`${url}\n`);
 		return { code: 0 };
 	}
 
-	const qr = await QRCode.toString(url, { type: "terminal", small: true });
+	const qr = await renderPairingQr(url);
 	process.stdout.write(`\nScan with the Clanky iOS app to pair (relay ${relayUrl}):\n\n`);
 	process.stdout.write(`${qr}\n`);
 	process.stdout.write(`Or open this link on the phone:\n  ${url}\n\n`);
@@ -305,38 +409,6 @@ function readFlagValue(argv: readonly string[], flag: string): string | undefine
 	if (idx === -1) return undefined;
 	const value = argv[idx + 1];
 	return value !== undefined && !value.startsWith("--") ? value : undefined;
-}
-
-// Pick the address the phone can actually reach: an explicit non-wildcard
-// CLANKY_EVE_HOST, else the Tailscale IPv4, else the machine hostname.
-async function resolvePairHost(configured: string | undefined): Promise<string> {
-	const trimmed = configured?.trim();
-	if (trimmed && !isWildcardHost(trimmed)) return trimmed;
-	const tailscaleIp = await tailscaleIPv4();
-	if (tailscaleIp) return tailscaleIp;
-	return hostname();
-}
-
-function isWildcardHost(host: string): boolean {
-	return (
-		host === "0.0.0.0" || host === "::" || host === "127.0.0.1" || host === "localhost" || host === "::1"
-	);
-}
-
-function tailscaleIPv4(): Promise<string | undefined> {
-	return new Promise((resolvePromise) => {
-		execFile("tailscale", ["ip", "-4"], { timeout: 3000 }, (error, stdout) => {
-			if (error) {
-				resolvePromise(undefined);
-				return;
-			}
-			const first = stdout
-				.split("\n")
-				.map((line) => line.trim())
-				.find((line) => line.length > 0);
-			resolvePromise(first);
-		});
-	});
 }
 
 async function waitForDevBrainHealth(
@@ -359,7 +431,50 @@ async function discoverDevServerHost(): Promise<string | undefined> {
 	if (record === undefined || !isPidAlive(record.pid)) return undefined;
 	const host = normalizeHost(record.url);
 	if (host === undefined) return undefined;
-	return (await probeHost(host)) === "down" ? undefined : host;
+	if ((await probeHost(host)) !== "down") return host;
+
+	const graceMs = devServerRecordStartupGraceMs(record);
+	if (graceMs <= 0) return undefined;
+	const deadline = Date.now() + graceMs;
+	while (Date.now() < deadline && isPidAlive(record.pid)) {
+		await sleep(Math.min(DEV_SERVER_RECORD_REPROBE_MS, Math.max(0, deadline - Date.now())));
+		if ((await probeHost(host)) !== "down") return host;
+	}
+	return undefined;
+}
+
+async function staleDevServerRecord(): Promise<DevServerRecord | undefined> {
+	const record = await readDevServerRecord();
+	if (record === undefined || !isPidAlive(record.pid) || record.pid === process.pid) return undefined;
+	const host = normalizeHost(record.url);
+	if (host === undefined) return undefined;
+	return (await probeHost(host)) === "down" ? record : undefined;
+}
+
+async function stopStaleDevServerRecord(record: DevServerRecord): Promise<void> {
+	const host = normalizeHost(record.url) ?? record.url;
+	process.stderr.write(`clanky: stale Eve dev server pid ${record.pid} is alive but ${host} is unreachable; stopping it before restart\n`);
+	try {
+		process.kill(record.pid, "SIGTERM");
+	} catch {
+		return;
+	}
+	if (await waitForPidExit(record.pid, SERVER_STOP_TIMEOUT_MS)) return;
+	process.stderr.write(`clanky: stale Eve dev server pid ${record.pid} did not exit after SIGTERM; forcing stop\n`);
+	try {
+		process.kill(record.pid, "SIGKILL");
+	} catch {
+		return;
+	}
+	await waitForPidExit(record.pid, SERVER_KILL_TIMEOUT_MS);
+}
+
+function devServerRecordStartupGraceMs(record: DevServerRecord): number {
+	if (record.updatedAt === undefined) return 0;
+	const updatedAt = Date.parse(record.updatedAt);
+	if (!Number.isFinite(updatedAt)) return 0;
+	const ageMs = Math.max(0, Date.now() - updatedAt);
+	return Math.max(0, DEV_SERVER_RECORD_STARTUP_GRACE_MS - ageMs);
 }
 
 async function readDevServerRecord(): Promise<DevServerRecord | undefined> {
@@ -419,6 +534,15 @@ function isPidAlive(pid: number): boolean {
 	} catch (error) {
 		return typeof error === "object" && error !== null && "code" in error && String(error.code) === "EPERM";
 	}
+}
+
+async function waitForPidExit(pid: number, timeoutMs: number): Promise<boolean> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		if (!isPidAlive(pid)) return true;
+		await sleep(100);
+	}
+	return !isPidAlive(pid);
 }
 
 function installDevBrainExitCleanup(child: ChildProcess | undefined): () => void {

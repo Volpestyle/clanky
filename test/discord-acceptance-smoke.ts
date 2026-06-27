@@ -13,7 +13,11 @@ import {
 import { isDiscordSelfMessage, parseBridgeCommand, RecentDiscordMessageIds } from "../agent/lib/discord/host.ts";
 import { extractDiscordMemoryCandidates } from "../agent/lib/discord/memory.ts";
 import { buildPresenceSessionMessage } from "../agent/lib/discord/presence-payload.ts";
-import { formatPresencePrompt } from "../agent/lib/discord/prompt.ts";
+import {
+	formatCompactPresencePrompt,
+	formatPresencePrompt,
+	summarizePresencePromptForMirror,
+} from "../agent/lib/discord/prompt.ts";
 import { applyEnvUpserts } from "../agent/lib/discord/env-file.ts";
 import { resolveDiscordCredentialKind } from "../agent/lib/discord/gateway.ts";
 import { detectVoiceIntent } from "../agent/lib/discord/voice-intent.ts";
@@ -203,6 +207,20 @@ check("normal reply is not skip", !isSkipReplyText("sure, on it"));
 	]);
 	check("presence prompt includes gateway history", historyPrompt.includes("- vuhlp: hi clankey"));
 	check("presence prompt discourages redundant Discord reads", historyPrompt.includes("do not call discord_read_messages"));
+	const compactPrompt = formatCompactPresencePrompt(mediaMessage, "recent_engagement", "Paul", [
+		{ author: "vuhlp", text: "hi clankey" },
+		{ author: "Clanky", text: "hey vuhlp, what's up?" },
+	]);
+	check("compact presence prompt keeps Discord ids", compactPrompt.includes("- newestMessageId: m1"));
+	check("compact presence prompt keeps skip policy", compactPrompt.includes("exactly [SKIP]"));
+	check("compact presence prompt omits long bootstrap contract", !compactPrompt.includes("You are participating in an ongoing Discord chat"));
+	check("compact channel prompt keeps small gateway context", compactPrompt.includes("Recent gateway context:"));
+	const dmCompactPrompt = formatCompactPresencePrompt({ ...mediaMessage, kind: "dm" }, "dm", "Paul", [
+		{ author: "vuhlp", text: "hi clankey" },
+	]);
+	check("compact DM prompt relies on session history", !dmCompactPrompt.includes("Recent gateway context:"));
+	const mirrorSummary = summarizePresencePromptForMirror(compactPrompt);
+	check("mirror summary collapses Discord prompt", mirrorSummary === "Discord channel Paul: clanky what is this?");
 
 	const png = Buffer.alloc(24);
 	Buffer.from("89504e470d0a1a0a", "hex").copy(png, 0);
@@ -226,6 +244,10 @@ check("normal reply is not skip", !isSkipReplyText("sure, on it"));
 		"presence payload records inline transfer note",
 		parts[0]?.type === "text" && parts[0].text.includes("inlined photo.png"),
 	);
+	const compactPayload = await buildPresenceSessionMessage(msg({ text: "follow-up" }), "recent_engagement", "Paul", {
+		mode: "compact",
+	});
+	check("presence payload supports compact mode", typeof compactPayload === "string" && compactPayload.startsWith("Discord follow-up:"));
 }
 
 {

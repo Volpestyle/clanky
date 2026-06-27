@@ -20,6 +20,7 @@ export type ClankyTranscriptViewportOptions = {
 	// Blank rows inserted before each block after the first, so turns read as
 	// separated paragraphs rather than one wall of text.
 	readonly blockSpacing?: number;
+	readonly underfilledAlignment?: TranscriptUnderfilledAlignment;
 };
 
 export type ClankyTranscriptBlockHandle = {
@@ -50,6 +51,7 @@ type RenderedBlock = {
 };
 
 type ScrollDirection = "down" | "up";
+export type TranscriptUnderfilledAlignment = "bottom" | "top";
 
 type SelectionPoint = {
 	readonly line: number;
@@ -75,6 +77,7 @@ export class ClankyTranscriptViewport implements Component, Focusable {
 	private readonly maxRows: (width: number) => number;
 	private readonly theme: ClankyTranscriptViewportTheme;
 	private readonly blockSpacing: number;
+	private underfilledAlignment: TranscriptUnderfilledAlignment;
 	private nextBlockId = 1;
 	private scrollbackRows = 0;
 	private selectedIndex = 0;
@@ -94,6 +97,11 @@ export class ClankyTranscriptViewport implements Component, Focusable {
 		this.maxRows = maxRows;
 		this.theme = { ...DEFAULT_THEME, ...theme };
 		this.blockSpacing = Math.max(0, Math.floor(options.blockSpacing ?? 0));
+		this.underfilledAlignment = options.underfilledAlignment ?? "bottom";
+	}
+
+	setUnderfilledAlignment(alignment: TranscriptUnderfilledAlignment): void {
+		this.underfilledAlignment = alignment;
 	}
 
 	addChild(component: Component, options: ClankyTranscriptBlockOptions = {}): ClankyTranscriptBlockHandle {
@@ -238,9 +246,15 @@ export class ClankyTranscriptViewport implements Component, Focusable {
 		this.clampScrollback(width, lines.length, maxRows);
 		let visible: string[];
 		if (lines.length <= maxRows) {
-			this.lastTopPad = maxRows - lines.length;
 			this.lastWindowStart = 0;
-			visible = [...Array.from({ length: this.lastTopPad }, () => ""), ...lines];
+			const padding = Array.from({ length: maxRows - lines.length }, () => "");
+			if (this.underfilledAlignment === "top") {
+				this.lastTopPad = 0;
+				visible = [...lines, ...padding];
+			} else {
+				this.lastTopPad = padding.length;
+				visible = [...padding, ...lines];
+			}
 		} else {
 			const end = Math.max(maxRows, lines.length - this.scrollbackRows);
 			this.lastWindowStart = Math.max(0, end - maxRows);

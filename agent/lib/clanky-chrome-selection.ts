@@ -1,18 +1,17 @@
 /**
- * Mouse text selection for the face's static chrome — the banner header and the
- * status/typeahead footer rows. The transcript band owns its own selection (it
- * has scrollback the chrome lacks); this covers everything around it so the
- * whole window is selectable while SGR mouse tracking suppresses the terminal's
- * native drag-select.
+ * Mouse text selection for the face's static chrome and modal overlays. The
+ * transcript band owns its own selection (it has scrollback the chrome lacks);
+ * this covers everything around it so the whole window is selectable while SGR
+ * mouse tracking suppresses the terminal's native drag-select.
  *
  * Selection is scoped to a single band per drag: pressing in the banner and
  * dragging into the status row keeps the selection within the banner. Each
  * wrapped chrome component renders normally, then this controller paints the
  * inverse highlight over the selected columns of its own lines.
  */
-import { sliceByColumn, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { sliceByColumn, visibleWidth, type Component, type Focusable } from "@earendil-works/pi-tui";
 
-export type ClankyChromeBand = "banner" | "status" | "typeahead";
+export type ClankyChromeBand = "banner" | "modal" | "status" | "typeahead";
 
 type Point = {
 	readonly row: number;
@@ -44,6 +43,11 @@ export class ClankyChromeSelection {
 
 	clear(): void {
 		this.selection = null;
+	}
+
+	clearBand(band: ClankyChromeBand): void {
+		this.bandLines.delete(band);
+		if (this.selection?.band === band) this.selection = null;
 	}
 
 	isActive(): boolean {
@@ -95,10 +99,11 @@ export class ClankyChromeSelection {
  * inner component keeps full ownership of its rendering; the wrapper only
  * threads the rendered lines through the shared selection controller.
  */
-export class ClankyChromeSelectableComponent implements Component {
+export class ClankyChromeSelectableComponent implements Component, Focusable {
 	private readonly inner: Component;
 	private readonly band: ClankyChromeBand;
 	private readonly selection: ClankyChromeSelection;
+	private ownFocused = false;
 
 	constructor(inner: Component, band: ClankyChromeBand, selection: ClankyChromeSelection) {
 		this.inner = inner;
@@ -110,9 +115,30 @@ export class ClankyChromeSelectableComponent implements Component {
 		return this.selection.applyBand(this.band, this.inner.render(width));
 	}
 
+	get focused(): boolean {
+		return isFocusableComponent(this.inner) ? this.inner.focused : this.ownFocused;
+	}
+
+	set focused(value: boolean) {
+		this.ownFocused = value;
+		if (isFocusableComponent(this.inner)) this.inner.focused = value;
+	}
+
+	get wantsKeyRelease(): boolean | undefined {
+		return this.inner.wantsKeyRelease;
+	}
+
+	handleInput(data: string): void {
+		this.inner.handleInput?.(data);
+	}
+
 	invalidate(): void {
 		this.inner.invalidate();
 	}
+}
+
+function isFocusableComponent(component: Component): component is Component & Focusable {
+	return "focused" in component;
 }
 
 function selectionColumns(first: Point, last: Point, row: number, text: string): [number, number] | null {
