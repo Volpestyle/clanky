@@ -7,7 +7,6 @@ import {
 	createDroppedPathPasteRewriter,
 	parseTuiAttachmentPrompt,
 	rewriteDroppedPathsToDirectives,
-	TUI_ATTACHMENT_HELP,
 } from "../agent/lib/tui-attachments.ts";
 
 const PASTE_START = "\x1b[200~";
@@ -56,8 +55,6 @@ try {
 		rejected = true;
 	}
 	assert(rejected, "@image should reject non-image attachments");
-	assert(TUI_ATTACHMENT_HELP.includes("@image"), "help should mention image syntax");
-	assert(/drag/iu.test(TUI_ATTACHMENT_HELP), "help should mention drag-and-drop");
 
 	// Drag-and-drop directive rewriting.
 	const escapedImagePath = imagePath.replace(/ /gu, "\\ ");

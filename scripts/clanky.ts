@@ -59,7 +59,7 @@ import {
 import { inspectConnectionSearchOutput } from "../agent/lib/mcp-auth-probe.ts";
 import { isAutoApproveValue } from "../agent/lib/approvals.ts";
 import { isPetEnabledValue } from "../agent/lib/pet.ts";
-import { buildTuiAttachmentMessage, createDroppedPathPasteRewriter, TUI_ATTACHMENT_HELP } from "../agent/lib/tui-attachments.ts";
+import { buildTuiAttachmentMessage, createDroppedPathPasteRewriter } from "../agent/lib/tui-attachments.ts";
 import { createClankyFaceAnsiTheme } from "../agent/lib/clanky-face-theme.ts";
 import {
 	ClankyFaceRenderer,
@@ -268,7 +268,6 @@ type ClankyExtensionCommandName =
 	| "approvals"
 	| "image-model"
 	| "vision-model"
-	| "attachments"
 	| "voice"
 	| "integrations"
 	| "mcp"
@@ -970,13 +969,6 @@ function buildClankyPromptCommands(): ClankyPromptCommandSpec[] {
 			argumentHint: "[model-id|local <model-id>|openai <model-id>|unset|status]",
 			takesArgument: true,
 			build: (argument) => ({ type: "extension", name: "vision-model", argument }),
-		},
-		{
-			name: "attachments",
-			aliases: [],
-			description: "Show local file attachment syntax",
-			takesArgument: false,
-			build: () => ({ type: "extension", name: "attachments", argument: "" }),
 		},
 		{
 			name: "pet",
@@ -1681,8 +1673,6 @@ async function handleExtensionCommand(command: ClankyExtensionCommand, renderer:
 			return { message: await configureImageModel(command.argument, renderer.setupFlow) };
 		case "vision-model":
 			return { message: await configureVisionModel(command.argument, renderer.setupFlow) };
-		case "attachments":
-			return { message: TUI_ATTACHMENT_HELP };
 		case "pet":
 			return { message: await configurePet(command.argument, renderer.setupFlow) };
 		case "voice":

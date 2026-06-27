@@ -310,7 +310,7 @@ function formatCommandSuggestionLines(items: readonly (AutocompleteItem | Clanky
 function commandCategory(commandName: string): string {
 	if (["model", "effort", "image-model", "vision-model", "login"].includes(commandName)) return "model/auth";
 	if (["harness", "approvals", "trace", "status", "new", "clear", "exit"].includes(commandName)) return "runtime";
-	if (["mcp", "integrations", "browser", "attachments"].includes(commandName)) return "tools";
+	if (["mcp", "integrations", "browser"].includes(commandName)) return "tools";
 	if (["discord-token", "discord-scope", "voice"].includes(commandName)) return "discord";
 	if (commandName === "pet") return "desktop";
 	return "command";

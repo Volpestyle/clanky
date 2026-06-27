@@ -27,24 +27,6 @@ const DEFAULT_MAX_BYTES_PER_ATTACHMENT = 25 * 1024 * 1024;
 const ATTACHMENT_LINE_PATTERN = /^\s*@(file|image)\s+(.+?)\s*$/iu;
 const DEFAULT_ATTACHMENT_TEXT = "Inspect the attached file(s).";
 
-export const TUI_ATTACHMENT_HELP = [
-	"Attach local files two ways:",
-	"",
-	"1. Drag an image or file from Finder onto the terminal. The path is",
-	"   rewritten into an attachment line automatically; type your prompt",
-	"   on the line that follows.",
-	"",
-	"2. Add attachment lines to your prompt by hand:",
-	"",
-	"@file /absolute/or/relative/path",
-	"@image ~/Desktop/screenshot.png",
-	"",
-	"Then write the normal prompt on any other line. Example:",
-	"",
-	"@image ~/Desktop/ui.png",
-	"What's wrong with this layout?",
-].join("\n");
-
 const PASTE_START = "\x1b[200~";
 const PASTE_END = "\x1b[201~";
 const MAX_PASTE_BUFFER = 1 << 20;
