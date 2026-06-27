@@ -1,23 +1,21 @@
 /**
- * Push watcher (SPEC §4.4). Subscribes to herdr's `pane.agent_status_changed`
- * event stream (all panes) and pushes an APNs alert to every registered device
- * on a transition into a notify-worthy state. The subscription only fires on
- * transitions, so unlike the old poll-and-diff loop there's no "skip the first
- * read" priming and no per-tick `pane.list` traffic.
+ * Push watcher (SPEC §4.4). herdr's agent-status subscription is per-pane, so
+ * rather than juggle a subscription per pane we poll `pane.list` and diff each
+ * pane's agent_status. On a transition into a notify-worthy state we push an
+ * APNs alert to every registered device. Push latency of a few seconds is fine
+ * for "agent blocked / done".
  *
  * Started lazily on the first device registration (relay `register-push`), so it
- * never runs when no phone is listening. Idempotent. Reconnects with backoff if
- * herdr restarts or the socket drops.
+ * never runs when no phone is listening. Idempotent.
  */
 import { apnsConfigured, sendApns } from "./apns.ts";
-import { herdrStreamLines } from "./herdr-socket.ts";
+import { herdrRequest } from "./herdr-socket.ts";
 import { listPushDevices, unregisterPushDevice } from "./push-registry.ts";
 
+const POLL_MS = 5000;
 const NOTIFY_STATUSES = new Set(["blocked", "error", "needs-human", "needs_human"]);
 const DONE_STATUS = "done";
 const STALE_TOKEN_REASONS = new Set(["BadDeviceToken", "Unregistered", "DeviceTokenNotForTopic"]);
-const RECONNECT_MIN_MS = 1000;
-const RECONNECT_MAX_MS = 15000;
 
 interface HerdrPaneLite {
 	pane_id: string;
@@ -28,84 +26,39 @@ interface HerdrPaneLite {
 }
 
 let started = false;
+const lastStatus = new Map<string, string>();
 
 export function ensurePushWatcher(): void {
 	if (started) return;
 	started = true;
-	void runSubscription();
+	void loop();
 }
 
-/** Hold an `events.subscribe` stream open, reconnecting with backoff. */
-async function runSubscription(): Promise<void> {
-	let backoffMs = RECONNECT_MIN_MS;
+async function loop(): Promise<void> {
+	let primed = false;
 	for (;;) {
-		await subscribeOnce(() => {
-			backoffMs = RECONNECT_MIN_MS;
-		});
-		// Stream closed or errored — herdr may be down; wait, then reconnect.
-		await delay(backoffMs);
-		backoffMs = Math.min(backoffMs * 2, RECONNECT_MAX_MS);
-	}
-}
-
-/** Resolves when the subscription stream closes or errors. */
-function subscribeOnce(onEvent: () => void): Promise<void> {
-	return new Promise((resolve) => {
-		let settled = false;
-		const finish = () => {
-			if (settled) return;
-			settled = true;
-			stream.close();
-			resolve();
-		};
-		const stream = herdrStreamLines(
-			{
-				id: `push_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
-				method: "events.subscribe",
-				params: { subscriptions: [{ type: "pane.agent_status_changed" }] },
-			},
-			(line) => {
-				onEvent();
-				const pane = parseStatusEvent(line);
-				if (pane && shouldNotify(pane.agent_status ?? "")) {
-					void pushForPane(pane, (pane.agent_status ?? "").toLowerCase());
+		try {
+			const result = await herdrRequest("pane.list");
+			const panes = ((result as { panes?: HerdrPaneLite[] })?.panes ?? []) as HerdrPaneLite[];
+			for (const pane of panes) {
+				const status = (pane.agent_status ?? "").toLowerCase();
+				const previous = lastStatus.get(pane.pane_id);
+				lastStatus.set(pane.pane_id, status);
+				// Skip the first poll so we don't alert for panes already blocked/done.
+				if (primed && status !== previous && shouldNotify(status)) {
+					await pushForPane(pane, status);
 				}
-			},
-			() => finish(),
-			() => finish(),
-		);
-	});
-}
-
-/**
- * Pull pane id + status out of a herdr event line, tolerant of envelope drift
- * (dotted vs underscored event names, flattened vs `data`/`pane`-nested fields).
- */
-function parseStatusEvent(line: string): HerdrPaneLite | null {
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(line);
-	} catch {
-		return null;
+			}
+			const live = new Set(panes.map((pane) => pane.pane_id));
+			for (const id of [...lastStatus.keys()]) {
+				if (!live.has(id)) lastStatus.delete(id);
+			}
+			primed = true;
+		} catch {
+			// herdr unreachable (session down) — keep polling, it may come back.
+		}
+		await delay(POLL_MS);
 	}
-	const env = (parsed as { params?: unknown })?.params ?? parsed;
-	const record = env as Record<string, unknown>;
-	const name = String(record?.event ?? record?.type ?? "")
-		.toLowerCase()
-		.replace(/_/g, ".");
-	if (!name.includes("status.changed")) return null;
-	const data = ((record?.data as Record<string, unknown>) ?? record) as Record<string, unknown>;
-	const nestedPane = data?.pane as Record<string, unknown> | undefined;
-	const pane_id = (data?.pane_id ?? nestedPane?.pane_id) as string | undefined;
-	const agent_status = (data?.agent_status ?? data?.status ?? nestedPane?.agent_status) as string | undefined;
-	if (!pane_id || !agent_status) return null;
-	return {
-		pane_id,
-		agent_status: String(agent_status).toLowerCase(),
-		workspace_id: (data?.workspace_id ?? nestedPane?.workspace_id) as string | undefined,
-		tab_id: (data?.tab_id ?? nestedPane?.tab_id) as string | undefined,
-		agent: (data?.agent ?? nestedPane?.agent) as string | undefined,
-	};
 }
 
 function shouldNotify(status: string): boolean {
