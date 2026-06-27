@@ -6,15 +6,30 @@ import { discordReadMessages } from "../lib/discord/rest.ts";
 export default defineTool({
 	needsApproval: never(),
 	description:
-		"Read recent Discord channel messages, including attachment, embed, link, and media metadata. This does not visually inspect pixels; download and pass media to media_inspect before describing images. Do not infer that no vision model is available from this metadata.",
+		"Read recent Discord channel messages, including attachment, embed, link, and media metadata. This returns text metadata only, not pixels. To actually see images in a channel, call discord_recent_attachments, which downloads and describes them with Clanky's own vision model in one step. Do not infer from this metadata that no vision is available.",
 	inputSchema: z.object({
 		channelId: z.string().min(1),
 		limit: z.number().int().min(1).max(100).optional(),
 		before: z.string().optional(),
 		after: z.string().optional(),
-		around: z.string().optional(),
-		since: z.string().min(1).optional(),
-		until: z.string().min(1).optional(),
+		around: z
+			.string()
+			.optional()
+			.describe("Message ID to center results on. Mutually exclusive with since/until."),
+		since: z
+			.string()
+			.min(1)
+			.optional()
+			.describe(
+				"Lower time bound. ISO timestamp (2026-06-26T00:00:00Z) or relative duration like 30m, 24h, 7d. Cannot be combined with around.",
+			),
+		until: z
+			.string()
+			.min(1)
+			.optional()
+			.describe(
+				"Upper time bound. ISO timestamp or relative duration like 30m, 24h, 7d. Cannot be combined with around.",
+			),
 	}),
 	async execute(input) {
 		return { messages: await discordReadMessages(input) };

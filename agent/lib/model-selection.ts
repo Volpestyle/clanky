@@ -1,7 +1,9 @@
 import type { LanguageModel } from "ai";
 import { createClaudeModel } from "./claude-model.ts";
 import { type CodexReasoningEffort, createCodexModel } from "./codex-model.ts";
+import { createGeminiModel } from "./gemini-model.ts";
 import { createLocalModel } from "./local-model.ts";
+import { createXaiModel } from "./xai-model.ts";
 
 const CODEX_EFFORTS: readonly CodexReasoningEffort[] = ["minimal", "low", "medium", "high", "xhigh"];
 
@@ -9,8 +11,20 @@ export const DEFAULT_CODEX_MODEL = "gpt-5.4";
 export const DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-5";
 export const DEFAULT_LOCAL_MODEL = "qwen3-coder-next";
 export const DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:11434/v1";
+export const DEFAULT_XAI_MODEL = "grok-4";
+export const DEFAULT_GEMINI_MODEL = "gemini-2.5-pro";
 
-export type ClankyModelProvider = "claude" | "codex" | "local";
+export type ClankyModelProvider = "claude" | "codex" | "local" | "xai" | "gemini";
+
+/** Resolve the xAI API key (shared with Discord voice realtime). */
+export function resolveXaiApiKey(env: NodeJS.ProcessEnv = process.env): string | undefined {
+	return env.CLANKY_XAI_API_KEY?.trim() || env.XAI_API_KEY?.trim() || undefined;
+}
+
+/** Resolve the Gemini API key from any of the accepted env names. */
+export function resolveGeminiApiKey(env: NodeJS.ProcessEnv = process.env): string | undefined {
+	return env.CLANKY_GEMINI_API_KEY?.trim() || env.GEMINI_API_KEY?.trim() || env.GOOGLE_GENERATIVE_AI_API_KEY?.trim() || undefined;
+}
 
 export interface ClankyCodexModelSettings {
 	provider: "codex";
@@ -31,7 +45,24 @@ export interface ClankyLocalModelSettings {
 	reasoningEffort?: string;
 }
 
-export type ClankyModelSettings = ClankyCodexModelSettings | ClankyClaudeModelSettings | ClankyLocalModelSettings;
+export interface ClankyXaiModelSettings {
+	provider: "xai";
+	modelId: string;
+	apiKey?: string;
+}
+
+export interface ClankyGeminiModelSettings {
+	provider: "gemini";
+	modelId: string;
+	apiKey?: string;
+}
+
+export type ClankyModelSettings =
+	| ClankyCodexModelSettings
+	| ClankyClaudeModelSettings
+	| ClankyLocalModelSettings
+	| ClankyXaiModelSettings
+	| ClankyGeminiModelSettings;
 
 export function resolveCodexEffort(value: string | undefined): CodexReasoningEffort | undefined {
 	return CODEX_EFFORTS.find((effort) => effort === value);
@@ -55,6 +86,26 @@ export function resolveClankyModelSettings(env: NodeJS.ProcessEnv = process.env)
 			const reasoningEffort = env.CLANKY_LOCAL_EFFORT?.trim();
 			if (providerName !== undefined && providerName.length > 0) settings.providerName = providerName;
 			if (reasoningEffort !== undefined && reasoningEffort.length > 0) settings.reasoningEffort = reasoningEffort;
+			return settings;
+		}
+
+		case "xai": {
+			const settings: ClankyXaiModelSettings = {
+				provider: "xai",
+				modelId: env.CLANKY_XAI_MODEL ?? DEFAULT_XAI_MODEL,
+			};
+			const apiKey = resolveXaiApiKey(env);
+			if (apiKey !== undefined) settings.apiKey = apiKey;
+			return settings;
+		}
+
+		case "gemini": {
+			const settings: ClankyGeminiModelSettings = {
+				provider: "gemini",
+				modelId: env.CLANKY_GEMINI_MODEL ?? DEFAULT_GEMINI_MODEL,
+			};
+			const apiKey = resolveGeminiApiKey(env);
+			if (apiKey !== undefined) settings.apiKey = apiKey;
 			return settings;
 		}
 
@@ -90,6 +141,12 @@ export function createClankyModel(settings: ClankyModelSettings): LanguageModel 
 				instructions:
 					"You are Clanky, a personal always-on agent. Your full persona and operating rules are provided in the system prompt; follow them exactly.",
 			});
+
+		case "xai":
+			return createXaiModel({ modelId: settings.modelId, apiKey: settings.apiKey ?? "" });
+
+		case "gemini":
+			return createGeminiModel({ modelId: settings.modelId, apiKey: settings.apiKey ?? "" });
 	}
 }
 

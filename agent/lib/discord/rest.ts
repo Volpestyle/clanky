@@ -706,7 +706,10 @@ function snowflakeTimestampMs(value: string): number | undefined {
 }
 
 function timestampToDiscordSnowflake(timestampMs: number): string {
-	const safeTimestampMs = BigInt(Math.max(0, Math.floor(timestampMs)));
+	// Clamp to the Discord epoch so pre-2015 timestamps (e.g. a model passing Unix seconds or an old
+	// date) yield snowflake "0" rather than a negative value, which Discord rejects with a 400.
+	const flooredMs = BigInt(Math.max(0, Math.floor(timestampMs)));
+	const safeTimestampMs = flooredMs < DISCORD_EPOCH_MS ? DISCORD_EPOCH_MS : flooredMs;
 	return ((safeTimestampMs - DISCORD_EPOCH_MS) << 22n).toString();
 }
 

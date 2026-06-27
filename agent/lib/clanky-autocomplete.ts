@@ -308,8 +308,8 @@ function formatCommandSuggestionLines(items: readonly (AutocompleteItem | Clanky
 }
 
 function commandCategory(commandName: string): string {
-	if (["model", "effort", "image-model", "vision-model", "login"].includes(commandName)) return "model/auth";
-	if (["harness", "approvals", "trace", "status", "new", "clear", "exit"].includes(commandName)) return "runtime";
+	if (["model", "effort", "image-model", "video-model", "vision-model", "login"].includes(commandName)) return "model/auth";
+	if (["harness", "spawn", "agents", "approvals", "trace", "status", "new", "clear", "exit"].includes(commandName)) return "runtime";
 	if (["mcp", "integrations", "browser"].includes(commandName)) return "tools";
 	if (["discord-token", "discord-scope", "voice"].includes(commandName)) return "discord";
 	if (commandName === "pet") return "desktop";
@@ -338,6 +338,8 @@ function staticArgumentSpec(commandName: string, context: ArgumentContext): Stat
 			return voiceArguments(context);
 		case "harness":
 			return harnessArguments(context);
+		case "spawn":
+			return spawnArguments(context);
 		case "login":
 			return values(["claude", "codex", "status"], ["/login codex", "/login claude"]);
 		case "discord-scope":
@@ -347,7 +349,9 @@ function staticArgumentSpec(commandName: string, context: ArgumentContext): Stat
 		case "browser":
 			return values(["status", "install"], ["/browser status", "/browser install"]);
 		case "image-model":
-			return values(["status", "gpt-image-2", "unset"], ["/image-model", "/image-model status", "/image-model gpt-image-2"]);
+			return imageModelArguments(context);
+		case "video-model":
+			return values(["status", "xai", "grok-imagine-video", "unset"], ["/video-model xai grok-imagine-video", "/video-model status"]);
 		case "vision-model":
 			return values(["status", "local", "openai", "unset"], ["/vision-model local qwen3-vl:32b", "/vision-model unset"]);
 		case "integrations":
@@ -372,7 +376,27 @@ function modelArguments(context: ArgumentContext): StaticArgumentSpec {
 	if (provider === "local") {
 		return { values: [], examples: ["/model local qwen3-coder:30b", "/model local qwen3-coder:30b http://127.0.0.1:11434/v1"] };
 	}
-	return values(["status", "codex", "claude", "local"], ["/model status", "/model codex gpt-5.5 high", "/model claude", "/model local qwen3-coder"]);
+	if (provider === "xai") {
+		return values(["grok-4", "grok-4-fast", "grok-3"], ["/model xai grok-4"]);
+	}
+	if (provider === "gemini") {
+		return values(["gemini-2.5-pro", "gemini-2.5-flash", "gemini-3-pro"], ["/model gemini gemini-2.5-pro"]);
+	}
+	return values(
+		["status", "codex", "claude", "local", "xai", "gemini"],
+		["/model status", "/model codex gpt-5.5 high", "/model xai grok-4", "/model gemini gemini-2.5-pro"],
+	);
+}
+
+function imageModelArguments(context: ArgumentContext): StaticArgumentSpec {
+	const provider = context.args[0]?.toLowerCase();
+	if (provider === "openai") return values(["gpt-image-2"], ["/image-model openai gpt-image-2"]);
+	if (provider === "xai") return values(["grok-imagine-image-quality", "grok-imagine-image-fast"], ["/image-model xai grok-imagine-image-quality"]);
+	if (provider === "gemini") return values(["gemini-3.1-flash-image", "gemini-3-pro-image"], ["/image-model gemini gemini-3.1-flash-image"]);
+	return values(
+		["status", "openai", "xai", "gemini", "unset"],
+		["/image-model status", "/image-model openai gpt-image-2", "/image-model gemini gemini-3.1-flash-image"],
+	);
 }
 
 function mcpArguments(context: ArgumentContext): StaticArgumentSpec {
@@ -391,14 +415,31 @@ function mcpArguments(context: ArgumentContext): StaticArgumentSpec {
 
 function voiceArguments(context: ArgumentContext): StaticArgumentSpec {
 	const setting = context.args[0]?.toLowerCase();
-	if (setting === "realtime-provider") return values(["openai", "xai"], ["/voice realtime-provider openai"]);
+	if (setting === "realtime-provider") return values(["openai", "xai", "local"], ["/voice realtime-provider local"]);
 	if (setting === "tts-provider") return values(["realtime", "elevenlabs"], ["/voice tts-provider realtime"]);
+	if (setting === "local-tts-engine") return values(["say", "command"], ["/voice local-tts-engine say"]);
 	if (setting === "eve-session") return values(["on", "off"], ["/voice eve-session on"]);
 	if (setting === "memory-limit") return values(["0", "8", "16", "32", "50"], ["/voice memory-limit 16"]);
 	if (setting === "status") return { values: [], examples: ["/voice status"] };
 	return values(
-		["status", "realtime-provider", "realtime-model", "realtime-voice", "tts-provider", "elevenlabs-voice", "elevenlabs-model", "memory-limit", "eve-session"],
-		["/voice realtime-provider openai", "/voice tts-provider realtime", "/voice memory-limit 16"],
+		[
+			"status",
+			"local-defaults",
+			"realtime-provider",
+			"realtime-model",
+			"realtime-voice",
+			"tts-provider",
+			"asr-model",
+			"asr-command",
+			"local-base-url",
+			"local-tts-engine",
+			"local-tts-command",
+			"elevenlabs-voice",
+			"elevenlabs-model",
+			"memory-limit",
+			"eve-session",
+		],
+		["/voice local-defaults", "/voice realtime-provider local", "/voice asr-model ~/.clanky/models/voice/whisper/ggml-large-v3-turbo.bin"],
 	);
 }
 
@@ -413,6 +454,25 @@ function harnessArguments(context: ArgumentContext): StaticArgumentSpec {
 		"/harness status",
 		"/harness allow clanky claude codex",
 		"/harness codex ollama qwen3-coder:30b",
+	]);
+}
+
+function spawnArguments(context: ArgumentContext): StaticArgumentSpec {
+	const pendingFlag = context.argumentText.endsWith(" ") ? context.args.at(-1) : context.args.at(-2);
+	if (pendingFlag === "--harness") {
+		return values(["auto", "clanky", "claude", "codex", "opencode", "custom"], [
+			"/spawn --harness codex docs-review Review the changed files.",
+		]);
+	}
+	if (pendingFlag === "--performer") {
+		return values(["auto", "clanky", "claude", "codex", "opencode"], [
+			"/spawn --performer codex docs-review Review the changed files.",
+		]);
+	}
+	return values(["--harness", "--performer", "--cwd", "help"], [
+		"/spawn",
+		"/spawn docs-review Review the changed files and report findings.",
+		"/spawn --harness codex docs-review Review the changed files.",
 	]);
 }
 
@@ -447,6 +507,7 @@ function argumentWarning(
 	argumentText: string,
 ): string | undefined {
 	if (!command.takesArgument && argumentText.trim().length > 0) return "this command does not take arguments";
+	if (command.name === "spawn") return undefined;
 	const first = splitArgumentTokens(argumentText)[0];
 	if (first === undefined || first.length === 0) return undefined;
 	const hasStaticFirstArgs = staticArgumentSpec(command.name, { args: [], argumentText: "", prefix: "" }).values.length > 0;

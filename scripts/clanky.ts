@@ -6,7 +6,7 @@
  *
  * Run: pnpm face   (CLANKY_EVE_PORT to change the port, default 2000)
  */
-import { type ChildProcess, execFile, spawn } from "node:child_process";
+import { type ChildProcess, execFile, execFileSync, spawn } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
 import { join } from "node:path";
@@ -22,8 +22,10 @@ import {
 	type SelectListTheme,
 	Text,
 	TUI,
+	truncateToWidth,
 	type Component,
 	type OverlayHandle,
+	visibleWidth,
 } from "@earendil-works/pi-tui";
 import {
 	Client,
@@ -59,6 +61,7 @@ import {
 import { inspectConnectionSearchOutput } from "../agent/lib/mcp-auth-probe.ts";
 import { isAutoApproveValue } from "../agent/lib/approvals.ts";
 import { isPetEnabledValue } from "../agent/lib/pet.ts";
+import { resolveClankyDataPath } from "../agent/lib/paths.ts";
 import { buildTuiAttachmentMessage, createDroppedPathPasteRewriter } from "../agent/lib/tui-attachments.ts";
 import { createClankyFaceAnsiTheme } from "../agent/lib/clanky-face-theme.ts";
 import {
@@ -70,10 +73,12 @@ import {
 	type FaceRenderSink,
 } from "../agent/lib/clanky-face-renderer.ts";
 import {
+	resolveClankyChromeMouseTarget,
 	resolveClankyCommandRows,
 	resolveClankyTranscriptMouseTarget,
 	resolveClankyTranscriptRows,
 } from "../agent/lib/clanky-face-layout.ts";
+import { ClankyChromeSelectableComponent, ClankyChromeSelection } from "../agent/lib/clanky-chrome-selection.ts";
 import { isClankyLeftMouseButton, parseClankySgrMouse, type ClankySgrMouseEvent } from "../agent/lib/clanky-sgr-mouse.ts";
 import { writeClankyClipboard } from "../agent/lib/clanky-clipboard.ts";
 import {
@@ -103,6 +108,7 @@ import {
 	type ClankyTranscriptBlockHandle,
 	type ClankyTranscriptBlockOptions,
 } from "../agent/lib/clanky-transcript-viewport.ts";
+import { renderClankyOutline } from "../agent/lib/clanky-outline.ts";
 import { shouldRouteClankyTranscriptGlobalInput } from "../agent/lib/clanky-transcript-key-routing.ts";
 import {
 	ALL_CODING_HARNESSES,
@@ -147,6 +153,11 @@ import {
 	listHerdrAgents,
 	spawnClankyWorker,
 } from "../agent/tools/herdr_spawn.ts";
+import {
+	buildTuiContextMessage,
+	formatWorkerRosterForBrain,
+	TuiLedger,
+} from "../agent/lib/clanky-tui-ledger.ts";
 import { installBrowserBridge } from "../packages/clanky-browser-bridge/src/install.ts";
 import {
 	listMcpServerConfigs,
@@ -173,12 +184,23 @@ const DEFAULT_TURN_TRACE_MODE: TurnTraceMode = "no-reply";
 const CLANKY_FACE_HERDR_PANE_ID_ENV = "CLANKY_FACE_HERDR_PANE_ID";
 const CLANKY_FACE_HERDR_TAB_ID_ENV = "CLANKY_FACE_HERDR_TAB_ID";
 const CLANKY_FACE_HERDR_WORKSPACE_ID_ENV = "CLANKY_FACE_HERDR_WORKSPACE_ID";
+const SPAWN_USAGE =
+	"Usage: /spawn [--harness id|auto] [--performer id|auto] [--cwd path] <slug> <task>. Run /spawn with no args for the menu. Slug is kebab-case; the pane is clanky:<slug>.";
+const SPAWN_SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
+const SPAWN_AUTO_VALUE = "auto";
 // Mode 1002 reports drag motion while a button is held (1000 only reports
 // press/release), which the transcript needs to track a selection gesture.
 const CLANKY_MOUSE_TRACKING_ENABLE = "\x1b[?1002h\x1b[?1006h";
 const CLANKY_MOUSE_TRACKING_DISABLE = "\x1b[?1002l\x1b[?1006l";
 const MIN_TRANSCRIPT_ROWS = 4;
+const AGENTS_PANEL_WIDTH = 76;
 const runHostCommand = promisify(execFile);
+
+if (process.stdin.isTTY !== true || process.stdout.isTTY !== true) {
+	process.stderr.write("clanky: interactive Clanky face requires a TTY; use `clanky worker ...` or `clanky status` for noninteractive use\n");
+	process.exit(1);
+}
+
 const faceCapabilities = detectBannerCapabilities(process.stdout);
 const ansi = createClankyFaceAnsiTheme(faceCapabilities);
 
@@ -267,6 +289,7 @@ type ClankyExtensionCommandName =
 	| "effort"
 	| "approvals"
 	| "image-model"
+	| "video-model"
 	| "vision-model"
 	| "voice"
 	| "integrations"
@@ -310,6 +333,20 @@ type CommandRenderer = {
 	readonly setupFlow: SetupFlow | undefined;
 	setConnectionAuthPendingCount?(count: number): void;
 	upsertConnectionAuth?(state: ConnectionAuthState): void;
+};
+
+type ActivePromptTurn = {
+	readonly controller: AbortController;
+	readonly loader: Loader;
+	readonly loaderBlock: ClankyTranscriptBlockHandle;
+	readonly prompt: string;
+	readonly userBlock: FaceBlockHandle;
+	promptRestoreEligible: boolean;
+};
+
+type ShutdownOptions = {
+	readonly abortTurn?: boolean;
+	readonly waitForTurn?: boolean;
 };
 
 type ConnectionAuthState = {
@@ -357,6 +394,9 @@ const DEFAULT_CODEX_MODEL = "gpt-5.4";
 const DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-5";
 const DEFAULT_LOCAL_MODEL = "qwen3-coder-next";
 const DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:11434/v1";
+const DEFAULT_LOCAL_VOICE_LLM_MODEL = "qwen3.6:27b-mlx";
+const DEFAULT_LOCAL_VOICE_ASR_MODEL = "models/voice/whisper/ggml-large-v3-turbo.bin";
+const DEFAULT_LOCAL_VOICE = "Samantha";
 const DISCORD_SCOPE_ENV = {
 	guilds: "CLANKY_DISCORD_ALLOWED_GUILD_IDS",
 	channels: "CLANKY_DISCORD_ALLOWED_CHANNEL_IDS",
@@ -364,7 +404,7 @@ const DISCORD_SCOPE_ENV = {
 } as const;
 
 type ClankyConfig = {
-	provider: "codex" | "claude" | "local";
+	provider: "codex" | "claude" | "local" | "xai" | "gemini";
 	codexModel?: string;
 	claudeModel?: string;
 	codexEffort?: string;
@@ -372,7 +412,11 @@ type ClankyConfig = {
 	localBaseUrl?: string;
 	localEffort?: string;
 	localContextTokens?: string;
-	localVisionModel?: string;
+	xaiModel?: string;
+	geminiModel?: string;
+	visionModel?: string;
+	visionEnabled?: string;
+	visionProvider?: string;
 	openAiVisionModel?: string;
 	autoApprove?: string;
 	pet?: string;
@@ -387,10 +431,20 @@ type ClankyConfig = {
 	codingHarnessOpencodeLauncher?: string;
 	codingHarnessOpencodeModel?: string;
 	imageModel?: string;
+	xaiImageModel?: string;
+	geminiImageModel?: string;
+	imageProvider?: string;
+	videoProvider?: string;
+	xaiVideoModel?: string;
 	voiceRealtimeProvider?: string;
 	voiceRealtimeModel?: string;
 	voiceRealtimeVoice?: string;
 	voiceTtsProvider?: string;
+	voiceAsrModel?: string;
+	voiceAsrCommand?: string;
+	voiceLocalBaseUrl?: string;
+	voiceLocalTtsEngine?: string;
+	voiceLocalTtsCommand?: string;
 	elevenLabsVoiceId?: string;
 	elevenLabsTtsModel?: string;
 	voiceMemoryContextLimit?: string;
@@ -433,25 +487,30 @@ interface DiscoveredHost {
 const EFFORT_LEVELS = ["minimal", "low", "medium", "high", "xhigh"] as const;
 const LOCAL_EFFORT_LEVELS = ["low", "medium", "high"] as const;
 const VOICE_SETTINGS = [
+	"local-defaults",
 	"realtime-provider",
 	"realtime-model",
 	"realtime-voice",
 	"tts-provider",
+	"asr-model",
+	"asr-command",
+	"local-base-url",
+	"local-tts-engine",
+	"local-tts-command",
 	"elevenlabs-voice",
 	"elevenlabs-model",
 	"memory-limit",
 	"eve-session",
 ] as const;
 type VoiceSetting = (typeof VOICE_SETTINGS)[number];
-type VoiceRealtimeProvider = "openai" | "xai";
+type VoiceRealtimeProvider = "openai" | "xai" | "local";
 type VoiceTtsProvider = "realtime" | "elevenlabs";
 type VoiceSettingUpdate = {
 	updates: Record<string, string>;
 	message: string;
 };
 type ImageModelUpdate = {
-	updates?: Record<string, string>;
-	removals?: string[];
+	updates: Record<string, string>;
 	message: string;
 };
 type DiscordTokenUpdate = {
@@ -476,6 +535,26 @@ const MODEL_OPTIONS: Record<SubscriptionProvider, readonly MenuOption[]> = {
 		{ value: "claude-opus-4-8", label: "claude-opus-4-8" },
 		{ value: "keep-current", label: "keep current" },
 	],
+};
+const DEFAULT_XAI_MODEL = "grok-4";
+const DEFAULT_GEMINI_MODEL = "gemini-2.5-pro";
+const XAI_MODEL_OPTIONS: readonly MenuOption[] = [
+	{ value: "grok-4", label: "grok-4", hint: "flagship, vision" },
+	{ value: "grok-4-fast", label: "grok-4-fast" },
+	{ value: "grok-3", label: "grok-3" },
+	{ value: "keep-current", label: "keep current" },
+];
+const GEMINI_MODEL_OPTIONS: readonly MenuOption[] = [
+	{ value: "gemini-2.5-pro", label: "gemini-2.5-pro", hint: "vision" },
+	{ value: "gemini-2.5-flash", label: "gemini-2.5-flash" },
+	{ value: "gemini-3-pro", label: "gemini-3-pro" },
+	{ value: "keep-current", label: "keep current" },
+];
+const MODEL_ENV_KEY: Record<"codex" | "claude" | "xai" | "gemini", string> = {
+	codex: "CLANKY_CODEX_MODEL",
+	claude: "CLANKY_CLAUDE_MODEL",
+	xai: "CLANKY_XAI_MODEL",
+	gemini: "CLANKY_GEMINI_MODEL",
 };
 const EFFORT_OPTIONS: readonly MenuOption[] = [
 	{ value: "minimal", label: "minimal", hint: "fastest" },
@@ -502,10 +581,16 @@ const LOCAL_EFFORT_STATUS_OPTIONS: readonly MenuOption[] = [
 ];
 const VOICE_SETTING_OPTIONS: readonly MenuOption[] = [
 	{ value: "status", label: "status", hint: "show current voice config" },
-	{ value: "realtime-provider", label: "realtime provider", hint: "OpenAI or xAI" },
-	{ value: "realtime-model", label: "realtime model", hint: "gpt-realtime / grok-voice-2" },
+	{ value: "local-defaults", label: "local defaults", hint: "Whisper + Ollama + Mac voice" },
+	{ value: "realtime-provider", label: "realtime provider", hint: "OpenAI, xAI, or local" },
+	{ value: "realtime-model", label: "realtime model", hint: "gpt-realtime / grok-voice-2 / local LLM" },
 	{ value: "realtime-voice", label: "realtime voice", hint: "native provider voice" },
 	{ value: "tts-provider", label: "tts provider", hint: "realtime or ElevenLabs" },
+	{ value: "asr-model", label: "local ASR model", hint: "whisper.cpp ggml model path" },
+	{ value: "asr-command", label: "local ASR command", hint: "whisper-cli" },
+	{ value: "local-base-url", label: "local LLM endpoint", hint: DEFAULT_LOCAL_BASE_URL },
+	{ value: "local-tts-engine", label: "local TTS engine", hint: "say or command" },
+	{ value: "local-tts-command", label: "local TTS command", hint: "reads text, emits PCM" },
 	{ value: "elevenlabs-voice", label: "ElevenLabs voice id" },
 	{ value: "elevenlabs-model", label: "ElevenLabs TTS model" },
 	{ value: "memory-limit", label: "voice memory context", hint: "0-50 facts" },
@@ -514,10 +599,15 @@ const VOICE_SETTING_OPTIONS: readonly MenuOption[] = [
 const VOICE_REALTIME_PROVIDER_OPTIONS: readonly MenuOption[] = [
 	{ value: "openai", label: "openai", hint: "default" },
 	{ value: "xai", label: "xai", hint: "Grok realtime" },
+	{ value: "local", label: "local", hint: "Whisper + local LLM + local TTS" },
 ];
 const VOICE_TTS_PROVIDER_OPTIONS: readonly MenuOption[] = [
 	{ value: "realtime", label: "realtime", hint: "provider-native audio" },
 	{ value: "elevenlabs", label: "elevenlabs", hint: "external ElevenLabs TTS" },
+];
+const VOICE_LOCAL_TTS_ENGINE_OPTIONS: readonly MenuOption[] = [
+	{ value: "say", label: "say", hint: "macOS built-in voice" },
+	{ value: "command", label: "command", hint: "custom command emits raw PCM" },
 ];
 const VOICE_EVE_SESSION_OPTIONS: readonly MenuOption[] = [
 	{ value: "on", label: "on", hint: "default" },
@@ -556,8 +646,7 @@ const BROWSER_BRIDGE_OPTIONS: readonly MenuOption[] = [
 	{ value: "install", label: "install bridge", hint: "write extension and daemon config" },
 ];
 const DEFAULT_OPENAI_IMAGE_MODEL = "gpt-image-2";
-const CUSTOM_IMAGE_MODEL_OPTION = "__custom_image_model__";
-const CLEAR_IMAGE_MODEL_OPTION = "__clear_image_model__";
+const ENTER_IMAGE_MODEL_OPTION = "__enter_image_model__";
 const DISCORD_SCOPE_ACTION_OPTIONS: readonly MenuOption[] = [
 	{ value: "status", label: "view scope", hint: "show current allowlists" },
 	{ value: "set-guilds", label: "set servers", hint: "replace server allowlist" },
@@ -605,6 +694,13 @@ const CODING_HARNESS_LAUNCHER_OPTIONS: readonly MenuOption[] = [
 	{ value: "default", label: "default", hint: "use the CLI's configured model" },
 	{ value: "ollama", label: "ollama", hint: "launch through ollama with a model id" },
 ];
+const SPAWN_PERFORMER_OPTIONS: readonly MenuOption[] = [
+	{ value: SPAWN_AUTO_VALUE, label: "auto", hint: "use the selected harness" },
+	{ value: "clanky", label: "clanky", hint: BUILTIN_CODING_HARNESSES.clanky.description },
+	{ value: "claude", label: "claude", hint: BUILTIN_CODING_HARNESSES.claude.description },
+	{ value: "codex", label: "codex", hint: BUILTIN_CODING_HARNESSES.codex.description },
+	{ value: "opencode", label: "opencode", hint: BUILTIN_CODING_HARNESSES.opencode.description },
+];
 const MCP_ACTION_OPTIONS: readonly MenuOption[] = [
 	{ value: "status", label: "status", hint: "connections + dynamic server config" },
 	{ value: "list", label: "list tools", hint: "probe dynamic MCP servers" },
@@ -643,7 +739,9 @@ let turnTraceMode = parseTurnTraceMode(process.env.CLANKY_TURN_TRACE) ?? DEFAULT
 let headerVisible = parseBooleanFlag(process.env.CLANKY_HEADER) ?? true;
 let runningTurn: Promise<void> | undefined;
 let isResponding = false;
+let activeTurn: ActivePromptTurn | undefined;
 let shutdownStarted = false;
+const tuiLedger = new TuiLedger();
 let activeLoader: Loader | undefined;
 let commandPaletteOverlay: OverlayHandle | undefined;
 let commandTypeaheadState: ClankyCommandTypeaheadState | undefined;
@@ -651,6 +749,8 @@ let currentStatusLabel = "starting";
 let connectionAuthPendingCount = 0;
 let mouseTrackingEnabled = false;
 let transcriptSelectionActive = false;
+let chromeSelectionActive = false;
+const chromeSelection = new ClankyChromeSelection();
 
 const COMMANDS = buildClankyPromptCommands();
 
@@ -727,10 +827,10 @@ editor.onSubmit = (submitted) => {
 	runningTurn = tracked;
 };
 
-tui.addChild(banner);
+tui.addChild(new ClankyChromeSelectableComponent(banner, "banner", chromeSelection));
 tui.addChild(transcriptViewport);
-tui.addChild(status);
-tui.addChild(commandTypeaheadPanel);
+tui.addChild(new ClankyChromeSelectableComponent(status, "status", chromeSelection));
+tui.addChild(new ClankyChromeSelectableComponent(commandTypeaheadPanel, "typeahead", chromeSelection));
 tui.addChild(editor);
 tui.setFocus(editor);
 tui.addInputListener((data) => {
@@ -742,17 +842,23 @@ tui.addInputListener((data) => {
 	// key focus, so they run before the focus-specific branches below.
 	const mouse = parseClankySgrMouse(data);
 	if (mouse !== undefined && mouse.kind !== "wheel") {
-		handleTranscriptSelectionMouse(mouse);
+		handleSelectionMouse(mouse);
 		return { consume: true };
 	}
-	if (matchesKey(data, Key.ctrl("c")) && transcriptViewport.hasSelection()) {
-		void copyTranscriptSelection();
-		transcriptViewport.clearSelection();
+	if (matchesKey(data, Key.ctrl("c")) && (transcriptViewport.hasSelection() || chromeSelection.hasSelection())) {
+		if (transcriptViewport.hasSelection()) {
+			void copyTranscriptSelection();
+			transcriptViewport.clearSelection();
+		} else {
+			void copyChromeSelection();
+			chromeSelection.clear();
+		}
 		tui.requestRender();
 		return { consume: true };
 	}
-	if (matchesKey(data, Key.escape) && transcriptViewport.hasSelection()) {
+	if (matchesKey(data, Key.escape) && (transcriptViewport.hasSelection() || chromeSelection.hasSelection())) {
 		transcriptViewport.clearSelection();
+		chromeSelection.clear();
 		tui.requestRender();
 		return { consume: true };
 	}
@@ -790,6 +896,7 @@ tui.addInputListener((data) => {
 		setupFlow.handleSubmit("/cancel");
 		return { consume: true };
 	}
+	if (matchesKey(data, Key.escape) && handleActiveTurnEscape()) return { consume: true };
 	const commandInput = handleCommandTypeaheadInput(data);
 	if (commandInput !== undefined) return commandInput;
 	const transcriptInput = handleTranscriptViewportGlobalInput(data);
@@ -803,17 +910,11 @@ startBrainHealthMonitor();
 refreshStatus("ready");
 tui.start();
 enableClankyMouseTracking();
-
-try {
-	await new Promise<void>(() => {});
-} finally {
-	stopBrainHealthMonitor();
-	disableClankyMouseTracking();
-	tui.stop();
-	await reportClankyFaceToHerdr("unknown", "Clanky face stopped");
-	await stopCallbackProxy();
-	if (ownsServer) await stopServer();
-}
+const handleProcessShutdownSignal = (): void => {
+	void shutdown(0, { abortTurn: true, waitForTurn: false });
+};
+process.once("SIGINT", handleProcessShutdownSignal);
+process.once("SIGTERM", handleProcessShutdownSignal);
 
 function createAttachmentAwareClient(client: Client): Client {
 	const wrapped = {
@@ -902,7 +1003,7 @@ function buildClankyPromptCommands(): ClankyPromptCommandSpec[] {
 			name: "model",
 			aliases: [],
 			description: "Configure Codex or Claude subscription-backed model",
-			argumentHint: "[status|codex|claude|local] [id] [effort]",
+			argumentHint: "[status|codex|claude|local|xai|gemini] [id] [effort]",
 			takesArgument: true,
 			build: (argument) => ({ type: "extension", name: "model", argument }),
 		},
@@ -926,7 +1027,7 @@ function buildClankyPromptCommands(): ClankyPromptCommandSpec[] {
 			name: "spawn",
 			aliases: [],
 			description: "Spawn a herdr worker pane through the transcript seam",
-			argumentHint: "[--harness id] [--performer id] [--cwd path] <slug> <task>",
+			argumentHint: "[--harness id|auto] [--performer id|auto] [--cwd path] <slug> <task>",
 			takesArgument: true,
 			build: (argument) => ({ type: "extension", name: "spawn", argument }),
 		},
@@ -957,10 +1058,18 @@ function buildClankyPromptCommands(): ClankyPromptCommandSpec[] {
 		{
 			name: "image-model",
 			aliases: ["images"],
-			description: "Set OpenAI image generation model",
-			argumentHint: "[model-id|status|unset]",
+			description: "Set the image generation provider/model (openai, xai, gemini)",
+			argumentHint: "[status|openai|xai|gemini] [model-id]",
 			takesArgument: true,
 			build: (argument) => ({ type: "extension", name: "image-model", argument }),
+		},
+		{
+			name: "video-model",
+			aliases: ["video"],
+			description: "Set the video generation provider/model (xai)",
+			argumentHint: "[status|xai] [model-id]",
+			takesArgument: true,
+			build: (argument) => ({ type: "extension", name: "video-model", argument }),
 		},
 		{
 			name: "vision-model",
@@ -1103,33 +1212,72 @@ function toggleTranscriptFocus(): void {
 	tui.requestRender();
 }
 
-function handleTranscriptSelectionMouse(mouse: ClankySgrMouseEvent): void {
+function handleSelectionMouse(mouse: ClankySgrMouseEvent): void {
 	if (!isClankyLeftMouseButton(mouse)) return;
 	if (mouse.kind === "press") {
-		const target = transcriptMouseTarget(mouse);
-		if (target.inside) {
-			transcriptViewport.selectionPress(target.row, target.col);
+		const transcript = transcriptMouseTarget(mouse);
+		if (transcript.inside) {
+			chromeSelection.clear();
+			chromeSelectionActive = false;
+			transcriptViewport.selectionPress(transcript.row, transcript.col);
 			transcriptSelectionActive = true;
 		} else {
 			transcriptViewport.clearSelection();
 			transcriptSelectionActive = false;
+			const chrome = chromeMouseTarget(mouse);
+			if (chrome !== null) {
+				chromeSelection.press(chrome.band, chrome.row, chrome.col);
+				chromeSelectionActive = true;
+			} else {
+				chromeSelection.clear();
+				chromeSelectionActive = false;
+			}
 		}
 		tui.requestRender();
 		return;
 	}
 	if (mouse.kind === "drag") {
-		if (!transcriptSelectionActive) return;
-		const target = transcriptMouseTarget(mouse);
-		transcriptViewport.selectionDrag(target.row, target.col);
-		tui.requestRender();
+		if (transcriptSelectionActive) {
+			const transcript = transcriptMouseTarget(mouse);
+			transcriptViewport.selectionDrag(transcript.row, transcript.col);
+			tui.requestRender();
+			return;
+		}
+		if (chromeSelectionActive) {
+			const chrome = chromeMouseTarget(mouse);
+			if (chrome !== null) chromeSelection.drag(chrome.band, chrome.row, chrome.col);
+			tui.requestRender();
+		}
 		return;
 	}
 	// release
-	if (!transcriptSelectionActive) return;
-	transcriptSelectionActive = false;
-	if (transcriptViewport.hasSelection()) void copyTranscriptSelection();
-	else transcriptViewport.clearSelection();
-	tui.requestRender();
+	if (transcriptSelectionActive) {
+		transcriptSelectionActive = false;
+		if (transcriptViewport.hasSelection()) void copyTranscriptSelection();
+		else transcriptViewport.clearSelection();
+		tui.requestRender();
+		return;
+	}
+	if (chromeSelectionActive) {
+		chromeSelectionActive = false;
+		if (chromeSelection.hasSelection()) void copyChromeSelection();
+		else chromeSelection.clear();
+		tui.requestRender();
+	}
+}
+
+function chromeMouseTarget(mouse: ClankySgrMouseEvent): ReturnType<typeof resolveClankyChromeMouseTarget> {
+	const width = tui.terminal.columns;
+	return resolveClankyChromeMouseTarget({
+		bannerRows: banner.render(width).length,
+		editorRows: editor.render(width).length,
+		mouseCol: mouse.col,
+		mouseRow: mouse.row,
+		statusRows: status.render(width).length,
+		terminalRows: tui.terminal.rows,
+		transcriptRows: maxTranscriptRows(width),
+		typeaheadRows: commandTypeaheadPanel.render(width).length,
+	});
 }
 
 function transcriptMouseTarget(mouse: ClankySgrMouseEvent): ReturnType<typeof resolveClankyTranscriptMouseTarget> {
@@ -1147,6 +1295,16 @@ function transcriptMouseTarget(mouse: ClankySgrMouseEvent): ReturnType<typeof re
 
 async function copyTranscriptSelection(): Promise<void> {
 	const text = transcriptViewport.getSelectedText();
+	if (text.length === 0) return;
+	try {
+		await writeClankyClipboard(text, (chunk) => tui.terminal.write(chunk));
+	} catch {
+		return;
+	}
+}
+
+async function copyChromeSelection(): Promise<void> {
+	const text = chromeSelection.getSelectedText();
 	if (text.length === 0) return;
 	try {
 		await writeClankyClipboard(text, (chunk) => tui.terminal.write(chunk));
@@ -1405,9 +1563,13 @@ function insertMarkdown(text: string): FaceBlockHandle {
 		red: ansi.red,
 		yellow: ansi.yellow,
 	});
-	insertTranscript(component);
+	const block = insertTranscript(component);
 	tui.requestRender();
 	return {
+		remove(): void {
+			block.remove();
+			tui.requestRender();
+		},
 		setMarkdown(markdown: string): void {
 			component.setMarkdown(markdown);
 			tui.requestRender();
@@ -1513,6 +1675,29 @@ async function submitEditorText(rawPrompt: string): Promise<void> {
 	await submitPrompt(prompt);
 }
 
+function handleActiveTurnEscape(): boolean {
+	const turn = activeTurn;
+	if (turn === undefined || turn.controller.signal.aborted) return false;
+
+	const canRestorePrompt = turn.promptRestoreEligible && editor.getText().trim().length === 0;
+	if (canRestorePrompt) {
+		turn.userBlock.remove?.();
+		turn.loader.stop();
+		turn.loaderBlock.remove();
+		if (activeLoader === turn.loader) activeLoader = undefined;
+		editor.setText(turn.prompt);
+		tui.setFocus(editor);
+		refreshCommandSurface(turn.prompt);
+		refreshStatus("interrupted - edit prompt");
+	} else {
+		turn.loader.setMessage("Interrupting...");
+		refreshStatus("interrupting");
+	}
+	turn.controller.abort();
+	tui.requestRender();
+	return true;
+}
+
 async function handleSlashPrompt(prompt: string): Promise<void> {
 	const parsed = parsePromptCommand(prompt);
 	if (typeof parsed === "string") {
@@ -1526,7 +1711,9 @@ async function handleSlashPrompt(prompt: string): Promise<void> {
 		tui.requestRender();
 	}
 	if (outcome.message !== undefined && outcome.message.length > 0) {
-		insertCommandResult(prompt, outcome.message, outcome.message.toLowerCase().includes("unknown ") ? "error" : "success");
+		const tone: CommandLogTone = outcome.message.toLowerCase().includes("unknown ") ? "error" : "success";
+		insertCommandResult(prompt, outcome.message, tone);
+		tuiLedger.record(slashCommandLabel(prompt), outcome.message, tone);
 	}
 	if (outcome.newSession === true) {
 		if (isResponding) {
@@ -1543,47 +1730,130 @@ async function handleSlashPrompt(prompt: string): Promise<void> {
 async function submitPrompt(prompt: string): Promise<void> {
 	faceRenderer.resetTurn();
 	isResponding = true;
-	insertMarkdown(`**You**\n\n${prompt}`);
+	const controller = new AbortController();
+	const userBlock = insertMarkdown(`**You**\n\n${prompt}`);
 	const loader = new Loader(tui, ansi.cyan, ansi.dim, "Thinking...");
 	activeLoader = loader;
-	const loaderTranscript = insertTranscript(loader, { collapsible: false });
+	const loaderBlock = insertTranscript(loader, { collapsible: false });
+	const turn: ActivePromptTurn = {
+		controller,
+		loader,
+		loaderBlock,
+		prompt,
+		promptRestoreEligible: true,
+		userBlock,
+	};
+	activeTurn = turn;
 	loader.start();
 	refreshStatus("thinking");
 	tui.requestRender();
 
 	try {
-		await consumeTurn(session.send(prompt));
-		const notice = faceRenderer.noticeForCompletedTurn(turnTraceMode);
-		if (notice !== undefined) insertMarkdown(`**Notice**\n\n${notice}`);
+		const clientContext = await buildTuiClientContext();
+		const sendInput: SendTurnInput =
+			clientContext === undefined
+				? { message: prompt, signal: controller.signal }
+				: { message: prompt, clientContext, signal: controller.signal };
+		await consumeTurn(session.send(sendInput), turn);
+		if (!controller.signal.aborted) {
+			const notice = faceRenderer.noticeForCompletedTurn(turnTraceMode);
+			if (notice !== undefined) insertMarkdown(`**Notice**\n\n${notice}`);
+		}
 	} catch (error) {
-		insertMarkdown(`**Error**\n\n${formatError(error)}`);
+		if (!controller.signal.aborted || !isAbortError(error)) {
+			insertMarkdown(`**Error**\n\n${formatError(error)}`);
+		}
 	} finally {
 		loader.stop();
-		loaderTranscript.remove();
+		loaderBlock.remove();
 		if (activeLoader === loader) activeLoader = undefined;
+		if (activeTurn === turn) activeTurn = undefined;
 		isResponding = false;
 		refreshStatus("ready");
 		tui.requestRender();
 	}
 }
 
-async function consumeTurn(responsePromise: Promise<Awaited<ReturnType<ClientSession["send"]>>>): Promise<void> {
+/**
+ * The TUI state the brain should see for the next turn: recent face-side
+ * commands plus the live worker roster (fetched only after a face spawn, so
+ * idle chats add no latency). Attached as ephemeral eve `clientContext`.
+ */
+async function buildTuiClientContext(): Promise<string | undefined> {
+	const actions = tuiLedger.actionLines();
+	let workers: string[] = [];
+	if (tuiLedger.hasSpawnActivity() && process.env.HERDR_ENV === "1") {
+		try {
+			const agents = await listHerdrAgents();
+			// herdr can report one pane under multiple sources; keep one row each.
+			const deduped = [...new Map(agents.map((agent) => [agent.paneId, agent])).values()];
+			workers = formatWorkerRosterForBrain(deduped.filter((agent) => agent.agent.startsWith("clanky:")));
+		} catch {
+			// Roster unavailable (herdr down / off-stage); fall back to the action ledger alone.
+		}
+	}
+	return buildTuiContextMessage({ actions, workers });
+}
+
+async function consumeTurn(
+	responsePromise: Promise<Awaited<ReturnType<ClientSession["send"]>>>,
+	turn?: ActivePromptTurn,
+): Promise<void> {
 	const pendingInputRequests = new InputRequestQueue();
 	const response = await responsePromise;
 	for await (const event of response) {
+		if (turn?.controller.signal.aborted === true) break;
+		if (turn !== undefined && eventPreventsPromptRestore(event)) turn.promptRestoreEligible = false;
 		const result = faceRenderer.renderEvent(event);
 		if (result.inputRequests.length > 0) pendingInputRequests.add(result.inputRequests);
 		refreshStatus(statusLabelForEvent(event));
 		tui.requestRender();
 		if (result.terminal) break;
 	}
+	if (turn?.controller.signal.aborted === true) return;
 	const requests = pendingInputRequests.drain();
 	if (requests.length === 0) return;
-		const inputResponses = await readInputResponses(requests);
-		if (inputResponses.length === 0) return;
-		faceRenderer.recordInputResponses(inputResponses);
-		await consumeTurn(session.send({ inputResponses }));
+	const inputResponses = await readInputResponses(requests);
+	if (inputResponses.length === 0) return;
+	faceRenderer.recordInputResponses(inputResponses);
+	const followUpInput: SendTurnInput = turn === undefined
+		? { inputResponses }
+		: { inputResponses, signal: turn.controller.signal };
+	await consumeTurn(session.send(followUpInput), turn);
+}
+
+function eventPreventsPromptRestore(event: HandleMessageStreamEvent): boolean {
+	switch (event.type) {
+		case "message.appended":
+			return event.data.messageDelta.trim().length > 0 || event.data.messageSoFar.trim().length > 0;
+		case "message.completed":
+			return (event.data.message ?? "").trim().length > 0;
+		case "reasoning.appended":
+			return event.data.reasoningDelta.trim().length > 0 || event.data.reasoningSoFar.trim().length > 0;
+		case "reasoning.completed":
+			return (event.data.reasoning ?? "").trim().length > 0;
+		case "actions.requested":
+			return event.data.actions.length > 0;
+		case "input.requested":
+			return event.data.requests.length > 0;
+		case "action.result":
+		case "authorization.completed":
+		case "authorization.required":
+		case "compaction.completed":
+		case "compaction.requested":
+		case "result.completed":
+		case "session.failed":
+		case "step.failed":
+		case "subagent.called":
+		case "subagent.completed":
+		case "subagent.event":
+		case "subagent.started":
+		case "turn.failed":
+			return true;
+		default:
+			return false;
 	}
+}
 
 async function readInputResponses(requests: readonly InputRequest[]): Promise<InputResponse[]> {
 	activeLoader?.setMessage("Waiting for input...");
@@ -1671,6 +1941,8 @@ async function handleExtensionCommand(command: ClankyExtensionCommand, renderer:
 			return { message: await configureApprovals(command.argument, renderer.setupFlow) };
 		case "image-model":
 			return { message: await configureImageModel(command.argument, renderer.setupFlow) };
+		case "video-model":
+			return { message: await configureVideoModel(command.argument, renderer.setupFlow) };
 		case "vision-model":
 			return { message: await configureVisionModel(command.argument, renderer.setupFlow) };
 		case "pet":
@@ -1690,20 +1962,23 @@ async function handleExtensionCommand(command: ClankyExtensionCommand, renderer:
 		case "agents":
 			return { message: await listClankyAgentsText(command.argument) };
 		case "spawn":
-			return { message: await spawnWorkerFromFace(command.argument) };
+			return { message: await spawnWorkerFromFace(command.argument, renderer.setupFlow) };
 		case "status":
 			return { message: await statusText() };
 	}
 }
 
 function formatHelp(): string {
+	const bullet = ansi.dim("-");
 	return [
 		"Available commands:",
 		"",
 		...COMMANDS.map((command) => {
-			const aliases = command.aliases.length === 0 ? "" : ` (${command.aliases.map((alias) => `/${alias}`).join(", ")})`;
-			const hint = command.argumentHint === undefined ? "" : ` ${command.argumentHint}`;
-			return `- /${command.name}${hint}${aliases} - ${command.description}`;
+			const name = ansi.bold(ansi.cyan(`/${command.name}`));
+			const hint = command.argumentHint === undefined ? "" : ` ${ansi.dim(command.argumentHint)}`;
+			const aliases =
+				command.aliases.length === 0 ? "" : ` ${ansi.dim(`(${command.aliases.map((alias) => `/${alias}`).join(", ")})`)}`;
+			return `${bullet} ${name}${hint}${aliases} ${ansi.dim("·")} ${command.description}`;
 		}),
 	].join("\n");
 }
@@ -1735,7 +2010,56 @@ function buildBannerFields(info: AgentInfoResult | undefined): BannerFields {
 	if (modelId !== undefined) fields.model = modelId;
 	fields.cwd = displayHomePath(REPO);
 	fields.server = brainHost.replace(/^https?:\/\//u, "");
+	const stage = bannerStage();
+	fields.stage = stage.value;
+	fields.stageLabel = stage.label;
 	return fields;
+}
+
+/**
+ * Which terminal multiplexer this face sits in, and where: the session that
+ * worker spawns share plus this face's own pane (copy-pasteable for
+ * `herdr pane read` / `tmux capture-pane -t`). herdr takes precedence over tmux
+ * since Clanky's stage is herdr-native and herdr can itself run under tmux. When
+ * no multiplexer is detected we report `stage none` rather than dropping the row,
+ * so the header always says where spawns would (or wouldn't) land.
+ */
+function bannerStage(): { label: string; value: string } {
+	return bannerHerdrStage() ?? bannerTmuxStage() ?? { label: "stage", value: "none" };
+}
+
+function bannerHerdrStage(): { label: string; value: string } | undefined {
+	if (process.env.HERDR_ENV !== "1") return undefined;
+	return { label: "herdr", value: stageValue(process.env.HERDR_SESSION, process.env.HERDR_PANE_ID) };
+}
+
+function bannerTmuxStage(): { label: string; value: string } | undefined {
+	if (process.env.TMUX === undefined || process.env.TMUX.length === 0) return undefined;
+	return { label: "tmux", value: stageValue(tmuxSessionName(), process.env.TMUX_PANE) };
+}
+
+/** A `{session} · pane {pane}` summary, or "none" when neither is known. */
+function stageValue(session: string | undefined, pane: string | undefined): string {
+	const parts: string[] = [];
+	const sessionName = session?.trim();
+	const paneId = pane?.trim();
+	if (sessionName !== undefined && sessionName.length > 0) parts.push(sessionName);
+	if (paneId !== undefined && paneId.length > 0) parts.push(`pane ${paneId}`);
+	return parts.length > 0 ? parts.join(" · ") : "none";
+}
+
+/** tmux exposes the pane via `TMUX_PANE` but not the session name; ask tmux. */
+function tmuxSessionName(): string | undefined {
+	try {
+		const name = execFileSync("tmux", ["display-message", "-p", "#S"], {
+			encoding: "utf8",
+			timeout: 1000,
+			stdio: ["ignore", "pipe", "ignore"],
+		}).trim();
+		return name.length > 0 ? name : undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 function bannerModelId(info: AgentInfoResult | undefined): string | undefined {
@@ -1893,11 +2217,12 @@ async function reportClankyFaceToHerdr(state: "idle" | "working" | "blocked" | "
 	]).catch(() => {});
 }
 
-async function shutdown(exitCode: number): Promise<void> {
+async function shutdown(exitCode: number, options: ShutdownOptions = {}): Promise<void> {
 	if (shutdownStarted) return;
 	shutdownStarted = true;
 	try {
-		if (runningTurn !== undefined) await runningTurn.catch(() => undefined);
+		if (options.abortTurn === true) activeTurn?.controller.abort();
+		if (options.waitForTurn !== false && runningTurn !== undefined) await runningTurn.catch(() => undefined);
 		stopBrainHealthMonitor();
 		disableClankyMouseTracking();
 		tui.stop();
@@ -2457,6 +2782,8 @@ function formatProviderSummary(config: ClankyConfig): string {
 		const effort = config.localEffort ? ` (${config.localEffort})` : "";
 		return `local (${config.localModel ?? "default"} @ ${config.localBaseUrl ?? DEFAULT_LOCAL_BASE_URL})${effort}`;
 	}
+	if (config.provider === "xai") return `xai (${config.xaiModel ?? DEFAULT_XAI_MODEL})`;
+	if (config.provider === "gemini") return `gemini (${config.geminiModel ?? DEFAULT_GEMINI_MODEL})`;
 	return config.provider;
 }
 
@@ -2478,11 +2805,11 @@ async function configureModel(argument: string, flow: SetupFlow | undefined): Pr
 	const baseUrl = provider === "local" ? args[2] : undefined;
 
 	if (provider === undefined && args.length > 0) {
-		return `Unknown model provider "${args[0]}". Use codex, claude, local, or status.`;
+		return `Unknown model provider "${args[0]}". Use codex, claude, local, xai, gemini, or status.`;
 	}
 
 	if (provider === undefined) {
-		if (flow === undefined) return `${formatModelStatus(existing)}\n\nUsage: /model [status|codex|claude|local] [id] [effort|baseUrl]`;
+		if (flow === undefined) return `${formatModelStatus(existing)}\n\nUsage: /model [status|codex|claude|local|xai|gemini] [id] [effort|baseUrl]`;
 		const selectedProvider = await selectProvider(flow, "status");
 		if (selectedProvider === "status") return formatModelStatus(existing);
 		if (selectedProvider === undefined) return "/model cancelled.";
@@ -2503,7 +2830,8 @@ async function configureModel(argument: string, flow: SetupFlow | undefined): Pr
 		if (modelId !== undefined && modelId.length > 0) updates.CLANKY_LOCAL_MODEL = modelId;
 	} else {
 		if (modelId !== undefined && modelId.length > 0) {
-			updates[provider === "claude" ? "CLANKY_CLAUDE_MODEL" : "CLANKY_CODEX_MODEL"] = modelId;
+			const modelEnvKey = MODEL_ENV_KEY[provider];
+			updates[modelEnvKey] = modelId;
 		}
 		if (provider === "codex" && effort !== undefined && effort.length > 0) {
 			if (!isEffortLevel(effort)) return `Unknown Codex effort "${effort}".`;
@@ -2512,7 +2840,13 @@ async function configureModel(argument: string, flow: SetupFlow | undefined): Pr
 	}
 
 	await writeEnv(updates);
-	return await restartBrainMessage(`Model provider set to ${provider}${modelId ? ` (${modelId})` : ""}`);
+	const keyHint =
+		provider === "xai"
+			? " — ensure CLANKY_XAI_API_KEY or XAI_API_KEY is set"
+			: provider === "gemini"
+				? " — ensure CLANKY_GEMINI_API_KEY or GEMINI_API_KEY is set"
+				: "";
+	return await restartBrainMessage(`Model provider set to ${provider}${modelId ? ` (${modelId})` : ""}${keyHint}`);
 }
 
 function formatModelStatus(config: ClankyConfig): string {
@@ -2525,6 +2859,8 @@ function formatModelStatus(config: ClankyConfig): string {
 		`local model: ${config.localModel ?? DEFAULT_LOCAL_MODEL}`,
 		`local base URL: ${config.localBaseUrl ?? DEFAULT_LOCAL_BASE_URL}`,
 		`local effort: ${config.localEffort ?? "(server default)"}`,
+		`xai model: ${config.xaiModel ?? DEFAULT_XAI_MODEL}`,
+		`gemini model: ${config.geminiModel ?? DEFAULT_GEMINI_MODEL}`,
 	].join("\n");
 }
 
@@ -3133,102 +3469,190 @@ function formatHeaderStatus(): string {
 	return `Header: ${headerVisible ? "on" : "off"}. Use /header on|off|toggle|status.`;
 }
 
+const IMAGE_PROVIDERS = ["openai", "xai", "gemini"] as const;
+type ImageProvider = (typeof IMAGE_PROVIDERS)[number];
+const IMAGE_MODEL_ENV: Record<ImageProvider, string> = {
+	openai: "CLANKY_OPENAI_IMAGE_MODEL",
+	xai: "CLANKY_XAI_IMAGE_MODEL",
+	gemini: "CLANKY_GEMINI_IMAGE_MODEL",
+};
+const IMAGE_MODEL_DEFAULT: Record<ImageProvider, string> = {
+	openai: DEFAULT_OPENAI_IMAGE_MODEL,
+	xai: "grok-imagine-image-quality",
+	gemini: "gemini-3.1-flash-image",
+};
+const IMAGE_PROVIDER_OPTIONS: readonly MenuOption[] = [
+	{ value: "openai", label: "openai", hint: "OpenAI gpt-image" },
+	{ value: "xai", label: "xai", hint: "Grok Imagine" },
+	{ value: "gemini", label: "gemini", hint: "Nano Banana" },
+];
+const IMAGE_MODEL_OPTIONS: Record<ImageProvider, readonly MenuOption[]> = {
+	openai: [
+		{ value: DEFAULT_OPENAI_IMAGE_MODEL, label: DEFAULT_OPENAI_IMAGE_MODEL },
+		{ value: ENTER_IMAGE_MODEL_OPTION, label: "enter model id" },
+	],
+	xai: [
+		{ value: "grok-imagine-image-quality", label: "grok-imagine-image-quality" },
+		{ value: "grok-imagine-image-fast", label: "grok-imagine-image-fast" },
+		{ value: ENTER_IMAGE_MODEL_OPTION, label: "enter model id" },
+	],
+	gemini: [
+		{ value: "gemini-3.1-flash-image", label: "gemini-3.1-flash-image", hint: "nano banana 2" },
+		{ value: "gemini-3-pro-image", label: "gemini-3-pro-image", hint: "nano banana pro" },
+		{ value: ENTER_IMAGE_MODEL_OPTION, label: "enter model id" },
+	],
+};
+
+function parseImageProvider(value: string | undefined): ImageProvider | undefined {
+	return value === "openai" || value === "xai" || value === "gemini" ? value : undefined;
+}
+
+function currentImageProvider(config: ClankyConfig): ImageProvider {
+	return parseImageProvider(config.imageProvider) ?? "openai";
+}
+
+function imageModelFor(config: ClankyConfig, provider: ImageProvider): string {
+	const configured = (provider === "openai" ? config.imageModel : provider === "xai" ? config.xaiImageModel : config.geminiImageModel)?.trim();
+	return configured !== undefined && configured.length > 0 ? configured : IMAGE_MODEL_DEFAULT[provider];
+}
+
 async function configureImageModel(argument: string, flow: SetupFlow | undefined): Promise<string> {
 	const args = splitArgs(argument);
 	const first = args[0]?.toLowerCase();
 	const config = await readConfig();
 	if (first === "status" || first === "show") return formatImageModelStatus(config);
 	if (first === "unset" || first === "clear" || first === "default" || first === "none" || first === "off") {
-		await removeEnv(["CLANKY_OPENAI_IMAGE_MODEL"]);
-		return await restartBrainMessage(`OpenAI image model cleared; using ${DEFAULT_OPENAI_IMAGE_MODEL}`);
+		await removeEnv(["CLANKY_OPENAI_IMAGE_MODEL", "CLANKY_XAI_IMAGE_MODEL", "CLANKY_GEMINI_IMAGE_MODEL", "CLANKY_IMAGE_PROVIDER"]);
+		return await restartBrainMessage("Image model overrides cleared");
 	}
-	if (argument.trim().length > 0) return await saveOpenAiImageModel(argument);
+	const provider = parseImageProvider(first);
+	if (provider !== undefined) return await saveImageModel(provider, args.slice(1).join(" ").trim());
+	if (argument.trim().length > 0) return await saveImageModel(currentImageProvider(config), argument.trim());
 	if (flow === undefined) return `${formatImageModelStatus(config)}\n\n${imageModelUsage()}`;
 	return await configureImageModelInteractive(flow, config);
 }
 
+async function saveImageModel(provider: ImageProvider, model: string): Promise<string> {
+	const updates: Record<string, string> = { CLANKY_IMAGE_PROVIDER: provider };
+	if (model.length > 0) updates[IMAGE_MODEL_ENV[provider]] = model;
+	await writeEnv(updates);
+	return await restartBrainMessage(`Image provider set to ${provider}${model.length > 0 ? ` (${model})` : ""}`);
+}
+
 async function configureImageModelInteractive(flow: SetupFlow, config: ClankyConfig): Promise<string> {
 	let update: ImageModelUpdate | undefined;
-	flow.begin("Configure image model");
+	flow.begin("Select image model");
 	try {
 		flow.renderOutput(formatImageModelStatus(config));
-		const selected = await selectOne(
-			flow,
-			"Choose the OpenAI image generation model.",
-			imageModelOptions(config),
-			"status",
-		);
+		const providerChoice = await selectOne(flow, "Select the image generation provider.", IMAGE_PROVIDER_OPTIONS, currentImageProvider(config));
+		const provider = parseImageProvider(providerChoice);
+		if (provider === undefined) return "/image-model cancelled.";
+		const selected = await selectOne(flow, `Select the ${provider} image model.`, IMAGE_MODEL_OPTIONS[provider], imageModelFor(config, provider));
 		if (selected === undefined) return "/image-model cancelled.";
-		if (selected === "status") return formatImageModelStatus(config);
-		if (selected === CLEAR_IMAGE_MODEL_OPTION) {
-			update = {
-				removals: ["CLANKY_OPENAI_IMAGE_MODEL"],
-				message: `OpenAI image model cleared; using ${DEFAULT_OPENAI_IMAGE_MODEL}`,
-			};
-		} else {
-			const rawModel = selected === CUSTOM_IMAGE_MODEL_OPTION
+		const rawModel =
+			selected === ENTER_IMAGE_MODEL_OPTION
 				? await flow.readText({
-					message: "Set the OpenAI image generation model.",
-					defaultValue: config.imageModel ?? DEFAULT_OPENAI_IMAGE_MODEL,
-					placeholder: DEFAULT_OPENAI_IMAGE_MODEL,
-					validate: requiredImageModelText,
-				})
+						message: `Enter a ${provider} image model id.`,
+						placeholder: imageModelFor(config, provider),
+						validate: requiredImageModelText,
+					})
 				: selected;
-			if (rawModel === undefined) return "/image-model cancelled.";
-			const model = rawModel.trim();
-			update = {
-				updates: { CLANKY_OPENAI_IMAGE_MODEL: model },
-				message: `OpenAI image model set to ${model}`,
-			};
-		}
+		if (rawModel === undefined) return "/image-model cancelled.";
+		const model = rawModel.trim();
+		update = {
+			updates: { CLANKY_IMAGE_PROVIDER: provider, [IMAGE_MODEL_ENV[provider]]: model },
+			message: `Image provider set to ${provider} (${model})`,
+		};
 	} finally {
 		flow.end({ preserveDiagnostics: false });
 	}
-	if (update.removals !== undefined) await removeEnv(update.removals);
-	if (update.updates !== undefined) await writeEnv(update.updates);
+	await writeEnv(update.updates);
 	return await restartBrainMessage(update.message);
 }
 
-async function saveOpenAiImageModel(rawModel: string): Promise<string> {
-	const model = rawModel.trim();
-	if (model.length === 0) return imageModelUsage();
-	await writeEnv({ CLANKY_OPENAI_IMAGE_MODEL: model });
-	return await restartBrainMessage(`OpenAI image model set to ${model}`);
-}
-
-function imageModelOptions(config: ClankyConfig): readonly MenuOption[] {
-	const current = config.imageModel?.trim();
-	const options: MenuOption[] = [{ value: "status", label: "status", hint: "show current image model" }];
-	if (current !== undefined && current.length > 0 && current !== DEFAULT_OPENAI_IMAGE_MODEL) {
-		options.push({ value: current, label: current, hint: "current" });
-	}
-	options.push(
-		{
-			value: DEFAULT_OPENAI_IMAGE_MODEL,
-			label: DEFAULT_OPENAI_IMAGE_MODEL,
-			hint: current === undefined || current.length === 0 || current === DEFAULT_OPENAI_IMAGE_MODEL ? "current default" : "built-in default",
-		},
-		{ value: CUSTOM_IMAGE_MODEL_OPTION, label: "custom model id", hint: "type another OpenAI Images API model" },
-		{ value: CLEAR_IMAGE_MODEL_OPTION, label: "clear override", hint: `use built-in ${DEFAULT_OPENAI_IMAGE_MODEL}` },
-	);
-	return options;
-}
-
 function formatImageModelStatus(config: ClankyConfig): string {
-	const configured = config.imageModel?.trim();
-	const source = configured === undefined || configured.length === 0 ? "built-in default" : ".env.local";
-	return `OpenAI image model: ${configured && configured.length > 0 ? configured : DEFAULT_OPENAI_IMAGE_MODEL} (${source})`;
+	return [
+		`default image provider: ${currentImageProvider(config)}`,
+		`openai image model: ${imageModelFor(config, "openai")}`,
+		`xai image model: ${imageModelFor(config, "xai")}`,
+		`gemini image model: ${imageModelFor(config, "gemini")}`,
+	].join("\n");
 }
 
 function imageModelUsage(): string {
 	return [
 		"Usage:",
-		"/image-model",
+		"/image-model                      interactive (provider then model)",
 		"/image-model status",
-		`/image-model ${DEFAULT_OPENAI_IMAGE_MODEL}`,
-		"/image-model <model-id>",
+		"/image-model openai <model-id>",
+		"/image-model xai <model-id>",
+		"/image-model gemini <model-id>",
 		"/image-model unset",
 	].join("\n");
+}
+
+function currentImageModel(config: ClankyConfig): string {
+	return imageModelFor(config, currentImageProvider(config));
+}
+
+const DEFAULT_XAI_VIDEO_MODEL = "grok-imagine-video";
+const VIDEO_MODEL_OPTIONS: readonly MenuOption[] = [
+	{ value: DEFAULT_XAI_VIDEO_MODEL, label: DEFAULT_XAI_VIDEO_MODEL },
+	{ value: ENTER_IMAGE_MODEL_OPTION, label: "enter model id" },
+];
+
+function currentVideoModel(config: ClankyConfig): string {
+	const configured = config.xaiVideoModel?.trim();
+	return configured !== undefined && configured.length > 0 ? configured : DEFAULT_XAI_VIDEO_MODEL;
+}
+
+async function configureVideoModel(argument: string, flow: SetupFlow | undefined): Promise<string> {
+	const args = splitArgs(argument);
+	const first = args[0]?.toLowerCase();
+	const config = await readConfig();
+	if (first === "status" || first === "show") return formatVideoModelStatus(config);
+	if (first === "unset" || first === "clear" || first === "default" || first === "none" || first === "off") {
+		await removeEnv(["CLANKY_XAI_VIDEO_MODEL", "CLANKY_VIDEO_PROVIDER"]);
+		return await restartBrainMessage("Video model overrides cleared");
+	}
+	// xAI is the only video provider; accept an optional leading "xai" token.
+	const model = (first === "xai" ? args.slice(1).join(" ") : argument).trim();
+	if (model.length > 0) return await saveVideoModel(model);
+	if (flow === undefined) return `${formatVideoModelStatus(config)}\n\n${videoModelUsage()}`;
+	return await configureVideoModelInteractive(flow, config);
+}
+
+async function saveVideoModel(model: string): Promise<string> {
+	await writeEnv({ CLANKY_VIDEO_PROVIDER: "xai", CLANKY_XAI_VIDEO_MODEL: model });
+	return await restartBrainMessage(`Video model set to xai (${model})`);
+}
+
+async function configureVideoModelInteractive(flow: SetupFlow, config: ClankyConfig): Promise<string> {
+	let chosen: string | undefined;
+	flow.begin("Select video model");
+	try {
+		flow.renderOutput(formatVideoModelStatus(config));
+		const selected = await selectOne(flow, "Select the xAI video model.", VIDEO_MODEL_OPTIONS, currentVideoModel(config));
+		if (selected === undefined) return "/video-model cancelled.";
+		const rawModel =
+			selected === ENTER_IMAGE_MODEL_OPTION
+				? await flow.readText({ message: "Enter an xAI video model id.", placeholder: currentVideoModel(config), validate: requiredImageModelText })
+				: selected;
+		if (rawModel === undefined) return "/video-model cancelled.";
+		chosen = rawModel.trim();
+	} finally {
+		flow.end({ preserveDiagnostics: false });
+	}
+	if (chosen === undefined || chosen.length === 0) return "/video-model cancelled.";
+	return await saveVideoModel(chosen);
+}
+
+function formatVideoModelStatus(config: ClankyConfig): string {
+	return [`default video provider: ${config.videoProvider?.trim() || "xai"}`, `xai video model: ${currentVideoModel(config)}`].join("\n");
+}
+
+function videoModelUsage(): string {
+	return ["Usage:", "/video-model", "/video-model status", "/video-model xai <model-id>", "/video-model <model-id>", "/video-model unset"].join("\n");
 }
 
 async function configureVisionModel(argument: string, flow: SetupFlow | undefined): Promise<string> {
@@ -3236,13 +3660,26 @@ async function configureVisionModel(argument: string, flow: SetupFlow | undefine
 	const first = args[0]?.toLowerCase();
 	const config = await readConfig();
 	if (first === "status" || first === "show") return formatVisionModelStatus(config);
-	if (first === "unset" || first === "clear" || first === "default" || first === "none" || first === "off") {
-		await removeEnv(["CLANKY_LOCAL_VISION_MODEL"]);
-		return await restartBrainMessage("Local vision model override cleared");
+	if (first === "unset" || first === "clear" || first === "default" || first === "none") {
+		await removeEnv(["CLANKY_VISION_MODEL", "CLANKY_VISION_ENABLED", "CLANKY_VISION_PROVIDER", "CLANKY_VISION_BASE_URL"]);
+		return await restartBrainMessage("Vision override cleared; image inspection uses the brain model");
 	}
-	if (first === "local") return await saveLocalVisionModel(args.slice(1).join(" "));
+	if (first === "on" || first === "enable") {
+		if (config.visionModel === undefined || config.visionModel.length === 0) {
+			return "No vision model selected. Set one first: /vision-model <model-id>";
+		}
+		await writeEnv({ CLANKY_VISION_ENABLED: "1" });
+		return await restartBrainMessage(`Vision override on (${config.visionModel})`);
+	}
+	if (first === "off" || first === "disable") {
+		await writeEnv({ CLANKY_VISION_ENABLED: "0" });
+		return await restartBrainMessage("Vision override off; image inspection uses the brain model");
+	}
 	if (first === "openai") return await saveOpenAiVisionModel(args.slice(1).join(" "));
-	if (argument.trim().length > 0) return await saveLocalVisionModel(argument);
+	if (first === "local") return await selectVisionModel(args.slice(1).join(" "), "local");
+	if (first === "ollama") return await selectVisionModel(args.slice(1).join(" "), "ollama");
+	if (first === "codex" || first === "claude") return await selectVisionModel(args.slice(1).join(" "), first);
+	if (argument.trim().length > 0) return await selectVisionModel(argument, "local");
 	if (flow === undefined) return `${formatVisionModelStatus(config)}\n\n${visionModelUsage()}`;
 	return await configureVisionModelInteractive(flow, config);
 }
@@ -3256,21 +3693,31 @@ async function configureVisionModelInteractive(flow: SetupFlow, config: ClankyCo
 			flow,
 			"Choose the vision setting to change.",
 			[
-				{ value: "status", label: "status", hint: "show current vision models" },
-				{ value: "local", label: "local vision model", hint: config.localVisionModel ?? "active local model" },
+				{ value: "status", label: "status", hint: "show current vision config" },
+				{ value: "select", label: "select vision model", hint: config.visionModel ?? "dedicated model (e.g. qwen3-vl:32b)" },
+				{ value: "on", label: "turn override on", hint: "use the selected vision model" },
+				{ value: "off", label: "turn override off", hint: "use the brain model for vision" },
 				{ value: "openai", label: "OpenAI fallback model", hint: config.openAiVisionModel ?? "gpt-5.4-mini" },
-				{ value: "clear-local", label: "clear local override", hint: "use active local model when it supports vision" },
+				{ value: "clear", label: "clear override", hint: "remove the dedicated vision model" },
 			],
 			"status",
 		);
 		if (action === undefined) return "/vision-model cancelled.";
 		if (action === "status") return formatVisionModelStatus(config);
-		if (action === "clear-local") {
-			update = { removals: ["CLANKY_LOCAL_VISION_MODEL"], message: "Local vision model override cleared" };
+		if (action === "on") {
+			if (config.visionModel === undefined || config.visionModel.length === 0) return "No vision model selected. Choose 'select vision model' first.";
+			update = { updates: { CLANKY_VISION_ENABLED: "1" }, message: `Vision override on (${config.visionModel})` };
+		} else if (action === "off") {
+			update = { updates: { CLANKY_VISION_ENABLED: "0" }, message: "Vision override off; image inspection uses the brain model" };
+		} else if (action === "clear") {
+			update = {
+				removals: ["CLANKY_VISION_MODEL", "CLANKY_VISION_ENABLED", "CLANKY_VISION_PROVIDER", "CLANKY_VISION_BASE_URL"],
+				message: "Vision override cleared; image inspection uses the brain model",
+			};
 		} else {
-			const current = action === "openai" ? config.openAiVisionModel : config.localVisionModel;
+			const current = action === "openai" ? config.openAiVisionModel : config.visionModel;
 			const value = await flow.readText({
-				message: action === "openai" ? "Set the OpenAI fallback vision model." : "Set the local vision model for media_inspect.",
+				message: action === "openai" ? "Set the OpenAI fallback vision model." : "Select the dedicated vision model for media_inspect.",
 				defaultValue: current ?? "",
 				placeholder: action === "openai" ? "gpt-5.4-mini" : "qwen3-vl:32b",
 				validate: requiredVisionModelText,
@@ -3280,7 +3727,7 @@ async function configureVisionModelInteractive(flow: SetupFlow, config: ClankyCo
 			update =
 				action === "openai"
 					? { updates: { CLANKY_OPENAI_VISION_MODEL: model }, message: `OpenAI fallback vision model set to ${model}` }
-					: { updates: { CLANKY_LOCAL_VISION_MODEL: model }, message: `Local vision model set to ${model}` };
+					: { updates: { CLANKY_VISION_MODEL: model, CLANKY_VISION_ENABLED: "1" }, message: `Vision model set to ${model} and override turned on` };
 		}
 	} finally {
 		flow.end({ preserveDiagnostics: false });
@@ -3290,11 +3737,13 @@ async function configureVisionModelInteractive(flow: SetupFlow, config: ClankyCo
 	return await restartBrainMessage(update.message);
 }
 
-async function saveLocalVisionModel(rawModel: string): Promise<string> {
+async function selectVisionModel(rawModel: string, provider: "local" | "ollama" | "codex" | "claude"): Promise<string> {
 	const model = rawModel.trim();
 	if (model.length === 0) return "Usage: /vision-model <model-id> or /vision-model unset";
-	await writeEnv({ CLANKY_LOCAL_VISION_MODEL: model });
-	return await restartBrainMessage(`Local vision model set to ${model}`);
+	const updates: Record<string, string> = { CLANKY_VISION_MODEL: model, CLANKY_VISION_ENABLED: "1" };
+	if (provider !== "local") updates.CLANKY_VISION_PROVIDER = provider;
+	await writeEnv(updates);
+	return await restartBrainMessage(`Vision model set to ${model} (${provider}) and override turned on`);
 }
 
 async function saveOpenAiVisionModel(rawModel: string): Promise<string> {
@@ -3305,21 +3754,33 @@ async function saveOpenAiVisionModel(rawModel: string): Promise<string> {
 }
 
 function formatVisionModelStatus(config: ClankyConfig): string {
+	const enabled = isTruthyEnvValue(config.visionEnabled);
+	const selected = config.visionModel ?? "(none)";
+	const provider = config.visionProvider ?? "local";
 	return [
-		`local vision model: ${config.localVisionModel ?? "(active local model)"}`,
+		`vision override: ${enabled ? "on" : "off"}`,
+		`selected vision model: ${selected}${config.visionModel === undefined ? "" : ` (${provider})`}`,
+		`active when off: brain model`,
 		`OpenAI fallback vision model: ${config.openAiVisionModel ?? "gpt-5.4-mini"}`,
 	].join("\n");
+}
+
+function isTruthyEnvValue(value: string | undefined): boolean {
+	if (value === undefined) return false;
+	return ["1", "on", "true", "yes"].includes(value.trim().toLowerCase());
 }
 
 function visionModelUsage(): string {
 	return [
 		"Usage:",
-		"/vision-model",
+		"/vision-model                       interactive",
 		"/vision-model status",
-		"/vision-model <local-model-id>",
-		"/vision-model local <local-model-id>",
-		"/vision-model openai <model-id>",
-		"/vision-model unset",
+		"/vision-model <model-id>            select a local model and turn override on",
+		"/vision-model ollama <model-id>     select a model on the Ollama endpoint",
+		"/vision-model codex|claude <model>  select a hosted vision model",
+		"/vision-model on | off              toggle the selected override",
+		"/vision-model openai <model-id>     set the OpenAI fallback model",
+		"/vision-model unset                 clear the override (use the brain model)",
 	].join("\n");
 }
 
@@ -3373,6 +3834,7 @@ async function configureVoice(argument: string, flow: SetupFlow | undefined): Pr
 
 	const setting = parseVoiceSetting(args[0]);
 	if (setting === "status") return formatVoiceConfig(config);
+	if (setting === "local-defaults") return await saveLocalVoiceDefaults(config);
 	if (setting !== undefined) {
 		const value = args.slice(1).join(" ").trim();
 		if (value.length > 0) return await saveVoiceSetting(setting, value);
@@ -3402,11 +3864,15 @@ async function configureVoiceInteractive(
 		);
 		if (selectedSetting === undefined) return "/voice cancelled.";
 		if (selectedSetting === "status") return formatVoiceConfig(config);
-		const value = await promptVoiceSettingValue(flow, selectedSetting, config);
-		if (value === undefined) return "/voice cancelled.";
-		const result = buildVoiceSettingUpdate(selectedSetting, value);
-		if (typeof result === "string") return result;
-		update = result;
+		if (selectedSetting === "local-defaults") {
+			update = localVoiceDefaultsUpdate(config);
+		} else {
+			const value = await promptVoiceSettingValue(flow, selectedSetting, config);
+			if (value === undefined) return "/voice cancelled.";
+			const result = buildVoiceSettingUpdate(selectedSetting, value);
+			if (typeof result === "string") return result;
+			update = result;
+		}
 	} finally {
 		flow.end({ preserveDiagnostics: false });
 	}
@@ -3420,6 +3886,8 @@ async function promptVoiceSettingValue(
 	config: ClankyConfig,
 ): Promise<string | undefined> {
 	switch (setting) {
+		case "local-defaults":
+			return "1";
 		case "realtime-provider":
 			return await selectOne(
 				flow,
@@ -3473,6 +3941,41 @@ async function promptVoiceSettingValue(
 				placeholder: "eleven_flash_v2_5",
 				validate: requiredVoiceText,
 			});
+		case "asr-model":
+			return await flow.readText({
+				message: "Set the local ASR model path.",
+				defaultValue: config.voiceAsrModel ?? defaultVoiceAsrModelPath(),
+				placeholder: defaultVoiceAsrModelPath(),
+				validate: requiredVoiceText,
+			});
+		case "asr-command":
+			return await flow.readText({
+				message: "Set the local ASR command.",
+				defaultValue: config.voiceAsrCommand ?? "whisper-cli",
+				placeholder: "whisper-cli",
+				validate: requiredVoiceText,
+			});
+		case "local-base-url":
+			return await flow.readText({
+				message: "Set the local voice LLM endpoint.",
+				defaultValue: config.voiceLocalBaseUrl ?? config.localBaseUrl ?? DEFAULT_LOCAL_BASE_URL,
+				placeholder: DEFAULT_LOCAL_BASE_URL,
+				validate: requiredVoiceText,
+			});
+		case "local-tts-engine":
+			return await selectOne(
+				flow,
+				"Choose the local TTS engine.",
+				VOICE_LOCAL_TTS_ENGINE_OPTIONS,
+				parseLocalTtsEngine(config.voiceLocalTtsEngine) ?? "say",
+			);
+		case "local-tts-command":
+			return await flow.readText({
+				message: "Set the local TTS command.",
+				defaultValue: config.voiceLocalTtsCommand ?? "",
+				placeholder: "command that reads text on stdin and emits s16le PCM",
+				validate: requiredVoiceText,
+			});
 	}
 }
 
@@ -3483,13 +3986,40 @@ async function saveVoiceSetting(setting: VoiceSetting, value: string): Promise<s
 	return await restartBrainMessage(update.message);
 }
 
+async function saveLocalVoiceDefaults(config: ClankyConfig): Promise<string> {
+	const update = localVoiceDefaultsUpdate(config);
+	await writeEnv(update.updates);
+	return await restartBrainMessage(update.message);
+}
+
+function localVoiceDefaultsUpdate(config: Partial<ClankyConfig>): VoiceSettingUpdate {
+	return {
+		updates: {
+			CLANKY_DISCORD_VOICE: "1",
+			CLANKY_VOICE_REALTIME_PROVIDER: "local",
+			CLANKY_VOICE_REALTIME_MODEL: config.voiceRealtimeModel ?? DEFAULT_LOCAL_VOICE_LLM_MODEL,
+			CLANKY_VOICE_REALTIME_VOICE: config.voiceRealtimeVoice ?? DEFAULT_LOCAL_VOICE,
+			CLANKY_VOICE_TTS_PROVIDER: "realtime",
+			CLANKY_VOICE_ASR_MODEL: config.voiceAsrModel ?? defaultVoiceAsrModelPath(),
+			CLANKY_VOICE_ASR_COMMAND: config.voiceAsrCommand ?? "whisper-cli",
+			CLANKY_VOICE_LOCAL_BASE_URL: config.voiceLocalBaseUrl ?? config.localBaseUrl ?? DEFAULT_LOCAL_BASE_URL,
+			CLANKY_VOICE_LOCAL_TTS_ENGINE: config.voiceLocalTtsEngine ?? "say",
+			CLANKY_VOICE_MEMORY_CONTEXT_LIMIT: config.voiceMemoryContextLimit ?? "16",
+			CLANKY_VOICE_EVE_SESSION: config.voiceEveSession ?? "1",
+		},
+		message: "Local voice defaults set: Whisper ASR, local LLM, and local realtime TTS",
+	};
+}
+
 function buildVoiceSettingUpdate(setting: VoiceSetting, rawValue: string): VoiceSettingUpdate | string {
 	const value = rawValue.trim();
 	if (value.length === 0) return voiceSettingUsage(setting);
 	switch (setting) {
+		case "local-defaults":
+			return localVoiceDefaultsUpdate({});
 		case "realtime-provider": {
 			const provider = parseVoiceRealtimeProvider(value);
-			if (provider === undefined) return `Unknown voice realtime provider "${value}". Use openai or xai.`;
+			if (provider === undefined) return `Unknown voice realtime provider "${value}". Use openai, xai, or local.`;
 			return {
 				updates: { CLANKY_VOICE_REALTIME_PROVIDER: provider },
 				message: `Voice realtime provider set to ${provider}`,
@@ -3522,6 +4052,34 @@ function buildVoiceSettingUpdate(setting: VoiceSetting, rawValue: string): Voice
 			return {
 				updates: { CLANKY_ELEVENLABS_TTS_MODEL: value },
 				message: `ElevenLabs TTS model set to ${value}`,
+			};
+		case "asr-model":
+			return {
+				updates: { CLANKY_VOICE_ASR_MODEL: value },
+				message: `Voice ASR model set to ${value}`,
+			};
+		case "asr-command":
+			return {
+				updates: { CLANKY_VOICE_ASR_COMMAND: value },
+				message: `Voice ASR command set to ${value}`,
+			};
+		case "local-base-url":
+			return {
+				updates: { CLANKY_VOICE_LOCAL_BASE_URL: value },
+				message: `Voice local LLM endpoint set to ${value}`,
+			};
+		case "local-tts-engine": {
+			const engine = parseLocalTtsEngine(value);
+			if (engine === undefined) return `Unknown local voice TTS engine "${value}". Use say or command.`;
+			return {
+				updates: { CLANKY_VOICE_LOCAL_TTS_ENGINE: engine },
+				message: `Voice local TTS engine set to ${engine}`,
+			};
+		}
+		case "local-tts-command":
+			return {
+				updates: { CLANKY_VOICE_LOCAL_TTS_COMMAND: value },
+				message: "Voice local TTS command set",
 			};
 		case "memory-limit": {
 			const limit = parseVoiceMemoryLimit(value);
@@ -4496,8 +5054,9 @@ async function statusText(): Promise<string> {
 		`auth: claude=${formatCredStatus(claudeAuth)}; codex=${formatCredStatus(codexAuth)}`,
 		`approvals: ${isAutoApproveValue(config.autoApprove) ? "auto (no prompts)" : "prompt"}`,
 		`coding harness: ${formatCodingHarnessSummary(config)}`,
-		`image model: ${config.imageModel ?? DEFAULT_OPENAI_IMAGE_MODEL}`,
-		`vision model: local=${config.localVisionModel ?? "(active local model)"}; openai fallback=${config.openAiVisionModel ?? "gpt-5.4-mini"}`,
+		`image model: ${currentImageProvider(config)}=${imageModelFor(config, currentImageProvider(config))}`,
+		`video model: ${config.videoProvider?.trim() || "xai"}=${currentVideoModel(config)}`,
+		`vision model: ${isTruthyEnvValue(config.visionEnabled) ? `override=${config.visionModel ?? "(none)"}` : "brain model"}; openai fallback=${config.openAiVisionModel ?? "gpt-5.4-mini"}`,
 		...formatVoiceStatusLines(config),
 		`integrations: ${formatIntegrationSummary(bindings, connections)}`,
 		`mcp: ${formatMcpStatusSummary(info, mcpStore)}`,
@@ -4520,87 +5079,190 @@ async function listClankyAgentsText(argument: string): Promise<string> {
 	const deduped = [...new Map(agents.map((agent) => [agent.paneId, agent])).values()];
 	const workers = deduped.filter((agent) => agent.agent.startsWith("clanky:"));
 	const others = deduped.filter((agent) => !agent.agent.startsWith("clanky:"));
-	const lines = ["**Clanky workers**", ""];
+	return formatClankyAgentsPanel(workers, others, showAll);
+}
+
+function formatClankyAgentsPanel(
+	workers: readonly HerdrAgentInfo[],
+	others: readonly HerdrAgentInfo[],
+	showAll: boolean,
+): string {
+	const lines = [
+		formatAgentsSectionHeader("Clanky workers", workers, "worker"),
+		formatAgentStatusCounts(workers),
+	];
 	if (workers.length === 0) {
-		lines.push("_No Clanky workers on the stage. Spawn one with `/spawn <slug> <task>`._");
+		lines.push("", ansi.dim("No Clanky workers on the stage."), `Start one with ${ansi.cyan("/spawn")} or ${ansi.cyan("/spawn <slug> <task>")}.`);
 	} else {
-		for (const agent of workers.sort((a, b) => a.agent.localeCompare(b.agent))) {
-			lines.push(formatClankyAgentLine(agent));
-		}
+		lines.push("", ...formatAgentRosterRows(sortAgentsForRoster(workers)));
 	}
 	if (showAll && others.length > 0) {
-		lines.push("", "**Other herdr agents**", "");
-		for (const agent of others.sort((a, b) => a.agent.localeCompare(b.agent))) {
-			lines.push(formatClankyAgentLine(agent));
-		}
+		lines.push("", formatAgentsSectionHeader("Other herdr agents", others, "agent"), formatAgentStatusCounts(others), "");
+		lines.push(...formatAgentRosterRows(sortAgentsForRoster(others)));
+	} else if (showAll) {
+		lines.push("", `${ansi.bold("Other herdr agents")} ${ansi.dim("none on the stage")}`);
 	} else if (others.length > 0) {
-		lines.push("", `_${others.length} other herdr agent(s) on the stage; \`/agents all\` to include them._`);
+		lines.push(
+			"",
+			`${ansi.dim(`${others.length} other herdr ${pluralWord(others.length, "agent")} hidden.`)} ${ansi.cyan("/agents all")} ${ansi.dim("shows the full stage.")}`,
+		);
 	}
-	return lines.join("\n");
+	return renderClankyOutline(lines, AGENTS_PANEL_WIDTH, ansi.dim).join("\n");
 }
 
-function formatClankyAgentLine(agent: HerdrAgentInfo): string {
-	const role = agent.agent === "clanky:main" ? " (conductor)" : "";
-	const focus = agent.focused ? " · focused" : "";
-	const cwd = agent.cwd.length === 0 ? "" : ` · ${displayHomePath(agent.cwd)}`;
-	return `- \`${agent.agent}\`${role} — ${agentStatusLabel(agent.agentStatus)} · pane ${agent.paneId}${cwd}${focus}`;
+function formatAgentsSectionHeader(label: string, agents: readonly HerdrAgentInfo[], noun: string): string {
+	return `${ansi.bold(label)} ${ansi.dim(`${agents.length} ${pluralWord(agents.length, noun)}`)}`;
 }
 
-function agentStatusLabel(status: string): string {
+function formatAgentStatusCounts(agents: readonly HerdrAgentInfo[]): string {
+	if (agents.length === 0) return ansi.dim("no matching panes");
+	const counts = new Map<string, number>();
+	for (const agent of agents) {
+		const status = normalizeAgentStatus(agent.agentStatus);
+		counts.set(status, (counts.get(status) ?? 0) + 1);
+	}
+	const ordered = ["working", "blocked", "idle", "done", "unknown"];
+	const parts = ordered
+		.filter((status) => (counts.get(status) ?? 0) > 0)
+		.map((status) => colorAgentStatusCount(status, counts.get(status) ?? 0));
+	for (const [status, count] of [...counts.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+		if (!ordered.includes(status)) parts.push(colorAgentStatusCount(status, count));
+	}
+	return parts.join(ansi.dim("  "));
+}
+
+function formatAgentRosterRows(agents: readonly HerdrAgentInfo[]): string[] {
+	const lines: string[] = [];
+	for (const agent of agents) {
+		lines.push(formatAgentRosterPrimary(agent));
+		const cwd = formatAgentRosterCwd(agent);
+		if (cwd !== undefined) lines.push(cwd);
+	}
+	return lines;
+}
+
+function formatAgentRosterPrimary(agent: HerdrAgentInfo): string {
+	const status = padVisible(agentStatusBadge(agent.agentStatus), 12);
+	const name = padVisible(truncateToWidth(formatAgentName(agent), 33, "", true), 33);
+	const meta = agent.focused ? `pane ${agent.paneId} ${ansi.cyan("focused")}` : `pane ${agent.paneId}`;
+	return `${status} ${name} ${ansi.dim(meta)}`;
+}
+
+function formatAgentName(agent: HerdrAgentInfo): string {
+	const role = agent.agent === "clanky:main" ? "conductor" : agent.agent.startsWith("clanky:") ? "worker" : undefined;
+	return role === undefined ? ansi.bold(agent.agent) : `${ansi.bold(agent.agent)} ${ansi.dim(role)}`;
+}
+
+function formatAgentRosterCwd(agent: HerdrAgentInfo): string | undefined {
+	const cwd = (agent.foregroundCwd.trim() || agent.cwd.trim());
+	if (cwd.length === 0) return undefined;
+	return `${ansi.dim("  cwd")} ${ansi.code(truncateToWidth(displayHomePath(cwd), 62, "", true))}`;
+}
+
+function sortAgentsForRoster(agents: readonly HerdrAgentInfo[]): HerdrAgentInfo[] {
+	return [...agents].sort((left, right) => {
+		const rank = agentRosterRank(left) - agentRosterRank(right);
+		if (rank !== 0) return rank;
+		if (left.focused !== right.focused) return left.focused ? -1 : 1;
+		return left.agent.localeCompare(right.agent);
+	});
+}
+
+function agentRosterRank(agent: HerdrAgentInfo): number {
+	if (agent.agent === "clanky:main") return 0;
+	switch (normalizeAgentStatus(agent.agentStatus)) {
+		case "working":
+			return 1;
+		case "blocked":
+			return 2;
+		case "idle":
+			return 3;
+		case "done":
+			return 4;
+		default:
+			return 5;
+	}
+}
+
+function agentStatusBadge(status: string): string {
+	const normalized = normalizeAgentStatus(status);
+	switch (normalized) {
+		case "working":
+			return ansi.yellow("● working");
+		case "blocked":
+			return ansi.red("● blocked");
+		case "idle":
+			return ansi.green("○ idle");
+		case "done":
+			return ansi.green("✓ done");
+		case "unknown":
+			return ansi.dim("○ unknown");
+		default:
+			return ansi.cyan(`● ${normalized}`);
+	}
+}
+
+function colorAgentStatusCount(status: string, count: number): string {
+	const text = `${count} ${status}`;
 	switch (status) {
 		case "working":
-			return "working";
-		case "idle":
-			return "idle";
+			return ansi.yellow(text);
 		case "blocked":
-			return "blocked";
+			return ansi.red(text);
+		case "idle":
 		case "done":
-			return "done";
+			return ansi.green(text);
+		case "unknown":
+			return ansi.dim(text);
 		default:
-			return status.length === 0 ? "unknown" : status;
+			return ansi.cyan(text);
 	}
 }
 
-async function spawnWorkerFromFace(argument: string): Promise<string> {
-	const tokens = splitArgs(argument);
-	let harnessArg: string | undefined;
-	let performerArg: string | undefined;
-	let cwdArg: string | undefined;
-	let index = 0;
-	// Leading --flags are options; the first bare token is the slug and the rest is
-	// the verbatim task brief (so task words are never mistaken for flags).
-	while (index < tokens.length && tokens[index].startsWith("--")) {
-		const flag = tokens[index];
-		const value = tokens[index + 1];
-		if (value === undefined) return `Missing value for ${flag}. ${SPAWN_USAGE}`;
-		if (flag === "--harness") harnessArg = value;
-		else if (flag === "--performer") performerArg = value;
-		else if (flag === "--cwd") cwdArg = value;
-		else return `Unknown flag ${flag}. ${SPAWN_USAGE}`;
-		index += 2;
-	}
-	const slug = tokens[index];
-	const task = tokens.slice(index + 1).join(" ");
-	if (slug === undefined || task.length === 0) return SPAWN_USAGE;
+function normalizeAgentStatus(status: string): string {
+	const normalized = status.trim().toLowerCase();
+	return normalized.length === 0 ? "unknown" : normalized;
+}
 
-	const harness = harnessArg === undefined ? undefined : parseCodingHarnessId(harnessArg);
-	if (harnessArg !== undefined && harness === undefined) {
-		return `Unknown harness '${harnessArg}'. Allowed: ${CODING_HARNESS_IDS.join(", ")}.`;
-	}
-	const performer: Performer | undefined = performerArg === undefined ? undefined : parsePerformer(performerArg);
-	if (performerArg !== undefined && performer === undefined) {
-		return `Unknown performer '${performerArg}'. Allowed: ${PERFORMERS.join(", ")}.`;
-	}
+function pluralWord(count: number, noun: string): string {
+	return count === 1 ? noun : `${noun}s`;
+}
+
+function padVisible(text: string, width: number): string {
+	return text + " ".repeat(Math.max(0, width - visibleWidth(text)));
+}
+
+type FaceSpawnRequest = {
+	readonly slug: string;
+	readonly task: string;
+	readonly harness?: CodingHarnessId;
+	readonly performer?: Performer;
+	readonly cwd?: string;
+};
+
+async function spawnWorkerFromFace(argument: string, flow: SetupFlow | undefined): Promise<string> {
+	const request = argument.trim().length === 0
+		? await promptSpawnWorkerFromFace(flow)
+		: parseSpawnWorkerArgument(argument);
+	if (request === undefined) return "/spawn cancelled.";
+	if (typeof request === "string") return request;
 
 	const config = await readConfig();
 	// Feed the configured harness allowlist/launch settings to the seam so /spawn
 	// resolves the same harness the eve brain would, then pin transcript home/session.
 	const env: NodeJS.ProcessEnv = { ...process.env, ...codingHarnessEnv(config) };
 	try {
-		const result = await spawnClankyWorker({ slug, task, harness, performer, cwd: cwdArg, env });
+		const result = await spawnClankyWorker({
+			slug: request.slug,
+			task: request.task,
+			harness: request.harness,
+			performer: request.performer,
+			cwd: request.cwd,
+			env,
+		});
 		const pane = result.paneId ?? "(pane unknown)";
 		const lines = [
-			`Spawned \`${result.agent}\` — ${result.harnessLabel} (${result.performer} · ${result.codingRuntime}) · pane ${pane}.`,
+			`Spawned \`${result.agent}\` - ${result.harnessLabel} (${result.performer} · ${result.codingRuntime}) · pane ${pane}.`,
 		];
 		if (result.transcript.readCommand !== null) lines.push(`Transcript: \`${result.transcript.readCommand}\``);
 		lines.push("Watch it with `/agents`.");
@@ -4610,8 +5272,172 @@ async function spawnWorkerFromFace(argument: string): Promise<string> {
 	}
 }
 
-const SPAWN_USAGE =
-	"Usage: /spawn [--harness id] [--performer id] [--cwd path] <slug> <task>. Slug is kebab-case; the pane is clanky:<slug>.";
+function parseSpawnWorkerArgument(argument: string): FaceSpawnRequest | string {
+	let tokens: string[];
+	try {
+		tokens = splitCommandLine(argument);
+	} catch (error) {
+		return `Invalid /spawn command: ${error instanceof Error ? error.message : String(error)}`;
+	}
+	const help = tokens[0]?.toLowerCase();
+	if (tokens.length === 1 && (help === "help" || help === "--help" || help === "-h")) return SPAWN_USAGE;
+
+	let harnessArg: string | undefined;
+	let performerArg: string | undefined;
+	let cwdArg: string | undefined;
+	let index = 0;
+	// Leading --flags are options; the first bare token is the slug and the rest is
+	// the verbatim task brief (so task words are never mistaken for flags).
+	while (index < tokens.length && tokens[index].startsWith("--")) {
+		const rawFlag = tokens[index] ?? "";
+		const equalIndex = rawFlag.indexOf("=");
+		const flag = equalIndex === -1 ? rawFlag : rawFlag.slice(0, equalIndex);
+		const inlineValue = equalIndex === -1 ? undefined : rawFlag.slice(equalIndex + 1);
+		const value = inlineValue ?? tokens[index + 1];
+		if (value === undefined) return `Missing value for ${flag}. ${SPAWN_USAGE}`;
+		if (flag === "--harness") harnessArg = value;
+		else if (flag === "--performer") performerArg = value;
+		else if (flag === "--cwd") cwdArg = value;
+		else return `Unknown flag ${flag}. ${SPAWN_USAGE}`;
+		index += inlineValue === undefined ? 2 : 1;
+	}
+	const slug = tokens[index];
+	const task = tokens.slice(index + 1).join(" ").trim();
+	if (slug === undefined || task.length === 0) return SPAWN_USAGE;
+	const slugError = validateSpawnSlugText(slug);
+	if (slugError !== undefined) return slugError;
+
+	let harness: CodingHarnessId | undefined;
+	if (harnessArg !== undefined && !isSpawnAutoValue(harnessArg)) {
+		harness = parseCodingHarnessId(harnessArg);
+	}
+	if (harnessArg !== undefined && !isSpawnAutoValue(harnessArg) && harness === undefined) {
+		return `Unknown harness '${harnessArg}'. Allowed: ${CODING_HARNESS_IDS.join(", ")}.`;
+	}
+	let performer: Performer | undefined;
+	if (performerArg !== undefined && !isSpawnAutoValue(performerArg)) {
+		performer = parsePerformer(performerArg);
+	}
+	if (performerArg !== undefined && !isSpawnAutoValue(performerArg) && performer === undefined) {
+		return `Unknown performer '${performerArg}'. Allowed: ${PERFORMERS.join(", ")}.`;
+	}
+
+	return { slug, task, harness, performer, cwd: normalizedOptionalText(cwdArg) };
+}
+
+async function promptSpawnWorkerFromFace(flow: SetupFlow | undefined): Promise<FaceSpawnRequest | string | undefined> {
+	const config = await readConfig();
+	if (flow === undefined) return `${formatSpawnWorkerConfig(config)}\n\n${SPAWN_USAGE}`;
+
+	let request: FaceSpawnRequest | undefined;
+	flow.begin("Spawn Clanky worker");
+	try {
+		flow.renderOutput(formatSpawnWorkerConfig(config));
+		const slug = await flow.readText({
+			message: "Name the worker pane.",
+			placeholder: "docs-review",
+			validate: validateSpawnSlugText,
+		});
+		if (slug === undefined) return undefined;
+		const task = await flow.readText({
+			message: "Describe the task for the worker.",
+			placeholder: "Review the changed files and report findings.",
+			validate: requiredSpawnTaskText,
+		});
+		if (task === undefined) return undefined;
+
+		const harnessChoice = await selectOne(
+			flow,
+			"Choose the worker harness.",
+			spawnHarnessOptions(config),
+			SPAWN_AUTO_VALUE,
+		);
+		if (harnessChoice === undefined) return undefined;
+		const harness = isSpawnAutoValue(harnessChoice) ? undefined : parseCodingHarnessId(harnessChoice);
+		if (!isSpawnAutoValue(harnessChoice) && harness === undefined) {
+			return `Unknown harness '${harnessChoice}'. Allowed: ${CODING_HARNESS_IDS.join(", ")}.`;
+		}
+
+		const performerChoice = harness === undefined
+			? await selectOne(flow, "Choose a performer override.", SPAWN_PERFORMER_OPTIONS, SPAWN_AUTO_VALUE)
+			: SPAWN_AUTO_VALUE;
+		if (performerChoice === undefined) return undefined;
+		const performer = isSpawnAutoValue(performerChoice) ? undefined : parsePerformer(performerChoice);
+		if (!isSpawnAutoValue(performerChoice) && performer === undefined) {
+			return `Unknown performer '${performerChoice}'. Allowed: ${PERFORMERS.join(", ")}.`;
+		}
+
+		const cwd = await flow.readText({
+			message: "Set the host working directory.",
+			defaultValue: process.cwd(),
+			placeholder: process.cwd(),
+			validate: validateSpawnCwdText,
+		});
+		if (cwd === undefined) return undefined;
+
+		request = {
+			slug: slug.trim(),
+			task: task.trim(),
+			harness,
+			performer,
+			cwd: normalizedSpawnCwd(cwd),
+		};
+		return request;
+	} finally {
+		flow.end({ preserveDiagnostics: false });
+	}
+}
+
+function formatSpawnWorkerConfig(config: ClankyConfig): string {
+	return [
+		"Spawn worker:",
+		`default harness: ${formatCodingHarnessSummary(config)}`,
+		`allowed: ${formatAllowedHarnesses(config)}`,
+		`default cwd: ${displayHomePath(process.cwd())}`,
+	].join("\n");
+}
+
+function spawnHarnessOptions(config: ClankyConfig): readonly MenuOption[] {
+	const allowed = configuredAllowedHarnesses(config);
+	const explicit = CODING_HARNESS_OPTIONS.filter((option) => {
+		const harness = parseCodingHarnessId(option.value);
+		return harness !== undefined && allowed.includes(harness);
+	});
+	return [
+		{ value: SPAWN_AUTO_VALUE, label: "auto", hint: "use /harness fallback and allowlist" },
+		...explicit,
+	];
+}
+
+function validateSpawnSlugText(value: string): string | undefined {
+	const trimmed = value.trim();
+	if (trimmed.length === 0) return "Enter a worker slug.";
+	if (!SPAWN_SLUG_RE.test(trimmed)) return "Use lowercase letters, digits, and hyphens; start with a letter or digit.";
+	return undefined;
+}
+
+function requiredSpawnTaskText(value: string): string | undefined {
+	return value.trim().length === 0 ? "Enter a task brief." : undefined;
+}
+
+function validateSpawnCwdText(value: string): string | undefined {
+	return value.trim().length === 0 ? "Enter a host working directory, or keep the default." : undefined;
+}
+
+function normalizedSpawnCwd(value: string): string | undefined {
+	const trimmed = value.trim();
+	return trimmed === process.cwd() ? undefined : trimmed;
+}
+
+function normalizedOptionalText(value: string | undefined): string | undefined {
+	const trimmed = value?.trim();
+	return trimmed === undefined || trimmed.length === 0 ? undefined : trimmed;
+}
+
+function isSpawnAutoValue(value: string): boolean {
+	const normalized = value.trim().toLowerCase();
+	return normalized === SPAWN_AUTO_VALUE || normalized === "default";
+}
 
 function formatBrainHealthSummary(health: BrainHealthState): string {
 	switch (health.state) {
@@ -4692,6 +5518,16 @@ async function selectProvider(
 					label: "local",
 					hint: "local OpenAI-compatible server (Ollama, LM Studio, llama.cpp)",
 				},
+				{
+					value: "xai",
+					label: "xai",
+					hint: "xAI Grok (CLANKY_XAI_API_KEY / XAI_API_KEY)",
+				},
+				{
+					value: "gemini",
+					label: "gemini",
+					hint: "Google Gemini (CLANKY_GEMINI_API_KEY / GEMINI_API_KEY)",
+				},
 			],
 			initialValue,
 		);
@@ -4713,6 +5549,12 @@ async function selectModel(
 			const baseUrl = config.localBaseUrl ?? DEFAULT_LOCAL_BASE_URL;
 			const options = await localModelOptions(baseUrl);
 			return await selectOne(flow, `Choose the local model served at ${baseUrl}.`, options, config.localModel);
+		}
+		if (provider === "xai") {
+			return await selectOne(flow, "Choose the xAI Grok model Clanky should use.", XAI_MODEL_OPTIONS, config.xaiModel);
+		}
+		if (provider === "gemini") {
+			return await selectOne(flow, "Choose the Gemini model Clanky should use.", GEMINI_MODEL_OPTIONS, config.geminiModel);
 		}
 		const current = provider === "codex" ? config.codexModel : config.claudeModel;
 		return await selectOne(flow, "Choose the model Clanky should use.", MODEL_OPTIONS[provider], current);
@@ -4793,16 +5635,22 @@ function formatVoiceStatusLines(config: ClankyConfig): string[] {
 	const discordVoiceEnabled = parseVoiceToggle(config.discordVoice) === true;
 	const discordCredentialKind = config.discordCredentialKind === "user-token" ? "user-token" : "bot-token";
 	const discordCredential = config.discordTokenPresent === true ? discordCredentialKind : "unset";
-	return [
+	const lines = [
 		`discord voice runtime: ${discordVoiceEnabled ? "on" : "off"}`,
 		`discord credential: ${discordCredential}`,
-		`voice realtime: ${realtimeProvider} / ${config.voiceRealtimeModel ?? defaultRealtimeModel(config)} / voice ${config.voiceRealtimeVoice ?? "marin"}`,
+		`voice realtime: ${realtimeProvider} / ${config.voiceRealtimeModel ?? defaultRealtimeModel(config)} / voice ${config.voiceRealtimeVoice ?? defaultRealtimeVoice(config)}`,
 		`voice tts: ${inferredVoiceTtsProvider(config)}`,
 		`elevenlabs voice id: ${config.elevenLabsVoiceId ?? "(unset)"}`,
 		`elevenlabs tts model: ${config.elevenLabsTtsModel ?? "(default)"}`,
 		`voice memory context limit: ${memoryLimit}`,
 		`voice eve session: ${eveSessionEnabled ? "on" : "off"}`,
 	];
+	if (realtimeProvider === "local") {
+		lines.splice(4, 0, `voice ASR: ${config.voiceAsrCommand ?? "whisper-cli"} / ${config.voiceAsrModel ?? defaultVoiceAsrModelPath()}`);
+		lines.splice(5, 0, `voice local endpoint: ${config.voiceLocalBaseUrl ?? config.localBaseUrl ?? DEFAULT_LOCAL_BASE_URL}`);
+		lines.splice(6, 0, `voice local TTS: ${parseLocalTtsEngine(config.voiceLocalTtsEngine) ?? "say"}${config.voiceLocalTtsCommand === undefined ? "" : ` / ${config.voiceLocalTtsCommand}`}`);
+	}
+	return lines;
 }
 
 function voiceUsage(): string {
@@ -4811,20 +5659,33 @@ function voiceUsage(): string {
 		"/voice",
 		"/voice status",
 		"/voice <elevenlabs-voice-id>",
-		"/voice [provider|model|realtime-voice|tts|elevenlabs|elevenlabs-model|memory|eve-session] [value]",
+		"/voice local-defaults",
+		"/voice [provider|model|realtime-voice|tts|asr-model|asr-command|local-base-url|local-tts-engine|local-tts-command|elevenlabs|elevenlabs-model|memory|eve-session] [value]",
 	].join("\n");
 }
 
 function voiceSettingUsage(setting: VoiceSetting): string {
 	switch (setting) {
 		case "realtime-provider":
-			return "Usage: /voice provider <openai|xai>";
+			return "Usage: /voice provider <openai|xai|local>";
+		case "local-defaults":
+			return "Usage: /voice local-defaults";
 		case "realtime-model":
 			return "Usage: /voice model <model-id>";
 		case "realtime-voice":
 			return "Usage: /voice realtime-voice <voice>";
 		case "tts-provider":
 			return "Usage: /voice tts <realtime|elevenlabs>";
+		case "asr-model":
+			return "Usage: /voice asr-model <whisper.cpp-model-path>";
+		case "asr-command":
+			return "Usage: /voice asr-command <command>";
+		case "local-base-url":
+			return "Usage: /voice local-base-url <openai-compatible-base-url>";
+		case "local-tts-engine":
+			return "Usage: /voice local-tts-engine <say|command>";
+		case "local-tts-command":
+			return "Usage: /voice local-tts-command <shell-command>";
 		case "elevenlabs-voice":
 			return "Usage: /voice elevenlabs <voice-id>";
 		case "elevenlabs-model":
@@ -4859,6 +5720,24 @@ function parseVoiceSetting(value: string | undefined): VoiceSetting | "status" |
 		case "tts":
 		case "ttsprovider":
 			return "tts-provider";
+		case "asr":
+		case "asrmodel":
+		case "whisper":
+		case "whispermodel":
+			return "asr-model";
+		case "asrcommand":
+		case "whispercommand":
+			return "asr-command";
+		case "localbaseurl":
+		case "localendpoint":
+		case "localvoiceendpoint":
+			return "local-base-url";
+		case "localtts":
+		case "localttsengine":
+			return "local-tts-engine";
+		case "localttscommand":
+		case "ttscommand":
+			return "local-tts-command";
 		case "11labs":
 		case "elevenlabs":
 		case "elevenlabsvoice":
@@ -4884,6 +5763,7 @@ function parseVoiceRealtimeProvider(value: string | undefined): VoiceRealtimePro
 	const normalized = value?.trim().toLowerCase();
 	if (normalized === "openai") return "openai";
 	if (normalized === "xai" || normalized === "grok") return "xai";
+	if (normalized === "local") return "local";
 	return undefined;
 }
 
@@ -4891,6 +5771,13 @@ function parseVoiceTtsProvider(value: string | undefined): VoiceTtsProvider | un
 	const normalized = value?.trim().toLowerCase();
 	if (normalized === "realtime" || normalized === "native") return "realtime";
 	if (normalized === "elevenlabs" || normalized === "11labs") return "elevenlabs";
+	return undefined;
+}
+
+function parseLocalTtsEngine(value: string | undefined): "say" | "command" | undefined {
+	const normalized = value?.trim().toLowerCase();
+	if (normalized === "say" || normalized === "macos") return "say";
+	if (normalized === "command" || normalized === "cmd") return "command";
 	return undefined;
 }
 
@@ -4915,7 +5802,17 @@ function parseVoiceMemoryLimit(value: string | undefined): number | undefined {
 }
 
 function defaultRealtimeModel(config: ClankyConfig): string {
-	return (parseVoiceRealtimeProvider(config.voiceRealtimeProvider) ?? "openai") === "xai" ? "grok-voice-2" : "gpt-realtime";
+	const provider = parseVoiceRealtimeProvider(config.voiceRealtimeProvider) ?? "openai";
+	if (provider === "local") return DEFAULT_LOCAL_VOICE_LLM_MODEL;
+	return provider === "xai" ? "grok-voice-2" : "gpt-realtime";
+}
+
+function defaultRealtimeVoice(config: ClankyConfig): string {
+	return (parseVoiceRealtimeProvider(config.voiceRealtimeProvider) ?? "openai") === "local" ? DEFAULT_LOCAL_VOICE : "marin";
+}
+
+function defaultVoiceAsrModelPath(): string {
+	return resolveClankyDataPath(DEFAULT_LOCAL_VOICE_ASR_MODEL);
 }
 
 function inferredVoiceTtsProvider(config: ClankyConfig): VoiceTtsProvider {
@@ -4961,7 +5858,11 @@ async function readConfig(): Promise<ClankyConfig> {
 	const localBaseUrl = get("CLANKY_LOCAL_BASE_URL");
 	const localEffort = get("CLANKY_LOCAL_EFFORT");
 	const localContextTokens = get(LOCAL_CONTEXT_TOKENS_ENV);
-	const localVisionModel = get("CLANKY_LOCAL_VISION_MODEL");
+	const xaiModel = get("CLANKY_XAI_MODEL");
+	const geminiModel = get("CLANKY_GEMINI_MODEL");
+	const visionModel = get("CLANKY_VISION_MODEL");
+	const visionEnabled = get("CLANKY_VISION_ENABLED");
+	const visionProvider = get("CLANKY_VISION_PROVIDER");
 		const openAiVisionModel = get("CLANKY_OPENAI_VISION_MODEL");
 		const autoApprove = get("CLANKY_AUTO_APPROVE");
 			const pet = get("CLANKY_PET");
@@ -4976,10 +5877,20 @@ async function readConfig(): Promise<ClankyConfig> {
 	const codingHarnessOpencodeLauncher = get(codingHarnessLauncherEnvKey("opencode"));
 	const codingHarnessOpencodeModel = get(codingHarnessModelEnvKey("opencode"));
 	const imageModel = get("CLANKY_OPENAI_IMAGE_MODEL");
+	const xaiImageModel = get("CLANKY_XAI_IMAGE_MODEL");
+	const geminiImageModel = get("CLANKY_GEMINI_IMAGE_MODEL");
+	const imageProvider = get("CLANKY_IMAGE_PROVIDER");
+	const videoProvider = get("CLANKY_VIDEO_PROVIDER");
+	const xaiVideoModel = get("CLANKY_XAI_VIDEO_MODEL");
 	const voiceRealtimeProvider = get("CLANKY_VOICE_REALTIME_PROVIDER");
 	const voiceRealtimeModel = get("CLANKY_VOICE_REALTIME_MODEL");
 	const voiceRealtimeVoice = get("CLANKY_VOICE_REALTIME_VOICE");
 	const voiceTtsProvider = get("CLANKY_VOICE_TTS_PROVIDER");
+	const voiceAsrModel = get("CLANKY_VOICE_ASR_MODEL");
+	const voiceAsrCommand = get("CLANKY_VOICE_ASR_COMMAND");
+	const voiceLocalBaseUrl = get("CLANKY_VOICE_LOCAL_BASE_URL");
+	const voiceLocalTtsEngine = get("CLANKY_VOICE_LOCAL_TTS_ENGINE");
+	const voiceLocalTtsCommand = get("CLANKY_VOICE_LOCAL_TTS_COMMAND");
 	const elevenLabsVoiceId = get("CLANKY_ELEVENLABS_VOICE_ID");
 		const elevenLabsTtsModel = get("CLANKY_ELEVENLABS_TTS_MODEL");
 		const voiceMemoryContextLimit = get("CLANKY_VOICE_MEMORY_CONTEXT_LIMIT");
@@ -4994,10 +5905,14 @@ async function readConfig(): Promise<ClankyConfig> {
 	if (claudeModel !== undefined) config.claudeModel = claudeModel;
 	if (codexEffort !== undefined) config.codexEffort = codexEffort;
 	if (localModel !== undefined) config.localModel = localModel;
+	if (xaiModel !== undefined) config.xaiModel = xaiModel;
+	if (geminiModel !== undefined) config.geminiModel = geminiModel;
 	if (localBaseUrl !== undefined) config.localBaseUrl = localBaseUrl;
 	if (localEffort !== undefined) config.localEffort = localEffort;
 	if (localContextTokens !== undefined) config.localContextTokens = localContextTokens;
-	if (localVisionModel !== undefined) config.localVisionModel = localVisionModel;
+	if (visionModel !== undefined) config.visionModel = visionModel;
+	if (visionEnabled !== undefined) config.visionEnabled = visionEnabled;
+	if (visionProvider !== undefined) config.visionProvider = visionProvider;
 		if (openAiVisionModel !== undefined) config.openAiVisionModel = openAiVisionModel;
 		if (autoApprove !== undefined) config.autoApprove = autoApprove;
 			if (pet !== undefined) config.pet = pet;
@@ -5012,10 +5927,20 @@ async function readConfig(): Promise<ClankyConfig> {
 	if (codingHarnessOpencodeLauncher !== undefined) config.codingHarnessOpencodeLauncher = codingHarnessOpencodeLauncher;
 	if (codingHarnessOpencodeModel !== undefined) config.codingHarnessOpencodeModel = codingHarnessOpencodeModel;
 	if (imageModel !== undefined) config.imageModel = imageModel;
+	if (xaiImageModel !== undefined) config.xaiImageModel = xaiImageModel;
+	if (geminiImageModel !== undefined) config.geminiImageModel = geminiImageModel;
+	if (imageProvider !== undefined) config.imageProvider = imageProvider;
+	if (videoProvider !== undefined) config.videoProvider = videoProvider;
+	if (xaiVideoModel !== undefined) config.xaiVideoModel = xaiVideoModel;
 	if (voiceRealtimeProvider !== undefined) config.voiceRealtimeProvider = voiceRealtimeProvider;
 	if (voiceRealtimeModel !== undefined) config.voiceRealtimeModel = voiceRealtimeModel;
 	if (voiceRealtimeVoice !== undefined) config.voiceRealtimeVoice = voiceRealtimeVoice;
 	if (voiceTtsProvider !== undefined) config.voiceTtsProvider = voiceTtsProvider;
+	if (voiceAsrModel !== undefined) config.voiceAsrModel = voiceAsrModel;
+	if (voiceAsrCommand !== undefined) config.voiceAsrCommand = voiceAsrCommand;
+	if (voiceLocalBaseUrl !== undefined) config.voiceLocalBaseUrl = voiceLocalBaseUrl;
+	if (voiceLocalTtsEngine !== undefined) config.voiceLocalTtsEngine = voiceLocalTtsEngine;
+	if (voiceLocalTtsCommand !== undefined) config.voiceLocalTtsCommand = voiceLocalTtsCommand;
 	if (elevenLabsVoiceId !== undefined) config.elevenLabsVoiceId = elevenLabsVoiceId;
 		if (elevenLabsTtsModel !== undefined) config.elevenLabsTtsModel = elevenLabsTtsModel;
 		if (voiceMemoryContextLimit !== undefined) config.voiceMemoryContextLimit = voiceMemoryContextLimit;
@@ -5488,7 +6413,7 @@ function ownedServerExitMessage(child: ChildProcess): string {
 }
 
 function parseProvider(value: string | undefined): ClankyConfig["provider"] | undefined {
-	return value === "codex" || value === "claude" || value === "local" ? value : undefined;
+	return value === "codex" || value === "claude" || value === "local" || value === "xai" || value === "gemini" ? value : undefined;
 }
 
 function parseSubscriptionProvider(value: string | undefined): SubscriptionProvider | undefined {
@@ -5595,6 +6520,12 @@ function formatError(error: unknown): string {
 	return error instanceof Error ? error.stack ?? error.message : String(error);
 }
 
+function isAbortError(error: unknown): boolean {
+	if (error instanceof DOMException && error.name === "AbortError") return true;
+	if (!(error instanceof Error)) return false;
+	return error.name === "AbortError" || /abort|cancel/iu.test(error.message);
+}
+
 function truncate(text: string, maxChars: number): string {
 	if (text.length <= maxChars) return text;
 	return `${text.slice(0, maxChars)}\n... truncated ${text.length - maxChars} chars`;
@@ -5602,4 +6533,17 @@ function truncate(text: string, maxChars: number): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+try {
+	await new Promise<void>(() => {});
+} finally {
+	process.off("SIGINT", handleProcessShutdownSignal);
+	process.off("SIGTERM", handleProcessShutdownSignal);
+	stopBrainHealthMonitor();
+	disableClankyMouseTracking();
+	tui.stop();
+	await reportClankyFaceToHerdr("unknown", "Clanky face stopped");
+	await stopCallbackProxy();
+	if (ownsServer) await stopServer();
 }

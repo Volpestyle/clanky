@@ -6,7 +6,7 @@ import { inspectVisualMedia } from "../lib/media.ts";
 export default defineTool({
 	needsApproval: never(),
 	description:
-		"Inspect local image artifacts. With the local provider active, prefers CLANKY_LOCAL_VISION_MODEL when configured, then Clanky's current brain model when it is vision-capable, and falls back to the configured OpenAI vision model when the active model cannot inspect images. Use after web_render screenshots, web_capture_frames, discord_download_media, or generated image files when visual content must be understood.",
+		"Inspect local image artifacts. When the vision override is on (CLANKY_VISION_ENABLED), uses the selected CLANKY_VISION_MODEL regardless of the brain provider; otherwise uses Clanky's current brain model when it is vision-capable, and falls back to the configured OpenAI vision model when neither can inspect images. Use after web_render screenshots, web_capture_frames, discord_download_media, or generated image files when visual content must be understood.",
 	inputSchema: z.object({
 		paths: z.array(z.string().min(1)).min(1).max(12),
 		prompt: z.string().min(1).max(4_000).optional(),

@@ -1,36 +1,39 @@
 ---
 name: clanky-media-operator
-description: Route image and video generation requests across OpenAI Images API, xAI Grok Imagine image generation, and xAI Grok Imagine video generation.
-when_to_use: Use for generated images, edited images, visual assets, icons, logos, banners, thumbnails, posters, Grok Imagine image requests, xAI video generation, text-to-video, image-to-video, or API-backed media creation.
+description: Route image and video generation requests across OpenAI Images API, Google Gemini (Nano Banana) image generation, xAI Grok Imagine image generation, and xAI Grok Imagine video generation.
+when_to_use: Use for generated images, edited images, visual assets, icons, logos, banners, thumbnails, posters, Nano Banana / Gemini image requests, Grok Imagine image requests, xAI video generation, text-to-video, image-to-video, or API-backed media creation.
 allowed_tools: []
 deps:
   - openai-images-api
+  - gemini-nano-banana-image
   - xai-grok-imagine-image
   - xai-grok-imagine-video
 ---
 
 # Media Operator
 
-Use this skill for API-backed image and video creation. Choose the backend that fits the user intent, requested provider, and output type.
+Use this skill for API-backed image and video creation. Choose the backend that fits the user intent, requested provider, and output type. The default image provider is set by the `/image-model` face command (`CLANKY_IMAGE_PROVIDER`); the default video provider by `/video-model`.
 
 ## Backend Choices
 
 - Use `openai_image_generate` for OpenAI still-image creation with GPT Image models. Default model: `gpt-image-2`.
+- Use `gemini_image_generate` when the user asks for Gemini, Nano Banana, legible in-image text, or conversational edits. Default model: `gemini-3.1-flash-image`.
 - Use `xai_image_generate` when the user asks for xAI, Grok, Imagine, Grok Imagine, aspect-ratio controls, or 1k/2k xAI image output. Default model: `grok-imagine-image-quality`.
 - Use `xai_video_generate` for generated videos, animations, text-to-video, or Grok Imagine video. Default model: `grok-imagine-video`.
 - Use `media_backend_status` before choosing if credential availability is unclear.
 
 ## Credentials
 
-- OpenAI image generation uses `/openai-login`, `CLANKY_OPENAI_API_KEY`, `OPENAI_API_KEY`, or a stored `openai` AuthStorage credential.
-- xAI image/video generation uses `/xai-login`, `XAI_API_KEY`, or a stored `xai` AuthStorage credential.
-- If credentials are missing, tell the user exactly which setup path is needed.
+- OpenAI image generation uses `CLANKY_OPENAI_API_KEY` or `OPENAI_API_KEY`.
+- Gemini image generation uses `CLANKY_GEMINI_API_KEY`, `GEMINI_API_KEY`, or `GOOGLE_GENERATIVE_AI_API_KEY`.
+- xAI image/video generation uses `CLANKY_XAI_API_KEY` or `XAI_API_KEY`.
+- If credentials are missing, tell the user exactly which env var to set.
 
 ## Output Handling
 
-- Generated files are saved under `/tmp/clanky-media` by default. Use `output_dir` and `filename_prefix` when the user asks for a specific location or name.
-- Always report saved file paths. For xAI video, also report the `request_id` and hosted URL when present.
-- xAI hosted URLs are temporary; prefer downloaded files when possible.
+- Generated files are saved under Clanky's data directory (`CLANKY_HOME/media/<provider>-images` or `.../xai-videos`) by default. Use `output_dir` and `filename_prefix` when the user asks for a specific location or name.
+- Always report saved file paths. For xAI video, also report the hosted URL when present.
+- xAI hosted URLs are temporary; the tool downloads the video to a local file — prefer that file.
 
 ## Parameter Guidance
 
@@ -39,6 +42,11 @@ OpenAI images:
 - `size`: use explicit dimensions only when the user gives a target. Common choices include `1024x1024`, `1536x1024`, `1024x1536`, `2048x2048`, `3840x2160`.
 - `output_format`: `png` for general use, `jpeg` for faster/smaller photographic output, `webp` for web assets.
 - `background: "transparent"` is not supported by `gpt-image-2`; pick another model only if the user explicitly needs transparency.
+
+Gemini images (Nano Banana):
+- Default model `gemini-3.1-flash-image` (Nano Banana 2); use `gemini-3-pro-image` (Nano Banana Pro) for professional assets, complex instructions, and high-fidelity in-image text.
+- Strongest choice when the user needs legible rendered text (logos, infographics, posters) or conversational/iterative edits.
+- Output is returned as image bytes and saved directly; no size/quality flags are required.
 
 xAI images:
 - `aspect_ratio`: choose from `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `3:2`, `2:3`, `2:1`, `1:2`, `19.5:9`, `9:19.5`, `20:9`, `9:20`, or `auto`.

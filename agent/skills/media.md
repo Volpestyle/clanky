@@ -9,16 +9,20 @@ Do not tell the user there is no vision model or no visual inspection backend
 unless `media_backend_status` reports no active or fallback backend, or
 `media_inspect` fails with that specific current error. Old failures in the
 conversation may be stale after a model/config restart.
-Use `openai_image_generate` for still-image generation. It defaults to
-`CLANKY_OPENAI_IMAGE_MODEL`, or `gpt-image-2` when unset. The custom face command
-`/image-model <model-id>` updates that default.
-Use `media_inspect` for local image artifacts that need visual understanding. It
-prefers `CLANKY_LOCAL_VISION_MODEL` when the local provider is active, then
-Clanky's current brain model when that model is vision-capable. For Ollama local
-models, capability is checked through `/api/show`. The custom face command
-`/vision-model <model-id>` updates the local vision override. If the active
-model cannot inspect images, it falls back to `CLANKY_OPENAI_VISION_MODEL`, or
-`gpt-5.4-mini` when unset.
+Generate images with `openai_image_generate` (OpenAI gpt-image), `gemini_image_generate`
+(Gemini / Nano Banana, strong at in-image text and edits), or `xai_image_generate` (Grok
+Imagine, aspect-ratio + 1k/2k control). Generate videos with `xai_video_generate` (Grok
+Imagine, async). The `clanky-media-operator` skill routes by intent. Defaults and the
+preferred provider are set by the face commands `/image-model [openai|xai|gemini] <model>`
+and `/video-model xai <model>`; `media_backend_status` reports per-provider availability.
+Use `media_inspect` for local image artifacts that need visual understanding. When
+the vision override is enabled (`CLANKY_VISION_ENABLED`), it uses the selected
+`CLANKY_VISION_MODEL` regardless of the brain provider — so a hosted codex brain can
+still inspect images on a local Ollama model. Otherwise it uses Clanky's current brain
+model when that model is vision-capable (for Ollama brains, capability is checked through
+`/api/show`). The custom face command `/vision-model` selects the model and toggles the
+override on/off. If neither can inspect images, it falls back to `CLANKY_OPENAI_VISION_MODEL`,
+or `gpt-5.4-mini` when unset.
 
 Generated images are saved to local files under Clanky's data directory unless
 the caller supplies `outputDir`. To share them in Discord, pass those file paths
