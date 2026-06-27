@@ -28,8 +28,11 @@ Generated images are saved to local files under Clanky's data directory unless
 the caller supplies `outputDir`. To share them in Discord, pass those file paths
 to `discord_send_message`.
 
-For third-party or Discord media you need to inspect rather than generate, use
-`discord_download_media` or `web_render` first, then `web_capture_frames` for
+For third-party or Discord media you need to inspect rather than generate,
+prefer `discord_recent_attachments` for recent Discord channel still images; it
+returns inline `visualInspection` by default. Use `discord_download_media` for
+specific older Discord messages, direct media URLs, saved artifacts, or
+re-sharing. Use `web_render` for rendered pages, then `web_capture_frames` for
 GIF/video/local artifact visual sampling. Screenshot and frame tools return
 local paths; call `media_inspect` on those paths before making visual claims.
 

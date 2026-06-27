@@ -166,9 +166,6 @@ export async function discordReadMessages(
 	const limit = Math.max(1, Math.min(100, Math.floor(input.limit ?? 25)));
 	const since = resolveOptionalTimeBoundary(input.since, "since");
 	const until = resolveOptionalTimeBoundary(input.until, "until");
-	if ((since !== undefined || until !== undefined) && input.around !== undefined) {
-		throw new Error("discord_read_messages does not support around together with since/until filters");
-	}
 	if (since !== undefined || until !== undefined) {
 		return await readDiscordMessagesWithinWindow(
 			{
@@ -643,11 +640,14 @@ function resolveOptionalTimeBoundary(value: string | undefined, label: string): 
 }
 
 function parseTimeBoundary(value: string, label: string): Date {
+	if (/^now$/iu.test(value)) return new Date();
+	const naturalDateMs = parseNaturalDayBoundaryMs(value, label);
+	if (Number.isFinite(naturalDateMs)) return new Date(naturalDateMs);
 	const relativeDurationMs = parseRelativeDurationMs(value);
 	if (relativeDurationMs !== undefined) return new Date(Date.now() - relativeDurationMs);
-	const parsed = Date.parse(value);
+	const parsed = parseIsoBoundaryMs(value, label);
 	if (Number.isFinite(parsed)) return new Date(parsed);
-	throw new Error(`${label} must be an ISO timestamp or relative duration like 30m, 24h, or 7d`);
+	throw new Error(`${label} must be an ISO timestamp/date, month/day date, "now", or relative duration like 30m, 24h, or 7d`);
 }
 
 const RELATIVE_DURATION_UNIT_MS: Record<"ms" | "s" | "m" | "h" | "d" | "w", number> = {
@@ -668,6 +668,83 @@ function parseRelativeDurationMs(value: string): number | undefined {
 	if (!Number.isFinite(amount) || amount < 0) return undefined;
 	const unit = rawUnit.toLowerCase() as keyof typeof RELATIVE_DURATION_UNIT_MS;
 	return amount * RELATIVE_DURATION_UNIT_MS[unit];
+}
+
+function parseIsoBoundaryMs(value: string, label: string): number {
+	const trimmed = value.trim();
+	const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(trimmed);
+	if (dateOnly !== null) {
+		const year = Number.parseInt(dateOnly[1] ?? "", 10);
+		const month = Number.parseInt(dateOnly[2] ?? "", 10) - 1;
+		const day = Number.parseInt(dateOnly[3] ?? "", 10);
+		return utcDayBoundaryMs(year, month, day, label === "until");
+	}
+	if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2})$/u.test(trimmed)) return Number.NaN;
+	return Date.parse(trimmed);
+}
+
+const MONTH_INDEX_BY_NAME: Record<string, number> = {
+	jan: 0,
+	january: 0,
+	feb: 1,
+	february: 1,
+	mar: 2,
+	march: 2,
+	apr: 3,
+	april: 3,
+	may: 4,
+	jun: 5,
+	june: 5,
+	jul: 6,
+	july: 6,
+	aug: 7,
+	august: 7,
+	sep: 8,
+	sept: 8,
+	september: 8,
+	oct: 9,
+	october: 9,
+	nov: 10,
+	november: 10,
+	dec: 11,
+	december: 11,
+};
+
+function parseNaturalDayBoundaryMs(value: string, label: string): number {
+	const normalized = value.trim().toLowerCase().replace(/,/gu, "").replace(/\s+/gu, " ");
+	const explicitEnd = /^(?:end of day|end of|through)\s+/u.test(normalized);
+	const explicitStart = /^(?:start of day|start of|beginning of)\s+/u.test(normalized);
+	const dayText = normalized.replace(/^(?:on|start of day|start of|beginning of|end of day|end of|through)\s+/u, "");
+	const endOfDay = explicitEnd || (!explicitStart && label === "until");
+	const today = new Date();
+	if (dayText === "today") {
+		return utcDayBoundaryMs(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate(), endOfDay);
+	}
+	if (dayText === "yesterday") {
+		return utcDayBoundaryMs(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - 1, endOfDay);
+	}
+	const match = /^([a-z]+)\s+(\d{1,2})(?:\s+(\d{4}))?$/u.exec(dayText);
+	if (match === null) return Number.NaN;
+	const month = MONTH_INDEX_BY_NAME[match[1] ?? ""];
+	if (month === undefined) return Number.NaN;
+	const day = Number.parseInt(match[2] ?? "", 10);
+	const year = match[3] === undefined ? inferNaturalDayYear(month, day, today) : Number.parseInt(match[3], 10);
+	return utcDayBoundaryMs(year, month, day, endOfDay);
+}
+
+function inferNaturalDayYear(month: number, day: number, now: Date): number {
+	const year = now.getUTCFullYear();
+	const candidate = Date.UTC(year, month, day);
+	const tomorrow = Date.UTC(year, now.getUTCMonth(), now.getUTCDate() + 1);
+	return candidate > tomorrow ? year - 1 : year;
+}
+
+function utcDayBoundaryMs(year: number, month: number, day: number, endOfDay: boolean): number {
+	if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return Number.NaN;
+	const timestamp = Date.UTC(year, month, day, endOfDay ? 23 : 0, endOfDay ? 59 : 0, endOfDay ? 59 : 0, endOfDay ? 999 : 0);
+	const date = new Date(timestamp);
+	if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month || date.getUTCDate() !== day) return Number.NaN;
+	return timestamp;
 }
 
 function normalizeQuery(value: string | undefined): string | undefined {

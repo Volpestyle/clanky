@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, stat, writeFile } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 import { guardedFetch } from "../net-guard.ts";
 import { inspectVisualMedia } from "../media.ts";
@@ -127,6 +127,8 @@ const DEFAULT_MAX_ITEMS = 10;
 const DEFAULT_MAX_BYTES = 50_000_000;
 const DEFAULT_RECENT_ATTACHMENT_MESSAGE_LIMIT = 25;
 const DEFAULT_RECENT_ATTACHMENT_MEDIA_LIMIT = 20;
+const DOWNLOAD_CACHE_MAX_ENTRIES = 256;
+const downloadedMediaCache = new Map<string, DiscordDownloadedMedia>();
 
 export async function discordDownloadMedia(
 	input: DiscordDownloadMediaInput,
@@ -380,6 +382,9 @@ async function downloadMediaCandidate(
 	options: DiscordRestOptions,
 ): Promise<DiscordDownloadedMedia> {
 	const env = options.env ?? process.env;
+	const cacheKey = discordMediaDownloadCacheKey(candidate.url, env);
+	const cached = await readCachedDownloadedMedia(cacheKey, maxBytes);
+	if (cached !== undefined) return cached;
 	const response = await guardedFetch(candidate.url, {
 		...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
 		headersFor: (url) => buildDiscordMediaFetchHeaders(url.toString(), env),
@@ -396,7 +401,7 @@ async function downloadMediaCandidate(
 	const filename = mediaFilename(finalUrl, contentType);
 	const outputPath = await writeDiscordMediaFile(filename, bytes, options.env);
 	const dimensions = probeImageDimensions(bytes, contentType, finalUrl);
-	return {
+	const downloaded = {
 		url: finalUrl,
 		path: outputPath,
 		kind: inferMediaKind(finalUrl, contentType, candidate.kind),
@@ -414,6 +419,8 @@ async function downloadMediaCandidate(
 		...(candidate.provider === undefined ? {} : { provider: candidate.provider }),
 		...(candidate.embedType === undefined ? {} : { embedType: candidate.embedType }),
 	};
+	rememberDownloadedMedia(cacheKey, downloaded);
+	return downloaded;
 }
 
 export function buildDiscordMediaFetchHeaders(url: string, env: NodeJS.ProcessEnv = process.env): Headers {
@@ -500,6 +507,37 @@ async function writeDiscordMediaFile(filename: string, bytes: Buffer, env: NodeJ
 	const path = join(dir, `${Date.now()}-${randomUUID()}-${filename}`);
 	await writeFile(path, bytes, { mode: 0o600 });
 	return path;
+}
+
+function discordMediaDownloadCacheKey(url: string, env: NodeJS.ProcessEnv): string {
+	return `${resolveClankyDataPath("discord-media", env)}\0${url}`;
+}
+
+async function readCachedDownloadedMedia(cacheKey: string, maxBytes: number): Promise<DiscordDownloadedMedia | undefined> {
+	const cached = downloadedMediaCache.get(cacheKey);
+	if (cached === undefined) return undefined;
+	if (cached.bytes > maxBytes) throw new Error(`media is ${cached.bytes} bytes, over maxBytes ${maxBytes}`);
+	try {
+		const info = await stat(cached.path);
+		if (!info.isFile() || info.size !== cached.bytes) {
+			downloadedMediaCache.delete(cacheKey);
+			return undefined;
+		}
+	} catch {
+		downloadedMediaCache.delete(cacheKey);
+		return undefined;
+	}
+	return { ...cached };
+}
+
+function rememberDownloadedMedia(cacheKey: string, media: DiscordDownloadedMedia): void {
+	downloadedMediaCache.delete(cacheKey);
+	downloadedMediaCache.set(cacheKey, { ...media });
+	while (downloadedMediaCache.size > DOWNLOAD_CACHE_MAX_ENTRIES) {
+		const oldest = downloadedMediaCache.keys().next().value;
+		if (oldest === undefined) break;
+		downloadedMediaCache.delete(oldest);
+	}
 }
 
 function parseContentLength(value: string | null): number | undefined {

@@ -9,7 +9,7 @@ Use the Discord tools with Clanky's configured Discord credential.
 - `discord_list_guilds`: find visible servers.
 - `discord_list_channels`: find text channels in a server.
 - `discord_read_messages`: inspect a channel, including links, embeds, attachments, and media metadata.
-- `discord_recent_attachments`: find recent channel media and optionally download it for inspection.
+- `discord_recent_attachments`: find recent channel media and, by default, download and visually describe still images in the same call.
 - `discord_download_media`: download attachments, embeds, GIFs, videos, and direct media URLs into local artifacts.
 - `discord_recent_activity`: quick scan of active channels.
 - `discord_whoami`: check which Discord identity Clanky is using.
@@ -26,13 +26,16 @@ When a message contains links to YouTube, X, web pages, GIFs, or other media,
 inspect static pages with `web_fetch` and rendered/social/video preview pages
 with `web_render` or `web_capture_frames`. Use `web_capture_frames` for GIFs,
 videos, and links where motion/timing matters. Use `browser_control` only when
-the user's real browser or login state matters. Use `discord_download_media`
-when the message has an image, GIF, video, or Discord CDN attachment that needs
-to be saved locally for inspection or re-sharing; then pass the saved local path
-to `media_inspect` for still images, or to `web_capture_frames` and then
-`media_inspect` for GIF/video visual sampling. For generated images, call
-`openai_image_generate` first, then upload the returned file path with
-`discord_send_message`. You can inspect generated image files with
+the user's real browser or login state matters. For recent Discord channel
+images, prefer `discord_recent_attachments` with its default `describe:true`;
+that returns `visualInspection` and does not require a separate
+`media_inspect` call for inspected still images. Use `discord_download_media`
+when media must be saved for re-sharing, when inspecting a specific older
+message or URL, or when the recent-attachments result says a video/GIF still
+needs frame capture. Then pass saved still-image paths to `media_inspect`, or
+GIF/video paths to `web_capture_frames` and then `media_inspect`. For generated
+images, call `openai_image_generate` first, then upload the returned file path
+with `discord_send_message`. You can inspect generated image files with
 `media_inspect` before sharing when quality or content needs checking.
 
 Do not claim you visually inspected an image, GIF, video, stream, or webpage

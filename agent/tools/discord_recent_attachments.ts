@@ -24,13 +24,15 @@ export default defineTool({
 			.min(1)
 			.optional()
 			.describe(
-				"Lower time bound. ISO timestamp (2026-06-26T00:00:00Z) or relative duration like 30m, 24h, 7d. Takes precedence over messageId/around.",
+				"Lower time bound. ISO timestamp/date (2026-06-26T00:00:00Z or 2026-06-26), month/day date like June 24, 'today', 'yesterday', 'now', or relative duration like 30m, 24h, 7d. Takes precedence over messageId/around.",
 			),
 		until: z
 			.string()
 			.min(1)
 			.optional()
-			.describe("Upper time bound. ISO timestamp or relative duration like 30m, 24h, 7d."),
+			.describe(
+				"Upper time bound. ISO timestamp/date (2026-06-26T00:00:00Z or 2026-06-26), month/day date like June 24, 'today', 'yesterday', 'now', or relative duration like 30m, 24h, 7d.",
+			),
 		includeLinks: z.boolean().optional(),
 		download: z.boolean().optional(),
 		maxBytes: z.number().int().min(1).max(100_000_000).optional(),

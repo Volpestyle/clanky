@@ -13,7 +13,7 @@ export default defineTool({
 			.min(1)
 			.optional()
 			.describe(
-				"Only channels with activity since this point. ISO timestamp (2026-06-26T00:00:00Z) or relative duration like 30m, 24h, 7d.",
+				"Only channels with activity since this point. ISO timestamp/date (2026-06-26T00:00:00Z or 2026-06-26), month/day date like June 24, 'today', 'yesterday', 'now', or relative duration like 30m, 24h, 7d.",
 			),
 	}),
 	async execute(input) {
