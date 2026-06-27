@@ -10,6 +10,7 @@ export type ClankyFaceColor =
 	| "dim"
 	| "label"
 	| "link"
+	| "selectedDescription"
 	| "success"
 	| "warning";
 
@@ -26,6 +27,7 @@ export type ClankyFaceAnsiTheme = {
 	readonly label: (text: string) => string;
 	readonly link: (text: string) => string;
 	readonly red: (text: string) => string;
+	readonly selectedDescription: (text: string) => string;
 	readonly success: (text: string) => string;
 	readonly underline: (text: string) => string;
 	readonly warning: (text: string) => string;
@@ -42,6 +44,7 @@ const PALETTE: Record<ClankyFaceColor, Rgb> = {
 	dim: [128, 116, 112],
 	label: [150, 132, 126],
 	link: [126, 170, 190],
+	selectedDescription: [198, 190, 186],
 	success: [128, 168, 128],
 	warning: [255, 196, 112],
 };
@@ -53,6 +56,7 @@ const PALETTE_256: Record<ClankyFaceColor, number> = {
 	dim: 244,
 	label: 245,
 	link: 109,
+	selectedDescription: 251,
 	success: 108,
 	warning: 215,
 };
@@ -65,6 +69,7 @@ export function createClankyFaceAnsiTheme(caps: ClankyFaceThemeCapabilities): Cl
 	const danger = paint("danger");
 	const label = paint("label");
 	const link = paint("link");
+	const selectedDescription = paint("selectedDescription");
 	const success = paint("success");
 	const warning = paint("warning");
 	return {
@@ -80,6 +85,7 @@ export function createClankyFaceAnsiTheme(caps: ClankyFaceThemeCapabilities): Cl
 		label,
 		link,
 		red: danger,
+		selectedDescription,
 		success,
 		underline: attribute("4", "24"),
 		warning,

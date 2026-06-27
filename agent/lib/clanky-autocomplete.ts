@@ -316,7 +316,7 @@ function formatCommandSuggestionLines(items: readonly (AutocompleteItem | Clanky
 
 function commandCategory(commandName: string): string {
 	if (["model", "auth", "profile", "effort", "image-model", "video-model", "vision-model", "login"].includes(commandName)) return "model/auth";
-	if (["harness", "spawn", "agents", "approvals", "trace", "layout", "status", "new", "clear", "exit"].includes(commandName)) return "runtime";
+	if (["harness", "spawn", "agents", "approvals", "agent-md", "trace", "layout", "status", "new", "clear", "exit"].includes(commandName)) return "runtime";
 	if (["mcp", "integrations", "browser"].includes(commandName)) return "tools";
 	if (["discord-token", "discord-scope", "voice"].includes(commandName)) return "discord";
 	if (commandName === "pet") return "desktop";
@@ -349,6 +349,8 @@ function staticArgumentSpec(commandName: string, context: ArgumentContext): Stat
 			]);
 		case "approvals":
 			return values(["auto", "prompt", "status"], ["/approvals auto", "/approvals prompt"]);
+		case "agent-md":
+			return values(["status", "on", "off", "root", "clear-root"], ["/agent-md status", "/agent-md on", "/agent-md root ~/dev/project"]);
 		case "trace":
 			return values(["status", "off", "no-reply", "all"], ["/trace no-reply", "/trace all"]);
 		case "layout":

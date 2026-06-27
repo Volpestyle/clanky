@@ -45,6 +45,10 @@ const accentTheme = {
 	...theme,
 	yellow: (text: string) => `\x1b[33m${text}\x1b[39m`,
 };
+const selectedDescriptionTheme = {
+	...theme,
+	selectedDescription: (text: string) => `\x1b[37m${text}\x1b[39m`,
+};
 
 const commands: ClankyAutocompleteCommand[] = [
 	{
@@ -185,14 +189,18 @@ assert(clankyCommandCompletion(selectedClankyCommandTypeahead(shortNewState)!) =
 const rootState = clankyCommandTypeaheadFor(commands, "/");
 assert(rootState !== undefined, "bare slash should produce command typeahead state");
 const rootRows = renderClankyCommandTypeahead(rootState, theme, 72);
+assert(stripAnsi(rootRows[0] ?? "") === "", "command typeahead should keep a spacer above the menu");
 assert(rootRows.some((line) => line.includes("/n")), "bare slash typeahead should show /n as its own command row");
 assert(rootRows.some((line) => line.includes("/new")) && rootRows.every((line) => !line.includes("/new (/n)")), "bare slash typeahead should not show /n only as a /new alias");
 const narrowRootRows = renderClankyCommandTypeahead(rootState, accentTheme, 64);
-assert(stripAnsi(narrowRootRows[0] ?? "") === "Start a fresh session and clear the transcript", "truncated selected descriptions should render in full above the list");
-assert(narrowRootRows[0]?.startsWith("\x1b[33m") === true, "expanded selected description should use accent color");
+assert(stripAnsi(narrowRootRows[0] ?? "") === "", "selected description preview should share the menu top spacer");
+assert(stripAnsi(narrowRootRows[1] ?? "") === "Start a fresh session and clear the transcript", "truncated selected descriptions should render in full above the list");
+assert(narrowRootRows[1]?.startsWith("\x1b[33m") === true, "expanded selected description should use accent color");
 assertFits(narrowRootRows, 64, "selected description preview");
 const wideRootRows = renderClankyCommandTypeahead(rootState, theme, 140);
-assert(wideRootRows[0]?.includes("/n") === true, "typeahead should skip the selected description preview when the row description fits");
+assert(wideRootRows[1]?.includes("/n") === true, "typeahead should skip the selected description preview when the row description fits");
+const selectedDescriptionRows = renderClankyCommandTypeahead(rootState, selectedDescriptionTheme, 140);
+assert(selectedDescriptionRows[1]?.includes("\x1b[37mStart a fresh session") === true, "selected command description should use the highlighted description style");
 assert(renderClankyCommandTypeahead(rootState, theme, 72, 2).length === 2, "typeahead should respect a short row budget");
 assert(renderClankyCommandTypeahead(rootState, theme, 72, 0).length === 0, "typeahead should hide when no row budget remains");
 const wrappedState = moveClankyCommandTypeaheadSelection(rootState, -1);

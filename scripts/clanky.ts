@@ -9,7 +9,7 @@
 import { type ChildProcess, execFile, execFileSync, spawn } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { parseEnv, promisify } from "node:util";
 import {
 	Editor,
@@ -62,6 +62,13 @@ import {
 } from "../agent/lib/curated-mcp-connections.ts";
 import { inspectConnectionSearchOutput } from "../agent/lib/mcp-auth-probe.ts";
 import { isAutoApproveValue } from "../agent/lib/approvals.ts";
+import {
+	AGENT_MD_FILENAMES,
+	CLANKY_AGENT_MD_ENV,
+	CLANKY_AGENT_MD_ROOT_ENV,
+	collectAgentMdFiles,
+	parseAgentMdToggle,
+} from "../agent/lib/agent-md.ts";
 import { isPetEnabledValue } from "../agent/lib/pet.ts";
 import { resolveClankyDataPath } from "../agent/lib/paths.ts";
 import { buildTuiAttachmentMessage, createDroppedPathPasteRewriter } from "../agent/lib/tui-attachments.ts";
@@ -256,6 +263,7 @@ const commandUiTheme = {
 	dim: ansi.dim,
 	green: ansi.green,
 	red: ansi.red,
+	selectedDescription: ansi.selectedDescription,
 	yellow: ansi.yellow,
 };
 
@@ -327,6 +335,7 @@ type ClankyExtensionCommandName =
 	| "harness"
 	| "effort"
 	| "approvals"
+	| "agent-md"
 	| "image-model"
 	| "video-model"
 	| "vision-model"
@@ -487,6 +496,8 @@ type ClankyConfig = {
 	visionProvider?: string;
 	openAiVisionModel?: string;
 	autoApprove?: string;
+	agentMd?: string;
+	agentMdRoot?: string;
 	pet?: string;
 	codingHarness?: string;
 	codingHarnesses?: string;
@@ -850,6 +861,12 @@ const APPROVAL_OPTIONS: readonly MenuOption[] = [
 	{ value: "auto", label: "auto approve", hint: "run tool calls without prompts" },
 	{ value: "prompt", label: "prompt", hint: "restore per-tool approvals" },
 ];
+const AGENT_MD_OPTIONS: readonly MenuOption[] = [
+	{ value: "on", label: "on", hint: "load AGENTS.md/agent.md files into instructions" },
+	{ value: "off", label: "off", hint: "ignore filesystem agent instruction files" },
+	{ value: "root", label: "root", hint: "set the scan start directory" },
+	{ value: "clear-root", label: "clear root", hint: "use the brain working directory" },
+];
 const TRACE_OPTIONS: readonly MenuOption[] = [
 	{ value: "off", label: "off" },
 	{ value: "no-reply", label: "no-reply", hint: "show compact no-reply traces" },
@@ -953,8 +970,8 @@ const MCP_TRANSPORT_OPTIONS: readonly MenuOption[] = [
 	{ value: "sse", label: "sse", hint: "SSE MCP endpoint" },
 ];
 const SETTINGS_STATUS_TOGGLE_VALUE = "__settings_status_toggle__";
-const SETTINGS_STATUS_EXPAND_ICON = "▶";
-const SETTINGS_STATUS_COLLAPSE_ICON = "▼";
+const SETTINGS_STATUS_EXPAND_ICON = "▲";
+const SETTINGS_STATUS_COLLAPSE_ICON = "▶";
 const MCP_DYNAMIC_NAME_RE = /^[a-z0-9][a-z0-9_-]*$/i;
 const MCP_CONNECTION_INFO_UNAVAILABLE = "(curated connection inventory unavailable: /eve/v1/info is not healthy)";
 
@@ -1325,6 +1342,14 @@ function buildClankyPromptCommands(): ClankyPromptCommandSpec[] {
 			argumentHint: "[auto|prompt|status]",
 			takesArgument: true,
 			build: (argument) => ({ type: "extension", name: "approvals", argument }),
+		},
+		{
+			name: "agent-md",
+			aliases: ["agent-files", "agents-md"],
+			description: "Toggle AGENTS.md/agent.md instruction ingestion",
+			argumentHint: "[on|off|status|root <path>|clear-root]",
+			takesArgument: true,
+			build: (argument) => ({ type: "extension", name: "agent-md", argument }),
 		},
 		{
 			name: "image-model",
@@ -2395,6 +2420,8 @@ async function handleExtensionCommand(command: ClankyExtensionCommand, renderer:
 			return { message: await configureEffort(command.argument, renderer.setupFlow) };
 		case "approvals":
 			return { message: await configureApprovals(command.argument, renderer.setupFlow) };
+		case "agent-md":
+			return { message: await configureAgentMd(command.argument, renderer.setupFlow) };
 		case "image-model":
 			return { message: await configureImageModel(command.argument, renderer.setupFlow) };
 		case "video-model":
@@ -4847,6 +4874,149 @@ function formatApprovalsStatus(config: ClankyConfig): string {
 	return `Approvals: ${state}. Usage: /approvals [auto|prompt|status]`;
 }
 
+async function configureAgentMd(argument: string, flow: SetupFlow | undefined): Promise<string> {
+	const args = splitArgs(argument);
+	const command = args[0]?.toLowerCase();
+	const config = await readConfig();
+	if (command === undefined) {
+		if (flow === undefined) return `${await formatAgentMdStatus(config)}\n\n${agentMdUsage()}`;
+		return await configureAgentMdInteractive(flow, config);
+	}
+	if (command === "status" || command === "show") return await formatAgentMdStatus(config);
+	if (command === "on" || command === "enable" || command === "enabled") {
+		return await saveAgentMdMode(true, args.slice(1).join(" "));
+	}
+	if (command === "off" || command === "disable" || command === "disabled") {
+		return await saveAgentMdMode(false);
+	}
+	if (command === "root") {
+		const root = normalizeAgentMdRoot(args.slice(1).join(" "));
+		if (root === undefined) return "Usage: /agent-md root <path>";
+		await writeEnv({ [CLANKY_AGENT_MD_ROOT_ENV]: root });
+		return await restartBrainMessage(`Agent file instruction root set to ${displayHomePath(root)}`);
+	}
+	if (command === "clear-root" || command === "unset-root") {
+		await removeEnv([CLANKY_AGENT_MD_ROOT_ENV]);
+		return await restartBrainMessage("Agent file instruction root cleared");
+	}
+	return `Unknown agent-md command "${command}".\n\n${agentMdUsage()}`;
+}
+
+async function configureAgentMdInteractive(flow: SetupFlow, config: ClankyConfig): Promise<string> {
+	flow.begin("Configure agent file instructions");
+	try {
+		const result = await settingsLoop(flow, {
+			title: "Choose AGENTS.md/agent.md ingestion setting.",
+			options: () => AGENT_MD_OPTIONS,
+			renderStatus: () => formatAgentMdMenuStatus(config),
+			initial: agentMdEnabled(config) ? "on" : "off",
+			dispatch: async (value) => {
+				if (value === "on") return await saveAgentMdMode(true);
+				if (value === "off") return await saveAgentMdMode(false);
+				if (value === "clear-root") {
+					await removeEnv([CLANKY_AGENT_MD_ROOT_ENV]);
+					return await restartBrainMessage("Agent file instruction root cleared");
+				}
+				if (value !== "root") return undefined;
+				const root = await flow.readText({
+					message: "Set the AGENTS.md/agent.md scan start directory.",
+					defaultValue: agentMdRoot(config),
+					placeholder: agentMdRoot(config),
+					validate: validateAgentMdRootText,
+					allowBack: true,
+				});
+				const normalized = normalizeAgentMdRoot(root);
+				if (normalized === undefined) return undefined;
+				await writeEnv({ [CLANKY_AGENT_MD_ROOT_ENV]: normalized });
+				return await restartBrainMessage(`Agent file instruction root set to ${displayHomePath(normalized)}`);
+			},
+		});
+		return result ?? "/agent-md cancelled.";
+	} finally {
+		flow.end({ preserveDiagnostics: false });
+	}
+}
+
+async function saveAgentMdMode(enabled: boolean, rootArgument = ""): Promise<string> {
+	const updates: Record<string, string> = { [CLANKY_AGENT_MD_ENV]: enabled ? "1" : "0" };
+	const root = normalizeAgentMdRoot(rootArgument);
+	if (root !== undefined) updates[CLANKY_AGENT_MD_ROOT_ENV] = root;
+	const rootSummary = root === undefined ? "" : ` from ${displayHomePath(root)}`;
+	await writeEnv(updates);
+	return await restartBrainMessage(`Agent file instruction ingestion ${enabled ? "enabled" : "disabled"}${rootSummary}`);
+}
+
+function agentMdEnabled(config: ClankyConfig): boolean {
+	return parseAgentMdToggle(config.agentMd) === true;
+}
+
+function agentMdRoot(config: ClankyConfig): string {
+	const configured = config.agentMdRoot?.trim();
+	return configured !== undefined && configured.length > 0 ? configured : REPO;
+}
+
+function formatAgentMdSummary(config: ClankyConfig): string {
+	return agentMdEnabled(config) ? `on (${displayHomePath(agentMdRoot(config))})` : "off";
+}
+
+function normalizeAgentMdRoot(value: string | undefined): string | undefined {
+	const trimmed = value?.trim();
+	if (trimmed === undefined || trimmed.length === 0) return undefined;
+	return resolve(REPO, trimmed.replace(/^~(?=\/|$)/u, process.env.HOME ?? "~"));
+}
+
+function validateAgentMdRootText(value: string): string | undefined {
+	return normalizeAgentMdRoot(value) === undefined ? "Enter a scan start directory." : undefined;
+}
+
+async function formatAgentMdStatus(config: ClankyConfig): Promise<string> {
+	const enabled = agentMdEnabled(config);
+	const root = agentMdRoot(config);
+	const files = enabled ? await collectAgentMdFiles({ root }) : [];
+	const matched = enabled
+		? files.length === 0
+			? "(none)"
+			: files.map((file) => displayHomePath(file.path)).join(", ")
+		: "(disabled)";
+	return [
+		statusTitle("Agent file instructions"),
+		statusLine("ingestion", enabled ? "on" : "off", enabled ? "active" : "muted"),
+		statusLine("root", displayHomePath(root), "muted"),
+		statusLine("filenames", AGENT_MD_FILENAMES.join(", "), "muted"),
+		statusLine("matched", matched, enabled && files.length > 0 ? "ok" : "muted"),
+		ansi.dim("Usage: /agent-md [on|off|status|root <path>|clear-root]"),
+	].join("\n");
+}
+
+function formatAgentMdMenuStatus(config: ClankyConfig): SettingsMenuStatus {
+	const enabled = agentMdEnabled(config);
+	const root = displayHomePath(agentMdRoot(config));
+	const collapsed = [
+		statusTitle("Agent files"),
+		statusLine("ingestion", enabled ? "on" : "off", enabled ? "active" : "muted"),
+		statusLine("root", root, "muted"),
+	].join("\n");
+	const expanded = [
+		collapsed,
+		statusLine("filenames", AGENT_MD_FILENAMES.join(", "), "muted"),
+		statusLine("order", "parent directories before leaf directories", "muted"),
+		ansi.dim("Use /agent-md status to list matched files."),
+	].join("\n");
+	return collapsibleMenuStatus(collapsed, expanded);
+}
+
+function agentMdUsage(): string {
+	return [
+		"Usage:",
+		"/agent-md",
+		"/agent-md status",
+		"/agent-md on [root]",
+		"/agent-md off",
+		"/agent-md root <path>",
+		"/agent-md clear-root",
+	].join("\n");
+}
+
 async function configureTrace(argument: string, flow: SetupFlow | undefined): Promise<string> {
 	const raw = argument.trim();
 	const mode = parseTurnTraceMode(raw);
@@ -6745,6 +6915,7 @@ async function statusText(): Promise<string> {
 		statusLine("running conductor", formatRunningConductorSummary(config), startupModelFallback !== undefined && config.provider === startupModelFallback.provider ? "warn" : "active"),
 		statusLine("auth", `claude=${formatCredStatus(claudeAuth)}; codex=${formatCredStatus(codexAuth)}`, claudeAuth.present || codexAuth.present ? "ok" : "warn"),
 		statusLine("approvals", isAutoApproveValue(config.autoApprove) ? "auto (no prompts)" : "prompt", isAutoApproveValue(config.autoApprove) ? "warn" : "ok"),
+		statusLine("agent files", formatAgentMdSummary(config), agentMdEnabled(config) ? "active" : "muted"),
 		statusLine("coding harness", formatCodingHarnessSummary(config), "active"),
 		statusLine("image model", `${currentImageProvider(config)}=${imageModelFor(config, currentImageProvider(config))}`, "active"),
 		statusLine("video model", `${config.videoProvider?.trim() || "xai"}=${currentVideoModel(config)}`, "active"),
@@ -7903,6 +8074,8 @@ async function readConfig(): Promise<ClankyConfig> {
 	const visionProvider = get("CLANKY_VISION_PROVIDER");
 		const openAiVisionModel = get("CLANKY_OPENAI_VISION_MODEL");
 		const autoApprove = get("CLANKY_AUTO_APPROVE");
+		const agentMd = get(CLANKY_AGENT_MD_ENV);
+		const agentMdRoot = get(CLANKY_AGENT_MD_ROOT_ENV);
 			const pet = get("CLANKY_PET");
 			const codingHarness = get(CLANKY_CODING_HARNESS_ENV.id);
 	const codingHarnesses = get(CLANKY_CODING_HARNESS_ENV.allowed);
@@ -7959,6 +8132,8 @@ async function readConfig(): Promise<ClankyConfig> {
 	if (visionProvider !== undefined) config.visionProvider = visionProvider;
 		if (openAiVisionModel !== undefined) config.openAiVisionModel = openAiVisionModel;
 		if (autoApprove !== undefined) config.autoApprove = autoApprove;
+		if (agentMd !== undefined) config.agentMd = agentMd;
+		if (agentMdRoot !== undefined) config.agentMdRoot = agentMdRoot;
 			if (pet !== undefined) config.pet = pet;
 			if (codingHarness !== undefined) config.codingHarness = codingHarness;
 	if (codingHarnesses !== undefined) config.codingHarnesses = codingHarnesses;

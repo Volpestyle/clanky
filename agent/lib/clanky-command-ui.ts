@@ -26,6 +26,7 @@ export type ClankyCommandUiTheme = {
 	readonly dim: (text: string) => string;
 	readonly green: (text: string) => string;
 	readonly red: (text: string) => string;
+	readonly selectedDescription?: (text: string) => string;
 	readonly yellow: (text: string) => string;
 };
 
@@ -118,18 +119,21 @@ export function renderClankyCommandTypeahead(
 	const usableWidth = Math.max(1, width);
 	if (maxVisibleRows <= 0) return [];
 	const visibleRows = clampVisibleRows(maxVisibleRows, TYPEAHEAD_VISIBLE_ROWS);
+	const contentRows = visibleRows > 1 ? visibleRows - 1 : visibleRows;
 	const inlineHint = inlineClankyCommandHint(state);
 	if (inlineHint !== undefined) {
 		const command = state.matches[0];
 		if (command === undefined) return [];
 		const hint = inlineHint.length === 0 ? "Enter to run" : inlineHint;
-		return [
+		return withTypeaheadTopSpacing([
 			fit(`${theme.cyan(`> /${command.name}`)} ${theme.dim(hint)}  ${theme.dim(command.description)}`, usableWidth),
-		];
+		], visibleRows);
 	}
-	if (state.matches.length === 0) return [theme.dim(fit(`No command matches ${state.query}`, usableWidth))];
+	if (state.matches.length === 0) {
+		return withTypeaheadTopSpacing([theme.dim(fit(`No command matches ${state.query}`, usableWidth))], visibleRows);
+	}
 
-	const initialWindow = windowAroundSelection(state.matches, state.selectedIndex, visibleRows);
+	const initialWindow = windowAroundSelection(state.matches, state.selectedIndex, contentRows);
 	const invocationWidth = Math.min(
 		Math.max(16, ...initialWindow.items.map((command) => visibleWidth(commandInvocationWithAliases(command)))) + 2,
 		Math.max(16, Math.floor(usableWidth * 0.58)),
@@ -138,7 +142,7 @@ export function renderClankyCommandTypeahead(
 	const selectedDetailLines = selectedCommand === undefined || !commandDescriptionIsTruncated(selectedCommand, usableWidth, invocationWidth)
 		? []
 		: wrapSelectedCommandDescription(selectedCommand, theme, usableWidth);
-	const commandRows = Math.max(1, visibleRows - selectedDetailLines.length);
+	const commandRows = Math.max(1, contentRows - selectedDetailLines.length);
 	const windowed = windowAroundSelection(state.matches, state.selectedIndex, commandRows);
 
 	const rows = windowed.items.map((command, index) => {
@@ -149,9 +153,10 @@ export function renderClankyCommandTypeahead(
 		const aliases = command.aliases.length === 0 ? "" : ` ${command.aliases.map((alias) => `(/${alias})`).join(" ")}`;
 		const commandText = selected ? theme.cyan(`${pointer}${canonical}`) : `${pointer}${canonical}`;
 		const left = padVisible(fit(`${commandText}${theme.dim(aliases)}`, invocationWidth), invocationWidth);
-		return fit(`${left}${theme.dim(command.description)}`, usableWidth);
+		const description = selected ? (theme.selectedDescription ?? theme.dim)(command.description) : theme.dim(command.description);
+		return fit(`${left}${description}`, usableWidth);
 	});
-	return [...selectedDetailLines, ...rows].slice(0, visibleRows);
+	return withTypeaheadTopSpacing([...selectedDetailLines, ...rows], visibleRows);
 }
 
 export type ClankyCommandTypeaheadPanelOptions = {
@@ -442,6 +447,12 @@ function wrapSelectedCommandDescription(
 	width: number,
 ): string[] {
 	return wrapTextWithAnsi(theme.yellow(command.description), Math.max(1, width)).map((line) => fit(line, width));
+}
+
+function withTypeaheadTopSpacing(rows: readonly string[], visibleRows: number): string[] {
+	if (rows.length === 0) return [];
+	if (visibleRows <= 1) return rows.slice(0, visibleRows);
+	return ["", ...rows].slice(0, visibleRows);
 }
 
 function normalizeWorkbenchFilter(filter: string): string {

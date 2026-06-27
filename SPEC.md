@@ -773,6 +773,15 @@ connections); the agent picks up the change on the next turn. `instructions.md`
 describes roles, so swapping Linear for another tracker, or Figma for another design
 tool, is a binding change, not an edit to the persona.
 
+**Filesystem agent files.** Clanky can optionally include host filesystem
+instruction files in the same always-on instruction surface. When
+`CLANKY_AGENT_MD=1`, `agent/instructions/agent-md.ts` walks upward from
+`CLANKY_AGENT_MD_ROOT` (or the brain working directory when unset), reads
+`AGENTS.md` / `agent.md` variants in parent-to-leaf order, and appends them as a
+dynamic instruction on each turn. This is opt-in because those files are trusted
+prompt material; the custom face exposes it through `/agent-md` and restarts the
+owned brain after setting changes.
+
 ## 10. Implementation status
 
 - **Core runtime:** eve agent, custom face, model selection, harness profiles,
