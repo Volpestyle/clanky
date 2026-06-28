@@ -6,13 +6,13 @@ usage() {
 	cat >&2 <<'EOF'
 Usage: spawn.sh --slug <task-slug> --task "<one-line summary>" \
 				(--prompt "<text>" | --prompt-file <path>) \
-				[--run <run-id>] [--cwd <dir>] [--harness clanky|claude|codex|opencode|custom] \
+				--harness <clanky|claude|codex|opencode|custom> \
+				[--run <run-id>] [--cwd <dir>] \
 				[--no-transcript] [-- <worker argv...>]
 
 Spawns one worker agent named clanky:<slug> into the run's herdr tab.
-CLANKY_CODING_HARNESSES allowlists usable harnesses. When no harness is passed,
-the worker uses CLANKY_CODING_HARNESS when it is allowed, otherwise it picks
-from the allowed set and prefers clanky when available.
+CLANKY_CODING_HARNESSES allowlists usable harnesses. Pass --harness explicitly;
+the script rejects harnesses outside the allowlist.
 Claude/Codex/OpenCode can launch through native CLIs or Ollama CLI integrations.
 In a custom argv, the token {KICKOFF} is replaced with the kickoff message;
 without the token the kickoff is appended as the final argument.
@@ -101,18 +101,6 @@ parse_allowed_harnesses() {
 	fi
 }
 
-automatic_harness() {
-	local configured
-	configured="$(normalize_harness "$1")"
-	if harness_in_list "$configured" "${ALLOWED_HARNESS_LIST[@]}"; then
-		printf '%s' "$configured"
-	elif harness_in_list "clanky" "${ALLOWED_HARNESS_LIST[@]}"; then
-		printf '%s' "clanky"
-	else
-		printf '%s' "${ALLOWED_HARNESS_LIST[0]}"
-	fi
-}
-
 RUN_ID="" SLUG="" TASK="" PROMPT="" PROMPT_FILE="" WORKER_CWD="$PWD" HARNESS="" TRANSCRIPT=1
 ARGV=()
 while [ $# -gt 0 ]; do
@@ -135,8 +123,8 @@ if [ -z "$PROMPT" ] && [ -z "$PROMPT_FILE" ]; then usage; fi
 ALLOWED_HARNESSES="$(config_value CLANKY_CODING_HARNESSES)"
 parse_allowed_harnesses "$ALLOWED_HARNESSES"
 if [ -z "$HARNESS" ]; then
-	CONFIGURED_HARNESS="$(config_value CLANKY_CODING_HARNESS)"
-	HARNESS="$(automatic_harness "$CONFIGURED_HARNESS")"
+	echo "spawn.sh: --harness is required (clanky, claude, codex, opencode, or custom)" >&2
+	exit 2
 fi
 if ! printf '%s' "$SLUG" | grep -Eq '^[a-z0-9][a-z0-9-]*$'; then
 	echo "spawn.sh: slug must be lowercase kebab-case ([a-z0-9-])" >&2

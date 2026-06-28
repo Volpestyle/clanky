@@ -15,7 +15,7 @@ Clanky tool ──HTTP──▶ daemon ◀──WebSocket── extension SW ─
   - Incoming HTTP from Clanky tools (`POST /tabs` etc.) authenticated with `X-Clanky-Token`.
   - Incoming WebSocket upgrades from the extension on `/agent?token=...`.
 - The extension's service worker reads its bundled `config.json` (written at install time) for the daemon port and token, opens a WebSocket, and waits for ops. A 24s `chrome.alarms` watchdog keeps the SW from being killed during idle periods and reopens the socket if it drops.
-- The daemon writes `~/.clanky/browser-bridge/state.json` (mode `0600`) with `{ port, pid, secret, browser, startedAt, connectedBrowsers }`. Clanky-side `browser_open_tab` reads the state to discover where to send commands. State is removed when the daemon exits.
+- The daemon writes `~/.clanky/browser-bridge/state.json` (mode `0600`) with `{ port, pid, secret, browser, startedAt, connectedBrowsers }`. Clanky's unified `browser_control` tool reads the state to discover where to send commands. State is removed when the daemon exits.
 
 ## Install
 
@@ -46,35 +46,35 @@ callers.
 
 Tabs & history:
 
-- `browser_open_tab({ url, active? })` — opens a tab. Returns `{ tabId, url, windowId, active, browser }`.
-- `browser_navigate({ url, tabId? })` — navigates a tab (opens one if `tabId` omitted). Returns when navigation is *initiated*, not loaded.
-- `browser_list_tabs()` — returns `{ tabs: [{ tabId, url, title, active, windowId }] }`.
-- `browser_close_tab({ tabId })`.
-- `browser_back({ tabId })` / `browser_forward({ tabId })` / `browser_reload({ tabId, bypassCache? })` — history navigation. Like `navigate`, these return as navigation *initiates*; the echoed `url`/`title` may be the pre-navigation page, so follow with `browser_wait_for`.
+- `op: "open_tab"`, params `{ url, active? }` — opens a tab. Returns `{ tabId, url, windowId, active, browser }`.
+- `op: "navigate"`, params `{ url, tabId? }` — navigates a tab (opens one if `tabId` omitted). Returns when navigation is *initiated*, not loaded.
+- `op: "list_tabs"` — returns `{ tabs: [{ tabId, url, title, active, windowId }] }`.
+- `op: "close_tab"`, params `{ tabId }`.
+- `op: "back"` / `op: "forward"` / `op: "reload"`, params `{ tabId, bypassCache? }` — history navigation. Like `navigate`, these return as navigation *initiates*; the echoed `url`/`title` may be the pre-navigation page, so follow with `op: "wait_for"`.
 
 Read & extract (via `chrome.scripting`, no debugger bar):
 
-- `browserSnapshot({ tabId, maxTextChars?, maxLinks?, maxMedia?, maxElements? })` / `op: "snapshot"` — returns `{ tabId, url, title, text, length, truncated, viewport, links, media, elements, counts }`. `elements` includes visible/actionable links, buttons, inputs, selects, textareas, contenteditable nodes, and common ARIA controls with selectors plus CSS-pixel rects; use those `centerX`/`centerY` values directly with input ops.
-- `browser_read_text({ tabId, maxChars? })` — returns `{ tabId, url, title, text, length, truncated }` where `text` is the rendered `document.body.innerText` (post-JS), truncated to `maxChars` (default 20000). Flat text only — no links or structure.
-- `browser_query({ tabId, selector, all?, scrollIntoView? })` — locate elements by CSS selector. Returns `{ found, count, element | elements }` where each element is `{ tag, rect: { x, y, width, height, centerX, centerY }, text, value, href, visible, inViewport }`. `rect` is in CSS pixels — pass `centerX`/`centerY` straight to `browser_click`. The reliable alternative to eyeballing screenshot coordinates.
-- `browser_fill({ tabId, selector, value })` — focus an input/textarea/select/contenteditable and set its value via the native setter, firing `input` + `change` (replaces existing text; `value:""` clears). Works with React-controlled inputs. Returns `{ tabId, selector, value }`.
+- `op: "snapshot"`, params `{ tabId, maxTextChars?, maxLinks?, maxMedia?, maxElements? }` — returns `{ tabId, url, title, text, length, truncated, viewport, links, media, elements, counts }`. `elements` includes visible/actionable links, buttons, inputs, selects, textareas, contenteditable nodes, and common ARIA controls with selectors plus CSS-pixel rects; use those `centerX`/`centerY` values directly with input ops.
+- `op: "read_text"`, params `{ tabId, maxChars? }` — returns `{ tabId, url, title, text, length, truncated }` where `text` is the rendered `document.body.innerText` (post-JS), truncated to `maxChars` (default 20000). Flat text only — no links or structure.
+- `op: "query"`, params `{ tabId, selector, all?, scrollIntoView? }` — locate elements by CSS selector. Returns `{ found, count, element | elements }` where each element is `{ tag, rect: { x, y, width, height, centerX, centerY }, text, value, href, visible, inViewport }`. `rect` is in CSS pixels — pass `centerX`/`centerY` straight to `op: "click"`. The reliable alternative to eyeballing screenshot coordinates.
+- `op: "fill"`, params `{ tabId, selector, value }` — focus an input/textarea/select/contenteditable and set its value via the native setter, firing `input` + `change` (replaces existing text; `value:""` clears). Works with React-controlled inputs. Returns `{ tabId, selector, value }`.
 
 Eval & sync:
 
-- `browser_eval({ tabId, expression, awaitPromise? })` — evaluate a JS expression in the page main world via CDP and return its JSON-serializable value as `{ tabId, value }`. The power tool for structured extraction and reading page state; wrap multi-statement logic in an IIFE. Attaches the debugger (shows the yellow bar). Page exceptions are returned as an error.
-- `browser_wait_for({ tabId, selector?, jsCondition?, readyState?, visible?, timeoutMs?, pollMs? })` — block until a condition holds: a selector matches (optionally visible), `document.readyState` reaches a level, or a JS condition is truthy. Returns `{ ok, waitedMs, timedOut }`. `timeoutMs` defaults to 10000, capped at 30000.
+- `op: "eval"`, params `{ tabId, expression, awaitPromise? }` — evaluate a JS expression in the page main world via CDP and return its JSON-serializable value as `{ tabId, value }`. The power tool for structured extraction and reading page state; wrap multi-statement logic in an IIFE. Attaches the debugger (shows the yellow bar). Page exceptions are returned as an error.
+- `op: "wait_for"`, params `{ tabId, selector?, jsCondition?, readyState?, visible?, timeoutMs?, pollMs? }` — block until a condition holds: a selector matches (optionally visible), `document.readyState` reaches a level, or a JS condition is truthy. Returns `{ ok, waitedMs, timedOut }`. `timeoutMs` defaults to 10000, capped at 30000.
 
 Vision + input (via `chrome.debugger` CDP; shows the yellow debugging bar):
 
-- `browser_screenshot({ tabId? })` — returns `{ tabId, dataUrl, width, height, capturedWidth, capturedHeight, devicePixelRatio, url, title }`. The PNG is downscaled to the CSS viewport, so `width`/`height` (and the coordinates you read off it) match the CSS-pixel space used by the input ops — no devicePixelRatio math. Activates the target tab to capture it.
-- `browser_click` / `browser_double_click({ tabId, x, y, button? })`, `browser_type({ tabId, text })`, `browser_key({ tabId, key, modifiers? })`, `browser_scroll({ tabId, x, y, deltaX, deltaY })`, `browser_hover({ tabId, x, y })` (updates hover state to reveal `:hover` menus/tooltips).
-- `browser_wait({ ms })` — daemon-side sleep (≤30000 ms) between vision ops. Prefer `browser_wait_for` when you are waiting on the page rather than a fixed delay.
+- `op: "screenshot"`, params `{ tabId? }` — returns `{ tabId, dataUrl, width, height, capturedWidth, capturedHeight, devicePixelRatio, url, title }`. The PNG is downscaled to the CSS viewport, so `width`/`height` (and the coordinates you read off it) match the CSS-pixel space used by the input ops — no devicePixelRatio math. Activates the target tab to capture it.
+- `op: "click"` / `op: "double_click"`, params `{ tabId, x, y, button? }`; `op: "type"`, params `{ tabId, text }`; `op: "key"`, params `{ tabId, key, modifiers? }`; `op: "scroll"`, params `{ tabId, x, y, deltaX, deltaY }`; `op: "hover"`, params `{ tabId, x, y }` (updates hover state to reveal `:hover` menus/tooltips).
+- `op: "wait"`, params `{ ms }` — daemon-side sleep (≤30000 ms) between vision ops. Prefer `op: "wait_for"` when you are waiting on the page rather than a fixed delay.
 
 Input fidelity notes:
 
-- `browser_type` uses CDP `Input.insertText`: it sets the value and fires `input` but **no** `keydown`/`keypress`. For per-key behavior use `browser_key`.
-- `browser_key` with `key: "Enter"` fires a real `keypress`, so it triggers implicit form submission and textarea newlines.
-- Browser accelerators like ⌘A / Ctrl+A are **not** delivered to the page through CDP. To clear or replace a field, use `browser_fill`, not select-all + retype.
+- `op: "type"` uses CDP `Input.insertText`: it sets the value and fires `input` but **no** `keydown`/`keypress`. For per-key behavior use `op: "key"`.
+- `op: "key"` with `key: "Enter"` fires a real `keypress`, so it triggers implicit form submission and textarea newlines.
+- Browser accelerators like ⌘A / Ctrl+A are **not** delivered to the page through CDP. To clear or replace a field, use `op: "fill"`, not select-all + retype.
 
 The daemon advertises the connected extension's `version` and an `expectedExtensionVersion` (the packaged manifest version) on `GET /healthz` and in `state.json`, with a `stale` flag per connection. `browser_control` with `{"op":"status"}` surfaces this so a stale (un-reloaded) extension is diagnosable instead of failing with a bare `unknown op`. The daemon re-reads `expectedExtensionVersion` on each `/healthz`, so after upgrading this package you only need to reload the unpacked extension — the running daemon picks up the new packaged version on its own.
 
@@ -109,4 +109,4 @@ const ctx = await chromium.launchPersistentContext("/tmp/clanky-pw-profile", {
 await ctx.waitForEvent("serviceworker"); // SW connects to the daemon on its own
 ```
 
-Then drive the bridge with the typed client (`browserOpenTab`, `browserReadText`, …) passing `{ homeDir: "/tmp/clanky-test-home" }`, or hit the HTTP API directly with the token from `~/.clanky/.../config.json`.
+Then drive the bridge with the typed client (`browserOpenTab`, `browserReadText`, …) passing `{ homeDir: "/tmp/clanky-test-home" }`, or hit the HTTP API directly with the token from `/tmp/clanky-test-home/browser-bridge/config.json`.

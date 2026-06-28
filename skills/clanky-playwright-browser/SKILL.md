@@ -13,10 +13,10 @@ Use this for general web browsing, research, screenshots, and deterministic brow
 
 ## CLI
 
-- Verify: `pnpm browser:playwright --version`
-- Install Chromium if the browser binary is missing: `pnpm browser:install`
-- Quick screenshot: `pnpm browser:playwright screenshot <url> /tmp/clanky-page.png`
-- For multi-step work, write a short TypeScript script in the current workspace, such as `./.clanky-tmp/script.ts`, and run it with `pnpm exec tsx ./.clanky-tmp/script.ts`. Keep output artifacts such as screenshots under `/tmp` when they do not need to be committed.
+- Verify: `pnpm exec playwright --version`
+- Install Chromium if the browser binary is missing: `pnpm exec playwright install chromium`
+- Quick screenshot: `pnpm exec playwright screenshot <url> /tmp/clanky-page.png`
+- For multi-step work, write a short erasable TypeScript script in the current workspace, such as `./.clanky-tmp/script.ts`, and run it with `node ./.clanky-tmp/script.ts`. Keep output artifacts such as screenshots under `/tmp` when they do not need to be committed.
 - Do not put the script itself under `/tmp` unless you also handle dependency resolution; Node resolves imports from the script path, so `/tmp/script.ts` will not find this workspace's `node_modules` by default.
 
 ## Workflow
@@ -26,7 +26,7 @@ Use this for general web browsing, research, screenshots, and deterministic brow
 3. Capture useful artifacts under `/tmp` or the task workspace: screenshot, extracted text, relevant HTML snippet, and final URL.
 4. Extract page text with DOM APIs such as `document.body.innerText`; use locators for clicking/form-filling instead of brittle coordinate clicks.
 5. Close browsers and contexts in a `finally` block.
-6. If browsing fails because Chromium is not installed, run `pnpm browser:install` once and retry.
+6. If browsing fails because Chromium is not installed, run `pnpm exec playwright install chromium` once and retry.
 
 ## Script Pattern
 

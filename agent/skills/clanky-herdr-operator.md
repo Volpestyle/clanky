@@ -25,11 +25,9 @@ creating. If tasks share mutable paths, sequence them (separate runs or a
 - Give the worker a complete brief: context, exact scope, verification command,
   and what to report back.
 - Check `herdr_status.codingHarnesses` when choosing worker runtimes; it shows
-  the allowed harnesses and automatic fallback.
+  the allowed harnesses and launcher profiles.
 - Use `harness: "clanky"`, `"claude"`, `"codex"`, `"opencode"`, or `"custom"`
-  when a specific allowed runner fits the task. Omit `harness`, `performer`, and
-  `command` only when Clanky may pick from the allowed set. Use `performer` only as a
-  lower-level override.
+  for every spawn. Use `performer` only as a lower-level override.
 - `/harness allow` controls the allowed set. `/harness` also controls
   native-vs-Ollama launch models for Claude, Codex, and OpenCode workers; Codex
   Ollama mode is the CLI integration, not the app.
@@ -55,7 +53,9 @@ current TUI state.
 Use `herdr_send` to answer worker prompts or steer a worker. Prefer addressing a
 named worker by `agent`; use `pane` only after re-reading status and confirming
 the current pane id. Before steering, confirm the worker is still running: a
-worker that already wrote `DONE` is finished, and re-prompting it wastes a turn.
+worker with `agent_status: done` is finished, and a bundled operator-run worker
+that already wrote a `DONE` sentinel is finished too. Re-prompting either wastes
+a turn.
 Pane reads and status lag the sentinel. To submit a prompt in one call, pass both `text` and
 `keys: ["Enter"]`; keys-only sends such as `keys: ["Enter"]` are valid.
 

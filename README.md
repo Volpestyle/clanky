@@ -47,7 +47,7 @@ flowchart TB
   subgraph mac["Mac mini — always on"]
     subgraph herdr["herdr (vanilla) — STAGE: persistent session 'clankies'"]
       face["pane: clanky face<br/>pi-tui client · Clanky's face"]
-      disc["pane: clanky:discord"]
+      disc["pane: clanky:discord-*"]
       w1["pane: clanky / claude / codex / opencode<br/>performers"]
     end
     eve["eve service — CONDUCTOR<br/>channels · schedules · memory"]
@@ -90,8 +90,9 @@ his memory, persona, and tools without clogging the main face-pane thread, and
 it is mirrored into a watchable herdr pane. With a user/self token
 (`CLANKY_DISCORD_CREDENTIAL_KIND=user-token`) he can also watch others' Go Live
 screen shares and publish his own (`discord_golive`). Configure the token and
-model from the custom face's `/token` and `/model` slash commands (see below)
-instead of hand-editing `.env.local`. See [SPEC.md](SPEC.md) §5.2–§5.6.
+model from the custom face's `/token` and `/model` slash commands (`/help` is
+the live command list) instead of hand-editing `.env.local`. See
+[SPEC.md](SPEC.md) §5.2–§5.6.
 
 ## Running Clanky
 
@@ -112,14 +113,9 @@ Then use `clanky` from anywhere:
   face on `eve unavailable 503`.
 - **`clanky face`** — Clanky's custom face (`scripts/clanky.ts`): a pi-tui client
   that renders eve's `eve/client` event stream, owns/attaches the headless brain
-  once without watch mode,
-  and adds the slash commands eve can't — `/token <token> [--user-token] [--voice]`,
-  `/model <codex|claude> [id]`, `/harness allow ...`,
-  `/harness <clanky|claude|codex|opencode|custom> [default|ollama] [model]`,
-  `/agent-md on|off|status`, `/skills`,
-  `/n`, `/new`, `/status`, `/help`, `/exit`. Config commands rewrite `.env.local`
-  and restart the brain. Default port 2000
-  (`CLANKY_EVE_PORT`).
+  once without watch mode, and adds Clanky-specific slash commands. Use `/help`
+  in the face for the canonical command list. Config commands rewrite
+  `.env.local` and restart the brain. Default port 2000 (`CLANKY_EVE_PORT`).
 - **`clanky up` / `clanky status` / `clanky down`** — manage the persistent
   Herdr session and headless Eve brain.
 - **`clanky worker <prompt>`** — send one task to the running Clanky Eve brain

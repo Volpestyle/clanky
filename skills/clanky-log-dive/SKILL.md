@@ -40,11 +40,12 @@ Read the active panes, choosing exact names from `agent list`:
 herdr --session clankies agent read <agent-name>
 ```
 
-Common panes to inspect when present:
+Common pane prefixes to inspect when present:
 
 ```bash
-herdr --session clankies agent read clanky:discord-chat
-herdr --session clankies agent read clanky:voice
+herdr --session clankies agent list
+herdr --session clankies agent read clanky:discord-<suffix>
+herdr --session clankies agent read clanky:voice-<slug>
 ```
 
 Start the runtime if status shows no brain:

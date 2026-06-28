@@ -15,9 +15,14 @@ trackers; those must be eve connections in `agent/connections/<name>.ts`.
 
 Configured servers come from:
 
-- `~/.clanky/mcp-servers.json`
+- `$CLANKY_HOME/mcp-servers.json` (default `~/.clanky/mcp-servers.json`)
 - `CLANKY_MCP_SERVERS` JSON in the process environment
 
 Use `mcp_configure` only when the user asks to add or update a server. For a
 Minecraft MCP, configure the server the user provides, then list tools before
 trying to move, chat, mine, craft, or interact in-world.
+
+Supported transports are `stdio`, `streamable-http` (also accepted as `http`),
+and `sse`. Stdio servers receive only an allowlisted child-process environment,
+not the full Clanky process env. The face exposes dynamic MCP server management
+through `/mcp`; curated OAuth services still belong in `agent/connections/`.

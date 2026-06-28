@@ -1,21 +1,19 @@
 ---
 name: clanky-figma-operator
-description: Clanky's conventions for working with Figma through a connected Figma MCP server, and routing to Figma's official figma-* skills for Plugin API depth.
+description: Clanky's conventions for working with the curated Figma connection, and routing to Figma's official figma-* skills for Plugin API depth.
 when_to_use: Use when SELF.md, the project's AGENTS.md, or the user designates Figma and the task involves design, components, specs, layouts, design tokens, design systems, design-to-code, or visual references.
-allowed_tools:
-  - mcp_list_tools
-  - mcp_call
+allowed_tools: []
 deps: []
 ---
 
 # Clanky Figma Operator
 
-Treat a connected Figma MCP server as the default source of truth for design work. Do not wait for the user to ask before consulting it when the task is clearly design-related.
+Treat the configured Figma design-tool connection as the default source of truth for design work. Do not wait for the user to ask before consulting it when the task is clearly design-related.
 
 ## Availability First
 
-- If no Figma MCP server is connected, say so plainly and stop — do not invent design details or describe components you cannot see. Setup path: `/setup mcp figma <url>` (the Figma Dev Mode MCP server URL from the Figma desktop app, e.g. a local `http://127.0.0.1:3845/...` endpoint).
-- Use `mcp_list_tools` when exact server or tool names are unknown, then call provider tools through `mcp_call`.
+- Figma is a curated OAuth connection in `agent/connections/figma.ts`, not a dynamic MCP server. Use the configured design-tool role and the exposed Figma connection tools.
+- If the connection is unavailable or unauthenticated, say so plainly and stop. Setup/auth path: `/mcp auth figma` or `/mcp install figma` from Clanky's face.
 
 ## Routing to Figma's Official Skills
 

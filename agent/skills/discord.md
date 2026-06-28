@@ -13,6 +13,8 @@ Use the Discord tools with Clanky's configured Discord credential.
 - `discord_download_media`: download attachments, embeds, GIFs, videos, and direct media URLs into local artifacts.
 - `discord_recent_activity`: quick scan of active channels.
 - `discord_whoami`: check which Discord identity Clanky is using.
+- `voice_control`: control the active Discord voice session after Clanky joins vc.
+- `discord_golive`: list/watch/publish Go Live streams when running on a user token in vc.
 - `discord_list_emojis`: list guild custom emojis and reaction strings.
 - `discord_add_reaction`: react to a message with Unicode or custom emoji.
 - `discord_send_message`: post text or upload local files.
@@ -34,9 +36,10 @@ when media must be saved for re-sharing, when inspecting a specific older
 message or URL, or when the recent-attachments result says a video/GIF still
 needs frame capture. Then pass saved still-image paths to `media_inspect`, or
 GIF/video paths to `web_capture_frames` and then `media_inspect`. For generated
-images, call `openai_image_generate` first, then upload the returned file path
-with `discord_send_message`. You can inspect generated image files with
-`media_inspect` before sharing when quality or content needs checking.
+images, choose the provider through `media_backend_status` / the media operator
+guidance, then upload the returned file path with `discord_send_message`. You
+can inspect generated image files with `media_inspect` before sharing when
+quality or content needs checking.
 
 Do not claim you visually inspected an image, GIF, video, stream, or webpage
 unless you actually loaded it through a tool that returned extracted content or

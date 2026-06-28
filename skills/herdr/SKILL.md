@@ -295,6 +295,10 @@ herdr pane read 1-3 --source recent-unwrapped --lines 40
 
 ### spawn a new agent and give it a task
 
+For Clanky worker fan-out, do not use this raw recipe: use Clanky's `herdr_spawn`
+tool or the `clanky-herdr-operator` skill so the worker is launched through the
+transcript seam. Raw pane starts are only for generic ad hoc panes.
+
 ```bash
 herdr pane split 1-2 --direction right --no-focus
 herdr pane run 1-3 "claude"

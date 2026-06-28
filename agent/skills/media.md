@@ -15,6 +15,9 @@ Imagine, aspect-ratio + 1k/2k control). Generate videos with `xai_video_generate
 Imagine, async). The `clanky-media-operator` skill routes by intent. Defaults and the
 preferred provider are set by the face commands `/image-model [openai|xai|gemini] <model>`
 and `/video-model xai <model>`; `media_backend_status` reports per-provider availability.
+Credentials are `CLANKY_OPENAI_API_KEY`/`OPENAI_API_KEY` for OpenAI,
+`CLANKY_GEMINI_API_KEY`/`GEMINI_API_KEY`/`GOOGLE_GENERATIVE_AI_API_KEY` for Gemini,
+and `CLANKY_XAI_API_KEY`/`XAI_API_KEY` for xAI.
 Use `media_inspect` for local image artifacts that need visual understanding. When
 the vision override is enabled (`CLANKY_VISION_ENABLED`), it uses the selected
 `CLANKY_VISION_MODEL` regardless of the brain provider — so a hosted codex brain can

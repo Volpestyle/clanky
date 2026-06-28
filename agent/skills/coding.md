@@ -8,9 +8,10 @@ This is Clanky's own coding-work routing skill. Use it when Clanky is deciding
 whether to code directly, delegate to a visible worker, or ask a worker to use
 its own native planning/review/subagent behavior. New workers may use any
 allowed coding harness configured by the face's `/harness allow` command;
-direct `/harness <id>` commands can configure an optional preferred fallback and
-native-vs-Ollama model preference. Use the user-directed harness when they name one, otherwise pick the
-allowed harness that best fits the task.
+direct `/harness <id>` commands configure native-vs-Ollama model preference for
+launchable harnesses. Use the user-directed harness when they name one,
+otherwise pick the allowed harness that best fits the task and pass it
+explicitly when spawning.
 
 In the worker brief, include:
 

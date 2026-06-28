@@ -8,6 +8,14 @@ and writes `pet.json`. The assembler is already verified.
 Reference image to attach on EVERY imagegen prompt (keeps the character
 consistent): `branding/clanky-logo-512-alpha.png`.
 
+One-time setup for the assembler:
+
+```sh
+cd ~/dev/clanky/tools/petdex-sprite
+python3 -m venv .venv
+./.venv/bin/python -m pip install pillow
+```
+
 ## Option A — fastest (one pose)
 Generate a single clean idle pose, then let the assembler fake motion for every
 state (bob / mirror / red-tint / jump-arc / zoom). Pose changes are subtle but
@@ -63,7 +71,7 @@ PNGs for the rest.
 ## After building
 `build_sheet.py` writes to `~/.codex/pets/clanky/` by default. Then:
 ```sh
-npx petdex init          # desktop app + sidecar (once)
-npx petdex select clanky
+pnpm dlx petdex init          # desktop app + sidecar (once)
+pnpm dlx petdex select clanky
 ```
 Add `CLANKY_PET=1` to `~/dev/clanky/.env.local`, then `clanky down && clanky up`.

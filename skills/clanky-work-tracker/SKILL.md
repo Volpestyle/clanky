@@ -1,11 +1,8 @@
 ---
 name: clanky-work-tracker
-description: Provider-neutral work tracker protocol for using configured tracker MCP servers, CLIs, or skills and binding tracker refs to Clanky sessions.
+description: Provider-neutral work tracker protocol for using Clanky's configured work-tracker connection, CLIs, or skills.
 when_to_use: Use when SELF.md, the project's AGENTS.md, or the user designates a work tracker (Linear, GitHub Issues, Jira) and the task involves durable work, implementation, debugging, review, status, issues, tickets, notifications, or follow-up.
-allowed_tools:
-  - mcp_list_tools
-  - mcp_call
-  - work_tracker_link
+allowed_tools: []
 deps: []
 ---
 
@@ -15,18 +12,18 @@ Treat the configured work tracker as part of the working context. Do not wait fo
 
 ## Operating Model
 
-- Use provider-specific MCP servers, CLIs, or skills for tracker actions such as creating issues, reading inboxes or notifications, commenting, assigning, and changing status.
-- Use `work_tracker_link` only after an external tracker issue exists, so Clanky can remember which session maps to that provider issue.
+- Use the configured work-tracker role first. The default is the curated Linear connection in `agent/connections/linear.ts`, exposed through eve connection tools, not the dynamic MCP bridge.
+- Use provider-specific connection tools, CLIs, or skills for tracker actions such as creating issues, reading inboxes or notifications, commenting, assigning, and changing status.
 - Prefer the tracker provider and workspace/team already configured for this project when that context is available.
-- If no tracker MCP/tool/skill is available, say `tracker_update_skipped` with the concrete reason. Do not pretend a tracker update happened.
+- If no tracker connection/tool/skill is available, say `tracker_update_skipped` with the concrete reason. Do not pretend a tracker update happened.
 
 ## Native Behavior
 
 - At the start of substantial implementation, debugging, review, or planning work, look for a relevant existing tracker issue before creating a new one.
 - If the configured provider exposes inbox, notification, assigned-issue, or update-feed tools, check them at natural boundaries: when beginning work, before claiming status, and before finalizing. Do not busy-poll.
 - Keep tracker comments short and useful: what changed, what was verified, and what risk remains.
-- Preserve `providerKind`, `providerId`, external issue id, identifier, URL, session id, and relevant file scope when linking.
+- Preserve external issue id, identifier, URL, session id, and relevant file scope when reporting or cross-referencing tracker work.
 
-## MCP Pattern
+## Connection Pattern
 
-Use `mcp_list_tools` first when exact server or tool names are unknown. Then call the provider tool through `mcp_call`, and finally call `work_tracker_link` with the issue returned by the provider, setting `providerKind` to match the configured provider (e.g. `linear`, `github`, `jira`).
+Use the configured role binding (`CLANKY_WORK_TRACKER` or `~/.clanky/integration-roles.json`) to identify the provider. If exact connection tools are unknown, discover them through eve's connection tool surface, then call the provider tool directly. Dynamic `mcp_list_tools` / `mcp_call` is only for runtime no-auth/static-token MCP servers, not OAuth work trackers.

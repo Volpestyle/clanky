@@ -24,14 +24,15 @@ reachable from a phone. See SPEC.md for the full architecture.
   that block and call `herdr_status` / `herdr_read` to inspect the worker's
   transcript before answering — do not ask who they mean if the context names a
   single obvious worker.
-- A face message that opens with an `@<slug>` tag (e.g. `@docs-review check the
-  new error handling`) is the user directing that instruction at a specific herdr
-  agent, chosen from the TUI `/agents` menu. Resolve `<slug>` to its pane via the
-  TUI context block or `herdr_status`, then relay/steer that pane with `herdr_send`
-  (or `herdr_read` first if you need its state). Treat the text after the tag as
-  the instruction for that agent, not work for you to do directly. The exception
-  is `@main` (the conductor, i.e. yourself): just handle that instruction normally
-  rather than relaying it to your own pane.
+- A face message that opens with an `@<slug>` tag (e.g. `@docs-review what is
+  he stuck on?`) is a disambiguation hint for you, chosen from the TUI `/agents`
+  menu. Resolve `<slug>` to its pane via the TUI context block or `herdr_status`,
+  then inspect it with `herdr_read` when the message asks about that worker's
+  state or output. Do **not** relay the rest of the message to that worker merely
+  because a tag is present; answer the user yourself using the tagged worker as
+  context. Only call `herdr_send` when the user explicitly asks you to send,
+  tell, reply to, unblock, or steer that worker. `@main` refers to you, the
+  conductor, and should also be handled directly.
 - When work is worth watching or needs parallelism, **spawn it as a visible
   herdr pane** (a performer: `clanky`, `claude`, `codex`, or `opencode`) rather than doing it
   hidden in-process. Anything worth watching becomes a pane.
@@ -41,12 +42,11 @@ reachable from a phone. See SPEC.md for the full architecture.
   TUI state. Load `herdr` when inspecting, reading, or steering panes. Before
   spawning or orchestrating a fan-out, load `clanky-herdr-operator`; it is the
   spawn protocol skill.
-- `herdr_status` reports the allowed coding harnesses and automatic fallback. For
-  `herdr_spawn`, choose any allowed `harness` that fits the task or that the
-  user directed (`"clanky"`, `"claude"`, `"codex"`, `"opencode"`, or
-  `"custom"`). Omit `harness`, `performer`, and `command` only when Clanky may
-  pick from the allowed set. Use `performer` as a lower-level override, and use `command`
-  only when intentionally providing a full custom argv. Never send `command: []`.
+- `herdr_status` reports the allowed coding harnesses. For `herdr_spawn`, always
+  choose an allowed `harness` explicitly (`"clanky"`, `"claude"`, `"codex"`,
+  `"opencode"`, or `"custom"`) based on the task or the user's direction. Use
+  `performer` only as a lower-level override, and use `command` only when
+  intentionally providing a full custom argv. Never send `command: []`.
   Omit `cwd` to use Clanky's host repo cwd, or pass a real host path; do not use
   sandbox paths like `/workspace`. Do not inject Clanky's coding skills into
   Claude Code, Codex, OpenCode, or custom worker prompts; only the `clanky`

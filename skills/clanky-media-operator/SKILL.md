@@ -31,7 +31,7 @@ Use this skill for API-backed image and video creation. Choose the backend that 
 
 ## Output Handling
 
-- Generated files are saved under Clanky's data directory (`CLANKY_HOME/media/<provider>-images` or `.../xai-videos`) by default. Use `output_dir` and `filename_prefix` when the user asks for a specific location or name.
+- Generated files are saved under Clanky's data directory (`CLANKY_HOME/media/<provider>-images` or `.../xai-videos`) by default. Use `outputDir` and `filenamePrefix` when the user asks for a specific location or name.
 - Always report saved file paths. For xAI video, also report the hosted URL when present.
 - xAI hosted URLs are temporary; the tool downloads the video to a local file — prefer that file.
 
@@ -40,7 +40,7 @@ Use this skill for API-backed image and video creation. Choose the backend that 
 OpenAI images:
 - `quality`: `low` for drafts, `medium` or `high` for final assets, `auto` when unspecified.
 - `size`: use explicit dimensions only when the user gives a target. Common choices include `1024x1024`, `1536x1024`, `1024x1536`, `2048x2048`, `3840x2160`.
-- `output_format`: `png` for general use, `jpeg` for faster/smaller photographic output, `webp` for web assets.
+- `outputFormat`: `png` for general use, `jpeg` for faster/smaller photographic output, `webp` for web assets.
 - `background: "transparent"` is not supported by `gpt-image-2`; pick another model only if the user explicitly needs transparency.
 
 Gemini images (Nano Banana):
@@ -49,13 +49,13 @@ Gemini images (Nano Banana):
 - Output is returned as image bytes and saved directly; no size/quality flags are required.
 
 xAI images:
-- `aspect_ratio`: choose from `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `3:2`, `2:3`, `2:1`, `1:2`, `19.5:9`, `9:19.5`, `20:9`, `9:20`, or `auto`.
+- `aspectRatio`: choose from `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `3:2`, `2:3`, `2:1`, `1:2`, `19.5:9`, `9:19.5`, `20:9`, `9:20`, or `auto`.
 - `resolution`: `1k` for normal output, `2k` for higher-resolution final assets.
-- Default `response_format` is `b64_json` so the file can be saved immediately.
+- Files are saved locally by the tool; no `responseFormat` parameter is exposed.
 
 xAI videos:
 - `duration`: 1-15 seconds.
-- `aspect_ratio`: same ratios as xAI images, defaulting to `16:9` when omitted by the API.
+- `aspectRatio`: same ratios as xAI images, defaulting to `16:9` when omitted by the API.
 - `resolution`: `480p` for faster drafts, `720p` for HD.
 - Long videos can take several minutes. If polling times out, report that the request may still be running only when a request id was returned.
 

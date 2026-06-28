@@ -23,14 +23,14 @@ If the task involves spawning, fan-out, or creating a performer, load
 `clanky-herdr-operator` before calling `herdr_spawn`. This skill is enough for
 status/read/send operations, but the operator skill owns Clanky's spawn protocol.
 
-`herdr_status` includes `codingHarnesses`: the allowed harness set and automatic
-fallback. When calling `herdr_spawn`, choose any allowed `harness` that fits the
-task or that the user directed. Omit `harness`, `performer`, and `command` only
-when Clanky may pick from the allowed set. `/harness` controls the allowlist and
-native-vs-Ollama launch models for Claude, Codex, and OpenCode workers.
-`performer` is a lower-level override. `command` is only a raw argv override for
-custom commands; never pass `command: []`. Omit `cwd` to use Clanky's host repo
-cwd, or pass a real host path. Do not use sandbox paths like `/workspace`.
+`herdr_status` includes `codingHarnesses`: the allowed harness set and configured
+launcher profiles. When calling `herdr_spawn`, choose any allowed `harness` that
+fits the task or that the user directed; do not omit it. `/harness` controls the
+allowlist and native-vs-Ollama launch models for Claude, Codex, and OpenCode
+workers. `performer` is a lower-level override. `command` is only a raw argv
+override for custom commands; never pass `command: []`. Omit `cwd` to use
+Clanky's host repo cwd, or pass a real host path. Do not use sandbox paths like
+`/workspace`.
 
 Spawned workers receive a compact bootstrap pointing them to
 `skills/clanky-herdr-worker/SKILL.md` for coordination and completion only.

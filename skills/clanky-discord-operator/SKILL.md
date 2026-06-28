@@ -3,12 +3,15 @@ name: clanky-discord-operator
 description: Use Clanky's native Discord tools to inspect guilds/channels, read recent channel activity and media, send channel messages, upload attachments, and add reactions.
 when_to_use: Use when the user asks what Discord servers or channels Clanky can see, asks Clanky to send or read a Discord message, wants recent Discord media or a digest, provides Discord IDs, or wants a reaction added.
 allowed_tools:
+  - discord_whoami
   - discord_list_guilds
   - discord_list_channels
   - discord_read_messages
   - discord_recent_activity
   - discord_recent_attachments
+  - discord_download_media
   - discord_send_message
+  - discord_golive
   - discord_list_emojis
   - discord_add_reaction
 deps: []
@@ -17,8 +20,7 @@ deps: []
 # Clanky Discord Operator
 
 Use Clanky's native `discord_*` tools directly. They are available whenever the
-active profile has a Discord credential. From a shell, the same operations are
-available as `clanky discord <guilds|channels|messages|recent|send|emojis|react>`.
+active profile has a Discord credential.
 
 ## Tools
 
@@ -27,7 +29,10 @@ available as `clanky discord <guilds|channels|messages|recent|send|emojis|react>
 - `discord_read_messages`
 - `discord_recent_activity`
 - `discord_recent_attachments`
+- `discord_download_media`
 - `discord_send_message`
+- `discord_whoami`
+- `discord_golive`
 - `discord_list_emojis`
 - `discord_add_reaction`
 
@@ -38,7 +43,8 @@ Example — inspect media on a specific message:
   "channelId": "123",
   "messageId": "456",
   "mediaLimit": 4,
-  "load": true
+  "download": true,
+  "describe": true
 }
 ```
 
@@ -48,7 +54,7 @@ Example — inspect media on a specific message:
 - For "what happened recently", "what's going on in the server", or Discord digests, prefer `discord_recent_activity`.
 - For Discord media lookup, use `discord_recent_attachments` for recent images, GIF previews, image links, embeds, or video keyframes.
 - If the user references a specific Discord message, call `discord_recent_attachments` with both `channelId` and `messageId`.
-- Only say you visually inspected media when `discord_recent_attachments` returns `loadedImages` or image blocks. Metadata-only media is not visual inspection.
+- Only say you visually inspected media when `discord_recent_attachments` returns `visualInspection` or you ran `media_inspect` / `web_capture_frames` on the returned artifacts. Metadata-only media is not visual inspection.
 - Keep reads bounded with `since`, `limit`, `messageLimit`, and `mediaLimit`.
 
 ## ID handling

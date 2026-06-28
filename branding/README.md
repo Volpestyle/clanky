@@ -13,18 +13,15 @@ Source pixel art and the crops used across the docs site and elsewhere.
 - `masters/clanky-icon-380.png` — 380×380 ultra-tight crop on the hood opening (glowing eyes). Best for small sizes.
 
 Web-ready exports (PNG, all square) are published by the sibling docs site from
-`/Users/jamesvolpe/dev/agents/docs`; root-level copies for GitHub live directly
-in `branding/`.
+`/Users/jamesvolpe/dev/agents/docs`; the committed root-level copies for GitHub
+live directly in `branding/`.
 
 | File | Source | Use |
 |---|---|---|
-| `clanky-logo-{64,128,256,512}.png` | with-companion master | header logo, OG image, hero |
-| `clanky-figure-{256,512}.png` | figure master | alternative portrait variant |
-| `clanky-icon-{16,32,48,64,96,128,256}.png` | face master | favicon, anywhere the logo gets small |
-| `clanky-desert-world-1024.png` | desert world source | dramatic brand/world image, alternate hero, social preview |
+| `clanky-logo-512.png` | with-companion master | README header logo |
+| `clanky-logo-512-alpha.png` | with-companion master | transparent reference for generated media and pets |
 | `clanky-forest-overlook-1024.png` | forest overlook source | docs start image and calm brand/world image |
 | `clanky-forest-run-1024.png` | forest run source | using-Clanky image and active companion/agent image |
-| `apple-touch-icon.png` (180×180) | with-companion master | iOS home-screen icon |
 
 GitHub can render Markdown links such as `/branding/clanky-logo-512.png`.
 
@@ -51,4 +48,4 @@ sips --cropOffset 360 178 --cropToHeightWidth 600 600 clanky-original.png --out 
 sips --cropOffset 320 360 --cropToHeightWidth 380 380 clanky-original.png --out clanky-icon-380.png
 ```
 
-Then resize each master into the sizes needed with `sips -z H W <master> --out <out>`.
+Then resize each master into the sizes needed with `sips -z H W <master> --out <out>` and add the new export to the table above when it is committed here.

@@ -68,8 +68,8 @@ One worker per independent task, lowercase-kebab slug, one-line task summary:
 
 ```bash
 $OP/spawn.sh --slug fix-auth-tests --task "Fix the failing auth tests" \
-  --cwd ~/dev/someproject \
-  --prompt "Run the auth test suite in this repo, fix the failures, re-run until green. List every file you changed."
+	--cwd ~/dev/someproject --harness codex \
+	--prompt "Run the auth test suite in this repo, fix the failures, re-run until green. List every file you changed."
 ```
 
 It prints `RUN_ID=...`, `RUN_DIR=...`, `AGENT=...`, `PANE_ID=...`. Pass that
@@ -77,16 +77,15 @@ It prints `RUN_ID=...`, `RUN_DIR=...`, `AGENT=...`, `PANE_ID=...`. Pass that
 
 ```bash
 $OP/spawn.sh --run "$RUN_ID" --slug update-readme --task "Update README" \
-  --cwd ~/dev/someproject --prompt-file /tmp/readme-brief.md
+	--cwd ~/dev/someproject --harness claude --prompt-file /tmp/readme-brief.md
 ```
 
 For the eve host `herdr_spawn` tool, omit `cwd` to use Clanky's current host
 repo, or pass a real host path for another checkout. Never use sandbox paths
 like `/workspace`. Check `herdr_status.codingHarnesses` before choosing worker
-runtimes; it shows the allowed harnesses and automatic fallback. Use `harness:
-"clanky"`, `"claude"`, `"codex"`, `"opencode"`, or `"custom"` when a specific
-allowed runner fits the task; omit `harness`, `performer`, and `command` only
-when Clanky may pick from the allowed set. `performer` is a lower-level override.
+runtimes; it shows the allowed harnesses and launcher profiles. Use `harness:
+"clanky"`, `"claude"`, `"codex"`, `"opencode"`, or `"custom"` for every spawn.
+`performer` is a lower-level override.
 `command` is only a full custom argv override, never `command: []`.
 
 Workers spawned by either path receive a short bootstrap that tells them to
@@ -122,11 +121,9 @@ autonomy) to every prompt — do not restate it.
 ### Worker command
 
 The allowed worker set uses `CLANKY_CODING_HARNESSES`, configured from the face
-with `/harness allow`. When no harness is specified, Clanky picks automatically
-from the allowed set, preferring `clanky` when it is allowed. Direct
-`/harness <id>` commands can still set `CLANKY_CODING_HARNESS` as an optional
-preferred fallback. Built-in harnesses are
-`clanky`, `claude`, `codex`, and `opencode`. `custom` uses
+with `/harness allow`. Every spawn specifies its harness explicitly. Direct
+`/harness <id>` commands configure launch settings for built-in harnesses.
+Built-in harnesses are `clanky`, `claude`, `codex`, and `opencode`. `custom` uses
 `CLANKY_CODING_HARNESS_COMMAND`. The `claude`, `codex`, and `opencode` harnesses
 can use the default CLI launcher or `ollama launch <harness>` with a configured
 model. Codex Ollama mode uses `ollama launch codex`, not the Codex app, and runs
@@ -143,11 +140,11 @@ mode that will not stop to ask:
 ```bash
 # Claude Code worker (kickoff lands as the positional prompt)
 $OP/spawn.sh --run "$RUN_ID" --slug audit-deps --task "Audit dependencies" \
-  --prompt "..." -- claude --permission-mode acceptEdits
+	--harness claude --prompt "..." -- claude --permission-mode acceptEdits
 
 # Arbitrary worker with an explicit kickoff slot
 $OP/spawn.sh --run "$RUN_ID" --slug triage --task "Triage open issues" \
-  --prompt "..." -- codex --dangerously-bypass-approvals-and-sandbox {KICKOFF}
+	--harness codex --prompt "..." -- codex --dangerously-bypass-approvals-and-sandbox {KICKOFF}
 
 # Clanky worker: uses Clanky's Eve runtime and configured skills
 $OP/spawn.sh --run "$RUN_ID" --slug clanky-fix --task "Fix flaky tests" \
