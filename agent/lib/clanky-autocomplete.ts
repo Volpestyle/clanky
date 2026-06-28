@@ -505,10 +505,10 @@ function harnessArguments(context: ArgumentContext): StaticArgumentSpec {
 	const first = context.args[0]?.toLowerCase();
 	if (first === "allow") return values(["all", "clanky", "claude", "codex", "opencode", "custom"], ["/harness allow all"]);
 	if (first === "claude" || first === "codex" || first === "opencode") {
-		return values(["default", "ollama", "--launcher", "--model", "--runtime"], [`/harness ${first} ollama qwen3-coder:30b`]);
+		return values(["default", "ollama", "--launcher", "--model"], [`/harness ${first} ollama qwen3-coder:30b`]);
 	}
 	if (first === "custom") return values(["--runtime", "clanky", "native", "opencode"], ["/harness custom --runtime native node worker.js"]);
-	return values(["status", "allow", "clanky", "claude", "codex", "opencode", "custom"], [
+	return values(["status", "allow", "claude", "codex", "opencode", "custom"], [
 		"/harness status",
 		"/harness allow clanky claude codex",
 		"/harness codex ollama qwen3-coder:30b",
@@ -518,18 +518,12 @@ function harnessArguments(context: ArgumentContext): StaticArgumentSpec {
 function spawnArguments(context: ArgumentContext): StaticArgumentSpec {
 	const pendingFlag = context.argumentText.endsWith(" ") ? context.args.at(-1) : context.args.at(-2);
 	if (pendingFlag === "--harness") {
-		return values(["auto", "clanky", "claude", "codex", "opencode", "custom"], [
+		return values(["clanky", "claude", "codex", "opencode", "custom"], [
 			"/spawn --harness codex docs-review Review the changed files.",
 		]);
 	}
-	if (pendingFlag === "--performer") {
-		return values(["auto", "clanky", "claude", "codex", "opencode"], [
-			"/spawn --performer codex docs-review Review the changed files.",
-		]);
-	}
-	return values(["--harness", "--performer", "--cwd", "help"], [
+	return values(["--harness", "--cwd", "help"], [
 		"/spawn",
-		"/spawn docs-review Review the changed files and report findings.",
 		"/spawn --harness codex docs-review Review the changed files.",
 	]);
 }

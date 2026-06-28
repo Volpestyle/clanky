@@ -137,7 +137,7 @@ const commands: ClankyAutocompleteCommand[] = [
 		name: "spawn",
 		aliases: [],
 		description: "Spawn a herdr worker pane through the transcript seam",
-		argumentHint: "[--harness id|auto] [--performer id|auto] [--cwd path] <slug> <task>",
+		argumentHint: "--harness <clanky|claude|codex|opencode|custom> [--cwd path] <slug> <task>",
 		takesArgument: true,
 	},
 	{
@@ -359,7 +359,7 @@ assert(inspector.includes("**/mcp"), "inspector should identify the active comma
 assert(inspector.includes("Valid next args:"), "inspector should show valid next args");
 assert(inspector.includes("/mcp auth linear"), "inspector should show useful examples");
 assert(!inspector.includes("Warning: unknown first arg"), "partial valid arguments should not warn while the user is typing");
-const spawnInspector = formatClankyCommandInspector("/spawn docs-review", commands);
+const spawnInspector = formatClankyCommandInspector("/spawn --harness codex docs-review", commands);
 assert(!spawnInspector.includes("Warning: unknown first arg"), "spawn slugs should not warn as unknown first args");
 
 console.log("clanky-autocomplete-smoke: ok");

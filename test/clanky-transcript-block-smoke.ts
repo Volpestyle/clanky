@@ -31,6 +31,7 @@ const theme: ClankyTranscriptBlockTheme = {
 	cyan: plain,
 	dim: plain,
 	green: plain,
+	loadingGlyph: () => "⠃",
 	markdown: markdownTheme,
 	red: plain,
 	yellow: plain,
@@ -82,6 +83,9 @@ assert(inputBlock.render(48)[0]?.trimEnd() === "? Input requested", "input block
 
 const approvalBlock = new ClankyTranscriptMarkdownBlock("**Tool: bash - approved**\n\nanswer: approve", theme);
 assert(approvalBlock.render(48)[0]?.trimEnd() === "✓ bash approved", "approved tool prompts should render as completed approvals");
+
+const runningToolBlock = new ClankyTranscriptMarkdownBlock("**Tool: bash - running**\n\n$ sleep 1", theme);
+assert(runningToolBlock.render(48)[0]?.trimEnd() === "⠃ bash running", "running tool blocks should use the selected spinner glyph");
 
 const subagentFailedBlock = new ClankyTranscriptMarkdownBlock("**Subagent failed: Planner**\n\nboom", theme);
 assert(subagentFailedBlock.render(48)[0]?.trimEnd() === "◆ Planner subagent failed", "subagent failures should render as failed lifecycle headers");

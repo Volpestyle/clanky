@@ -10,6 +10,7 @@ export type ClankyTranscriptBlockTheme = {
 	readonly cyan: (text: string) => string;
 	readonly dim: (text: string) => string;
 	readonly green: (text: string) => string;
+	readonly loadingGlyph: () => string;
 	readonly red: (text: string) => string;
 	readonly yellow: (text: string) => string;
 	readonly markdown: MarkdownTheme;
@@ -173,7 +174,7 @@ function toolStatusGlyph(status: string, theme: ClankyTranscriptBlockTheme): str
 	if (normalized === "approved" || normalized === "authorized" || normalized === "completed" || normalized === "done") return theme.green("✓");
 	if (normalized === "failed" || normalized === "error") return theme.red("⨯");
 	if (normalized === "approval requested" || normalized === "pending" || normalized === "rejected" || normalized === "denied") return theme.yellow("–");
-	return theme.cyan("⠋");
+	return theme.cyan(theme.loadingGlyph());
 }
 
 function stylePrefix(prefix: string, tone: TranscriptBlockTone, theme: ClankyTranscriptBlockTheme): string {

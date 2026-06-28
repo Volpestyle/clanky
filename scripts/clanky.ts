@@ -81,6 +81,14 @@ import { listPushDevices, type PushDevice } from "../agent/lib/push-registry.ts"
 import { buildTuiAttachmentMessage, createDroppedPathPasteRewriter } from "../agent/lib/tui-attachments.ts";
 import { createClankyFaceAnsiTheme } from "../agent/lib/clanky-face-theme.ts";
 import {
+	AGENT_SPINNER_NAMES,
+	AGENT_SPINNER_CYCLE_NAME,
+	normalizeAgentSpinnerSelection,
+	resolveAgentSpinner,
+	type AgentSpinnerSelection,
+	type ResolvedAgentSpinner,
+} from "../agent/lib/agent-spinners.ts";
+import {
 	ClankyFaceRenderer,
 	defaultResponseForInputRequest,
 	formatContextUsage,
@@ -139,7 +147,6 @@ import {
 	CLANKY_CODING_HARNESS_ENV,
 	CODING_HARNESS_IDS,
 	LAUNCHABLE_CODING_HARNESS_IDS,
-	PERFORMERS,
 	type CodingHarnessEnv,
 	type CodingHarnessId,
 	type CodingHarnessLauncher,
@@ -148,14 +155,12 @@ import {
 	type Performer,
 	codingHarnessLauncherEnvKey,
 	codingHarnessModelEnvKey,
-	defaultCodingRuntimeForHarness,
 	parseAllowedCodingHarnesses,
 	parseCodingHarnessLauncher,
 	parseCodingHarnessId,
 	parseCodingRuntime,
 	parseHarnessCommand,
 	parseLaunchableCodingHarnessId,
-	parsePerformer,
 	resolveCodingHarness,
 	serializeCommandLine,
 	splitCommandLine,
@@ -195,6 +200,114 @@ import {
 	type McpServerStatus,
 	upsertMcpServer,
 } from "../agent/lib/mcp.ts";
+import {
+	AGENT_MD_OPTIONS,
+	APPROVAL_OPTIONS,
+	AUTH_GROUP_OPTIONS,
+	AUTH_KEY_OPTIONS,
+	AUTH_SECRET_TARGETS,
+	AUTH_SUBSCRIPTION_OPTIONS,
+	AUTH_TOKEN_OPTIONS,
+	type AuthAction,
+	type AuthSecretAction,
+	BROWSER_BRIDGE_OPTIONS,
+	type ClankyConfig,
+	CODING_HARNESS_ACTION_OPTIONS,
+	CODING_HARNESS_LAUNCHER_OPTIONS,
+	CODING_HARNESS_OPTIONS,
+	CODING_RUNTIME_OPTIONS,
+	DEFAULT_APNS_BUNDLE_ID,
+	DEFAULT_APNS_ENVIRONMENT,
+	DEFAULT_CLAUDE_MODEL,
+	DEFAULT_CODEX_MODEL,
+	DEFAULT_GEMINI_MODEL,
+	DEFAULT_LOCAL_BASE_URL,
+	DEFAULT_LOCAL_CONDUCTOR_MODEL,
+	DEFAULT_LOCAL_MODEL,
+	DEFAULT_LOCAL_VOICE,
+	DEFAULT_LOCAL_VOICE_ASR_MODEL,
+	DEFAULT_LOCAL_VOICE_LLM_MODEL,
+	DEFAULT_LOCAL_VOICE_SERVER_BASE_URL,
+	DEFAULT_LOCAL_VOICE_SMALL_MODEL,
+	DEFAULT_OPENAI_IMAGE_MODEL,
+	DEFAULT_XAI_MODEL,
+	DISCORD_CREDENTIAL_KIND_OPTIONS,
+	DISCORD_DM_OPTIONS,
+	DISCORD_SCOPE_CLEAR_OPTIONS,
+	DISCORD_SCOPE_ENV,
+	DISCORD_SCOPE_GROUP_OPTIONS,
+	DISCORD_SCOPE_TARGET_ACTION_OPTIONS,
+	DISCORD_SCOPE_TARGET_OPTIONS,
+	DISCORD_TOKEN_ACTION_OPTIONS,
+	DISCORD_TOKEN_VOICE_OPTIONS,
+	type DiscordScopeUpdate,
+	type DiscordTokenUpdate,
+	EFFORT_OPTIONS,
+	EFFORT_STATUS_OPTIONS,
+	ENTER_IMAGE_MODEL_OPTION,
+	GEMINI_MODEL_OPTIONS,
+	LAYOUT_HEADER_OPTIONS,
+	LAYOUT_INPUT_OPTIONS,
+	LAYOUT_OPTIONS,
+	LAYOUT_STATUS_OPTIONS,
+	LOCAL_EFFORT_OPTIONS,
+	LOCAL_EFFORT_STATUS_OPTIONS,
+	MCP_ACTION_OPTIONS,
+	MCP_CONNECTION_INFO_UNAVAILABLE,
+	MCP_DYNAMIC_NAME_RE,
+	MCP_TRANSPORT_OPTIONS,
+	type McpCommandAction,
+	type MenuBackOptions,
+	type MenuOption,
+	MODEL_ENV_KEY,
+	MODEL_OPTIONS,
+	PET_OPTIONS,
+	PROFILE_OPTIONS,
+	PUSH_ACTION_OPTIONS,
+	PUSH_APNS_ENV,
+	PUSH_APNS_ENV_OPTIONS,
+	type PushApnsEnvironment,
+	type PushCommandAction,
+	SETTINGS_STATUS_COLLAPSE_ICON,
+	SETTINGS_STATUS_EXPAND_ICON,
+	SETTINGS_STATUS_TOGGLE_VALUE,
+	type SubscriptionLoginPromptResult,
+	type SubscriptionProvider,
+	TRACE_OPTIONS,
+	VOICE_EVE_SESSION_OPTIONS,
+	VOICE_GROUP_OPTIONS,
+	VOICE_GROUPS,
+	VOICE_LOCAL_TTS_ENGINE_OPTIONS,
+	VOICE_REALTIME_PROVIDER_OPTIONS,
+	VOICE_SETTINGS,
+	VOICE_TTS_PROVIDER_OPTIONS,
+	type VoiceRealtimeProvider,
+	type VoiceSetting,
+	type VoiceSettingUpdate,
+	type VoiceTtsProvider,
+	XAI_MODEL_OPTIONS,
+} from "./clanky/config-data.ts";
+import {
+	formatAvailableConnections,
+	formatBrowserBridgeStatus,
+	formatBrowserBridgeSummary,
+	formatError,
+	formatIntegrationSummary,
+	formatIntegrationTable,
+	formatJson,
+	integrationSavedMessage,
+	isAbortError,
+	isEffortLevel,
+	isLocalEffortLevel,
+	isRecord,
+	normalizeCommandToken,
+	parseIntegrationBinding,
+	parseIntegrationRole,
+	parseProvider,
+	parseSubscriptionProvider,
+	splitArgs,
+	truncate,
+} from "./clanky/util.ts";
 
 const REPO = process.env.CLANKY_REPO_DIR ?? process.cwd();
 const PORT = resolvePort(process.env.CLANKY_EVE_PORT, 2000);
@@ -216,12 +329,12 @@ const CLANKY_FACE_HERDR_TAB_ID_ENV = "CLANKY_FACE_HERDR_TAB_ID";
 const CLANKY_FACE_HERDR_WORKSPACE_ID_ENV = "CLANKY_FACE_HERDR_WORKSPACE_ID";
 const CLANKY_TUI_INPUT_PLACEMENT_ENV = "CLANKY_TUI_INPUT_PLACEMENT";
 const CLANKY_TUI_STATUS_PLACEMENT_ENV = "CLANKY_TUI_STATUS_PLACEMENT";
+const CLANKY_TUI_SPINNER_ENV = "CLANKY_TUI_SPINNER";
 const CLANKY_STARTUP_MODEL_FALLBACK_PROVIDER_ENV = "CLANKY_STARTUP_MODEL_FALLBACK_PROVIDER";
 const CLANKY_STARTUP_MODEL_FALLBACK_ENV_NAMES_ENV = "CLANKY_STARTUP_MODEL_FALLBACK_ENV_NAMES";
 const SPAWN_USAGE =
-	"Usage: /spawn [--harness id|auto] [--performer id|auto] [--cwd path] <slug> <task>. Run /spawn with no args for the menu. Slug is kebab-case; the pane is clanky:<slug>.";
+	"Usage: /spawn --harness <clanky|claude|codex|opencode|custom> [--cwd path] <slug> <task>. Run /spawn with no args for the menu. Slug is kebab-case; the pane is clanky:<slug>.";
 const SPAWN_SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
-const SPAWN_AUTO_VALUE = "auto";
 // Mode 1002 reports drag motion while a button is held (1000 only reports
 // press/release), which the transcript needs to track a selection gesture.
 const CLANKY_MOUSE_TRACKING_ENABLE = "\x1b[?1002h\x1b[?1006h";
@@ -470,102 +583,7 @@ type SetupFlowController = SetupFlow & {
 	isWaitingForInput(): boolean;
 };
 
-type SubscriptionProvider = "codex" | "claude";
-const DEFAULT_CODEX_MODEL = "gpt-5.5";
-const DEFAULT_CLAUDE_MODEL = "claude-opus-4-8";
-const DEFAULT_LOCAL_MODEL = "qwen3-coder-next";
-const DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:11434/v1";
-const DEFAULT_LOCAL_VOICE_LLM_MODEL = "qwen3.6:27b-mlx";
-const DEFAULT_LOCAL_VOICE_ASR_MODEL = "models/voice/whisper/ggml-large-v3-turbo.bin";
-const DEFAULT_LOCAL_VOICE = "Samantha";
-// Tiered all-local stack defaults: a 4-bit conductor shared by the main thread and
-// Discord, and a small, low-latency voice model on a separate inference server so a
-// long conductor turn never stalls the realtime voice loop.
-const DEFAULT_LOCAL_CONDUCTOR_MODEL = "qwen3.6:27b-mlx";
-const DEFAULT_LOCAL_VOICE_SMALL_MODEL = "qwen3-vl:8b";
-const DEFAULT_LOCAL_VOICE_SERVER_BASE_URL = "http://127.0.0.1:11435/v1";
-const DISCORD_SCOPE_ENV = {
-	guilds: "CLANKY_DISCORD_ALLOWED_GUILD_IDS",
-	channels: "CLANKY_DISCORD_ALLOWED_CHANNEL_IDS",
-	dms: "CLANKY_DISCORD_ALLOW_DMS",
-} as const;
-const PUSH_APNS_ENV = {
-	keyPath: "CLANKY_APNS_KEY_PATH",
-	keyAlias: "CLANKY_APNS_KEY",
-	keyId: "CLANKY_APNS_KEY_ID",
-	teamId: "CLANKY_APNS_TEAM_ID",
-	bundleId: "CLANKY_APNS_BUNDLE_ID",
-	environment: "CLANKY_APNS_ENV",
-} as const;
-const DEFAULT_APNS_BUNDLE_ID = "io.clanky.ios";
-const DEFAULT_APNS_ENVIRONMENT = "sandbox";
 
-type ClankyConfig = {
-	provider: "codex" | "claude" | "local" | "xai" | "gemini";
-	codexModel?: string;
-	claudeModel?: string;
-	codexEffort?: string;
-	localModel?: string;
-	localBaseUrl?: string;
-	localEffort?: string;
-	localContextTokens?: string;
-	xaiModel?: string;
-	geminiModel?: string;
-	xaiApiKeyPresent?: boolean;
-	geminiApiKeyPresent?: boolean;
-	openAiApiKeyPresent?: boolean;
-	elevenLabsApiKeyPresent?: boolean;
-	relayTokenPresent?: boolean;
-	voiceLocalApiKeyPresent?: boolean;
-	visionModel?: string;
-	visionEnabled?: string;
-	visionProvider?: string;
-	openAiVisionModel?: string;
-	autoApprove?: string;
-	agentMd?: string;
-	agentMdRoot?: string;
-	pet?: string;
-	codingHarness?: string;
-	codingHarnesses?: string;
-	codingHarnessCommand?: string;
-	codingHarnessRuntime?: string;
-	codingHarnessClaudeLauncher?: string;
-	codingHarnessClaudeModel?: string;
-	codingHarnessCodexLauncher?: string;
-	codingHarnessCodexModel?: string;
-	codingHarnessOpencodeLauncher?: string;
-	codingHarnessOpencodeModel?: string;
-	imageModel?: string;
-	xaiImageModel?: string;
-	geminiImageModel?: string;
-	imageProvider?: string;
-	videoProvider?: string;
-	xaiVideoModel?: string;
-	voiceRealtimeProvider?: string;
-	voiceRealtimeModel?: string;
-	voiceRealtimeVoice?: string;
-	voiceTtsProvider?: string;
-	voiceAsrModel?: string;
-	voiceAsrCommand?: string;
-	voiceLocalBaseUrl?: string;
-	voiceLocalTtsEngine?: string;
-	voiceLocalTtsCommand?: string;
-	elevenLabsVoiceId?: string;
-	elevenLabsTtsModel?: string;
-	voiceMemoryContextLimit?: string;
-	voiceEveSession?: string;
-	discordCredentialKind?: string;
-	discordVoice?: string;
-	discordTokenPresent?: boolean;
-	discordAllowedGuildIds?: string;
-	discordAllowedChannelIds?: string;
-	discordAllowDms?: string;
-	apnsKeyPath?: string;
-	apnsKeyId?: string;
-	apnsTeamId?: string;
-	apnsBundleId?: string;
-	apnsEnvironment?: string;
-};
 
 type BrainHealthState =
 	| { state: "unknown"; checkedAt?: number }
@@ -582,12 +600,6 @@ type LayoutSettings = {
 	readonly statusPlacement: StatusPlacement;
 };
 
-type MenuOption = {
-	value: string;
-	label: string;
-	hint?: string;
-	description?: string;
-};
 type SettingsMenuStatus =
 	| string
 	| {
@@ -633,393 +645,6 @@ interface DiscoveredHost {
 	readonly state: "healthy" | "reachable";
 }
 
-const EFFORT_LEVELS = ["minimal", "low", "medium", "high", "xhigh"] as const;
-const LOCAL_EFFORT_LEVELS = ["low", "medium", "high"] as const;
-const VOICE_SETTINGS = [
-	"mode",
-	"local-defaults",
-	"realtime-provider",
-	"realtime-model",
-	"realtime-voice",
-	"tts-provider",
-	"asr-model",
-	"asr-command",
-	"local-base-url",
-	"local-tts-engine",
-	"local-tts-command",
-	"elevenlabs-voice",
-	"elevenlabs-model",
-	"memory-limit",
-	"eve-session",
-] as const;
-type VoiceSetting = (typeof VOICE_SETTINGS)[number];
-type VoiceRealtimeProvider = "openai" | "xai" | "local";
-type VoiceTtsProvider = "realtime" | "elevenlabs";
-type VoiceSettingUpdate = {
-	updates: Record<string, string>;
-	message: string;
-};
-type ImageModelUpdate = {
-	updates: Record<string, string>;
-	message: string;
-};
-type DiscordTokenUpdate = {
-	updates: Record<string, string>;
-	message: string;
-};
-type DiscordScopeUpdate = {
-	updates: Record<string, string>;
-	removals: string[];
-	message: string;
-};
-type AuthAction =
-	| "status"
-	| "codex"
-	| "claude"
-	| "xai"
-	| "gemini"
-	| "openai"
-	| "discord"
-	| "mcp"
-	| "elevenlabs"
-	| "relay"
-	| "local-voice"
-	| "login";
-type MenuBackOptions = {
-	readonly backReturnsToMenu?: boolean;
-};
-type AuthSecretAction = "openai" | "elevenlabs" | "relay" | "local-voice";
-type SubscriptionLoginPromptResult =
-	| { readonly state: "ready"; readonly message?: string }
-	| { readonly state: "skip" }
-	| { readonly state: "cancelled"; readonly message: string };
-type McpCommandAction = "status" | "list" | "add" | "remove" | "enable" | "disable" | "auth" | "install" | "connections" | "help";
-type PushCommandAction = "status" | "key-path" | "key-id" | "team-id" | "bundle-id" | "env" | "test" | "clear" | "help";
-type PushApnsEnvironment = "sandbox" | "production";
-const MODEL_OPTIONS: Record<SubscriptionProvider, readonly MenuOption[]> = {
-	codex: [
-		{ value: "gpt-5.5", label: "gpt-5.5" },
-		{ value: "gpt-5.4", label: "gpt-5.4" },
-		{ value: "gpt-5.3-codex-spark", label: "gpt-5.3-codex-spark" },
-		{ value: "keep-current", label: "keep current" },
-	],
-	claude: [
-		{ value: "claude-opus-4-8", label: "claude-opus-4-8", hint: "flagship" },
-		{ value: "claude-sonnet-4-6", label: "claude-sonnet-4-6" },
-		{ value: "keep-current", label: "keep current" },
-	],
-};
-const DEFAULT_XAI_MODEL = "grok-4";
-const DEFAULT_GEMINI_MODEL = "gemini-3-pro";
-const XAI_MODEL_OPTIONS: readonly MenuOption[] = [
-	{ value: "grok-4", label: "grok-4", hint: "flagship, vision" },
-	{ value: "grok-4-fast", label: "grok-4-fast" },
-	{ value: "grok-3", label: "grok-3" },
-	{ value: "keep-current", label: "keep current" },
-];
-const GEMINI_MODEL_OPTIONS: readonly MenuOption[] = [
-	{ value: "gemini-3-pro", label: "gemini-3-pro", hint: "flagship, vision" },
-	{ value: "gemini-2.5-pro", label: "gemini-2.5-pro", hint: "vision" },
-	{ value: "gemini-2.5-flash", label: "gemini-2.5-flash" },
-	{ value: "keep-current", label: "keep current" },
-];
-const MODEL_ENV_KEY: Record<"codex" | "claude" | "xai" | "gemini", string> = {
-	codex: "CLANKY_CODEX_MODEL",
-	claude: "CLANKY_CLAUDE_MODEL",
-	xai: "CLANKY_XAI_MODEL",
-	gemini: "CLANKY_GEMINI_MODEL",
-};
-const EFFORT_OPTIONS: readonly MenuOption[] = [
-	{ value: "minimal", label: "minimal", hint: "fastest" },
-	{ value: "low", label: "low" },
-	{ value: "medium", label: "medium" },
-	{ value: "high", label: "high" },
-	{ value: "xhigh", label: "xhigh", hint: "deepest" },
-	{ value: "keep-current", label: "keep current" },
-];
-const EFFORT_STATUS_OPTIONS: readonly MenuOption[] = [
-	{ value: "status", label: "status", hint: "show current effort" },
-	...EFFORT_OPTIONS,
-];
-const LOCAL_EFFORT_OPTIONS: readonly MenuOption[] = [
-	{ value: "low", label: "low" },
-	{ value: "medium", label: "medium" },
-	{ value: "high", label: "high", hint: "deepest" },
-	{ value: "unset", label: "unset", hint: "no reasoning_effort / server default" },
-	{ value: "keep-current", label: "keep current" },
-];
-const LOCAL_EFFORT_STATUS_OPTIONS: readonly MenuOption[] = [
-	{ value: "status", label: "status", hint: "show current effort" },
-	...LOCAL_EFFORT_OPTIONS,
-];
-const PROFILE_OPTIONS: readonly MenuOption[] = [
-	{ value: "local-tiered", label: "local tiered", hint: "local conductor + separate local voice server" },
-	{ value: "local-single", label: "local single", hint: "one local model for conductor and voice" },
-	{ value: "api", label: "api", hint: "hosted/API conductor + hosted realtime voice API" },
-	{ value: "local-api", label: "local + API voice", hint: "local conductor + hosted realtime voice API" },
-	{ value: "api-local", label: "API + local voice", hint: "hosted/API conductor + local voice stack" },
-];
-// Top-level voice menu: a short list of categories instead of 15 flat settings.
-// Most entries drill into a grouped submenu (group:*); "mode" is common enough
-// to drill straight to its picker.
-const VOICE_GROUP_OPTIONS: readonly MenuOption[] = [
-	{ value: "mode", label: "voice mode", hint: "realtime provider or local stack" },
-	{ value: "group:realtime", label: "realtime voice", hint: "model and provider voice" },
-	{ value: "group:local", label: "local stack", hint: "Whisper ASR, local LLM, local TTS" },
-	{ value: "group:elevenlabs", label: "ElevenLabs TTS", hint: "external TTS provider, voice, model" },
-	{ value: "group:session", label: "memory & session", hint: "voice memory and Eve continuity" },
-];
-const VOICE_GROUPS: Record<string, { readonly title: string; readonly options: readonly MenuOption[] }> = {
-	"group:realtime": {
-		title: "Choose the realtime voice setting to change.",
-		options: [
-			{ value: "realtime-model", label: "realtime model", hint: "gpt-realtime / grok-voice-2 / local LLM" },
-			{ value: "realtime-voice", label: "realtime voice", hint: "native provider voice" },
-		],
-	},
-	"group:local": {
-		title: "Choose the local voice stack setting to change.",
-		options: [
-			{ value: "local-defaults", label: "use local defaults", hint: "Whisper + Ollama + Mac voice" },
-			{ value: "asr-model", label: "ASR model", hint: "whisper.cpp ggml model path" },
-			{ value: "asr-command", label: "ASR command", hint: "whisper-cli" },
-			{ value: "local-base-url", label: "LLM endpoint", hint: DEFAULT_LOCAL_BASE_URL },
-			{ value: "local-tts-engine", label: "TTS engine", hint: "say or command" },
-			{ value: "local-tts-command", label: "TTS command", hint: "reads text, emits PCM" },
-		],
-	},
-	"group:elevenlabs": {
-		title: "Choose the ElevenLabs TTS setting to change.",
-		options: [
-			{ value: "tts-provider", label: "TTS provider", hint: "realtime or ElevenLabs" },
-			{ value: "elevenlabs-voice", label: "voice id" },
-			{ value: "elevenlabs-model", label: "TTS model" },
-		],
-	},
-	"group:session": {
-		title: "Choose the memory & session setting to change.",
-		options: [
-			{ value: "memory-limit", label: "voice memory context", hint: "0-50 facts" },
-			{ value: "eve-session", label: "Eve voice session", hint: "voice continuity turn" },
-		],
-	},
-};
-const VOICE_REALTIME_PROVIDER_OPTIONS: readonly MenuOption[] = [
-	{ value: "openai", label: "provider: OpenAI", hint: "OpenAI realtime API" },
-	{ value: "xai", label: "provider: xAI", hint: "Grok realtime API" },
-	{ value: "local", label: "local voice", hint: "Whisper + local LLM + local TTS" },
-];
-const VOICE_TTS_PROVIDER_OPTIONS: readonly MenuOption[] = [
-	{ value: "realtime", label: "realtime", hint: "provider-native audio" },
-	{ value: "elevenlabs", label: "elevenlabs", hint: "external ElevenLabs TTS" },
-];
-const VOICE_LOCAL_TTS_ENGINE_OPTIONS: readonly MenuOption[] = [
-	{ value: "say", label: "say", hint: "macOS built-in voice" },
-	{ value: "command", label: "command", hint: "custom command emits raw PCM" },
-];
-const VOICE_EVE_SESSION_OPTIONS: readonly MenuOption[] = [
-	{ value: "on", label: "on", hint: "default" },
-	{ value: "off", label: "off" },
-];
-// Top-level auth menu groups eleven flat credentials into four categories so the
-// list stays short; each group drills into the matching credential pickers.
-const AUTH_GROUP_OPTIONS: readonly MenuOption[] = [
-	{ value: "group:subscriptions", label: "subscriptions", hint: "Codex and Claude OAuth logins" },
-	{ value: "group:keys", label: "API keys", hint: "xAI, Gemini, OpenAI, ElevenLabs, local voice" },
-	{ value: "group:tokens", label: "tokens", hint: "Discord credential and relay token" },
-	{ value: "mcp", label: "MCP connection auth", hint: "Linear, Figma, and curated connections" },
-];
-const AUTH_SUBSCRIPTION_OPTIONS: readonly MenuOption[] = [
-	{ value: "codex", label: "Codex login", hint: "ChatGPT subscription OAuth" },
-	{ value: "claude", label: "Claude login", hint: "Claude subscription OAuth" },
-];
-const AUTH_KEY_OPTIONS: readonly MenuOption[] = [
-	{ value: "xai", label: "xAI API key", hint: "CLANKY_XAI_API_KEY" },
-	{ value: "gemini", label: "Gemini API key", hint: "CLANKY_GEMINI_API_KEY" },
-	{ value: "openai", label: "OpenAI API key", hint: "CLANKY_OPENAI_API_KEY" },
-	{ value: "elevenlabs", label: "ElevenLabs API key", hint: "CLANKY_ELEVENLABS_API_KEY" },
-	{ value: "local-voice", label: "local voice API key", hint: "CLANKY_VOICE_LOCAL_API_KEY" },
-];
-const AUTH_TOKEN_OPTIONS: readonly MenuOption[] = [
-	{ value: "discord", label: "Discord credential", hint: "bot/user token and voice flag" },
-	{ value: "relay", label: "relay token", hint: "CLANKY_RELAY_TOKEN" },
-];
-const AUTH_SECRET_TARGETS: Record<
-	AuthSecretAction,
-	{
-		readonly envKey: string;
-		readonly label: string;
-		readonly placeholder: string;
-		readonly savedMessage: string;
-	}
-> = {
-	openai: {
-		envKey: "CLANKY_OPENAI_API_KEY",
-		label: "OpenAI API key",
-		placeholder: "OpenAI API key",
-		savedMessage: "OpenAI API key saved",
-	},
-	elevenlabs: {
-		envKey: "CLANKY_ELEVENLABS_API_KEY",
-		label: "ElevenLabs API key",
-		placeholder: "ElevenLabs API key",
-		savedMessage: "ElevenLabs API key saved",
-	},
-	relay: {
-		envKey: "CLANKY_RELAY_TOKEN",
-		label: "relay token",
-		placeholder: "relay bearer token",
-		savedMessage: "Relay token saved",
-	},
-	"local-voice": {
-		envKey: "CLANKY_VOICE_LOCAL_API_KEY",
-		label: "local voice API key",
-		placeholder: "local voice API key",
-		savedMessage: "Local voice API key saved",
-	},
-};
-const DISCORD_CREDENTIAL_KIND_OPTIONS: readonly MenuOption[] = [
-	{ value: "bot-token", label: "bot token", hint: "recommended" },
-	{ value: "user-token", label: "user token", hint: "only when explicitly needed" },
-];
-const DISCORD_TOKEN_VOICE_OPTIONS: readonly MenuOption[] = [
-	{ value: "off", label: "chat only" },
-	{ value: "on", label: "chat + voice", hint: "enable Discord voice runtime" },
-];
-const DISCORD_TOKEN_ACTION_OPTIONS: readonly MenuOption[] = [
-	{ value: "status", label: "status", hint: "show credential + voice state" },
-	{ value: "set", label: "set credential", hint: "paste token and restart Clanky" },
-];
-const APPROVAL_OPTIONS: readonly MenuOption[] = [
-	{ value: "auto", label: "auto approve", hint: "run tool calls without prompts" },
-	{ value: "prompt", label: "prompt", hint: "restore per-tool approvals" },
-];
-const AGENT_MD_OPTIONS: readonly MenuOption[] = [
-	{ value: "on", label: "on", hint: "load AGENTS.md/agent.md files into instructions" },
-	{ value: "off", label: "off", hint: "ignore filesystem agent instruction files" },
-	{ value: "root", label: "root", hint: "set the scan start directory" },
-	{ value: "clear-root", label: "clear root", hint: "use the brain working directory" },
-];
-const TRACE_OPTIONS: readonly MenuOption[] = [
-	{ value: "off", label: "off" },
-	{ value: "no-reply", label: "no-reply", hint: "show compact no-reply traces" },
-	{ value: "all", label: "all", hint: "show compact trace after every turn" },
-];
-const LAYOUT_OPTIONS: readonly MenuOption[] = [
-	{ value: "input", label: "input placement", hint: "top or bottom" },
-	{ value: "status", label: "status placement", hint: "above or below input" },
-	{ value: "header", label: "header", hint: "show or hide the sticky header" },
-];
-const LAYOUT_INPUT_OPTIONS: readonly MenuOption[] = [
-	{ value: "bottom", label: "bottom", hint: "default" },
-	{ value: "top", label: "top", hint: "pin chat input above the transcript" },
-];
-const LAYOUT_STATUS_OPTIONS: readonly MenuOption[] = [
-	{ value: "above-input", label: "above input", hint: "default" },
-	{ value: "below-input", label: "below input" },
-];
-const LAYOUT_HEADER_OPTIONS: readonly MenuOption[] = [
-	{ value: "on", label: "on" },
-	{ value: "off", label: "off" },
-];
-const PET_OPTIONS: readonly MenuOption[] = [
-	{ value: "on", label: "on" },
-	{ value: "off", label: "off" },
-];
-const BROWSER_BRIDGE_OPTIONS: readonly MenuOption[] = [
-	{ value: "status", label: "view bridge status" },
-	{ value: "install", label: "install bridge", hint: "write extension and daemon config" },
-];
-const DEFAULT_OPENAI_IMAGE_MODEL = "gpt-image-2";
-const ENTER_IMAGE_MODEL_OPTION = "__enter_image_model__";
-// Top-level scope menu groups the six server/channel verbs into two submenus
-// so the list stays short; each group drills into set/add/remove.
-const DISCORD_SCOPE_GROUP_OPTIONS: readonly MenuOption[] = [
-	{ value: "group:guilds", label: "servers", hint: "set, add, or remove server ids" },
-	{ value: "group:channels", label: "channels", hint: "set, add, or remove channel/thread ids" },
-	{ value: "dms", label: "DMs", hint: "allow or block private replies" },
-	{ value: "clear", label: "clear scope", hint: "remove allowlist settings" },
-];
-const DISCORD_SCOPE_TARGET_ACTION_OPTIONS: readonly MenuOption[] = [
-	{ value: "set", label: "set (replace)", hint: "replace the allowlist" },
-	{ value: "add", label: "add", hint: "append ids" },
-	{ value: "remove", label: "remove", hint: "choose existing ids to remove" },
-];
-const DISCORD_SCOPE_CLEAR_OPTIONS: readonly MenuOption[] = [
-	{ value: "all", label: "all", hint: "servers, channels, and DM override" },
-	{ value: "guilds", label: "servers", hint: "server allowlist only" },
-	{ value: "channels", label: "channels", hint: "channel/thread allowlist only" },
-	{ value: "dms", label: "DM override", hint: "return DMs to default allowed" },
-];
-const DISCORD_SCOPE_TARGET_OPTIONS: readonly MenuOption[] = [
-	{ value: "guilds", label: "servers", hint: "Discord guild/server ids" },
-	{ value: "channels", label: "channels", hint: "channel, thread, or parent-channel ids" },
-];
-const DISCORD_DM_OPTIONS: readonly MenuOption[] = [
-	{ value: "on", label: "allow DMs" },
-	{ value: "off", label: "block DMs" },
-];
-const CODING_HARNESS_OPTIONS: readonly MenuOption[] = [
-	{ value: "clanky", label: "clanky", hint: BUILTIN_CODING_HARNESSES.clanky.description },
-	{ value: "claude", label: "claude", hint: BUILTIN_CODING_HARNESSES.claude.description },
-	{ value: "codex", label: "codex", hint: BUILTIN_CODING_HARNESSES.codex.description },
-	{ value: "opencode", label: "opencode", hint: BUILTIN_CODING_HARNESSES.opencode.description },
-	{ value: "custom", label: "custom", hint: "user-supplied command run in a Herdr pane" },
-];
-const CODING_RUNTIME_OPTIONS: readonly MenuOption[] = [
-	{ value: "clanky", label: "clanky", hint: "allow Clanky's coding skills" },
-	{ value: "native", label: "native", hint: "use the harness internals" },
-	{ value: "opencode", label: "opencode", hint: "OpenCode-native alias" },
-];
-const CODING_HARNESS_ACTION_OPTIONS: readonly MenuOption[] = [
-	{ value: "allow", label: "allowed harnesses", hint: "toggle workers Clanky may use" },
-	{ value: "fallback", label: "fallback harness", hint: "choose default worker, launcher, and model" },
-	{ value: "custom", label: "custom command", hint: "set command + runtime for custom worker" },
-];
-const CODING_HARNESS_LAUNCHER_OPTIONS: readonly MenuOption[] = [
-	{ value: "default", label: "default", hint: "use the CLI's configured model" },
-	{ value: "ollama", label: "ollama", hint: "launch through ollama with a model id" },
-];
-const SPAWN_PERFORMER_OPTIONS: readonly MenuOption[] = [
-	{ value: SPAWN_AUTO_VALUE, label: "auto", hint: "use the selected harness" },
-	{ value: "clanky", label: "clanky", hint: BUILTIN_CODING_HARNESSES.clanky.description },
-	{ value: "claude", label: "claude", hint: BUILTIN_CODING_HARNESSES.claude.description },
-	{ value: "codex", label: "codex", hint: BUILTIN_CODING_HARNESSES.codex.description },
-	{ value: "opencode", label: "opencode", hint: BUILTIN_CODING_HARNESSES.opencode.description },
-];
-const MCP_ACTION_OPTIONS: readonly MenuOption[] = [
-	{ value: "status", label: "status", hint: "connections + dynamic server config" },
-	{ value: "list", label: "list tools", hint: "probe dynamic MCP servers" },
-	{ value: "add", label: "add dynamic", hint: "stdio/http/sse no-auth or static-token MCP" },
-	{ value: "auth", label: "auth connection", hint: "Linear, Figma, or another curated MCP connection" },
-	{ value: "disable", label: "disable dynamic", hint: "file-backed dynamic MCP" },
-	{ value: "enable", label: "enable dynamic", hint: "file-backed dynamic MCP" },
-	{ value: "remove", label: "remove dynamic", hint: "delete from the file-backed store" },
-	{ value: "connections", label: "connections", hint: "curated eve connection inventory" },
-];
-const MCP_TRANSPORT_OPTIONS: readonly MenuOption[] = [
-	{ value: "stdio", label: "stdio", hint: "local command" },
-	{ value: "streamable-http", label: "streamable-http", hint: "HTTP MCP endpoint" },
-	{ value: "sse", label: "sse", hint: "SSE MCP endpoint" },
-];
-const PUSH_ACTION_OPTIONS: readonly MenuOption[] = [
-	{ value: "key-path", label: "APNs key path", hint: "AuthKey_XXXX.p8 file path" },
-	{ value: "key-id", label: "APNs key ID", hint: "10-character Apple key id" },
-	{ value: "team-id", label: "Apple team ID", hint: "10-character developer team id" },
-	{ value: "bundle-id", label: "bundle id", hint: `default ${DEFAULT_APNS_BUNDLE_ID}` },
-	{ value: "env", label: "APNs environment", hint: "sandbox/development or production" },
-	{ value: "test", label: "send test notification", hint: "push to registered iOS devices" },
-	{ value: "clear", label: "clear APNs config", hint: "remove saved APNs env vars" },
-];
-const PUSH_APNS_ENV_OPTIONS: readonly MenuOption[] = [
-	{ value: "sandbox", label: "sandbox", hint: "Debug/development APNs" },
-	{ value: "production", label: "production", hint: "Release/TestFlight/App Store APNs" },
-];
-const SETTINGS_STATUS_TOGGLE_VALUE = "__settings_status_toggle__";
-const SETTINGS_STATUS_EXPAND_ICON = "▲";
-const SETTINGS_STATUS_COLLAPSE_ICON = "▶";
-const MCP_DYNAMIC_NAME_RE = /^[a-z0-9][a-z0-9_-]*$/i;
-const MCP_CONNECTION_INFO_UNAVAILABLE = "(curated connection inventory unavailable: /eve/v1/info is not healthy)";
 
 let server: ChildProcess | null = null;
 let callbackProxyServer: HttpServer | null = null;
@@ -1043,12 +668,15 @@ let uiReady = false;
 let turnTraceMode = parseTurnTraceMode(process.env.CLANKY_TURN_TRACE) ?? DEFAULT_TURN_TRACE_MODE;
 let headerVisible = parseBooleanFlag(process.env.CLANKY_HEADER) ?? true;
 let layoutSettings: LayoutSettings = layoutSettingsFromEnv(process.env);
+let agentSpinner: ResolvedAgentSpinner = resolveAgentSpinner(process.env[CLANKY_TUI_SPINNER_ENV], { unicode: faceCapabilities.unicode });
 let runningTurn: Promise<void> | undefined;
 let isResponding = false;
 let activeTurn: ActivePromptTurn | undefined;
 let shutdownStarted = false;
 const tuiLedger = new TuiLedger();
 let activeLoader: Loader | undefined;
+let statusSpinnerFrameIndex = 0;
+let statusSpinnerInterval: ReturnType<typeof setInterval> | undefined;
 let commandPaletteOverlay: OverlayHandle | undefined;
 let commandTypeaheadState: ClankyCommandTypeaheadState | undefined;
 let currentStatusLabel = "starting";
@@ -1079,6 +707,7 @@ let session: ClientSession = client.session();
 const faceEnv = await readFaceEnv();
 headerVisible = parseBooleanFlag(faceEnv.CLANKY_HEADER) ?? headerVisible;
 layoutSettings = layoutSettingsFromEnv(faceEnv);
+agentSpinner = resolveAgentSpinner(faceEnv[CLANKY_TUI_SPINNER_ENV], { unicode: faceCapabilities.unicode });
 
 const tui = new TUI(new ProcessTerminal());
 tui.setClearOnShrink(true);
@@ -1369,7 +998,7 @@ function buildClankyPromptCommands(): ClankyPromptCommandSpec[] {
 		{
 			name: "agents",
 			aliases: ["workers"],
-			description: "Browse herdr agents; pick one to tag your next message at it",
+			description: "Browse herdr agents; tag one as context for your next message",
 			argumentHint: "[all]",
 			takesArgument: true,
 			build: (argument) => ({ type: "extension", name: "agents", argument }),
@@ -1378,7 +1007,7 @@ function buildClankyPromptCommands(): ClankyPromptCommandSpec[] {
 			name: "spawn",
 			aliases: [],
 			description: "Spawn a herdr worker pane through the transcript seam",
-			argumentHint: "[--harness id|auto] [--performer id|auto] [--cwd path] <slug> <task>",
+			argumentHint: "--harness <clanky|claude|codex|opencode|custom> [--cwd path] <slug> <task>",
 			takesArgument: true,
 			build: (argument) => ({ type: "extension", name: "spawn", argument }),
 		},
@@ -2083,6 +1712,7 @@ function insertMarkdown(text: string, options?: ClankyTranscriptBlockOptions): F
 		cyan: ansi.cyan,
 		dim: ansi.dim,
 		green: ansi.green,
+		loadingGlyph: () => currentAgentSpinnerFrame().trimEnd() || "◜",
 		markdown: markdownTheme,
 		red: ansi.red,
 		yellow: ansi.yellow,
@@ -2366,7 +1996,7 @@ async function submitPrompt(prompt: string): Promise<void> {
 	isResponding = true;
 	const controller = new AbortController();
 	const userBlock = insertMarkdown(`**You**\n\n${prompt}`);
-	const loader = new Loader(tui, ansi.cyan, ansi.dim, "Thinking...");
+	const loader = new Loader(tui, ansi.cyan, ansi.dim, "Thinking...", loaderIndicatorFor(agentSpinner));
 	activeLoader = loader;
 	const loaderBlock = insertTranscript(loader, { collapsible: false, pin: "bottom" });
 	const turn: ActivePromptTurn = {
@@ -2378,6 +2008,7 @@ async function submitPrompt(prompt: string): Promise<void> {
 		userBlock,
 	};
 	activeTurn = turn;
+	startStatusSpinner();
 	loader.start();
 	refreshStatus("thinking");
 	tui.requestRender();
@@ -2398,6 +2029,7 @@ async function submitPrompt(prompt: string): Promise<void> {
 			insertMarkdown(`**Error**\n\n${formatError(error)}`);
 		}
 	} finally {
+		stopStatusSpinner();
 		loader.stop();
 		loaderBlock.remove();
 		if (activeLoader === loader) activeLoader = undefined;
@@ -2833,6 +2465,32 @@ function refreshStatusView(): void {
 	tui.requestRender();
 }
 
+function startStatusSpinner(): void {
+	stopStatusSpinner();
+	statusSpinnerFrameIndex = 0;
+	if (agentSpinner.frames.length <= 1) return;
+	statusSpinnerInterval = setInterval(() => {
+		statusSpinnerFrameIndex = (statusSpinnerFrameIndex + 1) % agentSpinner.frames.length;
+		refreshStatusView();
+	}, agentSpinner.intervalMs);
+}
+
+function stopStatusSpinner(): void {
+	if (statusSpinnerInterval !== undefined) {
+		clearInterval(statusSpinnerInterval);
+		statusSpinnerInterval = undefined;
+	}
+	statusSpinnerFrameIndex = 0;
+}
+
+function restartStatusSpinner(): void {
+	if (isResponding) startStatusSpinner();
+}
+
+function currentAgentSpinnerFrame(): string {
+	return agentSpinner.frames[statusSpinnerFrameIndex % agentSpinner.frames.length] ?? "";
+}
+
 function refreshBannerView(): void {
 	banner.setFields(buildBannerFields(latestInfo));
 	tui.requestRender();
@@ -2899,8 +2557,8 @@ function formatStatusText(label: string): string {
 	const focusState = transcriptViewport.focused ? "transcript nav" : "";
 	const brainState = formatBrainHealthStatus(brainHealth);
 	const parts = [
-		label,
-		responseState,
+		formatPrimaryStatusLabel(label),
+		...(responseState.length === 0 ? [] : [ansi.dim(responseState)]),
 		setupState,
 		authState,
 		focusState,
@@ -2908,7 +2566,7 @@ function formatStatusText(label: string): string {
 		formatContextUsage(faceRenderer.lastUsage, currentContextSize),
 	]
 		.filter((part) => part.length > 0)
-		.map((part) => ansi.dim(part));
+		.map((part) => part.includes("\x1b[") ? part : ansi.dim(part));
 	const showStatusBrand = !headerVisible;
 	if (showStatusBrand) parts.unshift(formatStatusBrand());
 	if (brainState.length > 0) parts.splice(showStatusBrand ? 2 : 1, 0, brainState);
@@ -2916,6 +2574,11 @@ function formatStatusText(label: string): string {
 	if (layoutSettings.inputPlacement === "bottom" && layoutSettings.statusPlacement === "above-input") return `\n${statusLine}`;
 	if (layoutSettings.inputPlacement === "top" && layoutSettings.statusPlacement === "below-input") return `${statusLine}\n`;
 	return statusLine;
+}
+
+function formatPrimaryStatusLabel(label: string): string {
+	if (!isResponding) return ansi.dim(label);
+	return `${ansi.cyan(currentAgentSpinnerFrame())} ${ansi.dim(label)}`;
 }
 
 function formatStatusBrand(): string {
@@ -2971,6 +2634,7 @@ async function shutdown(exitCode: number, options: ShutdownOptions = {}): Promis
 	try {
 		if (options.abortTurn === true) activeTurn?.controller.abort();
 		if (options.waitForTurn !== false && runningTurn !== undefined) await runningTurn.catch(() => undefined);
+		stopStatusSpinner();
 		stopBrainHealthMonitor();
 		stopFacePresence();
 		disableClankyMouseTracking();
@@ -4918,6 +4582,7 @@ async function fetchLocalModelIds(baseUrl: string): Promise<readonly string[] | 
 
 type HarnessUpdate = {
 	updates: Record<string, string>;
+	removals?: readonly string[];
 	summary: string;
 };
 type HarnessInteractiveUpdate = {
@@ -4952,8 +4617,8 @@ async function configureHarness(argument: string, flow: SetupFlow | undefined): 
 
 	const update = buildHarnessUpdate(harness, args.slice(1), config);
 	if (typeof update === "string") return update;
-	await writeEnv(update.updates);
-	return await restartBrainMessage(`Coding harness set to ${update.summary}`);
+	await updateEnv(update.updates, update.removals ?? []);
+	return await restartBrainMessage(`Coding harness updated: ${update.summary}`);
 }
 
 async function configureHarnessAllowlist(
@@ -5020,8 +4685,8 @@ async function configureHarnessInteractive(flow: SetupFlow, config: ClankyConfig
 						if (selectedAllowedValues === undefined) return undefined;
 						return await apply(buildHarnessAllowlistUpdate(config, selectedCodingHarnesses(selectedAllowedValues)));
 					}
-					case "fallback":
-						return await apply(await promptHarnessFallbackUpdate(flow, config));
+					case "launchers":
+						return await apply(await promptHarnessLauncherUpdate(flow, config));
 					case "custom":
 						return await apply(await promptCustomHarnessUpdate(flow, config));
 					default:
@@ -5041,48 +4706,41 @@ function buildHarnessAllowlistUpdate(
 ): HarnessInteractiveUpdate | string {
 	if (allowed === undefined || allowed.length === 0) return "Harness allowlist must include at least one harness.";
 	const updates: Record<string, string> = { [CLANKY_CODING_HARNESS_ENV.allowed]: allowed.join(",") };
-	const configured = parseCodingHarnessId(config.codingHarness);
-	const removals = configured !== undefined && !allowed.includes(configured)
-		? [CLANKY_CODING_HARNESS_ENV.id, CLANKY_CODING_HARNESS_ENV.runtime]
-		: [];
-	const autoMessage = removals.length > 0 ? " Cleared the configured fallback; Clanky will pick from the allowed set." : "";
+	const removals = config.codingHarness === undefined ? [] : [CLANKY_CODING_HARNESS_ENV.id];
+	const cleanupMessage = removals.length > 0 ? " Removed the obsolete fallback selection." : "";
 	return {
 		updates,
 		removals,
-		message: `Allowed coding harnesses set to ${allowed.join(", ")}.${autoMessage}`,
+		message: `Allowed coding harnesses set to ${allowed.join(", ")}.${cleanupMessage}`,
 	};
 }
 
-async function promptHarnessFallbackUpdate(
+async function promptHarnessLauncherUpdate(
 	flow: SetupFlow,
 	config: ClankyConfig,
 ): Promise<HarnessInteractiveUpdate | string | undefined> {
 	const allowed = configuredAllowedHarnesses(config);
+	const launchableOptions = CODING_HARNESS_OPTIONS.filter((option) => {
+		const harness = parseLaunchableCodingHarnessId(option.value);
+		return harness !== undefined && allowed.includes(harness);
+	});
+	if (launchableOptions.length === 0) {
+		return "No launchable harnesses are allowed. Run /harness allow claude codex opencode to allow one.";
+	}
 	const selectedHarness = parseCodingHarnessId(
 		await selectOne(
 			flow,
-			"Choose the fallback coding harness.",
-			CODING_HARNESS_OPTIONS.filter((option) => allowed.includes(option.value as CodingHarnessId)),
-			initialAllowedHarnessValue(config, allowed),
+			"Choose the harness launcher to configure.",
+			launchableOptions,
+			launchableOptions[0]?.value,
 			true,
 		),
 	);
 	if (selectedHarness === undefined) return undefined;
-	if (selectedHarness === "custom") return await promptCustomHarnessUpdate(flow, config);
-
-	const runtime = parseCodingRuntime(
-		await selectOne(
-			flow,
-			"Choose the worker runtime.",
-			CODING_RUNTIME_OPTIONS,
-			config.codingHarness === selectedHarness ? config.codingHarnessRuntime ?? defaultCodingRuntimeForHarness(selectedHarness) : defaultCodingRuntimeForHarness(selectedHarness),
-			true,
-		),
-	);
-	if (runtime === undefined) return undefined;
 
 	const launchable = parseLaunchableCodingHarnessId(selectedHarness);
-	const tail = ["--runtime", runtime];
+	if (launchable === undefined) return "Choose claude, codex, or opencode for launcher settings.";
+	const tail: string[] = [];
 	if (launchable !== undefined) {
 		const env = codingHarnessEnv(config);
 		const launcher = parseCodingHarnessLauncher(
@@ -5109,7 +4767,7 @@ async function promptHarnessFallbackUpdate(
 	}
 
 	const result = buildHarnessUpdate(selectedHarness, tail, config);
-	return typeof result === "string" ? result : { updates: result.updates, message: `Coding harness set to ${result.summary}` };
+	return typeof result === "string" ? result : { updates: result.updates, removals: result.removals, message: `Coding harness updated: ${result.summary}` };
 }
 
 async function promptCustomHarnessUpdate(
@@ -5138,17 +4796,11 @@ async function promptCustomHarnessUpdate(
 		return `Invalid custom harness command: ${error instanceof Error ? error.message : String(error)}`;
 	}
 	const result = buildHarnessUpdate("custom", ["--runtime", runtime, ...command], config);
-	return typeof result === "string" ? result : { updates: result.updates, message: `Coding harness set to ${result.summary}` };
+	return typeof result === "string" ? result : { updates: result.updates, removals: result.removals, message: `Coding harness updated: ${result.summary}` };
 }
 
 function selectedCodingHarnesses(values: readonly string[]): readonly CodingHarnessId[] {
 	return values.map((value) => parseCodingHarnessId(value)).filter((value): value is CodingHarnessId => value !== undefined);
-}
-
-function initialAllowedHarnessValue(config: ClankyConfig, allowed: readonly CodingHarnessId[]): CodingHarnessId | undefined {
-	const configured = parseCodingHarnessId(config.codingHarness);
-	if (configured !== undefined && allowed.includes(configured)) return configured;
-	return allowed[0];
 }
 
 function buildHarnessUpdate(harness: CodingHarnessId, args: readonly string[], config: ClankyConfig): HarnessUpdate | string {
@@ -5158,7 +4810,6 @@ function buildHarnessUpdate(harness: CodingHarnessId, args: readonly string[], c
 	}
 	const parsed = parseHarnessTail(args, harness !== "custom");
 	if (typeof parsed === "string") return parsed;
-	if (harness !== "custom" && parsed.command.length > 0) return harnessUsage();
 
 	if (harness === "custom") {
 		let command = parsed.command;
@@ -5173,27 +4824,31 @@ function buildHarnessUpdate(harness: CodingHarnessId, args: readonly string[], c
 		const resolved = resolveCodingHarness({ harness, command, runtime: parsed.runtime });
 		return {
 			updates: {
-				[CLANKY_CODING_HARNESS_ENV.id]: harness,
 				[CLANKY_CODING_HARNESS_ENV.command]: serializeCommandLine(command),
 				[CLANKY_CODING_HARNESS_ENV.runtime]: resolved.runtime,
 			},
+			removals: [CLANKY_CODING_HARNESS_ENV.id],
 			summary: formatCodingHarnessSummaryFromProfile(resolved),
 		};
 	}
 
-	const runtime = parsed.runtime ?? defaultCodingRuntimeForHarness(harness);
-	const updates: Record<string, string> = {
-		[CLANKY_CODING_HARNESS_ENV.id]: harness,
-		[CLANKY_CODING_HARNESS_ENV.runtime]: runtime,
-	};
 	const launchable = parseLaunchableCodingHarnessId(harness);
-	if (launchable !== undefined) {
-		if (parsed.launcher !== undefined) updates[codingHarnessLauncherEnvKey(launchable)] = parsed.launcher;
-		if (parsed.model !== undefined) updates[codingHarnessModelEnvKey(launchable)] = parsed.model;
+	if (launchable === undefined) {
+		if (args.length > 0) return harnessUsage();
+		return `The ${harness} harness has no launcher settings. Use /spawn --harness ${harness} <slug> <task> to run it.`;
 	}
-	const resolved = resolveCodingHarness({ harness, runtime, env: { ...codingHarnessEnv(config), ...updates } });
+	if (parsed.runtime !== undefined || parsed.command.length > 0) return harnessUsage();
+	if (parsed.launcher === undefined && parsed.model === undefined) {
+		const current = resolveCodingHarness({ harness, env: codingHarnessEnv(config) });
+		return `Current ${harness} launcher: ${formatCodingHarnessLauncher(current)}\n\nUsage: /harness ${harness} [default|ollama] [ollama-model]`;
+	}
+	const updates: Record<string, string> = {};
+	if (parsed.launcher !== undefined) updates[codingHarnessLauncherEnvKey(launchable)] = parsed.launcher;
+	if (parsed.model !== undefined) updates[codingHarnessModelEnvKey(launchable)] = parsed.model;
+	const resolved = resolveCodingHarness({ harness, env: { ...codingHarnessEnv(config), ...updates } });
 	return {
 		updates,
+		removals: [CLANKY_CODING_HARNESS_ENV.id],
 		summary: formatCodingHarnessSummaryFromProfile(resolved),
 	};
 }
@@ -5269,47 +4924,38 @@ function parseHarnessTail(args: readonly string[], allowLauncher: boolean): {
 
 function formatCodingHarnessConfig(config: ClankyConfig): string {
 	const allowed = formatAllowedHarnesses(config);
-	try {
-		const profile = resolveCodingHarness({ env: codingHarnessEnv(config) });
-		return [
-			statusTitle("Current coding harness"),
-			statusLine("allowed", allowed),
-			statusLine("fallback", formatCodingHarnessFallback(config, profile), "active"),
-			statusLine("runtime", profile.runtime),
-			statusLine("performer", profile.performer),
-			statusLine("launcher", formatCodingHarnessLauncher(profile)),
-			statusLine("command", profile.command === undefined ? "(built-in)" : serializeCommandLine(profile.command), profile.command === undefined ? "muted" : "normal"),
-			statusLine("description", profile.description, "muted"),
-			"",
-			statusSection("Configured worker launchers"),
-			...formatCodingHarnessLauncherLines(config),
-		].join("\n");
-	} catch (error) {
-		return [statusLine("Current coding harness", `invalid (${error instanceof Error ? error.message : String(error)})`, "bad"), statusLine("allowed", allowed)].join("\n");
-	}
+	return [
+		statusTitle("Coding harnesses"),
+		statusLine("allowed", allowed),
+		statusLine("selection", "explicit per /spawn or herdr_spawn call", "active"),
+		statusLine("custom command", formatCustomHarnessCommand(config), config.codingHarnessCommand === undefined ? "muted" : "normal"),
+		"",
+		statusSection("Configured worker launchers"),
+		...formatCodingHarnessLauncherLines(config),
+	].join("\n");
 }
 
 function formatCodingHarnessMenuStatus(config: ClankyConfig): SettingsMenuStatus {
 	return collapsibleMenuStatus(
 		[
 			statusTitle("Harness"),
-			statusLine("fallback", formatCodingHarnessSummary(config), "active"),
+			statusLine("selection", "explicit per spawn", "active"),
 			statusLine("allowed", formatAllowedHarnesses(config), "muted"),
 		].join("\n"),
 		formatCodingHarnessConfig(config),
 	);
 }
 
-function formatCodingHarnessFallback(config: ClankyConfig, profile: ReturnType<typeof resolveCodingHarness>): string {
-	const configured = parseCodingHarnessId(config.codingHarness);
-	if (configured === profile.id) return `${profile.id} (${profile.label}, configured)`;
-	const suffix = configured === undefined ? "" : `; configured ${configured} is not allowed`;
-	return `auto -> ${profile.id} (${profile.label}${suffix})`;
+function formatCodingHarnessSummary(config: ClankyConfig): string {
+	return `explicit selection; allowed ${formatAllowedHarnesses(config)}`;
 }
 
-function formatCodingHarnessSummary(config: ClankyConfig): string {
+function formatCustomHarnessCommand(config: ClankyConfig): string {
 	try {
-		return formatCodingHarnessSummaryFromProfile(resolveCodingHarness({ env: codingHarnessEnv(config) }));
+		const command = parseHarnessCommand(config.codingHarnessCommand);
+		if (command === undefined || command.length === 0) return "(not configured)";
+		const runtime = parseCodingRuntime(config.codingHarnessRuntime) ?? "native";
+		return `${serializeCommandLine(command)} (runtime=${runtime})`;
 	} catch (error) {
 		return `invalid (${error instanceof Error ? error.message : String(error)})`;
 	}
@@ -5376,15 +5022,13 @@ function harnessUsage(): string {
 		"/harness status",
 		"/harness allow all",
 		"/harness allow clanky claude codex opencode custom",
-		"/harness clanky",
 		"/harness claude [default|ollama] [ollama-model]",
-		"/harness codex",
 		"/harness codex [default|ollama] [ollama-model]",
-		"/harness opencode",
 		"/harness opencode [default|ollama] [ollama-model]",
 		"/harness <claude|codex|opencode> --launcher <default|ollama> --model <ollama-model>",
 		"/harness custom <command...>",
 		"/harness custom --runtime <clanky|native|opencode> <command...>",
+		"Use /spawn --harness <clanky|claude|codex|opencode|custom> <slug> <task> to choose a worker for a run.",
 		"Ollama codex workers use 'ollama launch codex', not the Codex desktop app.",
 		"Ollama codex runs in an isolated CODEX_HOME (CLANKY_CODEX_OLLAMA_HOME) so it",
 		"does not clobber a subscription codex worker's ~/.codex.",
@@ -5699,8 +5343,13 @@ async function configureLayout(argument: string, flow: SetupFlow | undefined): P
 		if (placement === undefined) return "Usage: /layout status <above|below>";
 		return await saveStatusPlacement(placement);
 	}
+	if (first === "spinner" || first === "spinners" || first === "loader") {
+		const spinner = normalizeAgentSpinnerSelection(args[1]);
+		if (spinner === undefined) return formatAgentSpinnerUsage(args[1]);
+		return await saveAgentSpinner(spinner);
+	}
 	if (first === "header" || first === "banner") return await configureHeader(args.slice(1).join(" "));
-	return `Unknown layout setting "${first}". Use /layout status, /layout input top|bottom, /layout status above|below, or /layout header on|off.`;
+	return `Unknown layout setting "${first}". Use /layout status, /layout input top|bottom, /layout status above|below, /layout spinner <name>, or /layout header on|off.`;
 }
 
 async function configureLayoutInteractive(flow: SetupFlow): Promise<string> {
@@ -5719,6 +5368,10 @@ async function configureLayoutInteractive(flow: SetupFlow): Promise<string> {
 				if (setting === "status") {
 					const selected = parseStatusPlacement(await selectOne(flow, "Place the status bar relative to the input.", LAYOUT_STATUS_OPTIONS, layoutSettings.statusPlacement, true, layoutSettings.statusPlacement));
 					return selected === undefined ? undefined : await saveStatusPlacement(selected);
+				}
+				if (setting === "spinner") {
+					const selected = normalizeAgentSpinnerSelection(await selectOne(flow, "Choose the thinking spinner.", agentSpinnerOptions(), agentSpinner.name, true, agentSpinner.name));
+					return selected === undefined ? undefined : await saveAgentSpinner(selected);
 				}
 				if (setting === "header") {
 					const current = headerVisible ? "on" : "off";
@@ -5775,6 +5428,44 @@ async function saveStatusPlacement(placement: StatusPlacement): Promise<string> 
 	return formatLayoutStatus();
 }
 
+async function saveAgentSpinner(name: AgentSpinnerSelection): Promise<string> {
+	agentSpinner = resolveAgentSpinner(name, { unicode: faceCapabilities.unicode });
+	await writeEnv({ [CLANKY_TUI_SPINNER_ENV]: agentSpinner.name });
+	activeLoader?.setIndicator(loaderIndicatorFor(agentSpinner));
+	restartStatusSpinner();
+	refreshStatusView();
+	return formatAgentSpinnerStatus();
+}
+
+function agentSpinnerOptions(): readonly MenuOption[] {
+	return [AGENT_SPINNER_CYCLE_NAME, ...AGENT_SPINNER_NAMES].map((name) => ({
+		value: name,
+		label: name,
+		hint: name === agentSpinner.name ? "active" : name === AGENT_SPINNER_CYCLE_NAME ? "rotate through all" : undefined,
+	}));
+}
+
+function formatAgentSpinnerStatus(): string {
+	return [
+		statusTitle("Spinner"),
+		statusLine("active", agentSpinner.name, "active"),
+		statusLine("source", "expo-agent-spinners", "muted"),
+		ansi.dim(`Usage: /layout spinner <name>. Available: ${[AGENT_SPINNER_CYCLE_NAME, ...AGENT_SPINNER_NAMES].join(", ")}`),
+	].join("\n");
+}
+
+function formatAgentSpinnerUsage(value: string | undefined): string {
+	const prefix = value === undefined ? "Usage: /layout spinner <name>." : `Unknown spinner "${value}".`;
+	return `${prefix} Available: ${[AGENT_SPINNER_CYCLE_NAME, ...AGENT_SPINNER_NAMES].join(", ")}`;
+}
+
+function loaderIndicatorFor(spinner: ResolvedAgentSpinner): { frames: string[]; intervalMs: number } {
+	return {
+		frames: spinner.frames.map((frame) => ansi.cyan(frame)),
+		intervalMs: spinner.intervalMs,
+	};
+}
+
 function formatLayoutStatus(): string {
 	const statusPlacement = layoutSettings.statusPlacement === "above-input" ? "above input" : "below input";
 	const typeaheadPlacement = layoutSettings.inputPlacement === "top" ? "below status/input pair" : "above status/input pair";
@@ -5782,9 +5473,10 @@ function formatLayoutStatus(): string {
 		statusTitle("Layout"),
 		statusLine("input", layoutSettings.inputPlacement, "active"),
 		statusLine("status", statusPlacement, "active"),
+		statusLine("spinner", agentSpinner.name, "active"),
 		statusLine("typeahead", typeaheadPlacement, "muted"),
 		statusLine("header", headerVisible ? "on" : "off", headerVisible ? "ok" : "muted"),
-		ansi.dim("Usage: /layout [status|input top|input bottom|status above|status below|header on|header off]"),
+		ansi.dim("Usage: /layout [status|input top|input bottom|status above|status below|spinner <name>|header on|header off]"),
 	].join("\n");
 }
 
@@ -7851,8 +7543,7 @@ function padVisible(text: string, width: number): string {
 type FaceSpawnRequest = {
 	readonly slug: string;
 	readonly task: string;
-	readonly harness?: CodingHarnessId;
-	readonly performer?: Performer;
+	readonly harness: CodingHarnessId;
 	readonly cwd?: string;
 };
 
@@ -7872,7 +7563,6 @@ async function spawnWorkerFromFace(argument: string, flow: SetupFlow | undefined
 			slug: request.slug,
 			task: request.task,
 			harness: request.harness,
-			performer: request.performer,
 			cwd: request.cwd,
 			env,
 		});
@@ -7899,7 +7589,6 @@ function parseSpawnWorkerArgument(argument: string): FaceSpawnRequest | string {
 	if (tokens.length === 1 && (help === "help" || help === "--help" || help === "-h")) return SPAWN_USAGE;
 
 	let harnessArg: string | undefined;
-	let performerArg: string | undefined;
 	let cwdArg: string | undefined;
 	let index = 0;
 	// Leading --flags are options; the first bare token is the slug and the rest is
@@ -7912,7 +7601,6 @@ function parseSpawnWorkerArgument(argument: string): FaceSpawnRequest | string {
 		const value = inlineValue ?? tokens[index + 1];
 		if (value === undefined) return `Missing value for ${flag}. ${SPAWN_USAGE}`;
 		if (flag === "--harness") harnessArg = value;
-		else if (flag === "--performer") performerArg = value;
 		else if (flag === "--cwd") cwdArg = value;
 		else return `Unknown flag ${flag}. ${SPAWN_USAGE}`;
 		index += inlineValue === undefined ? 2 : 1;
@@ -7923,22 +7611,13 @@ function parseSpawnWorkerArgument(argument: string): FaceSpawnRequest | string {
 	const slugError = validateSpawnSlugText(slug);
 	if (slugError !== undefined) return slugError;
 
-	let harness: CodingHarnessId | undefined;
-	if (harnessArg !== undefined && !isSpawnAutoValue(harnessArg)) {
-		harness = parseCodingHarnessId(harnessArg);
-	}
-	if (harnessArg !== undefined && !isSpawnAutoValue(harnessArg) && harness === undefined) {
+	if (harnessArg === undefined) return `Choose a harness explicitly. ${SPAWN_USAGE}`;
+	const harness = parseCodingHarnessId(harnessArg);
+	if (harness === undefined) {
 		return `Unknown harness '${harnessArg}'. Allowed: ${CODING_HARNESS_IDS.join(", ")}.`;
 	}
-	let performer: Performer | undefined;
-	if (performerArg !== undefined && !isSpawnAutoValue(performerArg)) {
-		performer = parsePerformer(performerArg);
-	}
-	if (performerArg !== undefined && !isSpawnAutoValue(performerArg) && performer === undefined) {
-		return `Unknown performer '${performerArg}'. Allowed: ${PERFORMERS.join(", ")}.`;
-	}
 
-	return { slug, task, harness, performer, cwd: normalizedOptionalText(cwdArg) };
+	return { slug, task, harness, cwd: normalizedOptionalText(cwdArg) };
 }
 
 async function promptSpawnWorkerFromFace(flow: SetupFlow | undefined): Promise<FaceSpawnRequest | string | undefined> {
@@ -7966,21 +7645,12 @@ async function promptSpawnWorkerFromFace(flow: SetupFlow | undefined): Promise<F
 			flow,
 			"Choose the worker harness.",
 			spawnHarnessOptions(config),
-			SPAWN_AUTO_VALUE,
+			spawnHarnessOptions(config)[0]?.value,
 		);
 		if (harnessChoice === undefined) return undefined;
-		const harness = isSpawnAutoValue(harnessChoice) ? undefined : parseCodingHarnessId(harnessChoice);
-		if (!isSpawnAutoValue(harnessChoice) && harness === undefined) {
+		const harness = parseCodingHarnessId(harnessChoice);
+		if (harness === undefined) {
 			return `Unknown harness '${harnessChoice}'. Allowed: ${CODING_HARNESS_IDS.join(", ")}.`;
-		}
-
-		const performerChoice = harness === undefined
-			? await selectOne(flow, "Choose a performer override.", SPAWN_PERFORMER_OPTIONS, SPAWN_AUTO_VALUE)
-			: SPAWN_AUTO_VALUE;
-		if (performerChoice === undefined) return undefined;
-		const performer = isSpawnAutoValue(performerChoice) ? undefined : parsePerformer(performerChoice);
-		if (!isSpawnAutoValue(performerChoice) && performer === undefined) {
-			return `Unknown performer '${performerChoice}'. Allowed: ${PERFORMERS.join(", ")}.`;
 		}
 
 		const cwd = await flow.readText({
@@ -7995,7 +7665,6 @@ async function promptSpawnWorkerFromFace(flow: SetupFlow | undefined): Promise<F
 			slug: slug.trim(),
 			task: task.trim(),
 			harness,
-			performer,
 			cwd: normalizedSpawnCwd(cwd),
 		};
 		return request;
@@ -8007,8 +7676,8 @@ async function promptSpawnWorkerFromFace(flow: SetupFlow | undefined): Promise<F
 function formatSpawnWorkerConfig(config: ClankyConfig): string {
 	return [
 		"Spawn worker:",
-		`default harness: ${formatCodingHarnessSummary(config)}`,
-		`allowed: ${formatAllowedHarnesses(config)}`,
+		"harness: choose explicitly for this worker",
+		`allowed harnesses: ${formatAllowedHarnesses(config)}`,
 		`default cwd: ${displayHomePath(process.cwd())}`,
 	].join("\n");
 }
@@ -8019,10 +7688,7 @@ function spawnHarnessOptions(config: ClankyConfig): readonly MenuOption[] {
 		const harness = parseCodingHarnessId(option.value);
 		return harness !== undefined && allowed.includes(harness);
 	});
-	return [
-		{ value: SPAWN_AUTO_VALUE, label: "auto", hint: "use /harness fallback and allowlist" },
-		...explicit,
-	];
+	return explicit;
 }
 
 function validateSpawnSlugText(value: string): string | undefined {
@@ -8048,11 +7714,6 @@ function normalizedSpawnCwd(value: string): string | undefined {
 function normalizedOptionalText(value: string | undefined): string | undefined {
 	const trimmed = value?.trim();
 	return trimmed === undefined || trimmed.length === 0 ? undefined : trimmed;
-}
-
-function isSpawnAutoValue(value: string): boolean {
-	const normalized = value.trim().toLowerCase();
-	return normalized === SPAWN_AUTO_VALUE || normalized === "default";
 }
 
 function formatBrainHealthSummary(health: BrainHealthState): string {
@@ -9398,128 +9059,6 @@ function ownedServerExitMessage(child: ChildProcess): string {
 		: `Eve server exited before becoming healthy (${status}). Recent server output:\n${output}`;
 }
 
-function parseProvider(value: string | undefined): ClankyConfig["provider"] | undefined {
-	return value === "codex" || value === "claude" || value === "local" || value === "xai" || value === "gemini" ? value : undefined;
-}
-
-function parseSubscriptionProvider(value: string | undefined): SubscriptionProvider | undefined {
-	return value === "codex" || value === "claude" ? value : undefined;
-}
-
-function isEffortLevel(value: string): value is (typeof EFFORT_LEVELS)[number] {
-	return EFFORT_LEVELS.includes(value as (typeof EFFORT_LEVELS)[number]);
-}
-
-function isLocalEffortLevel(value: string): value is (typeof LOCAL_EFFORT_LEVELS)[number] {
-	return LOCAL_EFFORT_LEVELS.includes(value as (typeof LOCAL_EFFORT_LEVELS)[number]);
-}
-
-function parseIntegrationRole(value: string | undefined): IntegrationRole | undefined {
-	if (value === undefined) return undefined;
-	const normalized = normalizeIntegrationToken(value);
-	return INTEGRATION_ROLES.find((role) => normalizeIntegrationToken(role.key) === normalized || normalizeIntegrationToken(role.label) === normalized)
-		?.key;
-}
-
-function parseIntegrationBinding(value: string, available: readonly string[]): string | undefined | "invalid" {
-	if (value === "unset" || value === "none" || value === "off") return undefined;
-	return available.includes(value) ? value : "invalid";
-}
-
-function normalizeIntegrationToken(value: string): string {
-	return normalizeCommandToken(value);
-}
-
-function normalizeCommandToken(value: string): string {
-	return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
-}
-
-function integrationSavedMessage(role: IntegrationRole, binding: string | undefined): string {
-	return `${roleLabel(role)} ${binding === undefined ? "unset" : `bound to ${binding}`}. New turns will use the updated role binding.`;
-}
-
-function formatIntegrationTable(bindings: IntegrationRoleBindings, available: readonly string[]): string {
-	const roleWidth = Math.max(...INTEGRATION_ROLES.map((role) => role.label.length), "role".length);
-	const bindingWidth = Math.max(
-		"binding".length,
-		...INTEGRATION_ROLES.map((role) => (bindings[role.key] ?? "(unset)").length),
-	);
-	const lines = [
-		`${"role".padEnd(roleWidth)}  ${"binding".padEnd(bindingWidth)}`,
-		`${"-".repeat(roleWidth)}  ${"-".repeat(bindingWidth)}`,
-		...INTEGRATION_ROLES.map((role) => `${role.label.padEnd(roleWidth)}  ${(bindings[role.key] ?? "(unset)").padEnd(bindingWidth)}`),
-		"",
-		`available connections: ${formatAvailableConnections(available)}`,
-	];
-	return lines.join("\n");
-}
-
-function formatIntegrationSummary(bindings: IntegrationRoleBindings, available: readonly string[]): string {
-	const bound = INTEGRATION_ROLES.map((role) => `${role.label}=${bindings[role.key] ?? "unset"}`).join(", ");
-	return `${bound}; available=${formatAvailableConnections(available)}`;
-}
-
-function formatAvailableConnections(available: readonly string[]): string {
-	return available.length === 0 ? "(none)" : available.join(", ");
-}
-
-function formatBrowserBridgeStatus(status: Record<string, unknown>): string {
-	const paths = isRecord(status.paths) ? status.paths : {};
-	const extension = isRecord(status.extension) ? status.extension : {};
-	const nextSteps = Array.isArray(status.nextSteps) ? status.nextSteps.map(String) : [];
-	return [
-		`available: ${status.available === true ? "yes" : "no"}`,
-		`daemon running: ${status.daemonRunning === true ? "yes" : "no"}`,
-		`extension connected: ${status.extensionConnected === true ? "yes" : "no"}`,
-		`extension dir: ${typeof extension.extensionDir === "string" ? extension.extensionDir : stringOrFallback(paths.extensionDir, "(missing)")}`,
-		`config: ${formatJson(status.config)}`,
-		`state: ${formatJson(status.state)}`,
-		...(nextSteps.length === 0 ? [] : ["next steps:", ...nextSteps.map((step) => `- ${step}`)]),
-	].join("\n");
-}
-
-function formatBrowserBridgeSummary(status: Record<string, unknown>): string {
-	const nextSteps = Array.isArray(status.nextSteps) ? status.nextSteps.map(String) : [];
-	const state = isRecord(status.state) ? status.state : {};
-	const port = typeof state.port === "number" ? ` port=${state.port}` : "";
-	const next = nextSteps.length === 0 ? "" : ` next=${nextSteps.join(" | ")}`;
-	return `available=${status.available === true} daemon=${status.daemonRunning === true} extension=${status.extensionConnected === true}${port}${next}`;
-}
-
-function stringOrFallback(value: unknown, fallback: string): string {
-	return typeof value === "string" && value.length > 0 ? value : fallback;
-}
-
-function splitArgs(argument: string): string[] {
-	return argument.trim().length === 0 ? [] : argument.trim().split(/\s+/);
-}
-
-function formatJson(value: unknown): string {
-	try {
-		return JSON.stringify(value);
-	} catch {
-		return String(value);
-	}
-}
-
-function formatError(error: unknown): string {
-	return error instanceof Error ? error.stack ?? error.message : String(error);
-}
-
-function isAbortError(error: unknown): boolean {
-	if (error instanceof DOMException && error.name === "AbortError") return true;
-	if (!(error instanceof Error)) return false;
-	return error.name === "AbortError" || /abort|cancel/iu.test(error.message);
-}
-
-function truncate(text: string, maxChars: number): string {
-	if (text.length <= maxChars) return text;
-	return `${text.slice(0, maxChars)}\n... truncated ${text.length - maxChars} chars`;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 try {
 	await new Promise<void>(() => {});
