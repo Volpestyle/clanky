@@ -54,6 +54,12 @@ export function formatCompactPresencePrompt(
 }
 
 export function summarizePresencePromptForMirror(prompt: string): string | null {
+	if (prompt.startsWith("Discord voice conversation update:")) {
+		const speaker = readListValue(prompt, "speakerName");
+		const rawText = readTrailingSection(prompt, "\nNewest voice transcript:\n");
+		const text = previewText(rawText.length === 0 ? "(no speech)" : rawText, MIRROR_PREVIEW_LIMIT);
+		return speaker.length === 0 ? `Voice: ${text}` : `Voice ${speaker}: ${text}`;
+	}
 	if (!prompt.startsWith("Discord conversation update:") && !prompt.startsWith("Discord follow-up:")) return null;
 	const kind = readListValue(prompt, "kind");
 	const sender = readLineValue(prompt, "From");
@@ -61,6 +67,11 @@ export function summarizePresencePromptForMirror(prompt: string): string | null 
 	const text = previewText(rawText.length === 0 ? "(no text)" : rawText, MIRROR_PREVIEW_LIMIT);
 	const prefix = kind.length === 0 ? "Discord" : `Discord ${kind}`;
 	return sender.length === 0 ? `${prefix}: ${text}` : `${prefix} ${sender}: ${text}`;
+}
+
+function readTrailingSection(prompt: string, marker: string): string {
+	const index = prompt.lastIndexOf(marker);
+	return index === -1 ? "" : prompt.slice(index + marker.length).trim();
 }
 
 function formatDiscordPresencePrompt(

@@ -589,9 +589,11 @@ to the gateway's Discord client via `attachVoiceRuntime()` on
   interrupts playback; floor control suppresses transcripts while Clanky speaks.
 - **Outbound:** the agent's reply is rendered to PCM (internal Realtime audio or
   ElevenLabs) and sent back through ClankVox to Discord.
-- **Watchable in herdr:** a `clanky:voice-<slug>` pane mirrors the live **transcript**
-  (who said what) plus the agent's reasoning, tool calls, and spoken replies, so
-  a voice room is as inspectable on the stage as a text channel.
+- **Watchable in herdr:** a `clanky:voice-<channel>` pane mirrors the durability
+  eve session (§5.6) — the live **transcript** (who said what) plus the agent's
+  reasoning and expandable tool calls — so a voice room is as inspectable on the
+  stage as a text channel. (Distinct from the `clanky:voice-<slug>` performer
+  panes the voice `delegate` op spawns for heavy work.)
 
 Because the voice presence is the same agent on its own session, a thing said in
 VC and a thing said in chat reach the same memory and character — and neither
@@ -664,6 +666,23 @@ There are two distinct things called "subagents" here; keep them apart:
 The mirror is the bridge between the two: it gives a session-only "subagent" the
 on-stage visibility that the project's "everything worth watching is a pane" rule
 requires, without spawning a redundant process.
+
+`scripts/discord-pane-mirror.ts` is a read-only pi-tui app that reuses the face's
+`ClankyFaceRenderer` + `ClankyTranscriptViewport` (the shared seam lives in
+`agent/lib/discord/pane-mirror-view.ts`), so the mirror renders the same
+collapsible blocks the face does — reasoning, messages, subagents, and **tool
+calls expandable to their full args and output**. It is watch-only: arrow keys
+select a block, Enter/Space (or Alt+Enter) or a left-click expand/collapse,
+PageUp/Down and the mouse wheel scroll; all interaction with the session happens
+over Discord.
+
+Both presence kinds spawn the mirror through one seam,
+`spawnSessionPaneMirror(slug, sessionId)` (`agent/lib/discord/pane-mirror-spawn.ts`):
+text channels mirror their presence session as `clanky:discord-<channel>` from
+the gateway's `onPresenceSession`; voice mirrors its **durability eve session**
+(§5.3 — the silent turn that runs the same brain on each voice transcript) as
+`clanky:voice-<channel>`, spawned from `joinVoice` once that session reports its
+id. Voice transcript turns surface as `Voice <speaker>: …` inbound lines.
 
 ## 6. Decoupled swarm sessions (Clanky optional)
 

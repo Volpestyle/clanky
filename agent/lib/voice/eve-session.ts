@@ -42,6 +42,8 @@ export interface BindVoiceEveSessionOptions {
 	stats?: VoiceEveSessionStats;
 	createSession?(host: string): VoiceEveSessionHandle;
 	speakResponse?(message: string): Promise<void> | void;
+	/** Fired once with the durability session id, so the owner can mirror it in a pane. */
+	onSessionId?(sessionId: string): void;
 }
 
 export interface VoiceEveSessionBinding {
@@ -103,8 +105,10 @@ class VoiceEveSessionBridge implements VoiceEveSessionBinding {
 	private readonly stats: VoiceEveSessionStats | undefined;
 	private readonly createSession: (host: string) => VoiceEveSessionHandle;
 	private readonly speakResponse: ((message: string) => Promise<void> | void) | undefined;
+	private readonly onSessionId: ((sessionId: string) => void) | undefined;
 	private readonly listener: (transcript: OpenAiRealtimeTranscript) => void;
 	private session: VoiceEveSessionHandle | undefined;
+	private sessionIdNotified = false;
 	private queue: Promise<void> = Promise.resolve();
 	private disposed = false;
 
@@ -114,6 +118,7 @@ class VoiceEveSessionBridge implements VoiceEveSessionBinding {
 		this.stats = options.stats;
 		this.createSession = options.createSession ?? createClientSession;
 		this.speakResponse = options.speakResponse;
+		this.onSessionId = options.onSessionId;
 		this.listener = (transcript) => this.enqueueTranscript(transcript);
 		this.realtime.on("transcript", this.listener);
 	}
@@ -137,6 +142,10 @@ class VoiceEveSessionBridge implements VoiceEveSessionBinding {
 		this.session = session;
 		const response = await session.send(formatVoiceEvePrompt(transcript, this.config));
 		const result = await response.result();
+		if (!this.sessionIdNotified && result.sessionId.length > 0) {
+			this.sessionIdNotified = true;
+			this.onSessionId?.(result.sessionId);
+		}
 		if (this.stats !== undefined) this.stats.voiceEveSessionSendCount += 1;
 		const message = result.message?.trim();
 		if (message !== undefined && message.length > 0 && !isSkipResponse(message)) {

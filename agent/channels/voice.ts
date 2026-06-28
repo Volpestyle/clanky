@@ -12,6 +12,7 @@
 import { defineChannel, WS } from "eve/channels";
 import type { WebSocketMessage, WebSocketPeer } from "eve/channels";
 import { isFrontdoorAuthorized } from "../lib/frontdoor-auth.ts";
+import { spawnSessionPaneMirror } from "../lib/discord/pane-mirror-spawn.ts";
 import { resolveClankyFacePanePlacement, startHerdrAgentNearPlacement } from "../lib/herdr-placement.ts";
 import type { ClankvoxIpcClient } from "../lib/voice/clankvoxIpcClient.ts";
 import {
@@ -55,6 +56,13 @@ export async function joinVoice(guildId: string, channelId: string): Promise<voi
 		guildId,
 		channelId,
 		...runtime,
+		// The voice durability session runs the same brain (tools, memory,
+		// delegation); mirror it into a watch-only pane like text presence (§5.6).
+		onEveSessionId: (sessionId) => {
+			void spawnSessionPaneMirror(`voice-${channelId.slice(-6)}`, sessionId).catch((error: unknown) =>
+				console.error("voice pane mirror spawn failed:", error),
+			);
+		},
 		onFault: (fault) => {
 			void handleVoiceFault(started, fault);
 		},

@@ -1,3 +1,5 @@
+import type { MarkdownTheme } from "@earendil-works/pi-tui";
+
 export type ClankyFaceThemeCapabilities = {
 	readonly color: boolean;
 	readonly trueColor: boolean;
@@ -90,6 +92,26 @@ export function createClankyFaceAnsiTheme(caps: ClankyFaceThemeCapabilities): Cl
 		underline: attribute("4", "24"),
 		warning,
 		yellow: warning,
+	};
+}
+
+/** Shared markdown palette for the face transcript and the read-only session mirror. */
+export function createClankyFaceMarkdownTheme(ansi: ClankyFaceAnsiTheme): MarkdownTheme {
+	return {
+		bold: ansi.bold,
+		code: ansi.yellow,
+		codeBlock: ansi.green,
+		codeBlockBorder: ansi.dim,
+		heading: ansi.cyan,
+		hr: ansi.dim,
+		italic: ansi.italic,
+		link: ansi.blue,
+		linkUrl: ansi.dim,
+		listBullet: ansi.cyan,
+		quote: ansi.italic,
+		quoteBorder: ansi.dim,
+		strikethrough: ansi.dim,
+		underline: ansi.underline,
 	};
 }
 

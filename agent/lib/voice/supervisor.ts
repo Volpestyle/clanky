@@ -170,6 +170,8 @@ export interface VoiceSessionConfig {
 	 * and cloud resilience is out of scope (SPEC.md §2).
 	 */
 	onFault?: (fault: VoiceSessionFault) => void;
+	/** Fired once with the durability eve session id, so the owner can mirror it in a pane. */
+	onEveSessionId?: (sessionId: string) => void;
 }
 
 export interface VoiceSessionFault {
@@ -465,6 +467,7 @@ function bindVoiceSessionMirror(
 		speakResponse(message) {
 			realtime.requestTextUtterance?.(message);
 		},
+		...(config.onEveSessionId === undefined ? {} : { onSessionId: config.onEveSessionId }),
 	});
 }
 
