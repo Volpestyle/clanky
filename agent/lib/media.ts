@@ -150,7 +150,7 @@ const MAX_VISUAL_IMAGES = 12;
 const MAX_VISUAL_BYTES_PER_IMAGE = 20 * 1024 * 1024;
 const DEFAULT_VISUAL_MAX_BYTES_PER_IMAGE = MAX_VISUAL_BYTES_PER_IMAGE;
 const OLLAMA_CAPABILITIES_TIMEOUT_MS = 3_000;
-const OLLAMA_VISION_TIMEOUT_MS = 60_000;
+const OLLAMA_VISION_TIMEOUT_MS = 120_000;
 const OLLAMA_VISION_TIMEOUT_MAX_MS = 300_000;
 // Each downscaled image costs ~900 vision tokens, and reasoning VL models (e.g. qwen3-vl) emit
 // a thinking block even with think:false. A static 8k context overflows on multi-image batches —
@@ -682,7 +682,13 @@ async function generateOllamaNativeVisualInspection(
 	for (const group of groups) {
 		const label = single ? "" : `[Images ${offset + 1}-${offset + group.length}]\n`;
 		try {
-			const result = await ollamaVisionChatRequest(request.model, apiBaseURL, promptText, group, fetchImpl);
+			const result = await ollamaVisionChatRequest(
+				request.model,
+				apiBaseURL,
+				ollamaVisionPromptForGroup(promptText, group),
+				group,
+				fetchImpl,
+			);
 			texts.push(`${label}${result.text}`.trim());
 			if (result.usage !== undefined) usage = result.usage;
 		} catch (error) {
@@ -695,6 +701,19 @@ async function generateOllamaNativeVisualInspection(
 	}
 	if (texts.length === 0) throw new Error(failures.join("; ") || "Ollama vision produced no output");
 	return { text: [...texts, ...failures].join("\n\n"), ...(usage === undefined ? {} : { usage }) };
+}
+
+function ollamaVisionPromptForGroup(
+	promptText: string,
+	group: Array<{ item: VisualInspectItem; data: Buffer }>,
+): string {
+	const marker = "\n\nImages attached as binary inputs:\n";
+	const markerIndex = promptText.indexOf(marker);
+	const basePrompt = (markerIndex === -1 ? promptText : promptText.slice(0, markerIndex)).trim();
+	const groupList = group
+		.map(({ item }) => `${item.index}. ${item.filename} (${item.mediaType}, ${item.bytes} bytes)`)
+		.join("\n");
+	return `${basePrompt}\n\nImages attached as binary inputs:\n${groupList}`;
 }
 
 async function ollamaVisionChatRequest(

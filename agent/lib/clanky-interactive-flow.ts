@@ -380,7 +380,26 @@ export class InteractiveSelectPrompt implements Component, Focusable {
 }
 
 function promptHeader(title: string, message: string, width: number, statusActions: readonly string[] = []): string[] {
-	return [bold(truncateToWidth(title, width, "")), "", ...wrapPromptMessage(message, width, statusActions)];
+	return [bold(truncateToWidth(title, width, "")), "", ...wrapPromptMessage(messageWithoutDuplicateTitle(title, message), width, statusActions)];
+}
+
+function messageWithoutDuplicateTitle(title: string, message: string): string {
+	const lines = message.split("\n");
+	const firstTextIndex = lines.findIndex((line) => line.trim().length > 0);
+	if (firstTextIndex < 0) return message;
+	if (normalizePromptHeaderLine(lines[firstTextIndex] ?? "") !== normalizePromptHeaderLine(title)) return message;
+	const next = [...lines.slice(0, firstTextIndex), ...lines.slice(firstTextIndex + 1)];
+	if (next[firstTextIndex]?.trim().length === 0) next.splice(firstTextIndex, 1);
+	return next.join("\n");
+}
+
+function normalizePromptHeaderLine(text: string): string {
+	return text
+		.replace(/\x1b\[[0-9;:?]*[ -/]*[@-~]/gu, "")
+		.replace(/[.?!:]+$/u, "")
+		.replace(/\s+/gu, " ")
+		.trim()
+		.toLowerCase();
 }
 
 function wrapPromptMessage(message: string, width: number, statusActions: readonly string[] = []): string[] {

@@ -86,6 +86,21 @@ singlePrompt.handleInput("\r");
 assert(singleSelected?.[0] === "claude", "single select should submit the filtered highlighted value");
 assertFits(singlePrompt.render(50), 50, "single select");
 
+const duplicateTitlePrompt = new InteractiveSelectPrompt({
+	kind: "single",
+	message: "What exactly do you want?\n\n- select request call_123\n  What exactly do you want?",
+	onCancel: () => undefined,
+	onRender: () => undefined,
+	onSubmit: () => undefined,
+	options: selectOptions,
+	theme,
+});
+const duplicateTitleRows = duplicateTitlePrompt.render(80).map(stripAnsi);
+assert(
+	duplicateTitleRows.filter((line) => line.includes("What exactly do you want")).length === 1,
+	"select prompt should not repeat the title line in the message body",
+);
+
 let rightSelected: readonly string[] | undefined;
 const rightPrompt = new InteractiveSelectPrompt({
 	kind: "single",

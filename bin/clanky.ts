@@ -193,33 +193,44 @@ function superviseDevBrain(initial: DevBrain): DevBrainSupervisor {
 	let child = initial.child;
 	let host = initial.host;
 	let removeExitCleanup = installDevBrainExitCleanup(child);
+	let removeChildExitRestart = (): void => {};
 	let failures = 0;
 	let restarting = false;
 	let stopped = false;
 
-	const tick = async (): Promise<void> => {
+	const restartOwnedDevBrain = async (): Promise<void> => {
 		if (stopped || restarting) return;
-		const state = hasChildExited(child) ? "down" : await probeHost(host);
-		if (stopped || restarting) return;
-		if (state === "healthy") {
-			failures = 0;
-			return;
-		}
-		if (++failures < DEV_BRAIN_SUPERVISE_FAILS) return;
 		restarting = true;
 		try {
 			removeExitCleanup();
+			removeChildExitRestart();
 			if (!hasChildExited(child)) await stopDevBrain(child);
 			const next = await startDevBrain();
 			child = next.child ?? child;
 			host = next.host;
 			removeExitCleanup = installDevBrainExitCleanup(child);
+			removeChildExitRestart = installDevBrainExitRestart(child, restartOwnedDevBrain);
 			failures = 0;
 		} catch {
 			// Restart failed (e.g. health never came up); a later tick retries.
 		} finally {
 			restarting = false;
 		}
+	};
+	removeChildExitRestart = installDevBrainExitRestart(child, restartOwnedDevBrain);
+
+	const tick = async (): Promise<void> => {
+		if (stopped || restarting) return;
+		const childExited = hasChildExited(child);
+		const state = childExited ? "down" : await probeHost(host);
+		if (stopped || restarting) return;
+		if (state === "healthy") {
+			failures = 0;
+			return;
+		}
+		failures = childExited ? DEV_BRAIN_SUPERVISE_FAILS : failures + 1;
+		if (failures < DEV_BRAIN_SUPERVISE_FAILS) return;
+		await restartOwnedDevBrain();
 	};
 
 	const timer = setInterval(() => void tick(), DEV_BRAIN_SUPERVISE_POLL_MS);
@@ -230,6 +241,7 @@ function superviseDevBrain(initial: DevBrain): DevBrainSupervisor {
 			stopped = true;
 			clearInterval(timer);
 			removeExitCleanup();
+			removeChildExitRestart();
 			if (!hasChildExited(child)) await stopDevBrain(child);
 		},
 	};
@@ -598,6 +610,16 @@ function installDevBrainExitCleanup(child: ChildProcess | undefined): () => void
 	return () => {
 		process.off("beforeExit", cleanup);
 		process.off("exit", cleanup);
+	};
+}
+
+function installDevBrainExitRestart(child: ChildProcess, restart: () => Promise<void>): () => void {
+	const onExit = (): void => {
+		void restart();
+	};
+	child.once("exit", onExit);
+	return () => {
+		child.off("exit", onExit);
 	};
 }
 

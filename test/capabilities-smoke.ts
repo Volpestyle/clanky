@@ -794,6 +794,49 @@ try {
 	assert(localVisionCalls.includes("http://127.0.0.1:11434/api/show"), "media_inspect did not probe Ollama capabilities");
 	assert(localVisionCalls.includes("http://127.0.0.1:11434/api/chat"), "media_inspect did not call native Ollama chat");
 
+	const chunkedVisionPrompts: string[] = [];
+	const chunkedVisionImageCounts: number[] = [];
+	let chunkedVisionChatCalls = 0;
+	const chunkedVision = await inspectVisualMedia(
+		{ paths: Array.from({ length: 5 }, () => downloadedPathForPrompt), prompt: "Describe chunked visuals." },
+		{
+			env: {
+				CLANKY_MODEL_PROVIDER: "local",
+				CLANKY_LOCAL_MODEL: "test-local-vision",
+				CLANKY_LOCAL_BASE_URL: "http://127.0.0.1:11434/v1",
+			},
+			fetchImpl: async (input, init) => {
+				const href = String(input);
+				const body = JSON.parse(String(init?.body ?? "{}")) as {
+					model?: string;
+					messages?: Array<{
+						content?: string;
+						images?: string[];
+					}>;
+				};
+				if (href === "http://127.0.0.1:11434/api/show") return jsonResponse({ capabilities: ["completion", "vision"] });
+				if (href === "http://127.0.0.1:11434/api/chat") {
+					chunkedVisionChatCalls += 1;
+					const message = body.messages?.[0];
+					assert(body.model === "test-local-vision", "chunked media_inspect sent images to the wrong Ollama model");
+					assert(message?.content !== undefined, "chunked media_inspect omitted the prompt");
+					chunkedVisionPrompts.push(message.content);
+					chunkedVisionImageCounts.push(message.images?.length ?? 0);
+					return jsonResponse({ message: { role: "assistant", content: `Chunk ${chunkedVisionChatCalls} saw its images.` } });
+				}
+				throw new Error(`unexpected chunked Ollama URL ${href}`);
+			},
+		},
+	);
+	assert(chunkedVision.text.includes("[Images 1-4]"), "chunked media_inspect did not label the first image group");
+	assert(chunkedVision.text.includes("[Images 5-5]"), "chunked media_inspect did not label the second image group");
+	assert(chunkedVisionImageCounts[0] === 4, "first chunk should include four images");
+	assert(chunkedVisionImageCounts[1] === 1, "second chunk should include one image");
+	assert(chunkedVisionPrompts[0]?.includes("4. ") === true, "first chunk prompt omitted its fourth image");
+	assert(chunkedVisionPrompts[0]?.includes("5. ") === false, "first chunk prompt leaked the next image index");
+	assert(chunkedVisionPrompts[1]?.includes("5. ") === true, "second chunk prompt omitted its image index");
+	assert(chunkedVisionPrompts[1]?.includes("1. ") === false, "second chunk prompt leaked the first image index");
+
 	// Provider-independent vision override: a hosted codex brain, but image inspection routed to a
 	// local Ollama model via CLANKY_VISION_*. The override is trusted, so it skips the /api/show probe.
 	const overrideVisionCalls: string[] = [];
