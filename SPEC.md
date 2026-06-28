@@ -67,7 +67,7 @@ flowchart TB
       w2["pane: codex<br/>delegated worker"]
     end
     eve["eve service — the CONDUCTOR<br/>Discord gateway · channels · schedules · sessions · memory"]
-    relay["eve relay channel<br/>WS over herdr socket"]
+    relay["eve relay channel<br/>WS over Herdr sockets"]
   end
 
   phone["Clanky iOS — the WINDOW"]
@@ -77,7 +77,7 @@ flowchart TB
   eve -->|spawns visible work| herdr
   eve --- face
   eve --> relay
-  relay -->|reads herdr.sock| herdr
+  relay -->|Herdr local sockets| herdr
   phone <-->|tailnet| relay
 
   face -. swarm CLI .- w1
@@ -261,10 +261,11 @@ protocol.
 ### 4.4 The window — iOS app, SSH lifecycle + eve relay channel
 
 Remote access must not require a herdr fork. Interaction goes through a **custom
-eve channel** (`defineChannel`, raw `WS` route) that relays herdr's local unix
-socket to the network. But the relay lives *inside* the eve brain, so it cannot
-be what *starts* the brain — that bootstrap rides the one channel that is always
-present on the Mac: **SSH**.
+eve channel** (`defineChannel`, raw `WS` route) that relays Herdr's local unix
+sockets to the network: the API socket for normal pane/workspace ops, and the
+client terminal socket for durable Native terminal attach. But the relay lives
+*inside* the eve brain, so it cannot be what *starts* the brain — that bootstrap
+rides the one channel that is always present on the Mac: **SSH**.
 
 ```mermaid
 flowchart LR
@@ -272,13 +273,13 @@ flowchart LR
   subgraph mac["Mac mini"]
     sshd["sshd (always-on)<br/>runs scripts/clanky-up.ts"]
     relay["eve relay channel (WS)<br/>auth: bearer token"]
-    sock["herdr.sock<br/>(local unix socket)"]
+    sock["Herdr local sockets<br/>herdr.sock API + herdr-client.sock terminal attach"]
     herdr["herdr panes"]
   end
   phone <-->|tailnet, ssh key: ensure session + brain| sshd
   phone <-->|tailnet, bearer token: chat + pane steer| relay
   sshd -->|herdr agent start| herdr
-  relay <-->|read scrollback / inject input / stream status| sock
+  relay <-->|read scrollback / inject input / stream status / terminal attach| sock
   sock --- herdr
 ```
 
@@ -694,8 +695,8 @@ attach to whichever session you point him at. You may run multiple sessions.
 3. The **Clanky transcript layer** — local append-only transcripts for
    Clanky-spawned workers, exposed through `clanky transcript` and transcript
    aware `herdr_read`.
-4. The **eve relay channel** — raw WS route bridging the iOS app to `herdr.sock`
-   (4.4).
+4. The **eve relay channel** — raw WS route bridging the iOS app to Herdr's local
+   API and terminal attach sockets (4.4).
 5. iOS `Services/` repointed at the relay contract.
 6. The **presence self-report** addition to the `herdr` skill (vanilla,
    upstreamable).
@@ -713,7 +714,7 @@ clanky/
       discord.ts             # Discord HTTP Interactions (slash commands)
       discord-gateway.ts     # free-will presence boot seam (Gateway WS owner)
       voice.ts               # voice channel (ClankVox-backed) + join/leave seam
-      relay.ts               # raw WS relay to herdr.sock (the iOS window)
+      relay.ts               # raw WS relay to Herdr sockets (the iOS window)
     connections/             # curated third-party servers (Linear, Figma): MCP/OpenAPI + brokered auth
     tools/                   # typed first-party tools (spawn seam, browser-bridge, web, discord, media, dynamic-MCP bridge)
     schedules/               # cron jobs

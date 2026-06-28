@@ -60,7 +60,7 @@ flowchart TB
   eve -->|spawns visible work| herdr
   eve <-->|eve/client| face
   eve --> relay
-  relay -->|reads herdr.sock| herdr
+  relay -->|Herdr local sockets| herdr
   phone <-->|tailnet| relay
 ```
 
