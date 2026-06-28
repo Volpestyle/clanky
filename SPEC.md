@@ -156,7 +156,9 @@ the default eve HTTP channel (`POST /eve/v1/session`,
 `POST /eve/v1/session/:id`, `GET /eve/v1/session/:id/stream`), and renders the
 streamed events (`message.appended`, `reasoning.completed`, `actions.requested`,
 `action.result`, `turn.failed`, …) closely mirroring `eve dev`'s look — gutter
-glyphs, an `expo-agent-spinners`-backed phase-aware working spinner, and a
+glyphs, an `expo-agent-spinners`-backed phase-aware working spinner with width
+presets, curated same-width cycles, exact spinner picks, custom cycles, and a
+configurable cycle rate, and a
 persistent bottom status line (model · effort · tokens · endpoint). On top it adds Clanky-specific slash
 commands `eve dev` can't. The live command list is the face's `/help` output and
 the shared `COMMANDS` registry in `scripts/clanky.ts`; this spec does not

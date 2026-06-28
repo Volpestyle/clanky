@@ -83,6 +83,10 @@ import { createClankyFaceAnsiTheme } from "../agent/lib/clanky-face-theme.ts";
 import {
 	AGENT_SPINNER_NAMES,
 	AGENT_SPINNER_CYCLE_NAME,
+	DEFAULT_AGENT_SPINNER_CYCLE_DWELL_MS,
+	AGENT_SPINNER_PRESET_NAMES,
+	AGENT_SPINNER_PRESETS,
+	normalizeAgentSpinnerCycleDwellMs,
 	normalizeAgentSpinnerSelection,
 	resolveAgentSpinner,
 	type AgentSpinnerSelection,
@@ -330,6 +334,7 @@ const CLANKY_FACE_HERDR_WORKSPACE_ID_ENV = "CLANKY_FACE_HERDR_WORKSPACE_ID";
 const CLANKY_TUI_INPUT_PLACEMENT_ENV = "CLANKY_TUI_INPUT_PLACEMENT";
 const CLANKY_TUI_STATUS_PLACEMENT_ENV = "CLANKY_TUI_STATUS_PLACEMENT";
 const CLANKY_TUI_SPINNER_ENV = "CLANKY_TUI_SPINNER";
+const CLANKY_TUI_SPINNER_RATE_MS_ENV = "CLANKY_TUI_SPINNER_RATE_MS";
 const CLANKY_STARTUP_MODEL_FALLBACK_PROVIDER_ENV = "CLANKY_STARTUP_MODEL_FALLBACK_PROVIDER";
 const CLANKY_STARTUP_MODEL_FALLBACK_ENV_NAMES_ENV = "CLANKY_STARTUP_MODEL_FALLBACK_ENV_NAMES";
 const SPAWN_USAGE =
@@ -409,6 +414,28 @@ function resolveDurationMs(value: string | undefined, fallback: number, envName:
 		throw new Error(`${envName} must be a positive integer number of milliseconds; got ${JSON.stringify(value)}`);
 	}
 	return parsed;
+}
+
+function parseAgentSpinnerCycleRateMs(value: string | undefined): number | undefined {
+	const raw = value?.trim().toLowerCase();
+	if (raw === undefined || raw.length === 0) return undefined;
+	if (raw === "fast") return 400;
+	if (raw === "normal" || raw === "default") return DEFAULT_AGENT_SPINNER_CYCLE_DWELL_MS;
+	if (raw === "slow") return 1_200;
+	const milliseconds = raw.endsWith("ms") ? Number.parseInt(raw.slice(0, -2), 10) : undefined;
+	if (milliseconds !== undefined && Number.isInteger(milliseconds) && `${milliseconds}ms` === raw) return validAgentSpinnerCycleRateMs(milliseconds);
+	if (raw.endsWith("s")) {
+		const seconds = Number.parseFloat(raw.slice(0, -1));
+		if (Number.isFinite(seconds) && seconds > 0 && `${seconds}s` === raw) return validAgentSpinnerCycleRateMs(Math.round(seconds * 1_000));
+	}
+	const parsed = Number.parseInt(raw, 10);
+	if (Number.isInteger(parsed) && String(parsed) === raw) return validAgentSpinnerCycleRateMs(parsed);
+	return undefined;
+}
+
+function validAgentSpinnerCycleRateMs(value: number): number | undefined {
+	const normalized = normalizeAgentSpinnerCycleDwellMs(value);
+	return normalized === value ? value : undefined;
 }
 
 function parseTurnTraceMode(value: string | undefined): TurnTraceMode | undefined {
@@ -668,15 +695,14 @@ let uiReady = false;
 let turnTraceMode = parseTurnTraceMode(process.env.CLANKY_TURN_TRACE) ?? DEFAULT_TURN_TRACE_MODE;
 let headerVisible = parseBooleanFlag(process.env.CLANKY_HEADER) ?? true;
 let layoutSettings: LayoutSettings = layoutSettingsFromEnv(process.env);
-let agentSpinner: ResolvedAgentSpinner = resolveAgentSpinner(process.env[CLANKY_TUI_SPINNER_ENV], { unicode: faceCapabilities.unicode });
+let agentSpinnerCycleRateMs = parseAgentSpinnerCycleRateMs(process.env[CLANKY_TUI_SPINNER_RATE_MS_ENV]) ?? DEFAULT_AGENT_SPINNER_CYCLE_DWELL_MS;
+let agentSpinner: ResolvedAgentSpinner = resolveAgentSpinner(process.env[CLANKY_TUI_SPINNER_ENV], { unicode: faceCapabilities.unicode, cycleDwellMs: agentSpinnerCycleRateMs });
 let runningTurn: Promise<void> | undefined;
 let isResponding = false;
 let activeTurn: ActivePromptTurn | undefined;
 let shutdownStarted = false;
 const tuiLedger = new TuiLedger();
 let activeLoader: Loader | undefined;
-let statusSpinnerFrameIndex = 0;
-let statusSpinnerInterval: ReturnType<typeof setInterval> | undefined;
 let commandPaletteOverlay: OverlayHandle | undefined;
 let commandTypeaheadState: ClankyCommandTypeaheadState | undefined;
 let currentStatusLabel = "starting";
@@ -707,7 +733,8 @@ let session: ClientSession = client.session();
 const faceEnv = await readFaceEnv();
 headerVisible = parseBooleanFlag(faceEnv.CLANKY_HEADER) ?? headerVisible;
 layoutSettings = layoutSettingsFromEnv(faceEnv);
-agentSpinner = resolveAgentSpinner(faceEnv[CLANKY_TUI_SPINNER_ENV], { unicode: faceCapabilities.unicode });
+agentSpinnerCycleRateMs = parseAgentSpinnerCycleRateMs(faceEnv[CLANKY_TUI_SPINNER_RATE_MS_ENV]) ?? agentSpinnerCycleRateMs;
+agentSpinner = resolveAgentSpinner(faceEnv[CLANKY_TUI_SPINNER_ENV], { unicode: faceCapabilities.unicode, cycleDwellMs: agentSpinnerCycleRateMs });
 
 const tui = new TUI(new ProcessTerminal());
 tui.setClearOnShrink(true);
@@ -2008,7 +2035,6 @@ async function submitPrompt(prompt: string): Promise<void> {
 		userBlock,
 	};
 	activeTurn = turn;
-	startStatusSpinner();
 	loader.start();
 	refreshStatus("thinking");
 	tui.requestRender();
@@ -2029,7 +2055,6 @@ async function submitPrompt(prompt: string): Promise<void> {
 			insertMarkdown(`**Error**\n\n${formatError(error)}`);
 		}
 	} finally {
-		stopStatusSpinner();
 		loader.stop();
 		loaderBlock.remove();
 		if (activeLoader === loader) activeLoader = undefined;
@@ -2465,30 +2490,9 @@ function refreshStatusView(): void {
 	tui.requestRender();
 }
 
-function startStatusSpinner(): void {
-	stopStatusSpinner();
-	statusSpinnerFrameIndex = 0;
-	if (agentSpinner.frames.length <= 1) return;
-	statusSpinnerInterval = setInterval(() => {
-		statusSpinnerFrameIndex = (statusSpinnerFrameIndex + 1) % agentSpinner.frames.length;
-		refreshStatusView();
-	}, agentSpinner.intervalMs);
-}
-
-function stopStatusSpinner(): void {
-	if (statusSpinnerInterval !== undefined) {
-		clearInterval(statusSpinnerInterval);
-		statusSpinnerInterval = undefined;
-	}
-	statusSpinnerFrameIndex = 0;
-}
-
-function restartStatusSpinner(): void {
-	if (isResponding) startStatusSpinner();
-}
-
 function currentAgentSpinnerFrame(): string {
-	return agentSpinner.frames[statusSpinnerFrameIndex % agentSpinner.frames.length] ?? "";
+	const index = Math.floor(Date.now() / agentSpinner.intervalMs) % agentSpinner.frames.length;
+	return agentSpinner.frames[index] ?? "";
 }
 
 function refreshBannerView(): void {
@@ -2577,8 +2581,7 @@ function formatStatusText(label: string): string {
 }
 
 function formatPrimaryStatusLabel(label: string): string {
-	if (!isResponding) return ansi.dim(label);
-	return `${ansi.cyan(currentAgentSpinnerFrame())} ${ansi.dim(label)}`;
+	return ansi.dim(label);
 }
 
 function formatStatusBrand(): string {
@@ -2634,7 +2637,6 @@ async function shutdown(exitCode: number, options: ShutdownOptions = {}): Promis
 	try {
 		if (options.abortTurn === true) activeTurn?.controller.abort();
 		if (options.waitForTurn !== false && runningTurn !== undefined) await runningTurn.catch(() => undefined);
-		stopStatusSpinner();
 		stopBrainHealthMonitor();
 		stopFacePresence();
 		disableClankyMouseTracking();
@@ -5343,13 +5345,15 @@ async function configureLayout(argument: string, flow: SetupFlow | undefined): P
 		if (placement === undefined) return "Usage: /layout status <above|below>";
 		return await saveStatusPlacement(placement);
 	}
+	if (first === "spinner-rate" || first === "spinner-cycle-rate" || first === "rate") return await configureAgentSpinnerCycleRate(args[1]);
 	if (first === "spinner" || first === "spinners" || first === "loader") {
-		const spinner = normalizeAgentSpinnerSelection(args[1]);
+		if (args[1] === "rate" || args[1] === "cycle-rate" || args[1] === "speed") return await configureAgentSpinnerCycleRate(args[2]);
+		const spinner = parseLayoutSpinnerSelection(args.slice(1));
 		if (spinner === undefined) return formatAgentSpinnerUsage(args[1]);
 		return await saveAgentSpinner(spinner);
 	}
 	if (first === "header" || first === "banner") return await configureHeader(args.slice(1).join(" "));
-	return `Unknown layout setting "${first}". Use /layout status, /layout input top|bottom, /layout status above|below, /layout spinner <name>, or /layout header on|off.`;
+	return `Unknown layout setting "${first}". Use /layout status, /layout input top|bottom, /layout status above|below, /layout spinner <name>, /layout spinner rate <ms>, or /layout header on|off.`;
 }
 
 async function configureLayoutInteractive(flow: SetupFlow): Promise<string> {
@@ -5373,6 +5377,7 @@ async function configureLayoutInteractive(flow: SetupFlow): Promise<string> {
 					const selected = normalizeAgentSpinnerSelection(await selectOne(flow, "Choose the thinking spinner.", agentSpinnerOptions(), agentSpinner.name, true, agentSpinner.name));
 					return selected === undefined ? undefined : await saveAgentSpinner(selected);
 				}
+				if (setting === "spinner-rate") return await configureAgentSpinnerCycleRateInteractive(flow);
 				if (setting === "header") {
 					const current = headerVisible ? "on" : "off";
 					const selected = parseBooleanFlag(await selectOne(flow, "Show the sticky header.", LAYOUT_HEADER_OPTIONS, current, true, current));
@@ -5385,6 +5390,15 @@ async function configureLayoutInteractive(flow: SetupFlow): Promise<string> {
 	} finally {
 		flow.end({ preserveDiagnostics: false });
 	}
+}
+
+function parseLayoutSpinnerSelection(args: readonly string[]): AgentSpinnerSelection | undefined {
+	const first = args[0];
+	if (first === "custom") return normalizeAgentSpinnerSelection(`custom:${args.slice(1).join(",")}`);
+	if (first === "cycle" && args.length > 1) return normalizeAgentSpinnerSelection(`custom:${args.slice(1).join(",")}`);
+	if (first === "preset") return normalizeAgentSpinnerSelection(args[1]);
+	if (args.length > 1) return normalizeAgentSpinnerSelection(`custom:${args.join(",")}`);
+	return normalizeAgentSpinnerSelection(first);
 }
 
 async function configureHeader(argument: string): Promise<string> {
@@ -5429,34 +5443,88 @@ async function saveStatusPlacement(placement: StatusPlacement): Promise<string> 
 }
 
 async function saveAgentSpinner(name: AgentSpinnerSelection): Promise<string> {
-	agentSpinner = resolveAgentSpinner(name, { unicode: faceCapabilities.unicode });
+	agentSpinner = resolveAgentSpinner(name, { unicode: faceCapabilities.unicode, cycleDwellMs: agentSpinnerCycleRateMs });
 	await writeEnv({ [CLANKY_TUI_SPINNER_ENV]: agentSpinner.name });
 	activeLoader?.setIndicator(loaderIndicatorFor(agentSpinner));
-	restartStatusSpinner();
+	refreshStatusView();
+	return formatAgentSpinnerStatus();
+}
+
+async function configureAgentSpinnerCycleRate(value: string | undefined): Promise<string> {
+	const normalized = value?.trim().toLowerCase();
+	if (normalized === undefined || normalized.length === 0 || normalized === "status" || normalized === "show") return formatAgentSpinnerCycleRateStatus();
+	const next = parseAgentSpinnerCycleRateMs(value);
+	if (next === undefined) return formatAgentSpinnerCycleRateUsage(value);
+	return await saveAgentSpinnerCycleRate(next);
+}
+
+async function configureAgentSpinnerCycleRateInteractive(flow: SetupFlow): Promise<string | undefined> {
+	const selected = await flow.readText({
+		allowBack: true,
+		defaultValue: `${agentSpinnerCycleRateMs}`,
+		message: "Set spinner cycle rate in ms per style.",
+		placeholder: "fast, normal, slow, 400, 400ms, or 1.2s",
+		validate: (value) => parseAgentSpinnerCycleRateMs(value) === undefined ? formatAgentSpinnerCycleRateUsage(value) : undefined,
+	});
+	if (selected === undefined) return undefined;
+	const next = parseAgentSpinnerCycleRateMs(selected);
+	return next === undefined ? formatAgentSpinnerCycleRateUsage(selected) : await saveAgentSpinnerCycleRate(next);
+}
+
+async function saveAgentSpinnerCycleRate(next: number): Promise<string> {
+	agentSpinnerCycleRateMs = next;
+	agentSpinner = resolveAgentSpinner(agentSpinner.name, { unicode: faceCapabilities.unicode, cycleDwellMs: agentSpinnerCycleRateMs });
+	await writeEnv({ [CLANKY_TUI_SPINNER_RATE_MS_ENV]: String(agentSpinnerCycleRateMs) });
+	activeLoader?.setIndicator(loaderIndicatorFor(agentSpinner));
 	refreshStatusView();
 	return formatAgentSpinnerStatus();
 }
 
 function agentSpinnerOptions(): readonly MenuOption[] {
-	return [AGENT_SPINNER_CYCLE_NAME, ...AGENT_SPINNER_NAMES].map((name) => ({
+	return [AGENT_SPINNER_CYCLE_NAME, ...AGENT_SPINNER_PRESET_NAMES, ...AGENT_SPINNER_NAMES].map((name) => ({
 		value: name,
-		label: name,
-		hint: name === agentSpinner.name ? "active" : name === AGENT_SPINNER_CYCLE_NAME ? "rotate through all" : undefined,
+		label: formatAgentSpinnerOptionLabel(name),
+		hint: name === agentSpinner.name ? "active" : agentSpinnerOptionHint(name),
 	}));
+}
+
+function formatAgentSpinnerOptionLabel(name: string): string {
+	if (name.startsWith("width-")) return `width: ${name.replace(/^width-/u, "")}`;
+	return name;
+}
+
+function agentSpinnerOptionHint(name: string): string | undefined {
+	if (name === AGENT_SPINNER_CYCLE_NAME) return "rotate through all";
+	if (name in AGENT_SPINNER_PRESETS) return `cycle ${AGENT_SPINNER_PRESETS[name as keyof typeof AGENT_SPINNER_PRESETS].length} same-width spinners`;
+	return undefined;
 }
 
 function formatAgentSpinnerStatus(): string {
 	return [
 		statusTitle("Spinner"),
 		statusLine("active", agentSpinner.name, "active"),
+		statusLine("cycle rate", `${agentSpinnerCycleRateMs}ms/style`, "active"),
 		statusLine("source", "expo-agent-spinners", "muted"),
-		ansi.dim(`Usage: /layout spinner <name>. Available: ${[AGENT_SPINNER_CYCLE_NAME, ...AGENT_SPINNER_NAMES].join(", ")}`),
+		ansi.dim(`Usage: /layout spinner <name|preset|custom names...>; /layout spinner rate <fast|normal|slow|ms>. Custom: /layout spinner custom dots dots2 dots9. Available: ${agentSpinnerAvailableValues().join(", ")}`),
 	].join("\n");
 }
 
+function formatAgentSpinnerCycleRateStatus(): string {
+	return `Spinner cycle rate: ${agentSpinnerCycleRateMs}ms per style. Use /layout spinner rate fast|normal|slow|<ms>.`;
+}
+
+function formatAgentSpinnerCycleRateUsage(value: string | undefined): string {
+	const prefix = value === undefined ? "Usage: /layout spinner rate <fast|normal|slow|ms>." : `Unknown spinner cycle rate "${value}".`;
+	return `${prefix} Use a positive millisecond value, e.g. 40, 800ms, or 12s.`;
+}
+
 function formatAgentSpinnerUsage(value: string | undefined): string {
-	const prefix = value === undefined ? "Usage: /layout spinner <name>." : `Unknown spinner "${value}".`;
-	return `${prefix} Available: ${[AGENT_SPINNER_CYCLE_NAME, ...AGENT_SPINNER_NAMES].join(", ")}`;
+	const prefix = value === undefined ? "Usage: /layout spinner <name|preset|custom names...>." : `Unknown spinner "${value}".`;
+	return `${prefix} Use width-1, micro, one spinner name, or custom dots dots2 dots9. Available: ${agentSpinnerAvailableValues().join(", ")}`;
+}
+
+function agentSpinnerAvailableValues(): readonly string[] {
+	return [AGENT_SPINNER_CYCLE_NAME, ...AGENT_SPINNER_PRESET_NAMES, ...AGENT_SPINNER_NAMES];
 }
 
 function loaderIndicatorFor(spinner: ResolvedAgentSpinner): { frames: string[]; intervalMs: number } {
@@ -5474,9 +5542,10 @@ function formatLayoutStatus(): string {
 		statusLine("input", layoutSettings.inputPlacement, "active"),
 		statusLine("status", statusPlacement, "active"),
 		statusLine("spinner", agentSpinner.name, "active"),
+		statusLine("spinner rate", `${agentSpinnerCycleRateMs}ms/style`, "active"),
 		statusLine("typeahead", typeaheadPlacement, "muted"),
 		statusLine("header", headerVisible ? "on" : "off", headerVisible ? "ok" : "muted"),
-		ansi.dim("Usage: /layout [status|input top|input bottom|status above|status below|spinner <name>|header on|header off]"),
+		ansi.dim("Usage: /layout [status|input top|bottom|status above|below|spinner <name|preset|custom names...>|spinner rate <ms>|header on|off]"),
 	].join("\n");
 }
 

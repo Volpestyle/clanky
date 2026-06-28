@@ -320,6 +320,7 @@ export const LAYOUT_OPTIONS: readonly MenuOption[] = [
 	{ value: "input", label: "input placement", hint: "top or bottom" },
 	{ value: "status", label: "status placement", hint: "above or below input" },
 	{ value: "spinner", label: "thinking spinner", hint: "expo-agent-spinners frames" },
+	{ value: "spinner-rate", label: "spinner rate", hint: "ms per spinner style" },
 	{ value: "header", label: "header", hint: "show or hide the sticky header" },
 ];
 export const LAYOUT_INPUT_OPTIONS: readonly MenuOption[] = [
