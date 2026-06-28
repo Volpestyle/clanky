@@ -255,7 +255,7 @@ export async function listHerdrAgents(): Promise<HerdrAgentInfo[]> {
 export interface SpawnClankyWorkerInput {
 	slug: string;
 	task: string;
-	harness?: CodingHarnessId;
+	harness: CodingHarnessId;
 	performer?: Performer;
 	codingRuntime?: CodingRuntime;
 	cwd?: string;
@@ -310,7 +310,7 @@ export async function spawnClankyWorker(input: SpawnClankyWorkerInput): Promise<
 	const paneCwd = await resolvePaneCwd(cwd);
 	const kickoff = buildWorkerKickoff({ agent, task, cwd: paneCwd });
 	const harnessProfile = resolveCodingHarness({
-		harness: harness as CodingHarnessId | undefined,
+		harness,
 		performer,
 		command,
 		runtime: codingRuntime,
@@ -365,14 +365,13 @@ export async function spawnClankyWorker(input: SpawnClankyWorkerInput): Promise<
 export default defineTool({
 	needsApproval: never(),
 	description:
-		"Spawn an allowed coding harness/performer (clanky, claude, codex, opencode, or custom command) as a visible herdr pane named clanky:<slug> and give it a task. Omit harness/performer to let Clanky pick from the allowed set. The /harness TUI command controls the allowlist; direct /harness <id> commands configure preferred fallback and default-vs-Ollama worker launch models. Load clanky-herdr-operator before spawn/fan-out work. Spawned workers receive only the Herdr worker coordination skill; Clanky's coding skills are available only when the runtime is clanky.",
+		"Spawn an explicit allowed coding harness/performer (clanky, claude, codex, opencode, or custom command) as a visible herdr pane named clanky:<slug> and give it a task. The /harness TUI command controls the allowlist and default-vs-Ollama worker launch models. Load clanky-herdr-operator before spawn/fan-out work. Spawned workers receive only the Herdr worker coordination skill; Clanky's coding skills are available only when the runtime is clanky.",
 	inputSchema: z.object({
 		slug: z.string().describe("kebab-case worker name; the pane is clanky:<slug>"),
 		task: z.string().describe("the kickoff brief the performer starts with"),
 		harness: z
 			.enum(CODING_HARNESS_IDS)
-			.optional()
-			.describe("allowed coding harness profile to run (clanky, claude, codex, opencode, custom); omit to use automatic selection from the allowed set"),
+			.describe("allowed coding harness profile to run (clanky, claude, codex, opencode, custom); choose explicitly for every spawn"),
 		performer: z
 			.enum(PERFORMERS)
 			.optional()
@@ -398,7 +397,7 @@ export default defineTool({
 		return await spawnClankyWorker({
 			slug: input.slug,
 			task: input.task,
-			harness: input.harness as CodingHarnessId | undefined,
+			harness: input.harness,
 			performer: input.performer,
 			codingRuntime: input.codingRuntime,
 			cwd: input.cwd,

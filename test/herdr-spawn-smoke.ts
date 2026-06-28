@@ -39,7 +39,7 @@ try {
 				{
 					slug: item.slug,
 					task: item.task,
-					performer: "claude",
+					harness: "custom",
 					command: ["bash", "-lc", item.command, "bash", "{KICKOFF}"],
 				},
 				undefined as never,

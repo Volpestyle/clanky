@@ -18,7 +18,7 @@ try {
 		{
 			slug: "spawn-transcript",
 			task: "Transcript smoke task",
-			performer: "claude",
+			harness: "custom",
 			command: [
 				"bash",
 				"-lc",

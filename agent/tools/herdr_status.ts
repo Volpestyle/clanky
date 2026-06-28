@@ -26,13 +26,28 @@ export default defineTool({
 
 function codingHarnessStatus(): unknown {
 	try {
-		const current = resolveCodingHarness({});
+		const allowed = allowedCodingHarnesses();
 		return {
-			allowed: allowedCodingHarnesses(),
-			default: current.id,
-			defaultLabel: current.label,
-			defaultRuntime: current.runtime,
-			defaultPerformer: current.performer,
+			allowed,
+			profiles: allowed.map((harness) => {
+				try {
+					const profile = resolveCodingHarness({ harness });
+					return {
+						id: profile.id,
+						label: profile.label,
+						runtime: profile.runtime,
+						performer: profile.performer,
+						launcher: profile.launcher,
+						model: profile.model,
+						command: profile.command,
+					};
+				} catch (error) {
+					return {
+						id: harness,
+						error: error instanceof Error ? error.message : String(error),
+					};
+				}
+			}),
 		};
 	} catch (error) {
 		return {

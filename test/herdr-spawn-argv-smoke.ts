@@ -125,14 +125,14 @@ expectEqual({
 	command: ["ollama", "launch", "claude", "--yes", "--model", "devstral:latest", "--", "--dangerously-skip-permissions", "{KICKOFF}"],
 }, "claude Ollama harness uses the Claude Code integration");
 
-const preferredClaude = resolveCodingHarness({
+const explicitClaude = resolveCodingHarness({
+	harness: "claude",
 	env: {
-		CLANKY_CODING_HARNESS: "claude",
 		[codingHarnessLauncherEnvKey("claude")]: "ollama",
 		[codingHarnessModelEnvKey("claude")]: "devstral:latest",
 	},
 });
-expectEqual(preferredClaude.command, ollamaClaude.command, "configured preferred fallback carries launcher config");
+expectEqual(explicitClaude.command, ollamaClaude.command, "explicit claude harness carries launcher config");
 
 const performerCodex = resolveCodingHarness({
 	performer: "codex",
@@ -182,22 +182,19 @@ if (!rejectedBlankExecutable) {
 	throw new Error("blank custom executable should be rejected");
 }
 
-expectEqual(resolveCodingHarness({ env: {} }), {
-	id: "clanky",
-	label: "Clanky-managed",
-	description: "Clanky runtime pane using Clanky's configured coding skills",
-	performer: "clanky",
-	runtime: "clanky",
-}, "empty env uses clanky harness default");
+expectThrows(
+	() => resolveCodingHarness({ env: {} }),
+	"empty env without an explicit harness is rejected",
+);
 
-expectEqual(resolveCodingHarness({ env: { CLANKY_CODING_HARNESS: "codex" } }), {
+expectEqual(resolveCodingHarness({ harness: "codex", env: { CLANKY_CODING_HARNESS: "clanky" } }), {
 	id: "codex",
 	label: "Codex",
 	description: "Codex CLI pane using Codex's native coding harness",
 	performer: "codex",
 	runtime: "native",
 	launcher: "default",
-}, "codex env selects native codex harness");
+}, "explicit codex harness ignores obsolete fallback env");
 
 expectEqual(parseAllowedCodingHarnesses("clanky, codex opencode"), ["clanky", "codex", "opencode"], "allowlist parses comma and space separators");
 expectEqual(parseAllowedCodingHarnesses("all"), ["clanky", "claude", "codex", "opencode", "custom"], "allowlist all expands to every harness");
@@ -206,15 +203,9 @@ expectThrows(
 	() => resolveCodingHarness({ harness: "claude", env: { CLANKY_CODING_HARNESSES: "codex,opencode" } }),
 	"disallowed explicit harness is rejected",
 );
-expectEqual(
-	resolveCodingHarness({ env: { CLANKY_CODING_HARNESSES: "codex", CLANKY_CODING_HARNESS: "clanky" } }).id,
-	"codex",
-	"disallowed configured fallback picks the first allowed harness",
-);
-expectEqual(
-	resolveCodingHarness({ env: { CLANKY_CODING_HARNESSES: "opencode,codex" } }).id,
-	"opencode",
-	"unset fallback picks the first allowed harness when clanky is not allowed",
+expectThrows(
+	() => resolveCodingHarness({ env: { CLANKY_CODING_HARNESSES: "codex", CLANKY_CODING_HARNESS: "clanky" } }),
+	"obsolete configured fallback does not select a harness",
 );
 
 expectEqual(resolveCodingHarness({ performer: "claude", env: {} }), {
@@ -226,7 +217,7 @@ expectEqual(resolveCodingHarness({ performer: "claude", env: {} }), {
 	launcher: "default",
 }, "explicit claude performer resolves the claude harness profile");
 
-expectEqual(resolveCodingHarness({ env: { CLANKY_CODING_HARNESS: "codex", CLANKY_CODING_HARNESS_CODEX_LAUNCHER: "ollama", CLANKY_CODING_HARNESS_CODEX_MODEL: "qwen3-coder:latest", CLANKY_CODEX_OLLAMA_HOME: CODEX_OLLAMA_HOME } }), {
+expectEqual(resolveCodingHarness({ harness: "codex", env: { CLANKY_CODING_HARNESS: "clanky", CLANKY_CODING_HARNESS_CODEX_LAUNCHER: "ollama", CLANKY_CODING_HARNESS_CODEX_MODEL: "qwen3-coder:latest", CLANKY_CODEX_OLLAMA_HOME: CODEX_OLLAMA_HOME } }), {
 	id: "codex",
 	label: "Codex",
 	description: "Codex CLI pane using Codex's native coding harness",
