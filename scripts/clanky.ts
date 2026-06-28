@@ -46,7 +46,8 @@ import { applyEnvRemovals, applyEnvUpserts } from "../agent/lib/discord/env-file
 import { apnsConfigFromEnv, sendApns } from "../agent/lib/apns.ts";
 import { browserBridgeStatus } from "../agent/lib/browser-bridge.ts";
 import { buildEveDevServerEnv } from "../agent/lib/eve-dev-env.ts";
-import { startFacePresence, stopFacePresence } from "../agent/lib/face-presence.ts";
+import { startFacePresence, stopFacePresence, type FaceCommandRequest } from "../agent/lib/face-presence.ts";
+import type { ClankyMenuClientMessage, ClankyMenuServerEvent } from "../agent/lib/clanky-menu-protocol.ts";
 import { buildPairingLink, type PairingLink, renderPairingQr } from "../agent/lib/pairing.ts";
 import { listClankySkills, type ClankySkillInventoryEntry } from "../agent/lib/skill-inventory.ts";
 import { renderClankySkillsPanel } from "../agent/lib/clanky-skills-panel.ts";
@@ -56,6 +57,12 @@ import {
 	readPromptHistoryFile,
 } from "../agent/lib/tui-prompt-history.ts";
 import { InputRequestQueue } from "../agent/lib/tui-input-request-queue.ts";
+import {
+	readTuiSessionStore,
+	rememberTuiSession,
+	sessionStateId,
+	type TuiSessionEntry,
+} from "../agent/lib/tui-session-store.ts";
 import { ClankyBannerComponent, detectBannerCapabilities, type BannerFields } from "../agent/lib/clanky-banner.ts";
 import {
 	LOCAL_CONTEXT_TOKENS_ENV,
@@ -79,7 +86,7 @@ import { isPetEnabledValue } from "../agent/lib/pet.ts";
 import { resolveClankyDataPath } from "../agent/lib/paths.ts";
 import { listPushDevices, type PushDevice } from "../agent/lib/push-registry.ts";
 import { buildTuiAttachmentMessage, createDroppedPathPasteRewriter } from "../agent/lib/tui-attachments.ts";
-import { createClankyFaceAnsiTheme } from "../agent/lib/clanky-face-theme.ts";
+import { createClankyFaceAnsiTheme, createClankyFaceMarkdownTheme } from "../agent/lib/clanky-face-theme.ts";
 import {
 	AGENT_SPINNER_NAMES,
 	AGENT_SPINNER_CYCLE_NAME,
@@ -97,6 +104,7 @@ import {
 	defaultResponseForInputRequest,
 	formatContextUsage,
 	formatInputRequests,
+	statusLabelForFaceEvent,
 	type FaceBlockHandle,
 	type FaceRenderSink,
 } from "../agent/lib/clanky-face-renderer.ts";
@@ -319,6 +327,7 @@ const HOST = `http://127.0.0.1:${PORT}`;
 const CALLBACK_PROXY_PORT = resolvePort(process.env.CLANKY_EVE_CALLBACK_PROXY_PORT, 3000);
 const HEALTH_TIMEOUT_MS = resolveDurationMs(process.env.CLANKY_EVE_HEALTH_TIMEOUT_MS, 180_000, "CLANKY_EVE_HEALTH_TIMEOUT_MS");
 const SERVER_STOP_TIMEOUT_MS = resolveDurationMs(process.env.CLANKY_EVE_STOP_TIMEOUT_MS, 5_000, "CLANKY_EVE_STOP_TIMEOUT_MS");
+const INTENTIONAL_RESTART_STOP_TIMEOUT_MS = resolveDurationMs(process.env.CLANKY_EVE_RESTART_STOP_TIMEOUT_MS, 1_000, "CLANKY_EVE_RESTART_STOP_TIMEOUT_MS");
 const SERVER_KILL_TIMEOUT_MS = resolveDurationMs(process.env.CLANKY_EVE_KILL_TIMEOUT_MS, 2_000, "CLANKY_EVE_KILL_TIMEOUT_MS");
 const DEV_SERVER_RECORD_STARTUP_GRACE_MS = 15_000;
 const DEV_SERVER_UNHEALTHY_SETTLE_MS = 5_000;
@@ -369,22 +378,7 @@ const editorTheme: EditorTheme = {
 	selectList: selectListTheme,
 };
 
-const markdownTheme: MarkdownTheme = {
-	bold: ansi.bold,
-	code: ansi.yellow,
-	codeBlock: ansi.green,
-	codeBlockBorder: ansi.dim,
-	heading: ansi.cyan,
-	hr: ansi.dim,
-	italic: ansi.italic,
-	link: ansi.blue,
-	linkUrl: ansi.dim,
-	listBullet: ansi.cyan,
-	quote: ansi.italic,
-	quoteBorder: ansi.dim,
-	strikethrough: ansi.dim,
-	underline: ansi.underline,
-};
+const markdownTheme: MarkdownTheme = createClankyFaceMarkdownTheme(ansi);
 
 const commandUiTheme = {
 	bold: ansi.bold,
@@ -511,6 +505,7 @@ type ClankyExtensionCommand = {
 type NativePromptCommand =
 	| { type: "help" }
 	| { type: "new"; quiet?: boolean }
+	| { type: "resume"; argument: string }
 	| { type: "clear" }
 	| { type: "exit" };
 type ClankyPromptCommand = NativePromptCommand | ClankyExtensionCommand;
@@ -531,6 +526,8 @@ type PromptCommandOutcome = {
 	readonly message?: string;
 	readonly newSession?: boolean;
 	readonly announceNewSession?: boolean;
+	readonly resumeSession?: SessionState;
+	readonly resumeLabel?: string;
 };
 type CommandLogTone = "error" | "success";
 
@@ -547,6 +544,11 @@ type ActivePromptTurn = {
 	readonly prompt: string;
 	readonly userBlock: FaceBlockHandle;
 	promptRestoreEligible: boolean;
+};
+
+type FaceSessionPersistence = {
+	readonly label?: string;
+	readonly lastPrompt?: string;
 };
 
 type ShutdownOptions = {
@@ -729,6 +731,10 @@ const client = createAttachmentAwareClient(baseClient);
 const initialInfo = await fetchInfo();
 if (initialInfo !== undefined) updateLatestInfo(initialInfo);
 let session: ClientSession = client.session();
+let currentSessionLabel: string | undefined;
+const FACE_SESSION_STORE_PATH = resolveClankyDataPath("tui/sessions.json");
+const FACE_SESSION_STORE_LIMIT = 30;
+const FACE_SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 const faceEnv = await readFaceEnv();
 headerVisible = parseBooleanFlag(faceEnv.CLANKY_HEADER) ?? headerVisible;
@@ -880,7 +886,7 @@ uiReady = true;
 startBrainHealthMonitor();
 // Announce this face to the brain so the iOS app can show headless vs attached.
 // Reconnects across brain restarts and host changes via the getters.
-startFacePresence({ host: () => brainHost, token: resolveRelayTokenSync, pid: process.pid });
+startFacePresence({ host: () => brainHost, token: resolveRelayTokenSync, pid: process.pid, onCommandRequest: runRemoteFaceCommand });
 refreshStatus("ready");
 tui.start();
 enableClankyMouseTracking();
@@ -966,6 +972,14 @@ function buildClankyPromptCommands(): ClankyPromptCommandSpec[] {
 			description: "Start a fresh session and clear the transcript",
 			takesArgument: false,
 			build: () => ({ type: "new" }),
+		},
+		{
+			name: "resume",
+			aliases: ["r"],
+			description: "Resume a saved Clanky session",
+			argumentHint: "[list|<number|session-id>]",
+			takesArgument: true,
+			build: (argument) => ({ type: "resume", argument }),
 		},
 		{
 			name: "clear",
@@ -1993,10 +2007,19 @@ async function handleSlashPrompt(prompt: string): Promise<void> {
 		insertCommandResult(prompt, "Clanky is still responding; wait for the current turn to finish before starting a new session.", "error");
 		return;
 	}
+	if (outcome.resumeSession !== undefined && isResponding) {
+		insertCommandResult(prompt, "Clanky is still responding; wait for the current turn to finish before resuming another session.", "error");
+		return;
+	}
 	if (outcome.clearTranscript === true) {
 		transcriptViewport.clear();
 		faceRenderer.resetTurn();
 		tui.requestRender();
+	}
+	if (outcome.resumeSession !== undefined) {
+		session = client.session(outcome.resumeSession);
+		currentSessionLabel = outcome.resumeLabel;
+		faceRenderer.resetSession();
 	}
 	if (outcome.message !== undefined && outcome.message.length > 0) {
 		const tone: CommandLogTone = outcome.message.toLowerCase().includes("unknown ") ? "error" : "success";
@@ -2010,12 +2033,172 @@ async function handleSlashPrompt(prompt: string): Promise<void> {
 	}
 	if (outcome.newSession === true) {
 		session = client.session();
+		currentSessionLabel = undefined;
 		faceRenderer.resetSession();
 		if (shouldAnnounceNewSessionCommand(outcome)) {
 			insertCommandResult(prompt, "New session started.", "success");
 		}
 	}
 	if (outcome.exit === true) await shutdown(0);
+}
+
+async function runRemoteFaceCommand(request: FaceCommandRequest): Promise<void> {
+	const commandLine = request.commandLine.trim();
+	const sessionId = request.id;
+	const command = slashCommandLabel(commandLine).replace(/^\//u, "");
+	const emit = (event: ClankyMenuServerEvent): void => request.send(event);
+	const flow = createRemoteSetupFlow(sessionId, command, request);
+	const renderer: CommandRenderer = {
+		setupFlow: flow,
+		setConnectionAuthPendingCount(count: number): void {
+			emit({ type: "menu.status", sessionId, text: count > 0 ? `${count} authorization ${count === 1 ? "request" : "requests"} pending` : undefined });
+		},
+		upsertConnectionAuth(state: ConnectionAuthState): void {
+			const reason = state.reason === undefined ? "" : ` (${state.reason})`;
+			emit({ type: "menu.line", sessionId, text: `Connection authorization ${state.state}: ${state.name}${reason}`, tone: state.state === "failed" ? "error" : "info" });
+		},
+	};
+
+	emit({ type: "menu.begin", sessionId, command, title: commandLine });
+	try {
+		const parsed = parsePromptCommand(commandLine);
+		if (typeof parsed === "string") {
+			emit({ type: "menu.failed", sessionId, message: parsed });
+			return;
+		}
+		const outcome = await handleClankyCommand(parsed, renderer);
+		if (outcome.message !== undefined && outcome.message.length > 0) {
+			emit({ type: "menu.line", sessionId, text: stripAnsi(outcome.message), tone: outcome.message.toLowerCase().includes("unknown ") ? "error" : "success" });
+		}
+		if (outcome.component !== undefined) {
+			emit({ type: "menu.line", sessionId, text: renderCommandComponentText(outcome.component), tone: "success" });
+		}
+		if (outcome.newSession === true && shouldAnnounceNewSessionCommand(outcome)) {
+			emit({ type: "menu.line", sessionId, text: "New session started.", tone: "success" });
+		}
+		if (outcome.clearTranscript === true) {
+			emit({ type: "menu.line", sessionId, text: "Transcript cleared.", tone: "success" });
+		}
+		if (outcome.resumeSession !== undefined) {
+			session = client.session(outcome.resumeSession);
+			currentSessionLabel = outcome.resumeLabel;
+			faceRenderer.resetSession();
+		}
+		if (outcome.newSession === true) {
+			session = client.session();
+			currentSessionLabel = undefined;
+			faceRenderer.resetSession();
+		}
+		if (outcome.exit === true) {
+			emit({ type: "menu.failed", sessionId, message: "/exit is only available in the attached TUI face." });
+			return;
+		}
+		emit({ type: "menu.end", sessionId, message: "Done." });
+	} catch (error) {
+		emit({ type: "menu.failed", sessionId, message: formatError(error) });
+	}
+}
+
+function createRemoteSetupFlow(sessionId: string, command: string, request: FaceCommandRequest): SetupFlow {
+	let stepIndex = 0;
+	const interruptResolvers = new Set<() => void>();
+
+	const nextStepId = (): string => `step-${++stepIndex}`;
+	const waitForStep = async (stepId: string): Promise<ClankyMenuClientMessage | undefined> => {
+		for (;;) {
+			const message = await request.waitForClientMessage();
+			if (message === undefined) return undefined;
+			if (message.type === "menu.cancel") {
+				for (const resolve of interruptResolvers) resolve();
+				interruptResolvers.clear();
+				return undefined;
+			}
+			if (message.stepId === stepId) return message;
+		}
+	};
+
+	return {
+		begin(title: string): void {
+			request.send({ type: "menu.begin", sessionId, command, title });
+		},
+		end(): void {
+			request.send({ type: "menu.status", sessionId, text: undefined });
+		},
+		renderOutput(text: string): void {
+			request.send({ type: "menu.line", sessionId, text: stripAnsi(text), tone: "info" });
+		},
+		renderLine(text: string, tone: FlowLineTone = "info"): void {
+			request.send({ type: "menu.line", sessionId, text: stripAnsi(text), tone });
+		},
+		setStatus(statusText: string | undefined): void {
+			request.send({ type: "menu.status", sessionId, text: statusText });
+		},
+		async readText(options): Promise<string | undefined> {
+			const stepId = nextStepId();
+			request.send({
+				type: "menu.text",
+				sessionId,
+				stepId,
+				message: options.message,
+				...(options.placeholder === undefined ? {} : { placeholder: options.placeholder }),
+				...(options.defaultValue === undefined ? {} : { defaultValue: options.defaultValue }),
+				...(options.allowBack === undefined ? {} : { allowBack: options.allowBack }),
+			});
+			const message = await waitForStep(stepId);
+			return message?.type === "menu.respond" ? message.text : undefined;
+		},
+		async readSelect(options): Promise<string[] | undefined> {
+			const stepId = nextStepId();
+			request.send({
+				type: "menu.select",
+				sessionId,
+				stepId,
+				message: options.message,
+				kind: options.kind,
+				options: options.options.map(toRemoteMenuOption),
+				...(options.statusActions === undefined ? {} : { statusActions: options.statusActions.map(toRemoteMenuOption) }),
+				...(options.currentValues === undefined && options.currentValue === undefined ? {} : { currentValues: options.currentValues ?? (options.currentValue === undefined ? [] : [options.currentValue]) }),
+				...(options.required === undefined ? {} : { required: options.required }),
+				...(options.allowBack === undefined ? {} : { allowBack: options.allowBack }),
+			});
+			const message = await waitForStep(stepId);
+			return message?.type === "menu.respond" ? [...(message.values ?? [])] : undefined;
+		},
+		waitForInterrupt() {
+			let resolver: (() => void) | undefined;
+			const promise = new Promise<void>((resolve) => {
+				resolver = resolve;
+				interruptResolvers.add(resolve);
+			});
+			return {
+				promise,
+				dispose(): void {
+					if (resolver !== undefined) interruptResolvers.delete(resolver);
+				},
+			};
+		},
+	};
+}
+
+function toRemoteMenuOption(option: MenuOption): { value: string; label: string; hint?: string; description?: string } {
+	return {
+		value: option.value,
+		label: option.label,
+		...(option.hint === undefined ? {} : { hint: option.hint }),
+		...(option.description === undefined ? {} : { description: option.description }),
+	};
+}
+
+function renderCommandComponentText(component: Component): string {
+	try {
+		return stripAnsi(component.render(100).join("\n"));
+	} catch (error) {
+		return `Rendered command output is unavailable: ${formatError(error)}`;
+	}
+}
+
+function stripAnsi(text: string): string {
+	return text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/gu, "");
 }
 
 async function submitPrompt(prompt: string): Promise<void> {
@@ -2036,7 +2219,7 @@ async function submitPrompt(prompt: string): Promise<void> {
 	};
 	activeTurn = turn;
 	loader.start();
-	refreshStatus("thinking");
+	refreshStatus("streaming");
 	tui.requestRender();
 
 	try {
@@ -2045,7 +2228,12 @@ async function submitPrompt(prompt: string): Promise<void> {
 			clientContext === undefined
 				? { message: prompt, signal: controller.signal }
 				: { message: prompt, clientContext, signal: controller.signal };
-		await consumeTurn(session.send(sendInput), turn);
+		const persistence = {
+			label: summarizeSessionPrompt(prompt),
+			lastPrompt: prompt,
+		};
+		if (currentSessionLabel === undefined) currentSessionLabel = persistence.label;
+		await consumeTurn(session.send(sendInput), turn, persistence);
 		if (!controller.signal.aborted) {
 			const notice = faceRenderer.noticeForCompletedTurn(turnTraceMode);
 			if (notice !== undefined) insertMarkdown(`**Notice**\n\n${notice}`);
@@ -2086,22 +2274,65 @@ async function buildTuiClientContext(): Promise<string | undefined> {
 	return buildTuiContextMessage({ actions, workers });
 }
 
+function restoreContinuationFromResponse(
+	response: Awaited<ReturnType<ClientSession["send"]>>,
+	observedEvents: number,
+): void {
+	const state = session.state;
+	if (state.continuationToken !== undefined || response.continuationToken === undefined) return;
+	session = client.session({
+		...state,
+		continuationToken: response.continuationToken,
+		sessionId: state.sessionId ?? response.sessionId,
+		streamIndex: state.streamIndex > 0 ? state.streamIndex : observedEvents,
+	});
+}
+
+async function persistCurrentFaceSession(persistence: FaceSessionPersistence | undefined): Promise<void> {
+	try {
+		await rememberTuiSession(
+			FACE_SESSION_STORE_PATH,
+			{
+				label: persistence?.label ?? currentSessionLabel,
+				lastPrompt: persistence?.lastPrompt,
+				session: session.state,
+			},
+			{ limit: FACE_SESSION_STORE_LIMIT, maxAgeMs: FACE_SESSION_MAX_AGE_MS },
+		);
+	} catch (error) {
+		console.error("failed to persist Clanky face session:", error);
+	}
+}
+
+function summarizeSessionPrompt(prompt: string): string {
+	const firstLine = prompt.trim().split(/\r?\n/u)[0]?.trim() ?? "";
+	const normalized = firstLine.replace(/\s+/gu, " ");
+	if (normalized.length <= 80) return normalized.length === 0 ? "Untitled session" : normalized;
+	return `${normalized.slice(0, 77)}...`;
+}
+
 async function consumeTurn(
 	responsePromise: Promise<Awaited<ReturnType<ClientSession["send"]>>>,
 	turn?: ActivePromptTurn,
+	persistence?: FaceSessionPersistence,
 ): Promise<void> {
 	const pendingInputRequests = new InputRequestQueue();
 	const response = await responsePromise;
+	let observedEvents = 0;
+	let sessionFailed = false;
 	for await (const event of response) {
+		observedEvents += 1;
+		if (event.type === "session.failed") sessionFailed = true;
 		if (turn?.controller.signal.aborted === true) break;
 		if (turn !== undefined && eventPreventsPromptRestore(event)) turn.promptRestoreEligible = false;
 		const result = faceRenderer.renderEvent(event);
 		if (result.inputRequests.length > 0) pendingInputRequests.add(result.inputRequests);
-		refreshStatus(statusLabelForEvent(event));
+		refreshStatus(statusLabelForFaceEvent(event));
 		tui.requestRender();
-		if (result.terminal) break;
 	}
 	if (turn?.controller.signal.aborted === true) return;
+	if (!sessionFailed) restoreContinuationFromResponse(response, observedEvents);
+	await persistCurrentFaceSession(persistence);
 	const requests = pendingInputRequests.drain();
 	if (requests.length === 0) return;
 	const inputResponses = await readInputResponses(requests);
@@ -2110,7 +2341,7 @@ async function consumeTurn(
 	const followUpInput: SendTurnInput = turn === undefined
 		? { inputResponses }
 		: { inputResponses, signal: turn.controller.signal };
-	await consumeTurn(session.send(followUpInput), turn);
+	await consumeTurn(session.send(followUpInput), turn, persistence);
 }
 
 function eventPreventsPromptRestore(event: HandleMessageStreamEvent): boolean {
@@ -2204,6 +2435,8 @@ async function handleClankyCommand(command: ClankyPromptCommand, renderer: Comma
 			return { message: formatHelp() };
 		case "new":
 			return clankyNewSessionCommandOutcome({ quiet: command.quiet === true });
+		case "resume":
+			return await resumeSessionCommandOutcome(command.argument, renderer.setupFlow);
 		case "clear":
 			return { clearTranscript: true };
 		case "exit":
@@ -2212,6 +2445,124 @@ async function handleClankyCommand(command: ClankyPromptCommand, renderer: Comma
 			return await handleExtensionCommand(command, renderer);
 	}
 	return { message: "Unknown command." };
+}
+
+async function resumeSessionCommandOutcome(argument: string, flow: SetupFlow | undefined): Promise<PromptCommandOutcome> {
+	const selector = argument.trim();
+	let entries: readonly TuiSessionEntry[];
+	try {
+		entries = [...(await readTuiSessionStore(FACE_SESSION_STORE_PATH, { maxAgeMs: FACE_SESSION_MAX_AGE_MS })).entries]
+			.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+	} catch (error) {
+		return { message: `Could not read saved Clanky sessions: ${formatError(error)}` };
+	}
+	if (entries.length === 0) return { message: "No saved Clanky sessions yet." };
+	if (isResumeListSelector(selector)) return { message: formatResumeSessionList(entries) };
+
+	if (selector.length === 0) {
+		if (flow === undefined) return { message: formatResumeSessionList(entries) };
+		const selected = await selectResumeSession(flow, entries);
+		return selected === undefined ? { message: "/resume cancelled." } : resumeSessionOutcomeForEntry(selected);
+	}
+
+	const selected = findResumeSessionEntry(entries, selector);
+	return typeof selected === "string" ? { message: selected } : resumeSessionOutcomeForEntry(selected);
+}
+
+async function selectResumeSession(flow: SetupFlow, entries: readonly TuiSessionEntry[]): Promise<TuiSessionEntry | undefined> {
+	flow.begin("Resume Clanky session");
+	try {
+		const selected = await flow.readSelect({
+			kind: "single",
+			message: "Pick a saved Clanky session to resume.",
+			options: entries.map(resumeSessionOption),
+			initialValue: entries[0]?.id,
+			required: true,
+			allowBack: true,
+		});
+		const id = selected?.[0];
+		return id === undefined ? undefined : entries.find((entry) => entry.id === id);
+	} finally {
+		flow.end({ preserveDiagnostics: false });
+	}
+}
+
+function resumeSessionOutcomeForEntry(entry: TuiSessionEntry): PromptCommandOutcome {
+	const label = resumeSessionLabel(entry);
+	return {
+		resumeLabel: label,
+		resumeSession: entry.session,
+		message: `Resumed Clanky session ${shortSessionId(entry.id)} (${label}).`,
+	};
+}
+
+function isResumeListSelector(selector: string): boolean {
+	return /^(list|ls|show|status)$/iu.test(selector);
+}
+
+function findResumeSessionEntry(entries: readonly TuiSessionEntry[], selector: string): TuiSessionEntry | string {
+	if (/^\d+$/u.test(selector)) {
+		const index = Number(selector) - 1;
+		return entries[index] ?? `No saved Clanky session #${selector}. Use /resume list to see saved sessions.`;
+	}
+	const normalized = selector.toLowerCase();
+	const matches = entries.filter((entry) => resumeSessionSelectors(entry).some((candidate) => candidate.toLowerCase().startsWith(normalized)));
+	if (matches.length === 1) return matches[0]!;
+	if (matches.length > 1) {
+		const choices = matches.slice(0, 5).map((entry) => shortSessionId(entry.id)).join(", ");
+		const suffix = matches.length > 5 ? ", ..." : "";
+		return `Session selector "${selector}" is ambiguous: ${choices}${suffix}.`;
+	}
+	return `No saved Clanky session matches "${selector}". Use /resume list to see saved sessions.`;
+}
+
+function resumeSessionSelectors(entry: TuiSessionEntry): readonly string[] {
+	return [entry.id, entry.session.sessionId, entry.session.continuationToken].filter((value): value is string => value !== undefined && value.length > 0);
+}
+
+function resumeSessionOption(entry: TuiSessionEntry): MenuOption {
+	return {
+		value: entry.id,
+		label: resumeSessionLabel(entry),
+		description: `${formatResumeSessionTimestamp(entry.updatedAt)} - ${shortSessionId(entry.id)}`,
+		hint: entry.lastPrompt === undefined ? undefined : truncateToWidth(entry.lastPrompt, 72, "..."),
+	};
+}
+
+function formatResumeSessionList(entries: readonly TuiSessionEntry[]): string {
+	return [
+		statusTitle("Saved Clanky sessions"),
+		"",
+		...entries.map((entry, index) => {
+			const label = ansi.bold(resumeSessionLabel(entry));
+			const meta = ansi.dim(`${formatResumeSessionTimestamp(entry.updatedAt)} - ${shortSessionId(entry.id)}`);
+			const prompt = entry.lastPrompt === undefined ? "" : `\n   ${ansi.dim(truncateToWidth(entry.lastPrompt, 96, "..."))}`;
+			return `${ansi.dim(`${index + 1}.`)} ${label} ${meta}${prompt}`;
+		}),
+		"",
+		ansi.dim("Use /resume <number> or /resume <session-id-prefix>."),
+	].join("\n");
+}
+
+function resumeSessionLabel(entry: TuiSessionEntry): string {
+	const label = entry.label?.trim();
+	if (label !== undefined && label.length > 0) return label;
+	return "Untitled session";
+}
+
+function shortSessionId(id: string): string {
+	return id.length <= 12 ? id : `${id.slice(0, 8)}...${id.slice(-4)}`;
+}
+
+function formatResumeSessionTimestamp(value: string): string {
+	const date = new Date(value);
+	if (!Number.isFinite(date.getTime())) return value;
+	return date.toLocaleString(undefined, {
+		day: "numeric",
+		hour: "numeric",
+		minute: "2-digit",
+		month: "short",
+	});
 }
 
 async function handleExtensionCommand(command: ClankyExtensionCommand, renderer: CommandRenderer): Promise<PromptCommandOutcome> {
@@ -2284,40 +2635,6 @@ function formatHelp(): string {
 			return `${bullet} ${name}${hint}${aliases} ${ansi.dim("·")} ${command.description}`;
 		}),
 	].join("\n");
-}
-
-function statusLabelForEvent(event: HandleMessageStreamEvent): string {
-	switch (event.type) {
-		case "actions.requested": {
-			const skill = skillLoadStatusLabel(event.data.actions);
-			return skill ?? "streaming";
-		}
-		case "step.started":
-			return `step ${event.data.stepIndex + 1}`;
-		case "step.completed":
-			return `step ${event.data.stepIndex + 1} completed`;
-		case "session.waiting":
-			return "waiting";
-		case "session.completed":
-			return "ready";
-		case "session.failed":
-			return "failed";
-		default:
-			return "streaming";
-	}
-}
-
-function skillLoadStatusLabel(
-	actions: Extract<HandleMessageStreamEvent, { type: "actions.requested" }>["data"]["actions"],
-): string | undefined {
-	for (const action of actions) {
-		const isSkillLoad = action.kind === "load-skill" || (action.kind === "tool-call" && action.toolName === "load_skill");
-		if (!isSkillLoad) continue;
-		const input = action.input;
-		const name = isRecord(input) && typeof input.skill === "string" && input.skill.trim().length > 0 ? input.skill.trim() : undefined;
-		return name === undefined ? "loading skill" : `loading skill ${name}`;
-	}
-	return undefined;
 }
 
 function buildBannerFields(info: AgentInfoResult | undefined): BannerFields {
@@ -2555,7 +2872,7 @@ function refreshCommandSurface(text: string): void {
 
 function formatStatusText(label: string): string {
 	const model = bannerModelId(latestInfo) ?? "model unknown";
-	const responseState = isResponding && label !== "thinking" && !label.startsWith("step ") ? "responding" : "";
+	const responseState = isResponding && label !== "ready" && label !== "streaming" ? "responding" : "";
 	const setupState = setupFlow.isWaitingForInput() ? "setup input" : "";
 	const authState = connectionAuthPendingCount > 0 ? `auth pending ${connectionAuthPendingCount}` : "";
 	const focusState = transcriptViewport.focused ? "transcript nav" : "";
@@ -8594,9 +8911,12 @@ async function updateEnv(updates: Record<string, string>, removals: readonly str
 async function restartBrainMessage(prefix: string): Promise<string> {
 	await refreshEffortStatusSuffix();
 	if (!ownsServer) {
+		const attachedRestart = await restartAttachedDevServerMessage();
+		if (attachedRestart !== undefined) return appendRestartSentence(prefix, attachedRestart);
 		return appendRestartSentence(prefix, "Saved .env.local; attached to an external eve server, so restart it to apply.");
 	}
 
+	const preservedSession = await preserveCurrentSessionForRestart();
 	brainRestartInProgress = true;
 	brainHealthGeneration += 1;
 	stopBrainHealthMonitor();
@@ -8604,7 +8924,7 @@ async function restartBrainMessage(prefix: string): Promise<string> {
 	refreshStatus("restarting");
 
 	try {
-		await stopServer();
+		await stopServer({ stopTimeoutMs: INTENTIONAL_RESTART_STOP_TIMEOUT_MS });
 		await startServer();
 		await waitForHealth();
 	} catch (error) {
@@ -8624,15 +8944,117 @@ async function restartBrainMessage(prefix: string): Promise<string> {
 	brainHealthGeneration += 1;
 	const info = await fetchInfo();
 	if (info !== undefined) updateLatestInfo(info);
+	restorePreservedSession(preservedSession);
 	forwardServerOutput = true;
 	startBrainHealthMonitor();
 	refreshStatus("ready");
-	return appendRestartSentence(prefix, "Restarted Clanky.");
+	return appendRestartSentence(prefix, restartCompleteSentence(preservedSession, "Restarted Clanky."));
 }
 
 function appendRestartSentence(prefix: string, sentence: string): string {
 	const trimmed = prefix.trim();
 	return `${trimmed}${/[.!?]$/u.test(trimmed) ? " " : ". "}${sentence}`;
+}
+
+async function restartAttachedDevServerMessage(): Promise<string | undefined> {
+	const discovered = await discoverDevServerHost();
+	if (discovered === undefined || !sameHost(discovered.host, brainHost)) return undefined;
+	if (!canRestartAttachedDevServer(discovered.record)) return undefined;
+
+	const preservedSession = await preserveCurrentSessionForRestart();
+	brainRestartInProgress = true;
+	brainHealthGeneration += 1;
+	stopBrainHealthMonitor();
+	setBrainHealth({ state: "restarting", checkedAt: Date.now(), detail: "applying configuration" });
+	refreshStatus("restarting");
+
+	try {
+		await stopDevServerRecord(discovered.record, "restart");
+		const restarted = await waitForAttachedDevServerRestart(discovered);
+		if (!restarted) throw new Error(`Eve dev server did not come back healthy on ${discovered.host}`);
+	} catch (error) {
+		const detail = error instanceof Error ? error.message : String(error);
+		brainRestartInProgress = false;
+		brainHealthGeneration += 1;
+		setBrainHealth({ state: "down", checkedAt: Date.now(), detail });
+		startBrainHealthMonitor();
+		refreshStatus("ready");
+		return `Saved .env.local, but restarting the attached Eve dev server failed: ${detail}`;
+	}
+
+	brainRestartInProgress = false;
+	brainHealthGeneration += 1;
+	const info = await fetchInfo();
+	if (info !== undefined) updateLatestInfo(info);
+	restorePreservedSession(preservedSession);
+	startBrainHealthMonitor();
+	refreshStatus("ready");
+	return restartCompleteSentence(preservedSession, "Restarted the attached Eve dev server.");
+}
+
+async function preserveCurrentSessionForRestart(): Promise<SessionState | undefined> {
+	const state = session.state;
+	if (sessionStateId(state) === undefined) return undefined;
+	await persistCurrentFaceSession({ label: currentSessionLabel });
+	return { ...state };
+}
+
+function restorePreservedSession(state: SessionState | undefined): void {
+	if (state === undefined) return;
+	session = client.session(state);
+}
+
+function restartCompleteSentence(state: SessionState | undefined, sentence: string): string {
+	return state === undefined ? sentence : `${sentence} Kept the current session.`;
+}
+
+async function waitForAttachedDevServerRestart(discovered: DiscoveredHost): Promise<boolean> {
+	const targetHost = discovered.host;
+	const oldPid = discovered.record.pid;
+	const deadline = Date.now() + HEALTH_TIMEOUT_MS;
+	while (Date.now() < deadline) {
+		if (!isPidAlive(oldPid) && (await probe(targetHost)) === "healthy") return true;
+		await new Promise((resolve) => setTimeout(resolve, DEV_SERVER_RECORD_REPROBE_MS));
+	}
+	return false;
+}
+
+function canRestartAttachedDevServer(record: DevServerRecord): boolean {
+	if (parseBooleanFlag(process.env.CLANKY_RESTART_ATTACHED_EVE) === true) return true;
+	const parent = parentPid(record.pid);
+	return parent !== undefined && processAncestorPids().has(parent);
+}
+
+function processAncestorPids(pid = process.pid): Set<number> {
+	const ancestors = new Set<number>();
+	let current = pid;
+	for (let depth = 0; depth < 32; depth += 1) {
+		const parent = parentPid(current);
+		if (parent === undefined || parent <= 1 || ancestors.has(parent)) break;
+		ancestors.add(parent);
+		current = parent;
+	}
+	return ancestors;
+}
+
+function parentPid(pid: number): number | undefined {
+	try {
+		const output = execFileSync("ps", ["-o", "ppid=", "-p", String(pid)], {
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "ignore"],
+			timeout: 1000,
+		}).trim();
+		const parsed = Number.parseInt(output, 10);
+		return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function sameHost(left: string, right: string): boolean {
+	const normalizedLeft = normalizeHost(left);
+	const normalizedRight = normalizeHost(right);
+	return normalizedLeft !== undefined && normalizedLeft === normalizedRight;
 }
 
 type FetchInfoOptions = {
@@ -8812,15 +9234,18 @@ function devServerRecordStartupGraceMs(record: DevServerRecord): number {
 	return Math.max(0, DEV_SERVER_RECORD_STARTUP_GRACE_MS - ageMs);
 }
 
-async function stopDevServerRecord(record: DevServerRecord, reason: "unhealthy"): Promise<void> {
+async function stopDevServerRecord(record: DevServerRecord, reason: "restart" | "unhealthy"): Promise<void> {
 	if (record.pid === process.pid) return;
 	try {
 		process.kill(record.pid, "SIGTERM");
 	} catch {
 		return;
 	}
-	if (await waitForPidExit(record.pid, SERVER_STOP_TIMEOUT_MS)) return;
-	process.stderr.write(`  \x1b[33m${reason} Eve dev server pid ${record.pid} did not exit after SIGTERM; forcing stop\x1b[39m\n`);
+	const stopTimeoutMs = reason === "restart" ? INTENTIONAL_RESTART_STOP_TIMEOUT_MS : SERVER_STOP_TIMEOUT_MS;
+	if (await waitForPidExit(record.pid, stopTimeoutMs)) return;
+	if (reason !== "restart") {
+		process.stderr.write(`  \x1b[33m${reason} Eve dev server pid ${record.pid} did not exit after SIGTERM; forcing stop\x1b[39m\n`);
+	}
 	try {
 		process.kill(record.pid, "SIGKILL");
 	} catch {
@@ -9079,13 +9504,13 @@ async function waitForHealth(timeoutMs = HEALTH_TIMEOUT_MS): Promise<void> {
 	}
 }
 
-async function stopServer(): Promise<void> {
+async function stopServer(options: { readonly stopTimeoutMs?: number } = {}): Promise<void> {
 	const child = server;
 	server = null;
 	forwardServerOutput = false;
 	if (child === null || hasChildExited(child)) return;
 	child.kill("SIGTERM");
-	if (await waitForChildExit(child, SERVER_STOP_TIMEOUT_MS)) return;
+	if (await waitForChildExit(child, options.stopTimeoutMs ?? SERVER_STOP_TIMEOUT_MS)) return;
 	child.kill("SIGKILL");
 	await waitForChildExit(child, SERVER_KILL_TIMEOUT_MS);
 }

@@ -158,7 +158,10 @@ assert(!blocks.some((block) => block.markdown.includes("**Input responses**")), 
 assert(blocks.some((block) => block.markdown.includes("**Result completed**") && block.markdown.includes("\"answer\": 42")), "structured result block should render");
 assert(inputRequestCount === 1, "input.requested should be surfaced to the caller");
 assert(terminal, "session.waiting should be a terminal boundary for the current stream pass");
-assert(statuses.includes("session waiting"), "renderer should update waiting status");
+assert(statuses.includes("streaming"), "renderer should show streaming while a turn is active");
+assert(statuses.includes("ready"), "renderer should return to ready when waiting for the next message");
+assert(!statuses.includes("step 1"), "renderer status should not expose step numbers");
+assert(!statuses.includes("step 1 completed"), "renderer status should not expose completed step numbers");
 assert(loaderMessages.includes("Step 1 running..."), "step start should update loader message");
 assert(formatTokenFlow(renderer.lastUsage, 100_000) === "↑ 12K ↓ 67 ctx 12%", "token flow should include context percent");
 assert(formatContextUsage(renderer.lastUsage, 100_000) === "↑ 12K ↓ 67 ctx 12%", "context usage should include token flow after usage");

@@ -63,6 +63,23 @@ export type FaceRenderEventResult = {
 	terminal: boolean;
 };
 
+export type FaceStatusLabel = "failed" | "ready" | "streaming";
+
+export function statusLabelForFaceEvent(event: HandleMessageStreamEvent): FaceStatusLabel {
+	switch (event.type) {
+		case "session.completed":
+		case "session.waiting":
+		case "turn.completed":
+			return "ready";
+		case "session.failed":
+		case "step.failed":
+		case "turn.failed":
+			return "failed";
+		default:
+			return "streaming";
+	}
+}
+
 const STREAM_RENDER_THROTTLE_MS = 50;
 const COLLAPSED_TOOL_BLOCK_OPTIONS: FaceBlockOptions = { clickToggle: true, collapsed: true };
 
@@ -144,15 +161,14 @@ export class ClankyFaceRenderer {
 	renderEvent(event: HandleMessageStreamEvent): FaceRenderEventResult {
 		this.recordEvent(event);
 		this.noReply.observe(event);
+		this.sink.setStatus(statusLabelForFaceEvent(event));
 		let inputRequests: readonly InputRequest[] = [];
 		let terminal = false;
 
 		switch (event.type) {
 			case "session.started":
-				this.sink.setStatus(`session started ${event.data.runtime?.modelId ?? ""}`.trim());
 				break;
 			case "turn.started":
-				this.sink.setStatus(`turn ${event.data.turnId}`);
 				break;
 			case "message.received":
 				break;
@@ -160,7 +176,6 @@ export class ClankyFaceRenderer {
 				this.closeStreamingBlocks();
 				this.stats.stepStarts += 1;
 				this.sink.setLoaderMessage(`Step ${event.data.stepIndex + 1} running...`);
-				this.sink.setStatus(`step ${event.data.stepIndex + 1}`);
 				break;
 			case "reasoning.appended":
 				this.appendReasoning(event.data.turnId, event.data.stepIndex, event.data.reasoningSoFar, event.data.reasoningDelta);
@@ -210,14 +225,12 @@ export class ClankyFaceRenderer {
 				this.flushPendingStreamUpdates();
 				this.stats.stepFinishes += 1;
 				this.usage = mergeUsage(this.usage, event.data.usage);
-				this.sink.setStatus(`step ${event.data.stepIndex + 1} completed`);
 				break;
 			case "step.failed":
 				this.upsertFailureBlock(event);
 				break;
 			case "turn.completed":
 				this.flushPendingStreamUpdates();
-				this.sink.setStatus("turn completed");
 				terminal = true;
 				break;
 			case "turn.failed":
@@ -235,12 +248,10 @@ export class ClankyFaceRenderer {
 				break;
 			case "session.waiting":
 				this.flushPendingStreamUpdates();
-				this.sink.setStatus("session waiting");
 				terminal = true;
 				break;
 			case "session.completed":
 				this.flushPendingStreamUpdates();
-				this.sink.setStatus("session completed");
 				terminal = true;
 				break;
 			case "session.failed":
