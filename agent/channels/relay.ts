@@ -546,7 +546,7 @@ function attach(peer: WebSocketPeer, req: RelayRequest): void {
 			{
 				onFrame: (frame) => {
 					if (closed || fallbackStarted) return;
-					sendFrame({
+					const body: PaneOutputFrame = {
 						type: "pane.output",
 						pane_id: pane,
 						terminal_id: terminalId,
@@ -558,7 +558,16 @@ function attach(peer: WebSocketPeer, req: RelayRequest): void {
 						seq: frame.seq,
 						width: frame.width,
 						height: frame.height,
-					});
+					};
+					if (!snapshotReady) {
+						if (pendingChunks.length > 100) {
+							startPolling("herdr terminal attach produced too many chunks before initial snapshot");
+							return;
+						}
+						pendingChunks.push(body);
+						return;
+					}
+					sendFrame(body);
 				},
 				onError: (error) => {
 					if (!closed && !fallbackStarted) startPolling(error.message);
@@ -568,6 +577,7 @@ function attach(peer: WebSocketPeer, req: RelayRequest): void {
 				},
 			},
 		);
+		void sendInitialSnapshot();
 		return;
 	}
 

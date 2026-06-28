@@ -157,11 +157,11 @@ the default eve HTTP channel (`POST /eve/v1/session`,
 streamed events (`message.appended`, `reasoning.completed`, `actions.requested`,
 `action.result`, `turn.failed`, …) closely mirroring `eve dev`'s look — gutter
 glyphs, a yellow phase-aware working spinner, and a persistent bottom status
-line (model · effort · tokens · endpoint). On top it adds the config slash
+line (model · effort · tokens · endpoint). On top it adds Clanky-specific slash
 commands `eve dev` can't: `/discord-token`, `/model`, `/harness`, `/effort`,
-`/approvals`, `/push` (they rewrite `.env.local` and restart the brain). The stock
-`eve dev` TUI stays available as a local dev/debug interface against the same
-runtime.
+`/approvals`, `/push`, `/skills`. Config commands rewrite `.env.local` and
+restart the brain. The stock `eve dev` TUI stays available as a local dev/debug
+interface against the same runtime.
 
 The face surfaces `input.requested` (tool-approval / human-input prompts) and
 `session.waiting`, then resumes the turn with explicit responses. `/approvals
@@ -316,14 +316,19 @@ flowchart LR
   held-open `attach` stream and a raw `write` op:
   - `attach {pane, terminal_id?, cols?, rows?, cell_width_px?, cell_height_px?, takeover?=true, source?="visible", format?="ansi", strip_ansi?=false, lines?, interval_ms?=180}`
     opens a per-pane stream. When `terminal_id` is present, the relay connects
-    to Herdr's client socket (`herdr-client.sock`), requests `TerminalAnsi`,
-    sends `AttachTerminal`, and forwards Herdr-rendered terminal frames as
-    base64 ANSI bytes:
+    to Herdr's client socket (`herdr-client.sock`), requests `TerminalAnsi`, and
+    also sends a full ANSI-preserving `pane.read` snapshot of `source` first so
+    remote clients can seed local scrollback:
+    `{id, ok:true, stream:true, body:{type:"pane.output", pane_id, source, format, full:true, text}}`.
+    Live chunks that arrive before that snapshot are buffered and replayed after
+    it. The relay then sends `AttachTerminal` output as Herdr-rendered base64
+    ANSI bytes:
     `{id, ok:true, stream:true, body:{type:"pane.output", pane_id, terminal_id, source:"terminal_attach", format:"ansi", full, encoding:"base64", data, seq, width, height}}`.
-    The client resets its local terminal for full byte redraws and applies
-    incremental frames directly. `cols`/`rows` and cell pixel sizes are the
-    viewing client's native terminal grid; reconnecting with a new grid resizes
-    the server-owned terminal while the pane process stays durable.
+    The client treats text snapshots as history replacement, while full byte
+    redraws replace only the active screen and must preserve the seeded
+    scrollback. `cols`/`rows` and cell pixel sizes are the viewing client's
+    native terminal grid; reconnecting with a new grid resizes the server-owned
+    terminal while the pane process stays durable.
     The iOS app exposes this as Terminal mode **Native**.
   - Without `terminal_id`, or if the direct attach path is unavailable, the relay
     uses the compatibility path: it first sends a **full** ANSI-preserving

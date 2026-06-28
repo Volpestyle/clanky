@@ -28,6 +28,7 @@ import {
 	type OverlayHandle,
 	type OverlayOptions,
 	visibleWidth,
+	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import {
 	Client,
@@ -47,6 +48,8 @@ import { browserBridgeStatus } from "../agent/lib/browser-bridge.ts";
 import { buildEveDevServerEnv } from "../agent/lib/eve-dev-env.ts";
 import { startFacePresence, stopFacePresence } from "../agent/lib/face-presence.ts";
 import { buildPairingLink, type PairingLink, renderPairingQr } from "../agent/lib/pairing.ts";
+import { listClankySkills, type ClankySkillInventoryEntry } from "../agent/lib/skill-inventory.ts";
+import { renderClankySkillsPanel } from "../agent/lib/clanky-skills-panel.ts";
 import {
 	appendPromptHistoryEntry,
 	clankyPromptHistoryPath,
@@ -355,6 +358,7 @@ type ClankyExtensionCommandName =
 	| "trace"
 	| "pet"
 	| "layout"
+	| "skills"
 	| "agents"
 	| "spawn"
 	| "pair"
@@ -381,7 +385,9 @@ type ClankyPromptCommandSpec = {
 
 type PromptCommandOutcome = {
 	readonly clearTranscript?: boolean;
+	readonly component?: Component;
 	readonly exit?: boolean;
+	readonly ledgerMessage?: string;
 	readonly message?: string;
 	readonly newSession?: boolean;
 	readonly announceNewSession?: boolean;
@@ -1409,6 +1415,13 @@ function buildClankyPromptCommands(): ClankyPromptCommandSpec[] {
 			build: (argument) => ({ type: "extension", name: "agent-md", argument }),
 		},
 		{
+			name: "skills",
+			aliases: ["skill"],
+			description: "Show Clanky's skills",
+			takesArgument: false,
+			build: () => ({ type: "extension", name: "skills", argument: "" }),
+		},
+		{
 			name: "image-model",
 			aliases: ["images"],
 			description: "Set the image generation provider/model (openai, xai, gemini)",
@@ -2089,17 +2102,72 @@ function insertMarkdown(text: string, options?: ClankyTranscriptBlockOptions): F
 }
 
 function insertCommandResult(prompt: string, message: string, tone: CommandLogTone): void {
-	const component = new Text(formatCommandLogText(prompt, message, tone), 1, 0);
-	insertTranscript(component);
+	insertTranscript(new ClankyCommandTextResultComponent(prompt, message, tone));
 	tui.requestRender();
 }
 
-function formatCommandLogText(prompt: string, message: string, tone: CommandLogTone): string {
+function insertCommandComponent(prompt: string, component: Component, tone: CommandLogTone): void {
+	insertTranscript(new ClankyCommandResultComponent(prompt, tone, component));
+	tui.requestRender();
+}
+
+class ClankyCommandResultComponent implements Component {
+	private readonly prompt: string;
+	private readonly tone: CommandLogTone;
+	private readonly body: Component;
+
+	constructor(prompt: string, tone: CommandLogTone, body: Component) {
+		this.prompt = prompt;
+		this.tone = tone;
+		this.body = body;
+	}
+
+	invalidate(): void {
+		this.body.invalidate();
+	}
+
+	render(width: number): string[] {
+		const bodyWidth = Math.max(1, width - 2);
+		return [
+			formatCommandLogHeader(this.prompt, this.tone),
+			...this.body.render(bodyWidth).map((line) => `  ${truncateToWidth(line, bodyWidth, "", true)}`),
+		];
+	}
+}
+
+class ClankyCommandTextResultComponent implements Component {
+	private readonly prompt: string;
+	private readonly message: string;
+	private readonly tone: CommandLogTone;
+
+	constructor(prompt: string, message: string, tone: CommandLogTone) {
+		this.prompt = prompt;
+		this.message = message;
+		this.tone = tone;
+	}
+
+	invalidate(): void {}
+
+	render(width: number): string[] {
+		const bodyWidth = Math.max(1, width - 2);
+		const lines = [formatCommandLogHeader(this.prompt, this.tone)];
+		for (const line of commandResultBodyLines(this.message)) {
+			if (line.trim().length === 0) {
+				lines.push("");
+				continue;
+			}
+			for (const wrapped of wrapTextWithAnsi(styleCommandResultLine(line), bodyWidth)) {
+				lines.push(`  ${truncateToWidth(wrapped, bodyWidth, "", true)}`);
+			}
+		}
+		return lines;
+	}
+}
+
+function formatCommandLogHeader(prompt: string, tone: CommandLogTone): string {
 	const command = slashCommandLabel(prompt);
 	const status = tone === "error" ? ansi.red("error") : ansi.green("done");
-	const header = `${status} ${ansi.cyan(command)} ${ansi.dim("command")}`;
-	const body = commandResultBodyLines(message);
-	return [header, ...body.map((line) => `  ${styleCommandResultLine(line)}`)].join("\n");
+	return `${status} ${ansi.cyan(command)} ${ansi.dim("command")}`;
 }
 
 function slashCommandLabel(prompt: string): string {
@@ -2277,6 +2345,11 @@ async function handleSlashPrompt(prompt: string): Promise<void> {
 		const tone: CommandLogTone = outcome.message.toLowerCase().includes("unknown ") ? "error" : "success";
 		insertCommandResult(prompt, outcome.message, tone);
 		tuiLedger.record(slashCommandLabel(prompt), outcome.message, tone);
+	}
+	if (outcome.component !== undefined) {
+		const tone: CommandLogTone = outcome.ledgerMessage?.toLowerCase().includes("unknown ") === true ? "error" : "success";
+		insertCommandComponent(prompt, outcome.component, tone);
+		tuiLedger.record(slashCommandLabel(prompt), outcome.ledgerMessage ?? "rendered command output", tone);
 	}
 	if (outcome.newSession === true) {
 		session = client.session();
@@ -2506,6 +2579,8 @@ async function handleExtensionCommand(command: ClankyExtensionCommand, renderer:
 			return { message: await configureApprovals(command.argument, renderer.setupFlow) };
 		case "agent-md":
 			return { message: await configureAgentMd(command.argument, renderer.setupFlow) };
+		case "skills":
+			return await skillsOutcome();
 		case "image-model":
 			return { message: await configureImageModel(command.argument, renderer.setupFlow) };
 		case "video-model":
@@ -7477,6 +7552,39 @@ async function statusText(): Promise<string> {
 		statusLine("discord gateway", formatJson(gateway), "muted"),
 	];
 	return lines.join("\n");
+}
+
+async function skillsOutcome(): Promise<PromptCommandOutcome> {
+	let entries: ClankySkillInventoryEntry[];
+	try {
+		entries = await listClankySkills(REPO);
+	} catch (error) {
+		return { message: `Could not read Clanky skills: ${error instanceof Error ? error.message : String(error)}` };
+	}
+	if (entries.length === 0) return { message: "No Clanky skills found." };
+	return {
+		component: new ClankySkillsPanelComponent(entries),
+		ledgerMessage: `Showed ${entries.length} Clanky ${pluralWord(entries.length, "skill")}.`,
+	};
+}
+
+class ClankySkillsPanelComponent implements Component {
+	private readonly entries: readonly ClankySkillInventoryEntry[];
+
+	constructor(entries: readonly ClankySkillInventoryEntry[]) {
+		this.entries = entries;
+	}
+
+	invalidate(): void {}
+
+	render(width: number): string[] {
+		return renderClankySkillsPanel(this.entries, width, {
+			bold: ansi.bold,
+			cyan: ansi.cyan,
+			dim: ansi.dim,
+			yellow: ansi.yellow,
+		});
+	}
 }
 
 const AGENTS_TOGGLE_VALUE = "__agents_toggle_others__";

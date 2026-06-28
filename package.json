@@ -48,6 +48,8 @@
 		"smoke:clipboard": "node test/clanky-clipboard-smoke.ts",
 		"smoke:tui:input-queue": "node test/tui-input-request-queue-smoke.ts",
 		"smoke:tui:attachments": "node test/tui-attachments-smoke.ts",
+		"smoke:skills": "node test/clanky-skills-smoke.ts",
+		"smoke:skills-panel": "node test/clanky-skills-panel-smoke.ts",
 		"smoke:mcp:auth": "node test/mcp-auth-probe-smoke.ts",
 		"smoke:mcp": "node test/mcp-stdio-smoke.ts",
 		"smoke:pairing": "node test/clanky-pairing-smoke.ts",

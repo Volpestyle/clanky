@@ -141,6 +141,12 @@ const commands: ClankyAutocompleteCommand[] = [
 		takesArgument: true,
 	},
 	{
+		name: "skills",
+		aliases: ["skill"],
+		description: "Show Clanky's skills",
+		takesArgument: false,
+	},
+	{
 		name: "trace",
 		aliases: [],
 		description: "Show compact per-turn stream traces",
@@ -218,7 +224,6 @@ assert(modelSuggestions.items.some((item) => item.value === "codex"), "model arg
 const modelStatusSuggestions = await provider.getSuggestions(["/model st"], 0, 9, { signal });
 assert(modelStatusSuggestions !== null, "model status query should produce suggestions");
 assert(modelStatusSuggestions.items.some((item) => item.value === "status"), "model argument completion should include status");
-
 const authSuggestions = await provider.getSuggestions(["/auth st"], 0, 8, { signal });
 assert(authSuggestions !== null, "auth status query should produce suggestions");
 assert(authSuggestions.items.some((item) => item.value === "status"), "auth argument completion should include status");

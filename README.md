@@ -116,7 +116,7 @@ Then use `clanky` from anywhere:
   and adds the slash commands eve can't — `/token <token> [--user-token] [--voice]`,
   `/model <codex|claude> [id]`, `/harness allow ...`,
   `/harness <clanky|claude|codex|opencode|custom> [default|ollama] [model]`,
-  `/agent-md on|off|status`,
+  `/agent-md on|off|status`, `/skills`,
   `/n`, `/new`, `/status`, `/help`, `/exit`. Config commands rewrite `.env.local`
   and restart the brain. Default port 2000
   (`CLANKY_EVE_PORT`).

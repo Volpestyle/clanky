@@ -45,6 +45,7 @@
 - Richly format TUI text with color, brightness, and emphasis to make dense output easy to scan.
 - Visually differentiate secondary or qualifying text from primary text. Parenthetical notes should use a distinct style, such as dimmer or lower-contrast text, instead of inheriting the surrounding text style: `(ignoring incompatible override qwen3.6:27b-mlx)`.
 - In slash-command typeahead, keep the list compact, but when the selected row's description would truncate, render the full description above the list as accented wrapped text.
+- Render slash-command results, status blocks, and dense menu panels as width-aware pi-tui components. Avoid pre-rendered fixed-width strings; wrap long text with `wrapTextWithAnsi` or component renderers so pane resizes reflow cleanly.
 
 ## TUI Menus
 
