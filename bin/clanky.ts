@@ -2,12 +2,13 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { watch } from "node:fs";
 import { lstat, mkdir, readlink, rm, symlink } from "node:fs/promises";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseEnv } from "node:util";
 import { Client } from "eve/client";
 import { serializeCommandLine } from "../agent/lib/coding-harness.ts";
+import { startTranscriptFileTail } from "../agent/lib/transcript-file-tail.ts";
 import { buildPairingLink, PAIRING_TOKEN_MISSING_MESSAGE, renderPairingQr } from "../agent/lib/pairing.ts";
 import { buildEveDevServerEnv } from "../agent/lib/eve-dev-env.ts";
 import {
@@ -912,7 +913,18 @@ async function runTranscriptProcess(
 	argv: readonly string[],
 	cwd: string,
 ): Promise<CommandResult> {
-	const launch = process.stdin.isTTY ? scriptCommand(argv) : directCommand(argv);
+	if (process.stdin.isTTY === true && process.stdout.isTTY === true) {
+		return await runTranscriptPtyBridge(run, argv, cwd);
+	}
+	return await runTranscriptPipeCapture(run, argv, cwd);
+}
+
+async function runTranscriptPipeCapture(
+	run: Awaited<ReturnType<typeof createTranscriptRun>>,
+	argv: readonly string[],
+	cwd: string,
+): Promise<CommandResult> {
+	const launch = directCommand(argv);
 	return await new Promise((resolvePromise, reject) => {
 		const child = spawn(launch.command, launch.args, { cwd, stdio: ["inherit", "pipe", "pipe"] });
 		let writeChain = Promise.resolve();
@@ -955,11 +967,54 @@ async function runTranscriptProcess(
 	});
 }
 
-function scriptCommand(argv: readonly string[]): { command: string; args: string[] } {
+async function runTranscriptPtyBridge(
+	run: Awaited<ReturnType<typeof createTranscriptRun>>,
+	argv: readonly string[],
+	cwd: string,
+): Promise<CommandResult> {
+	const rawPath = join(run.dir, "stream.script.ansi");
+	await writeFile(rawPath, "");
+	const launch = scriptCommand(argv, rawPath);
+	const tail = await startTranscriptFileTail(run, rawPath);
+	return await new Promise((resolvePromise, reject) => {
+		const child = spawn(launch.command, launch.args, { cwd, stdio: "inherit" });
+		let settled = false;
+		const forwardResize = (): void => {
+			if (child.killed) return;
+			child.kill("SIGWINCH");
+		};
+		process.stdout.on("resize", forwardResize);
+		process.on("SIGWINCH", forwardResize);
+		const settle = async (code: number | null, signal: NodeJS.Signals | null, error?: Error) => {
+			if (settled) return;
+			settled = true;
+			process.stdout.off("resize", forwardResize);
+			process.off("SIGWINCH", forwardResize);
+			const writeError = await tail.stop();
+			await finishTranscriptRun(run, { exitCode: code, signal });
+			if (error !== undefined) {
+				reject(error);
+				return;
+			}
+			if (writeError !== undefined) {
+				process.stderr.write(`clanky: transcript write failed: ${writeError.message}\n`);
+			}
+			resolvePromise({ code: code ?? 1 });
+		};
+		child.on("error", (error) => {
+			void settle(null, null, error);
+		});
+		child.on("close", (code, signal) => {
+			void settle(code, signal);
+		});
+	});
+}
+
+function scriptCommand(argv: readonly string[], outputPath: string): { command: string; args: string[] } {
 	if (process.platform === "darwin" || process.platform === "freebsd" || process.platform === "openbsd") {
-		return { command: "script", args: ["-q", "/dev/null", ...argv] };
+		return { command: "script", args: ["-q", "-e", "-F", outputPath, ...argv] };
 	}
-	return { command: "script", args: ["-q", "-e", "-c", serializeCommandLine(argv), "/dev/null"] };
+	return { command: "script", args: ["-q", "-f", "-e", "-c", serializeCommandLine(argv), outputPath] };
 }
 
 function directCommand(argv: readonly string[]): { command: string; args: string[] } {
