@@ -162,6 +162,19 @@ export interface VoiceSessionConfig {
 	eveSessionHost?: string;
 	memoryContextLimit?: number;
 	clankvox?: ClankvoxSpawnOptions;
+	/**
+	 * Invoked at most once if the realtime socket drops unexpectedly (i.e. not as
+	 * part of an intentional stop()). The owner should tear the session down; the
+	 * realtime brain is dead and ClankVox/Discord would otherwise linger as a
+	 * zombie. We do not auto-reconnect: provider realtime sessions are ephemeral
+	 * and cloud resilience is out of scope (SPEC.md §2).
+	 */
+	onFault?: (fault: VoiceSessionFault) => void;
+}
+
+export interface VoiceSessionFault {
+	readonly kind: "socket_closed" | "socket_error";
+	readonly detail: string;
 }
 
 export type VoiceSpeakerResolver = (userId: string) => VoiceMemorySpeaker | undefined;
@@ -189,6 +202,17 @@ export async function startVoiceSession(config: VoiceSessionConfig): Promise<Voi
 	const ttsBinding =
 		config.externalTts === undefined ? bindNativeRealtimeAudioOutput(realtime, vox, stats) : bindExternalTts(config, realtime, vox, stats);
 	bindRealtimeStats(realtime, stats);
+	let stopping = false;
+	let faulted = false;
+	const handleFault = (fault: VoiceSessionFault): void => {
+		if (stopping || faulted) return;
+		faulted = true;
+		config.onFault?.(fault);
+	};
+	realtime.on("socket_error", (error) => handleFault({ kind: "socket_error", detail: error.message }));
+	realtime.on("socket_closed", (event) => {
+		handleFault({ kind: "socket_closed", detail: event.reason.length === 0 ? `code ${event.code}` : `code ${event.code}: ${event.reason}` });
+	});
 	const memoryBinding = bindVoiceMemory(config, realtime, stats, speakerTracker);
 	const eveSessionBinding = bindVoiceSessionMirror(config, realtime, stats, speakerTracker);
 	const realtimeToolBinding = bindRealtimeVoiceControl(config, realtime, vox, speakerTracker);
@@ -243,6 +267,7 @@ export async function startVoiceSession(config: VoiceSessionConfig): Promise<Voi
 			};
 		},
 		async stop() {
+			stopping = true;
 			realtimeToolBinding.dispose();
 			eveSessionBinding.dispose();
 			memoryBinding.dispose();

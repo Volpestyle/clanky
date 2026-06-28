@@ -21,6 +21,7 @@ import {
 	type VoiceExternalTtsConfig,
 	type VoiceRealtimeConfig,
 	type VoiceSession,
+	type VoiceSessionFault,
 	type VoiceSpeakerResolver,
 	type VoiceControlInput,
 	summarizeVoiceRuntimeConfig,
@@ -50,7 +51,31 @@ export function attachVoiceRuntime(value: VoiceRuntime): void {
 export async function joinVoice(guildId: string, channelId: string): Promise<void> {
 	if (!runtime) throw new Error("voice runtime not attached (no Discord adapter / creds)");
 	if (session) await session.stop();
-	session = await startVoiceSession({ guildId, channelId, ...runtime });
+	const started = await startVoiceSession({
+		guildId,
+		channelId,
+		...runtime,
+		onFault: (fault) => {
+			void handleVoiceFault(started, fault);
+		},
+	});
+	session = started;
+}
+
+/**
+ * An unexpected realtime drop leaves a zombie session (ClankVox + Discord adapter
+ * alive, brain dead). Tear it down and clear state so voiceStatus reflects reality.
+ * We do not auto-reconnect (SPEC.md §2); the user can re-issue join.
+ */
+async function handleVoiceFault(faultedSession: VoiceSession, fault: VoiceSessionFault): Promise<void> {
+	if (session !== faultedSession) return;
+	session = null;
+	process.stderr.write(`voice: realtime ${fault.kind} (${fault.detail}); session torn down\n`);
+	try {
+		await faultedSession.stop();
+	} catch {
+		// best-effort teardown; the realtime socket is already gone
+	}
 }
 
 /** Programmatic leave. */
