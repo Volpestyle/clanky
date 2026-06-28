@@ -122,6 +122,31 @@ async function dispatch(op: string, args: Record<string, unknown>): Promise<unkn
 			return herdrRequest("tab.list", args.workspace_id ? { workspace_id: args.workspace_id } : {});
 		case "panes":
 			return herdrRequest("pane.list", args.workspace_id ? { workspace_id: args.workspace_id } : {});
+		case "create-tab": {
+			const workspaceId = str(args.workspace_id);
+			const cwd = str(args.cwd);
+			const label = str(args.label);
+			const focus = args.focus === true;
+			const argv = Array.isArray(args.argv) ? (args.argv as unknown[]).map(String).filter((part) => part.length > 0) : [];
+			if (argv.length === 0) throw new Error("create-tab requires argv[]");
+
+			const root: Record<string, unknown> = { type: "pane", command: argv };
+			if (cwd !== undefined) root.cwd = cwd;
+
+			const result = await herdrRequest("layout.apply", {
+				...(workspaceId === undefined ? {} : { workspace_id: workspaceId }),
+				...(label === undefined ? {} : { tab_label: label }),
+				focus,
+				root,
+			});
+			const layout = rec(rec(result).layout);
+			return {
+				workspace_id: str(layout.workspace_id),
+				tab_id: str(layout.tab_id),
+				pane_id: str(layout.focused_pane_id),
+				layout: result,
+			};
+		}
 		case "get":
 			if (!target) throw new Error("get requires agent or pane");
 			return args.pane ? herdrRequest("pane.get", { pane_id: target }) : herdrRequest("agent.get", { target });
