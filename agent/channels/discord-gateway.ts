@@ -178,10 +178,7 @@ function ensureStarted(): void {
 		onBridgeToMain: (command) =>
 			routeBridgeToMain(command).catch((error: unknown) => console.error("discord bridge-to-main failed:", error)),
 		onVoiceIntent: voiceEnabled
-			? (intent, message) =>
-					handleVoiceIntent(presence, intent, message).catch((error: unknown) =>
-						console.error("discord voice intent failed:", error),
-					)
+			? (intent, message) => handleVoiceIntent(presence, intent, message)
 			: undefined,
 	});
 	discordGatewayState.host = presence;

@@ -11,6 +11,9 @@
  *   CLANKY_RELAY_TOKEN   bearer token the client must present (?token= or
  *                        Authorization: Bearer). Fails closed when unset.
  */
+import { randomUUID } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import { basename, extname, join } from "node:path";
 import { defineChannel, GET, WS } from "eve/channels";
 import type { WebSocketMessage, WebSocketPeer } from "eve/channels";
 import { isFrontdoorAuthorized } from "../lib/frontdoor-auth.ts";
@@ -22,6 +25,7 @@ import { ensurePushWatcher } from "../lib/push-watcher.ts";
 import { apnsConfigured } from "../lib/apns.ts";
 import { newTranscriptRunId, readTranscript } from "../lib/transcripts.ts";
 import { wrapTranscriptArgv } from "../tools/herdr_spawn.ts";
+import { resolveClankyDataPath } from "../lib/paths.ts";
 
 interface RelayRequest {
 	id?: string | number;
@@ -46,6 +50,8 @@ function rec(v: unknown): Record<string, unknown> {
 }
 
 const VANILLA_HERDR_FALLBACK_LINES = 1000;
+const MAX_RELAY_UPLOAD_BYTES = 25 * 1024 * 1024;
+const RELAY_UPLOAD_DIR = "uploads/ios-terminal";
 
 function requestId(id: RelayRequest["id"]): string {
 	return id === undefined ? `relay_${Date.now().toString(36)}` : String(id);
@@ -83,6 +89,81 @@ function annotateFullFallback(result: unknown, fallbackReason: string): unknown 
 			truncated: true,
 		},
 	};
+}
+
+async function saveRelayUpload(args: Record<string, unknown>): Promise<unknown> {
+	const kind = str(args.kind) ?? "image";
+	if (kind !== "image") throw new Error("upload kind must be image");
+	const data = str(args.data);
+	if (data === undefined) throw new Error("upload requires base64 data");
+	const mediaType = (str(args.media_type) ?? str(args.mediaType) ?? dataUrlMediaType(data) ?? "application/octet-stream").toLowerCase();
+	if (!mediaType.startsWith("image/")) throw new Error("upload media_type must be an image type");
+	const bytes = decodeUploadData(data);
+	if (bytes.byteLength === 0) throw new Error("upload data is empty");
+	if (bytes.byteLength > MAX_RELAY_UPLOAD_BYTES) {
+		throw new Error(`upload is too large (${bytes.byteLength} bytes); maximum is ${MAX_RELAY_UPLOAD_BYTES}.`);
+	}
+
+	const dir = resolveClankyDataPath(RELAY_UPLOAD_DIR);
+	await mkdir(dir, { recursive: true, mode: 0o700 });
+	const filename = uploadFilename(str(args.filename), mediaType);
+	const path = join(dir, filename);
+	await writeFile(path, bytes, { mode: 0o600 });
+	return {
+		type: "upload",
+		kind,
+		path,
+		filename,
+		media_type: mediaType,
+		bytes: bytes.byteLength,
+		directive: `@image ${path}`,
+	};
+}
+
+function dataUrlMediaType(data: string): string | undefined {
+	return /^data:([^;,]+)?;base64,/iu.exec(data.trim())?.[1];
+}
+
+function decodeUploadData(data: string): Buffer {
+	const match = /^data:([^;,]+)?;base64,(.*)$/iu.exec(data.trim());
+	const encoded = (match?.[2] ?? data).replace(/\s+/gu, "");
+	if (!/^[A-Za-z0-9+/]*={0,2}$/u.test(encoded) || encoded.length % 4 === 1) {
+		throw new Error("upload data is not valid base64");
+	}
+	return Buffer.from(encoded, "base64");
+}
+
+function uploadFilename(filename: string | undefined, mediaType: string): string {
+	const original = basename(filename ?? "image");
+	const ext = extensionForMediaType(mediaType);
+	const originalExt = extname(original);
+	const stem = (originalExt.length > 0 ? original.slice(0, -originalExt.length) : original)
+		.replace(/[^A-Za-z0-9._-]+/gu, "-")
+		.replace(/^-+|-+$/gu, "")
+		.slice(0, 80) || "image";
+	return `${stem}-${Date.now()}-${randomUUID()}.${ext}`;
+}
+
+function extensionForMediaType(mediaType: string): string {
+	const sub = mediaType.split("/")[1]?.split(";")[0]?.trim().toLowerCase();
+	switch (sub) {
+		case "jpeg":
+		case "jpg":
+			return "jpg";
+		case "svg+xml":
+			return "svg";
+		case "heic":
+		case "heif":
+		case "png":
+		case "gif":
+		case "webp":
+		case "avif":
+		case "tiff":
+		case "bmp":
+			return sub;
+		default:
+			return "img";
+	}
 }
 
 async function herdrReadWithFullFallback(
@@ -213,6 +294,8 @@ async function dispatch(op: string, args: Record<string, unknown>): Promise<unkn
 			if (!pane || keys.length === 0) throw new Error("keys requires pane and keys[]");
 			return herdrRequest("pane.send_keys", { pane_id: pane, keys });
 		}
+		case "upload":
+			return saveRelayUpload(args);
 		case "start": {
 			const name = str(args.name);
 			const argv = Array.isArray(args.argv) ? (args.argv as unknown[]).map(String) : [];
@@ -306,14 +389,27 @@ interface StreamHandle {
 }
 
 const peerStreams = new WeakMap<WebSocketPeer, Map<string, StreamHandle>>();
+const orderedInputQueues = new Map<string, Promise<void>>();
 
 // Live TUI faces attached via a `face-attach` op. Presence = connection alive;
 // a face dropping (crash or quit) clears on the WS `close` hook. Surfaced in
 // `/relay/health` as `face` so the iOS app can show headless vs face-attached.
 const facePeers = new Set<WebSocketPeer>();
 
+type PendingFaceCommand = {
+	readonly client: WebSocketPeer;
+	readonly clientRequestId: RelayRequest["id"];
+	readonly face: WebSocketPeer;
+};
+
+const pendingFaceCommands = new Map<string, PendingFaceCommand>();
+
 function facePresence(): { attached: boolean; count: number } {
 	return { attached: facePeers.size > 0, count: facePeers.size };
+}
+
+function attachedFacePeer(): WebSocketPeer | undefined {
+	return facePeers.values().next().value;
 }
 
 function streamsFor(peer: WebSocketPeer): Map<string, StreamHandle> {
@@ -344,6 +440,114 @@ function closeStream(peer: WebSocketPeer, key?: string): void {
 		handle.close();
 		map.delete(key);
 	}
+}
+
+function orderedInputKey(req: RelayRequest): string | undefined {
+	switch (req.op) {
+		case "write":
+		case "keys":
+		case "run": {
+			const pane = str(req.args?.pane);
+			return pane === undefined ? undefined : `pane:${pane}`;
+		}
+		case "send": {
+			const pane = str(req.args?.pane);
+			if (pane !== undefined) return `pane:${pane}`;
+			const agent = str(req.args?.agent);
+			return agent === undefined ? undefined : `agent:${agent}`;
+		}
+		default:
+			return undefined;
+	}
+}
+
+function enqueueOrderedInput(peer: WebSocketPeer, req: RelayRequest, key: string): void {
+	const previous = orderedInputQueues.get(key) ?? Promise.resolve();
+	const next = previous
+		.catch(() => {
+			// Each queued request handles its own error and replies to its caller.
+			// Keep the chain alive if a prior request failed.
+		})
+		.then(async () => {
+			try {
+				const result = await dispatch(req.op, req.args ?? {});
+				reply(peer, { id: req.id, ok: true, result });
+			} catch (error) {
+				reply(peer, { id: req.id, ok: false, error: (error as Error).message });
+			}
+		})
+		.catch(() => {
+			// The peer may have disconnected while its queued input was in flight.
+			// Do not let a failed reply poison later input queued for this pane.
+		});
+	orderedInputQueues.set(key, next);
+	void next.finally(() => {
+		if (orderedInputQueues.get(key) === next) orderedInputQueues.delete(key);
+	});
+}
+
+function startFaceCommand(peer: WebSocketPeer, req: RelayRequest): void {
+	const face = attachedFacePeer();
+	if (face === undefined) throw new Error("No Clanky face is attached. Start the Clanky face before running native slash commands.");
+	const commandLine = str(req.args?.command_line) ?? str(req.args?.commandLine);
+	if (commandLine === undefined) throw new Error("face-command requires command_line");
+	const commandId = requestId(req.id);
+	pendingFaceCommands.set(commandId, { client: peer, clientRequestId: req.id, face });
+	reply(face, { type: "face.command.request", id: commandId, commandLine });
+}
+
+function forwardFaceCommandEvent(peer: WebSocketPeer, req: RelayRequest): void {
+	const commandId = str(req.args?.request_id) ?? str(req.args?.requestID) ?? requestId(req.id);
+	const event = req.args?.event;
+	const pending = pendingFaceCommands.get(commandId);
+	if (pending === undefined) return;
+	if (pending.face !== peer) throw new Error("face-command-event came from a different face peer");
+	reply(pending.client, { id: pending.clientRequestId, ok: true, stream: true, body: event });
+	if (isTerminalFaceCommandEvent(event)) pendingFaceCommands.delete(commandId);
+}
+
+function forwardFaceCommandClientMessage(peer: WebSocketPeer, req: RelayRequest): void {
+	const commandId = str(req.args?.request_id) ?? str(req.args?.requestID);
+	const message = req.args?.message;
+	if (commandId === undefined) throw new Error("face-command-client requires request_id");
+	const pending = pendingFaceCommands.get(commandId);
+	if (pending === undefined) throw new Error("No pending face command for request_id");
+	if (pending.client !== peer) throw new Error("face-command-client came from a different client peer");
+	reply(pending.face, { type: "face.command.client", id: commandId, message });
+	reply(peer, { id: req.id, ok: true, result: { sent: true } });
+}
+
+function closePendingFaceCommandsFor(peer: WebSocketPeer): void {
+	for (const [commandId, pending] of pendingFaceCommands) {
+		if (pending.client !== peer && pending.face !== peer) continue;
+		pendingFaceCommands.delete(commandId);
+		if (pending.client === peer) {
+			reply(pending.face, {
+				type: "face.command.client",
+				id: commandId,
+				message: { type: "menu.cancel", sessionId: commandId },
+			});
+			continue;
+		}
+		if (pending.face === peer) {
+			reply(pending.client, {
+				id: pending.clientRequestId,
+				ok: true,
+				stream: true,
+				body: {
+					type: "menu.failed",
+					sessionId: commandId,
+					message: "The Clanky face disconnected before the command finished.",
+				},
+			});
+		}
+	}
+}
+
+function isTerminalFaceCommandEvent(event: unknown): boolean {
+	if (event === null || typeof event !== "object" || Array.isArray(event)) return false;
+	const type = (event as { type?: unknown }).type;
+	return type === "menu.end" || type === "menu.failed";
 }
 
 function subscribe(peer: WebSocketPeer, req: RelayRequest): void {
@@ -715,7 +919,25 @@ export default defineChannel({
 					}
 					if (req.op === "face-detach") {
 						facePeers.delete(peer);
+						closePendingFaceCommandsFor(peer);
 						reply(peer, { id: req.id, ok: true, face: "detached" });
+						return;
+					}
+					if (req.op === "face-command") {
+						startFaceCommand(peer, req);
+						return;
+					}
+					if (req.op === "face-command-event") {
+						forwardFaceCommandEvent(peer, req);
+						return;
+					}
+					if (req.op === "face-command-client") {
+						forwardFaceCommandClientMessage(peer, req);
+						return;
+					}
+					const inputKey = orderedInputKey(req);
+					if (inputKey !== undefined) {
+						enqueueOrderedInput(peer, req, inputKey);
 						return;
 					}
 					const result = await dispatch(req.op, req.args ?? {});
@@ -726,6 +948,7 @@ export default defineChannel({
 			},
 			close(peer: WebSocketPeer) {
 				facePeers.delete(peer);
+				closePendingFaceCommandsFor(peer);
 				closeStream(peer);
 			},
 		})),

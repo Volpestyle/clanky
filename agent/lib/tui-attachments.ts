@@ -260,6 +260,11 @@ function mediaTypeFromMagic(bytes: Buffer): string | undefined {
 	if (bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WEBP") {
 		return "image/webp";
 	}
+	if (bytes.length >= 12 && bytes.subarray(4, 8).toString("ascii") === "ftyp") {
+		const brand = bytes.subarray(8, 12).toString("ascii").toLowerCase();
+		if (["heic", "heix", "hevc", "hevx"].includes(brand)) return "image/heic";
+		if (["mif1", "msf1"].includes(brand)) return "image/heif";
+	}
 	if (bytes.subarray(0, 5).toString("ascii") === "%PDF-") return "application/pdf";
 	return undefined;
 }
@@ -275,6 +280,10 @@ function mediaTypeFromExtension(extension: string): string | undefined {
 		case ".html":
 		case ".htm":
 			return "text/html";
+		case ".heic":
+			return "image/heic";
+		case ".heif":
+			return "image/heif";
 		case ".jpeg":
 		case ".jpg":
 			return "image/jpeg";

@@ -324,6 +324,7 @@ import {
 const REPO = process.env.CLANKY_REPO_DIR ?? process.cwd();
 const PORT = resolvePort(process.env.CLANKY_EVE_PORT, 2000);
 const HOST = `http://127.0.0.1:${PORT}`;
+const BIND_HOST = process.env.CLANKY_EVE_HOST?.trim();
 const CALLBACK_PROXY_PORT = resolvePort(process.env.CLANKY_EVE_CALLBACK_PROXY_PORT, 3000);
 const HEALTH_TIMEOUT_MS = resolveDurationMs(process.env.CLANKY_EVE_HEALTH_TIMEOUT_MS, 180_000, "CLANKY_EVE_HEALTH_TIMEOUT_MS");
 const SERVER_STOP_TIMEOUT_MS = resolveDurationMs(process.env.CLANKY_EVE_STOP_TIMEOUT_MS, 5_000, "CLANKY_EVE_STOP_TIMEOUT_MS");
@@ -9270,7 +9271,14 @@ async function startServer(): Promise<void> {
 	ownedServerStartError = undefined;
 	brainHost = HOST;
 	const env = await buildOwnedServerEnv();
-	const child = spawn(join(REPO, "node_modules", ".bin", "eve"), ["dev", "--no-ui", "--port", String(PORT)], {
+	const args = [
+		"dev",
+		"--no-ui",
+		...(BIND_HOST === undefined || BIND_HOST.length === 0 ? [] : ["--host", BIND_HOST]),
+		"--port",
+		String(PORT),
+	];
+	const child = spawn(join(REPO, "node_modules", ".bin", "eve"), args, {
 		cwd: REPO,
 		env,
 		stdio: ["ignore", "pipe", "pipe"],

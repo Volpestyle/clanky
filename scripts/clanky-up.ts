@@ -6,8 +6,9 @@
  * inside the eve brain, so it cannot start the brain. This can.
  *
  * It is idempotent. `up` ensures the persistent herdr session exists and that
- * Clanky's brain (`eve dev --no-ui`) is running as a pane inside it, then prints
- * a JSON status. `status` reports without starting. `down` closes the brain pane.
+ * Clanky's native command face is running as a pane inside it. That face owns the
+ * headless Eve brain and mirrors slash-command menu events for iOS. `status`
+ * reports without starting. `down` closes the face/brain pane.
  *
  * Run over SSH, e.g.:
  *   ssh mac 'cd ~/dev/clanky-eve-herdr && bash -lc "node scripts/clanky-up.ts --json"'
@@ -133,7 +134,7 @@ async function findBrain(): Promise<AgentEntry | undefined> {
 }
 
 async function startBrain(): Promise<AgentEntry> {
-	const command = await eveDevCommand();
+	const command = await clankyFaceCommand();
 	await herdr([
 		"--session",
 		SESSION,
@@ -150,16 +151,24 @@ async function startBrain(): Promise<AgentEntry> {
 		await sleep(500);
 		if (await portOpen()) {
 			const brain = await findBrain();
-			if (brain) return brain;
+			if (brain) {
+				await waitForFaceAttachment(5000);
+				return brain;
+			}
 		}
 	}
 	throw new Error(`brain '${BRAIN_AGENT}' did not serve on :${PORT} within 30s`);
 }
 
-async function eveDevCommand(): Promise<string[]> {
-	const command = ["pnpm", "exec", "eve", "dev", "--no-ui", "--host", HOST, "--port", String(PORT)];
+async function clankyFaceCommand(): Promise<string[]> {
 	const contextTokens = await contextTokensForOwnedBrain();
-	return contextTokens === undefined ? command : ["env", `${LOCAL_CONTEXT_TOKENS_ENV}=${contextTokens}`, ...command];
+	return [
+		"env",
+		`CLANKY_EVE_HOST=${HOST}`,
+		...(contextTokens === undefined ? [] : [`${LOCAL_CONTEXT_TOKENS_ENV}=${contextTokens}`]),
+		process.execPath,
+		"scripts/clanky.ts",
+	];
 }
 
 async function contextTokensForOwnedBrain(): Promise<number | undefined> {
@@ -182,6 +191,68 @@ async function readLocalEnv(): Promise<Record<string, string>> {
 	}
 }
 
+async function relayToken(): Promise<string> {
+	const fromEnv = process.env.CLANKY_RELAY_TOKEN;
+	if (fromEnv !== undefined && fromEnv.trim().length > 0) return fromEnv;
+	return (await readLocalEnv()).CLANKY_RELAY_TOKEN ?? "";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+async function relayFaceAttached(): Promise<boolean | undefined> {
+	const token = await relayToken();
+	if (token.trim().length === 0) return undefined;
+
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), 1500);
+	try {
+		const response = await fetch(`http://127.0.0.1:${PORT}/relay/health`, {
+			headers: { Authorization: `Bearer ${token}` },
+			signal: controller.signal,
+		});
+		if (!response.ok) return undefined;
+		const body: unknown = await response.json();
+		if (!isRecord(body)) return undefined;
+		const face = body.face;
+		if (!isRecord(face)) return false;
+		return face.attached === true;
+	} catch {
+		return undefined;
+	} finally {
+		clearTimeout(timeout);
+	}
+}
+
+async function waitForFaceAttachment(timeoutMs: number): Promise<boolean> {
+	if ((await relayToken()).trim().length === 0) return false;
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		const attached = await relayFaceAttached();
+		if (attached === true) return true;
+		await sleep(250);
+	}
+	return false;
+}
+
+async function existingBrainNeedsFaceRestart(): Promise<boolean> {
+	for (let i = 0; i < 5; i++) {
+		const attached = await relayFaceAttached();
+		if (attached === true || attached === undefined) return false;
+		await sleep(500);
+	}
+	return true;
+}
+
+async function waitForBrainPaneGone(paneId: string): Promise<void> {
+	for (let i = 0; i < 20; i++) {
+		const brain = await findBrain();
+		if (brain === undefined || brain.pane_id !== paneId) return;
+		await sleep(250);
+	}
+}
+
 function statusJson(session: SessionEntry | undefined, brain: AgentEntry | undefined, serving: boolean, started: boolean) {
 	return {
 		ok: !!session && !!brain && serving,
@@ -197,11 +268,19 @@ async function runUp(): Promise<number> {
 	const session = await ensureSession();
 	let brain = await findBrain();
 	let started = false;
-	if (!brain || !(await portOpen())) {
+	let serving = await portOpen();
+	if (brain && serving && await existingBrainNeedsFaceRestart()) {
+		await herdr(["--session", SESSION, "pane", "close", brain.pane_id]);
+		await waitForBrainPaneGone(brain.pane_id);
+		brain = undefined;
+		serving = await portOpen();
+	}
+	if (!brain || !serving) {
 		brain = await startBrain();
 		started = true;
 	}
-	const serving = await portOpen();
+	serving = await portOpen();
+	await waitForFaceAttachment(2000);
 	process.stdout.write(`${JSON.stringify(statusJson(session, brain, serving, started))}\n`);
 	return serving ? 0 : 1;
 }

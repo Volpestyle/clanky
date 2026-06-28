@@ -10,7 +10,14 @@ import {
 	parseDiscordIdAllowlist,
 	resolveDiscordAllowDms,
 } from "../agent/lib/discord/acceptance.ts";
-import { isDiscordSelfMessage, parseBridgeCommand, RecentDiscordMessageIds } from "../agent/lib/discord/host.ts";
+import {
+	formatVoiceIntentFailure,
+	formatVoiceIntentSuccess,
+	isDiscordSelfMessage,
+	parseBridgeCommand,
+	RecentDiscordMessageIds,
+	shouldCatchUpVoiceIntentMessage,
+} from "../agent/lib/discord/host.ts";
 import { extractDiscordMemoryCandidates } from "../agent/lib/discord/memory.ts";
 import { buildPresenceSessionMessage } from "../agent/lib/discord/presence-payload.ts";
 import {
@@ -43,6 +50,10 @@ function msg(over: Partial<DiscordInboundMessage>): DiscordInboundMessage {
 		mentionsSelf: false,
 		...over,
 	};
+}
+
+function snowflakeAt(timestampMs: number): string {
+	return String((BigInt(timestampMs) - 1_420_070_400_000n) << 22n);
 }
 
 const NEVER = {
@@ -375,6 +386,36 @@ check("'clanky leave vc' -> leave", detectVoiceIntent("clanky leave vc") === "le
 check("'clank hop out of the call' -> leave", detectVoiceIntent("clank hop out of the call") === "leave");
 check("'what did you think of the vc earlier' is not an intent", detectVoiceIntent("what about the vc earlier") === null);
 check("'how are you' has no voice intent", detectVoiceIntent("how are you") === null);
+check("voice join success reply is explicit", formatVoiceIntentSuccess("join") === "Joining VC.");
+check("voice leave success reply is explicit", formatVoiceIntentSuccess("leave") === "Left VC.");
+check(
+	"missing OpenAI voice key gets a friendly Discord reply",
+	formatVoiceIntentFailure(
+		"join",
+		new Error("voice requires CLANKY_OPENAI_API_KEY or OPENAI_API_KEY for the OpenAI realtime agent"),
+	) === "I couldn't join VC: voice is configured for OpenAI realtime but no OpenAI API key is available.",
+);
+check(
+	"recent voice intent qualifies for gateway startup catch-up",
+	shouldCatchUpVoiceIntentMessage(
+		msg({ externalMessageId: snowflakeAt(2_000), text: "Join Vc clanky" }),
+		1_000,
+	),
+);
+check(
+	"old voice intent is skipped by gateway startup catch-up",
+	!shouldCatchUpVoiceIntentMessage(
+		msg({ externalMessageId: snowflakeAt(500), text: "Join Vc clanky" }),
+		1_000,
+	),
+);
+check(
+	"non-voice chat is skipped by gateway startup catch-up",
+	!shouldCatchUpVoiceIntentMessage(
+		msg({ externalMessageId: snowflakeAt(2_000), text: "clanky what happened" }),
+		1_000,
+	),
+);
 
 // --- engagement window with injected clock -------------------------------
 {

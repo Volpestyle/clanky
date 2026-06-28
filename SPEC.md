@@ -351,7 +351,16 @@ flowchart LR
   - `write {pane, text}` → herdr `pane.send_text`, writing verbatim bytes to the
     PTY master with **no** trailing Enter (unlike `run`/`send`). Typed text,
     control sequences (Ctrl-C as `\x03`), and arrow-key escapes (`\x1b[A`) all pass
-    through, so the client owns keystroke encoding and newlines.
+    through, so the client owns keystroke encoding and newlines. The relay
+    serializes `write`, `keys`, `run`, and pane-targeted `send` by target pane
+    before forwarding to Herdr, so clients may pipeline live terminal input over a
+    held-open WebSocket without racing characters or Enter ahead of prior text.
+  - `upload {kind:"image", filename?, media_type?, data}` saves a base64 image
+    from a remote client into Clanky's private data dir on the host and returns
+    `{path, filename, media_type, bytes, directive}`. `directive` is an `@image
+    <path>` line for the Clanky TUI attachment parser. iOS inserts it through
+    bracketed paste so the path lands in the terminal editor without submitting
+    the prompt prematurely.
 - The brain is just another herdr pane — the lead pane — which is why lifecycle
   (SSH) sits below it and interaction (relay) sits inside it.
 - herdr stays vanilla; the glue is TypeScript inside the Clanky eve app.
@@ -573,7 +582,12 @@ performers are the visibility.
 Voice is the same presence model with a live media plane. The conductor's
 gateway already holds `GUILD_VOICE_STATES`, so "hop in vc" (a wake-addressed
 chat message, a voice op, or the existing `discord_voice_join` intent) makes
-Clanky join the caller's voice channel. The media path is the control plane in
+Clanky join the caller's voice channel. The gateway handles that intent before
+starting the normal text presence turn, so success/failure is reported directly
+instead of asking the text model to infer whether a voice tool exists. On
+startup, the gateway also fetches recent messages from scoped channels and
+replays only recent voice intents, covering the restart window without replaying
+ordinary chat turns. The media path is the control plane in
 `agent/lib/voice/*` (ClankVox Rust transport for Discord RTP/Opus,
 per-speaker OpenAI Realtime transcription, Realtime or ElevenLabs TTS), attached
 to the gateway's Discord client via `attachVoiceRuntime()` on
@@ -680,9 +694,10 @@ Both presence kinds spawn the mirror through one seam,
 `spawnSessionPaneMirror(slug, sessionId)` (`agent/lib/discord/pane-mirror-spawn.ts`):
 text channels mirror their presence session as `clanky:discord-<channel>` from
 the gateway's `onPresenceSession`; voice mirrors its **durability eve session**
-(§5.3 — the silent turn that runs the same brain on each voice transcript) as
-`clanky:voice-<channel>`, spawned from `joinVoice` once that session reports its
-id. Voice transcript turns surface as `Voice <speaker>: …` inbound lines.
+(§5.3 — the silent turn that runs the same brain on voice activity) as
+`clanky:voice-<channel>`, bootstrapped from `joinVoice` with a silent start turn
+so the voice subagent is visible immediately after joining. Voice transcript
+turns surface as `Voice <speaker>: …` inbound lines.
 
 ## 6. Decoupled swarm sessions (Clanky optional)
 

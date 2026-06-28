@@ -90,6 +90,8 @@ export interface DiscordPresenceHostOptions {
 const DEFAULT_EVE_HOST = "http://127.0.0.1:2000";
 const MAX_CHANNEL_HISTORY = 40;
 const MAX_INBOUND_MESSAGE_MEMORY = 1000;
+const DEFAULT_VOICE_INTENT_CATCH_UP_WINDOW_MS = 30_000;
+const DISCORD_EPOCH_MS = 1_420_070_400_000n;
 
 function formatDiscordTraceTarget(message: DiscordInboundMessage): string {
 	const parts = [
@@ -109,6 +111,59 @@ function shortDiscordId(id: string): string {
 
 function logDiscordTrace(message: string): void {
 	console.info(`[discord] ${message}`);
+}
+
+export function formatVoiceIntentSuccess(intent: VoiceIntent): string {
+	return intent === "join" ? "Joining VC." : "Left VC.";
+}
+
+export function formatVoiceIntentFailure(intent: VoiceIntent, error: unknown): string {
+	const action = intent === "join" ? "join" : "leave";
+	return `I couldn't ${action} VC: ${sentenceForDiscord(formatVoiceIntentFailureDetail(error))}`;
+}
+
+function formatVoiceIntentFailureDetail(error: unknown): string {
+	const detail = error instanceof Error ? error.message : String(error);
+	if (detail.includes("CLANKY_OPENAI_API_KEY") || detail.includes("OPENAI_API_KEY")) {
+		return "voice is configured for OpenAI realtime but no OpenAI API key is available";
+	}
+	if (detail.includes("CLANKY_XAI_API_KEY") || detail.includes("XAI_API_KEY")) {
+		return "voice is configured for xAI realtime but no xAI API key is available";
+	}
+	if (detail.includes("CLANKY_ELEVENLABS_API_KEY") || detail.includes("ELEVENLABS_API_KEY")) {
+		return "voice is configured for ElevenLabs TTS but no ElevenLabs API key is available";
+	}
+	return detail;
+}
+
+function sentenceForDiscord(text: string): string {
+	const trimmed = text.trim();
+	return /[.!?]$/u.test(trimmed) ? trimmed : `${trimmed}.`;
+}
+
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+function resolveVoiceIntentCatchUpWindowMs(env: NodeJS.ProcessEnv): number {
+	const raw = env.CLANKY_DISCORD_VOICE_CATCH_UP_WINDOW_MS?.trim();
+	if (raw === undefined || raw.length === 0) return DEFAULT_VOICE_INTENT_CATCH_UP_WINDOW_MS;
+	const parsed = Number.parseInt(raw, 10);
+	return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_VOICE_INTENT_CATCH_UP_WINDOW_MS;
+}
+
+function discordSnowflakeTimestampMs(id: string): number | undefined {
+	try {
+		return Number((BigInt(id) >> 22n) + DISCORD_EPOCH_MS);
+	} catch {
+		return undefined;
+	}
+}
+
+export function shouldCatchUpVoiceIntentMessage(message: DiscordInboundMessage, cutoffMs: number): boolean {
+	if (detectVoiceIntent(message.text) === null) return false;
+	const timestampMs = discordSnowflakeTimestampMs(message.externalMessageId);
+	return timestampMs !== undefined && timestampMs >= cutoffMs;
 }
 
 export class RecentDiscordMessageIds {
@@ -177,7 +232,9 @@ export class DiscordPresenceHost {
 	}
 
 	async start(): Promise<void> {
+		const catchUpCutoffMs = Date.now() - resolveVoiceIntentCatchUpWindowMs(process.env);
 		await this.gateway.start((message) => this.route(message));
+		await this.catchUpRecentVoiceIntents(catchUpCutoffMs);
 	}
 
 	async stop(): Promise<void> {
@@ -229,6 +286,21 @@ export class DiscordPresenceHost {
 		return resolveWakeNameMatch(message.text, this.wakeNames).mentioned;
 	}
 
+	private async catchUpRecentVoiceIntents(cutoffMs: number): Promise<void> {
+		if (this.options.onVoiceIntent === undefined) return;
+		const channelIds = [...new Set(this.scope.allowedChannelIds ?? [])];
+		for (const channelId of channelIds) {
+			const messages = await this.gateway.fetchRecentMessages(channelId, 5).catch((error: unknown) => {
+				console.error(`discord voice intent catch-up failed channel=${shortDiscordId(channelId)}:`, error);
+				return [];
+			});
+			const ordered = messages
+				.filter((message) => shouldCatchUpVoiceIntentMessage(message, cutoffMs))
+				.sort((left, right) => left.externalMessageId.localeCompare(right.externalMessageId));
+			for (const message of ordered) await this.route(message);
+		}
+	}
+
 	private async route(message: DiscordInboundMessage): Promise<void> {
 		const traceTarget = formatDiscordTraceTarget(message);
 		if (!this.inboundMessageIds.remember(message.externalMessageId)) {
@@ -271,7 +343,25 @@ export class DiscordPresenceHost {
 
 			if (this.options.onVoiceIntent !== undefined) {
 				const intent = detectVoiceIntent(message.text);
-				if (intent !== null) await this.options.onVoiceIntent(intent, message);
+				if (intent !== null) {
+					await this.gateway.sendTyping(message.channelId);
+					try {
+						await this.options.onVoiceIntent(intent, message);
+						const text = formatVoiceIntentSuccess(intent);
+						const sentIds = await this.gateway.sendMessage(message.channelId, text);
+						this.recordChannelMessage(message.channelId, { author: "Clanky", text });
+						logDiscordTrace(`voice intent handled intent=${intent} messages=${sentIds.length} ${traceTarget}`);
+					} catch (error) {
+						const text = formatVoiceIntentFailure(intent, error);
+						const sentIds = await this.gateway.sendMessage(message.channelId, text);
+						this.recordChannelMessage(message.channelId, { author: "Clanky", text });
+						logDiscordTrace(
+							`voice intent failed intent=${intent} error=${JSON.stringify(errorMessage(error))} messages=${sentIds.length} ${traceTarget}`,
+						);
+					}
+					this.tracker.record(message.channelId, message.authorId);
+					return;
+				}
 			}
 
 			await rememberDiscordMessageFacts(message).catch((error: unknown) =>

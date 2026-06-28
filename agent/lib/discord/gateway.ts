@@ -196,6 +196,13 @@ export class DiscordGateway {
 		}
 	}
 
+	async fetchRecentMessages(channelId: string, limit = 5): Promise<DiscordInboundMessage[]> {
+		const channel = await this.client.channels.fetch(channelId);
+		if (channel === null || !channel.isTextBased() || !("messages" in channel)) return [];
+		const messages = await channel.messages.fetch({ limit });
+		return [...messages.values()].map((message) => this.normalize(message));
+	}
+
 	isReady(): boolean {
 		return this.ready || this.client.isReady();
 	}

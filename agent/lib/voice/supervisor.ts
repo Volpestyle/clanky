@@ -17,7 +17,12 @@ import {
 	ElevenLabsTtsClient,
 	type ElevenLabsPcmOutputFormat,
 } from "./elevenLabsTtsClient.ts";
-import { bindVoiceEveSession, type VoiceEveSessionBinding, type VoiceEveSessionConfig } from "./eve-session.ts";
+import {
+	bindVoiceEveSession,
+	formatVoiceEveStartPrompt,
+	type VoiceEveSessionBinding,
+	type VoiceEveSessionConfig,
+} from "./eve-session.ts";
 import { type JsonRecord, stringValue } from "./json.ts";
 import { LocalRealtimeClient, type LocalRealtimeClientOptions } from "./localRealtimeClient.ts";
 import { OpenAiRealtimeClient, type OpenAiRealtimeConnectOptions } from "./openAiRealtimeClient.ts";
@@ -464,6 +469,7 @@ function bindVoiceSessionMirror(
 		realtime,
 		config: eveSession,
 		stats,
+		initialPrompt: formatVoiceEveStartPrompt(eveSession),
 		speakResponse(message) {
 			realtime.requestTextUtterance?.(message);
 		},

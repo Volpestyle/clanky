@@ -5,7 +5,11 @@ import { setImmediate } from "node:timers/promises";
 import { buildVoiceRuntimeSettings } from "../agent/lib/discord/voice-runtime.ts";
 import { rememberMemory } from "../agent/lib/memory.ts";
 import { DiscordVoiceTurnBuffer } from "../agent/lib/voice/discordVoiceTurnBuffer.ts";
-import { bindVoiceEveSession, formatVoiceEvePrompt } from "../agent/lib/voice/eve-session.ts";
+import {
+	bindVoiceEveSession,
+	formatVoiceEvePrompt,
+	formatVoiceEveStartPrompt,
+} from "../agent/lib/voice/eve-session.ts";
 import { bindExternalTtsOutput } from "../agent/lib/voice/externalTtsBridge.ts";
 import type { ElevenLabsTtsAudioChunk } from "../agent/lib/voice/elevenLabsTtsClient.ts";
 import { extractVoiceMemoryCandidates, isVoiceInputTranscript } from "../agent/lib/voice/memory.ts";
@@ -302,6 +306,48 @@ const mixedSpeakerPrompt = formatVoiceEvePrompt(inputTranscript, {
 });
 check("voice eve prompt marks mixed speakers", mixedSpeakerPrompt.includes("- speaker: multiple-or-unknown"));
 check("voice eve prompt includes mixed speaker ids", mixedSpeakerPrompt.includes("- speakerUserIds: u1, u2"));
+
+{
+	const startPrompt = formatVoiceEveStartPrompt({
+		host: "http://127.0.0.1:2000",
+		guildId: "g1",
+		channelId: "vc1",
+		speaker: { userId: "u1", userName: "Nina" },
+	});
+	check("voice eve start prompt marks the call start", startPrompt.includes("Discord voice conversation started:"));
+	const bootstrapSent: string[] = [];
+	const bootstrapSessions: string[] = [];
+	const bootstrapStats = { voiceEveSessionSendCount: 0, voiceEveSessionErrorCount: 0 };
+	bindVoiceEveSession({
+		realtime: {
+			on() {},
+		},
+		config: {
+			host: "http://127.0.0.1:2000",
+			guildId: "g1",
+			channelId: "vc1",
+			speaker: { userId: "u1", userName: "Nina" },
+		},
+		stats: bootstrapStats,
+		initialPrompt: startPrompt,
+		createSession() {
+			return {
+				async send(message: string) {
+					bootstrapSent.push(message);
+					return { result: async () => ({ sessionId: "voice-session-bootstrap", message: "[SKIP]" }) };
+				},
+			};
+		},
+		onSessionId(sessionId) {
+			bootstrapSessions.push(sessionId);
+		},
+	});
+	await setImmediate();
+	await setImmediate();
+	check("voice eve bootstrap creates the durability session immediately", bootstrapSent.length === 1);
+	check("voice eve bootstrap reports the session id", bootstrapSessions[0] === "voice-session-bootstrap");
+	check("voice eve bootstrap tracks the durability turn", bootstrapStats.voiceEveSessionSendCount === 1);
+}
 
 const eveTranscriptListeners: ((transcript: OpenAiRealtimeTranscript) => void)[] = [];
 const eveRealtime = {

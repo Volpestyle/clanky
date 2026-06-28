@@ -58,6 +58,10 @@ pnpm clanky up
 
 1. Check `pnpm clanky status` for the herdr session, brain pane, and serving
    state.
+   If you are already inside Herdr (`HERDR_ENV=1`) and `pnpm clanky status`
+   reports the persistent `clankies` session is down, also check the current
+   workspace with `herdr pane list`; live dev instances may be running outside
+   the persistent session.
 2. Read `herdr agent list` for the face pane, Discord presence mirrors, voice
    mirror, and delegated worker panes.
 3. Read the relevant pane tail and check ordering between user input, tool calls,

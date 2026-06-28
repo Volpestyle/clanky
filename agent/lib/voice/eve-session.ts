@@ -44,6 +44,8 @@ export interface BindVoiceEveSessionOptions {
 	speakResponse?(message: string): Promise<void> | void;
 	/** Fired once with the durability session id, so the owner can mirror it in a pane. */
 	onSessionId?(sessionId: string): void;
+	/** Optional first turn, used to create the watchable durability session at join time. */
+	initialPrompt?: string;
 }
 
 export interface VoiceEveSessionBinding {
@@ -69,6 +71,23 @@ export function formatVoiceEvePrompt(transcript: OpenAiRealtimeTranscript, confi
 		"",
 		"Newest voice transcript:",
 		transcript.text.trim(),
+	].join("\n");
+}
+
+export function formatVoiceEveStartPrompt(config: VoiceEveSessionConfig): string {
+	const speakerLines = formatSpeakerLines({
+		speaker: config.speaker,
+		speakerUserIds: config.speakerUserIds,
+	});
+	return [
+		"Discord voice conversation started:",
+		"",
+		"This is a silent durability turn for Clanky's live Discord voice call. The media session has just joined the voice channel. Preserve continuity and wait for spoken transcripts before doing substantive work. Reply with exactly [SKIP].",
+		"",
+		"Voice context:",
+		`- guildId: ${config.guildId}`,
+		`- channelId: ${config.channelId}`,
+		...speakerLines,
 	].join("\n");
 }
 
@@ -106,6 +125,7 @@ class VoiceEveSessionBridge implements VoiceEveSessionBinding {
 	private readonly createSession: (host: string) => VoiceEveSessionHandle;
 	private readonly speakResponse: ((message: string) => Promise<void> | void) | undefined;
 	private readonly onSessionId: ((sessionId: string) => void) | undefined;
+	private readonly initialPrompt: string | undefined;
 	private readonly listener: (transcript: OpenAiRealtimeTranscript) => void;
 	private session: VoiceEveSessionHandle | undefined;
 	private sessionIdNotified = false;
@@ -119,8 +139,15 @@ class VoiceEveSessionBridge implements VoiceEveSessionBinding {
 		this.createSession = options.createSession ?? createClientSession;
 		this.speakResponse = options.speakResponse;
 		this.onSessionId = options.onSessionId;
+		this.initialPrompt = options.initialPrompt;
 		this.listener = (transcript) => this.enqueueTranscript(transcript);
 		this.realtime.on("transcript", this.listener);
+		if (this.initialPrompt !== undefined && this.initialPrompt.trim().length > 0) {
+			this.queue = this.queue.then(() => this.startSession(this.initialPrompt!)).catch((error: unknown) => {
+				if (this.stats !== undefined) this.stats.voiceEveSessionErrorCount += 1;
+				console.error("voice eve session bootstrap failed:", error);
+			});
+		}
 	}
 
 	dispose(): void {
@@ -138,14 +165,10 @@ class VoiceEveSessionBridge implements VoiceEveSessionBinding {
 
 	private async sendTranscript(transcript: OpenAiRealtimeTranscript): Promise<void> {
 		if (this.disposed) return;
-		const session = this.session ?? this.createSession(this.config.host);
-		this.session = session;
+		const session = this.resolveSession();
 		const response = await session.send(formatVoiceEvePrompt(transcript, this.config));
 		const result = await response.result();
-		if (!this.sessionIdNotified && result.sessionId.length > 0) {
-			this.sessionIdNotified = true;
-			this.onSessionId?.(result.sessionId);
-		}
+		this.notifySessionId(result.sessionId);
 		if (this.stats !== undefined) this.stats.voiceEveSessionSendCount += 1;
 		const message = result.message?.trim();
 		if (message !== undefined && message.length > 0 && !isSkipResponse(message)) {
@@ -154,6 +177,26 @@ class VoiceEveSessionBridge implements VoiceEveSessionBinding {
 				this.stats.voiceEveSessionSpokenResponseCount = (this.stats.voiceEveSessionSpokenResponseCount ?? 0) + 1;
 			}
 		}
+	}
+
+	private resolveSession(): VoiceEveSessionHandle {
+		const session = this.session ?? this.createSession(this.config.host);
+		this.session = session;
+		return session;
+	}
+
+	private notifySessionId(sessionId: string): void {
+		if (this.sessionIdNotified || sessionId.length === 0) return;
+		this.sessionIdNotified = true;
+		this.onSessionId?.(sessionId);
+	}
+
+	private async startSession(prompt: string): Promise<void> {
+		if (this.disposed) return;
+		const response = await this.resolveSession().send(prompt);
+		const result = await response.result();
+		this.notifySessionId(result.sessionId);
+		if (this.stats !== undefined) this.stats.voiceEveSessionSendCount += 1;
 	}
 }
 

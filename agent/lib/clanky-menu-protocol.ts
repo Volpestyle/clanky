@@ -5,7 +5,7 @@
  * Clanky defines every command menu once, against the `SetupFlow` interface in
  * `scripts/clanky.ts`; the pi-tui renderer is one implementation. To drive those
  * same menus from the Clanky iOS app we add a second `SetupFlow` implementation
- * (`RemoteSetupFlow`, Phase 2) that, instead of drawing overlays, serializes each
+ * (`RemoteSetupFlow`) that, instead of drawing overlays, serializes each
  * step as a `ClankyMenuServerEvent` and resolves its `readSelect` / `readText`
  * promises from a `ClankyMenuClientMessage`.
  *
@@ -71,7 +71,7 @@ export type ClankyMenuClientMessage =
 	| { readonly type: "menu.back"; readonly sessionId: string; readonly stepId: string }
 	| { readonly type: "menu.cancel"; readonly sessionId: string };
 
-/** Catalog entry returned by the (Phase 2) relay `list-commands` op. */
+/** Catalog entry returned by the planned relay `list-commands` op. */
 export interface ClankyMenuCommandSpec {
 	readonly name: string;
 	readonly aliases: readonly string[];

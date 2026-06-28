@@ -23,9 +23,14 @@ await mkdir(dir, { recursive: true });
 try {
 	const png = Buffer.alloc(24);
 	Buffer.from("89504e470d0a1a0a", "hex").copy(png, 0);
+	const heic = Buffer.alloc(24);
+	heic.write("ftyp", 4, "ascii");
+	heic.write("heic", 8, "ascii");
 	const imagePath = join(dir, "screen shot.png");
+	const heicPath = join(dir, "camera.heic");
 	const notesPath = join(dir, "notes.md");
 	await writeFile(imagePath, png);
+	await writeFile(heicPath, heic);
 	await writeFile(notesPath, "# Notes\n\nhello\n");
 
 	const parsed = parseTuiAttachmentPrompt(`@image "${imagePath}"\nWhat changed?\n@file ${pathToFileURL(notesPath).href}`);
@@ -43,6 +48,11 @@ try {
 	assert(file !== undefined, "payload should include a file part");
 	assert(file.mediaType === "image/png", "payload should detect image media type");
 	assert(typeof file.data === "string" && file.data.startsWith("data:image/png;base64,"), "payload should use a data URL");
+
+	const heicPayload = await buildTuiAttachmentMessage(`@image ${heicPath}`, { cwd: dir });
+	assert(Array.isArray(heicPayload), "HEIC image prompt should become UserContent");
+	const heicFile = heicPayload.find((part) => part.type === "file");
+	assert(heicFile?.mediaType === "image/heic", "payload should detect HEIC image media type");
 
 	const defaultTextPayload = await buildTuiAttachmentMessage(`@file ${notesPath}`, { cwd: dir });
 	assert(Array.isArray(defaultTextPayload), "file-only prompt should become UserContent");
