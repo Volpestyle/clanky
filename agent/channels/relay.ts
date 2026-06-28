@@ -15,6 +15,7 @@ import { defineChannel, GET, WS } from "eve/channels";
 import type { WebSocketMessage, WebSocketPeer } from "eve/channels";
 import { isFrontdoorAuthorized } from "../lib/frontdoor-auth.ts";
 import { resolveClankyFacePanePlacement, startHerdrAgentNearPlacement, type HerdrPanePlacement } from "../lib/herdr-placement.ts";
+import { attachHerdrTerminal, type HerdrTerminalAttachStream } from "../lib/herdr-client-socket.ts";
 import { herdrRequest, herdrStreamLines, type HerdrStream } from "../lib/herdr-socket.ts";
 import { registerPushDevice, unregisterPushDevice } from "../lib/push-registry.ts";
 import { ensurePushWatcher } from "../lib/push-watcher.ts";
@@ -34,6 +35,10 @@ function str(v: unknown): string | undefined {
 
 function num(v: unknown, fallback: number): number {
 	return typeof v === "number" && Number.isFinite(v) ? v : fallback;
+}
+
+function int(v: unknown, fallback: number): number {
+	return typeof v === "number" && Number.isFinite(v) ? Math.round(v) : fallback;
 }
 
 function rec(v: unknown): Record<string, unknown> {
@@ -340,6 +345,7 @@ function subscribe(peer: WebSocketPeer, req: RelayRequest): void {
 interface PaneOutputFrame {
 	type: "pane.output";
 	pane_id: string;
+	terminal_id?: string;
 	source: string;
 	format: string;
 	full: boolean;
@@ -347,6 +353,8 @@ interface PaneOutputFrame {
 	encoding?: "base64";
 	data?: string;
 	seq?: number;
+	width?: number;
+	height?: number;
 	fallback?: boolean;
 	fallbackReason?: string;
 }
@@ -429,10 +437,9 @@ async function readPaneSnapshot(
 	}
 }
 
-// Live terminal stream (SPEC.md §4.3, Phase 2). Prefer herdr's native
-// `pane.attach` byte stream: attach first, read one ANSI snapshot for initial
-// state, then forward raw PTY chunks as base64 deltas. Older herdr builds fall
-// back to the Phase 1 snapshot poller behind the same relay op.
+// Live terminal stream (SPEC.md §4.4). Prefer Herdr's direct terminal client
+// socket when the caller has a terminal_id; fall back to the older pane attach /
+// snapshot-polling compatibility path behind the same relay op.
 function attach(peer: WebSocketPeer, req: RelayRequest): void {
 	const args = req.args ?? {};
 	const pane = str(args.pane);
@@ -442,9 +449,11 @@ function attach(peer: WebSocketPeer, req: RelayRequest): void {
 	const stripAnsi = args.strip_ansi === true;
 	const lines = typeof args.lines === "number" ? args.lines : undefined;
 	const intervalMs = Math.min(2000, Math.max(80, num(args.interval_ms, 180)));
+	const terminalId = str(args.terminal_id);
 	const key = `attach:${pane}`;
 
 	let closed = false;
+	let terminalStream: HerdrTerminalAttachStream | undefined;
 	let nativeStream: HerdrStream | undefined;
 	let last: string | undefined;
 	let timer: ReturnType<typeof setTimeout> | undefined;
@@ -460,6 +469,8 @@ function attach(peer: WebSocketPeer, req: RelayRequest): void {
 	const startPolling = (fallbackReason: string): void => {
 		if (closed || fallbackStarted) return;
 		fallbackStarted = true;
+		terminalStream?.close();
+		terminalStream = undefined;
 		nativeStream?.close();
 		nativeStream = undefined;
 		const tick = async (): Promise<void> => {
@@ -516,10 +527,49 @@ function attach(peer: WebSocketPeer, req: RelayRequest): void {
 	registerStream(peer, key, {
 		close: () => {
 			closed = true;
+			terminalStream?.close();
 			nativeStream?.close();
 			if (timer) clearTimeout(timer);
 		},
 	});
+
+	if (terminalId) {
+		terminalStream = attachHerdrTerminal(
+			{
+				terminalId,
+				takeover: args.takeover !== false,
+				cols: int(args.cols, 80),
+				rows: int(args.rows, 24),
+				cellWidthPx: int(args.cell_width_px, 0),
+				cellHeightPx: int(args.cell_height_px, 0),
+			},
+			{
+				onFrame: (frame) => {
+					if (closed || fallbackStarted) return;
+					sendFrame({
+						type: "pane.output",
+						pane_id: pane,
+						terminal_id: terminalId,
+						source: "terminal_attach",
+						format: "ansi",
+						full: frame.full,
+						encoding: "base64",
+						data: frame.bytes.toString("base64"),
+						seq: frame.seq,
+						width: frame.width,
+						height: frame.height,
+					});
+				},
+				onError: (error) => {
+					if (!closed && !fallbackStarted) startPolling(error.message);
+				},
+				onClose: () => {
+					if (!closed && !fallbackStarted) startPolling("herdr terminal attach stream closed");
+				},
+			},
+		);
+		return;
+	}
 
 	nativeStream = herdrStreamLines(
 		{ id: requestId(req.id), method: "pane.attach", params: { pane_id: pane } },

@@ -313,22 +313,28 @@ flowchart LR
 - **Live terminal (relay `attach`/`write`).** For a true interactive terminal —
   the phone typing straight into a pane and seeing it live — the relay adds a
   held-open `attach` stream and a raw `write` op:
-  - `attach {pane, source?="visible", format?="ansi", strip_ansi?=false, lines?, interval_ms?=180}`
-    where `source:"full"` requests all terminal history still retained by Herdr's
-    scrollback buffer when that Herdr build supports it. Vanilla Herdr builds
-    without `full` fall back to capped `recent_unwrapped` output; `recent`
-    remains bounded by `lines`.
-    opens a per-pane stream. The relay first sends a **full** ANSI-preserving
+  - `attach {pane, terminal_id?, cols?, rows?, cell_width_px?, cell_height_px?, takeover?=true, source?="visible", format?="ansi", strip_ansi?=false, lines?, interval_ms?=180}`
+    opens a per-pane stream. When `terminal_id` is present, the relay connects
+    to Herdr's client socket (`herdr-client.sock`), requests `TerminalAnsi`,
+    sends `AttachTerminal`, and forwards Herdr-rendered terminal frames as
+    base64 ANSI bytes:
+    `{id, ok:true, stream:true, body:{type:"pane.output", pane_id, terminal_id, source:"terminal_attach", format:"ansi", full, encoding:"base64", data, seq, width, height}}`.
+    The client resets its local terminal for full byte redraws and applies
+    incremental frames directly. `cols`/`rows` and cell pixel sizes are the
+    viewing client's native terminal grid; reconnecting with a new grid resizes
+    the server-owned terminal while the pane process stays durable.
+    The iOS app exposes this as Terminal mode **Native**.
+  - Without `terminal_id`, or if the direct attach path is unavailable, the relay
+    uses the compatibility path: it first sends a **full** ANSI-preserving
     snapshot of the requested source —
     `{id, ok:true, stream:true, body:{type:"pane.output", pane_id, source, format, full:true, text}}`
-    — then forwards herdr-native raw PTY chunks as base64 deltas:
-    `{id, ok:true, stream:true, body:{type:"pane.output", pane_id, source:"stream", format:"ansi", full:false, encoding:"base64", data, seq}}`.
-    The client replaces its buffer for `full:true` frames and appends bytes for
-    `full:false` frames. If the running herdr does not support native
-    `pane.attach`, the relay falls back to the old snapshot poller and emits
-    changed full frames. `detach {pane?}` ends one stream (or all). A peer may
-    hold one `events` subscription plus one `attach:<pane>` stream per open pane
-    concurrently.
+    — then uses native `pane.attach` byte chunks when available, otherwise
+    snapshot polling. `source:"full"` requests all retained Herdr scrollback when
+    that Herdr build supports it; vanilla builds without `full` fall back to
+    capped `recent_unwrapped` output, while `recent` remains bounded by `lines`.
+    The iOS app exposes this as Terminal mode **Mirror**.
+    `detach {pane?}` ends one stream (or all). A peer may hold one `events`
+    subscription plus one `attach:<pane>` stream per open pane concurrently.
   - `write {pane, text}` → herdr `pane.send_text`, writing verbatim bytes to the
     PTY master with **no** trailing Enter (unlike `run`/`send`). Typed text,
     control sequences (Ctrl-C as `\x03`), and arrow-key escapes (`\x1b[A`) all pass
@@ -800,13 +806,13 @@ owned brain after setting changes.
 
 ## 11. Open decisions
 
-- **Relay transport fit — RESOLVED (Phase 2): native `pane.attach` with
+- **Relay transport fit — RESOLVED (Phase 2): Herdr terminal attach with
   snapshot fallback.** A raw eve WS channel carries live terminal screens via
-  the `attach` op (§4.4). When Herdr exposes a native per-pane raw byte stream,
-  the relay attaches to it, sends an initial `pane.read` snapshot, then forwards
-  base64 PTY chunks as incremental `pane.output` frames. With vanilla Herdr
-  builds that do not expose native attach or uncapped `full` reads, the relay
-  falls back to snapshot polling over supported read sources. This keeps Herdr
+  the `attach` op (§4.4). When the pane record includes `terminal_id`, the relay
+  speaks Herdr's client-socket protocol directly, requests `TerminalAnsi`, and
+  forwards rendered terminal frames to iOS. With older Herdr builds or panes
+  that lack a terminal id, the relay falls back to the snapshot/native
+  `pane.attach` compatibility path over supported read sources. This keeps Herdr
   vanilla at runtime; upstream Herdr can add richer sources without forcing a
   Clanky-specific fork.
 - **Face surface — RESOLVED: custom face.** eve's stock TUI has a fixed,

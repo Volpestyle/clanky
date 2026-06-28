@@ -23,6 +23,16 @@ export function herdrSocketPath(): string {
 	return join(homedir(), ".config", "herdr", "herdr.sock");
 }
 
+export function herdrClientSocketPath(): string {
+	if (process.env.HERDR_SOCKET_PATH) return deriveClientSocketPath(process.env.HERDR_SOCKET_PATH);
+	if (process.env.HERDR_CLIENT_SOCKET_PATH) return process.env.HERDR_CLIENT_SOCKET_PATH;
+	return deriveClientSocketPath(herdrSocketPath());
+}
+
+function deriveClientSocketPath(apiSocketPath: string): string {
+	return apiSocketPath.endsWith(".sock") ? `${apiSocketPath.slice(0, -".sock".length)}-client.sock` : `${apiSocketPath}-client.sock`;
+}
+
 export function herdrRequest(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
 	const id = `eve_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 	return herdrRequestLine({ id, method, params }).then((line) => {
