@@ -1,6 +1,9 @@
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFile, mkdir, readdir, stat, writeFile } from "node:fs/promises";
+import { readFile, mkdir, readdir, stat, unlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
+import { promisify } from "node:util";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createXai } from "@ai-sdk/xai";
@@ -148,8 +151,23 @@ const MAX_VISUAL_BYTES_PER_IMAGE = 20 * 1024 * 1024;
 const DEFAULT_VISUAL_MAX_BYTES_PER_IMAGE = MAX_VISUAL_BYTES_PER_IMAGE;
 const OLLAMA_CAPABILITIES_TIMEOUT_MS = 3_000;
 const OLLAMA_VISION_TIMEOUT_MS = 60_000;
+const OLLAMA_VISION_TIMEOUT_MAX_MS = 300_000;
+// Each downscaled image costs ~900 vision tokens, and reasoning VL models (e.g. qwen3-vl) emit
+// a thinking block even with think:false. A static 8k context overflows on multi-image batches —
+// Ollama then 400s or returns empty content — so scale num_ctx with the batch and give output room.
 const OLLAMA_VISION_NUM_CTX = 8_192;
-const OLLAMA_VISION_NUM_PREDICT = 1_024;
+const OLLAMA_VISION_NUM_CTX_BASE = 4_096;
+const OLLAMA_VISION_NUM_CTX_PER_IMAGE = 1_024;
+const OLLAMA_VISION_NUM_CTX_MAX = 32_768;
+const OLLAMA_VISION_NUM_PREDICT = 2_048;
+const OLLAMA_VISION_MAX_IMAGES_PER_REQUEST = 4;
+// Cap the long edge before inspection. Raw 12MP phone photos are ~8MB of base64 per image;
+// resolution-sensitive backends (hosted vision, smaller local VL models) pay for every pixel,
+// and 1536px keeps text/UI legible while cutting payload ~7x. (Large MLX brains are prefill-bound
+// and barely resolution-sensitive, so for those the per-image timeout scaling below does the work.)
+const VISION_MAX_EDGE_PX = 1_536;
+const VISION_RESIZE_TIMEOUT_MS = 20_000;
+const execFileAsync = promisify(execFile);
 
 export async function generateOpenAiImage(
 	input: OpenAiImageGenerateInput,
@@ -650,26 +668,69 @@ async function generateOllamaNativeVisualInspection(
 	prepared: Array<{ item: VisualInspectItem; data: Buffer }>,
 	fetchImpl: typeof fetch,
 ): Promise<VisualInspectGenerateResult> {
+	// Send images in bounded chunks. A reasoning VL model's per-image token cost plus its thinking
+	// block grows with the batch; a single giant request overflows context (Ollama 400s or returns
+	// empty content) and risks the thinking eating the whole output budget. Small chunks stay within
+	// a predictable budget and combine into one description.
+	const promptText = textPartsFromUserContent(request.content);
+	const groups = chunkImages(prepared, OLLAMA_VISION_MAX_IMAGES_PER_REQUEST);
+	const single = groups.length <= 1;
+	const texts: string[] = [];
+	const failures: string[] = [];
+	let usage: unknown;
+	let offset = 0;
+	for (const group of groups) {
+		const label = single ? "" : `[Images ${offset + 1}-${offset + group.length}]\n`;
+		try {
+			const result = await ollamaVisionChatRequest(request.model, apiBaseURL, promptText, group, fetchImpl);
+			texts.push(`${label}${result.text}`.trim());
+			if (result.usage !== undefined) usage = result.usage;
+		} catch (error) {
+			// A single image-only request must surface its error so the OpenAI fallback can engage.
+			// Across a multi-chunk batch, one slow/failed chunk should not discard the others.
+			if (single) throw error;
+			failures.push(`${label}inspection failed: ${asError(error).message}`.trim());
+		}
+		offset += group.length;
+	}
+	if (texts.length === 0) throw new Error(failures.join("; ") || "Ollama vision produced no output");
+	return { text: [...texts, ...failures].join("\n\n"), ...(usage === undefined ? {} : { usage }) };
+}
+
+async function ollamaVisionChatRequest(
+	model: string,
+	apiBaseURL: string,
+	promptText: string,
+	group: Array<{ item: VisualInspectItem; data: Buffer }>,
+	fetchImpl: typeof fetch,
+): Promise<VisualInspectGenerateResult> {
 	const controller = new AbortController();
-	const timeout = setTimeout(() => controller.abort(), OLLAMA_VISION_TIMEOUT_MS);
+	const imageCount = Math.max(1, group.length);
+	// Budget per image: a chunk of large photos legitimately needs more wall-clock than one.
+	const timeoutMs = Math.min(OLLAMA_VISION_TIMEOUT_MS * imageCount, OLLAMA_VISION_TIMEOUT_MAX_MS);
+	const numCtx = Math.min(
+		OLLAMA_VISION_NUM_CTX_MAX,
+		Math.max(OLLAMA_VISION_NUM_CTX, imageCount * OLLAMA_VISION_NUM_CTX_PER_IMAGE + OLLAMA_VISION_NUM_CTX_BASE + OLLAMA_VISION_NUM_PREDICT),
+	);
+	const timeout = setTimeout(() => controller.abort(), timeoutMs);
 	let response: Response;
 	try {
 		response = await fetchImpl(`${apiBaseURL}/api/chat`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({
-				model: request.model,
+				model,
 				stream: false,
 				think: false,
 				messages: [
 					{
 						role: "user",
-						content: textPartsFromUserContent(request.content),
-						images: prepared.map(({ data }) => data.toString("base64")),
+						content: promptText,
+						images: group.map(({ data }) => data.toString("base64")),
 					},
 				],
 				options: {
-					num_ctx: OLLAMA_VISION_NUM_CTX,
+					num_ctx: numCtx,
 					num_predict: OLLAMA_VISION_NUM_PREDICT,
 					temperature: 0,
 				},
@@ -677,7 +738,7 @@ async function generateOllamaNativeVisualInspection(
 			signal: controller.signal,
 		});
 	} catch (error) {
-		if (isAbortError(error)) throw new Error(`Ollama vision request timed out after ${OLLAMA_VISION_TIMEOUT_MS}ms`);
+		if (isAbortError(error)) throw new Error(`Ollama vision request timed out after ${timeoutMs}ms`);
 		throw error;
 	} finally {
 		clearTimeout(timeout);
@@ -685,12 +746,28 @@ async function generateOllamaNativeVisualInspection(
 	const payload = await responseJson(response);
 	if (!response.ok) throw new Error(`Ollama vision request failed (${response.status}): ${summarizeApiError(payload)}`);
 	const message = isRecord(payload) && isRecord(payload.message) ? payload.message : undefined;
-	const text = typeof message?.content === "string" ? message.content : undefined;
-	if (text === undefined || text.trim().length === 0) throw new Error("Ollama vision response did not include message.content");
+	// Reasoning VL models (e.g. qwen3-vl) ignore think:false and sometimes emit the entire
+	// description into `thinking`, leaving `content` empty. The thinking text holds the answer,
+	// so fall back to it rather than discarding a populated response as a failure.
+	const text = firstNonEmptyString(message?.content, message?.thinking);
+	if (text === undefined) throw new Error("Ollama vision response did not include message.content or thinking");
 	return {
 		text,
 		...(isRecord(payload) && payload.usage !== undefined ? { usage: payload.usage } : {}),
 	};
+}
+
+function firstNonEmptyString(...values: unknown[]): string | undefined {
+	for (const value of values) {
+		if (typeof value === "string" && value.trim().length > 0) return value;
+	}
+	return undefined;
+}
+
+function chunkImages<T>(items: readonly T[], size: number): T[][] {
+	const groups: T[][] = [];
+	for (let index = 0; index < items.length; index += size) groups.push(items.slice(index, index + size));
+	return groups.length === 0 ? [[]] : groups;
 }
 
 type OllamaCapabilitiesResult = { ok: true; capabilities: string[] } | { ok: false; error: Error };
@@ -794,9 +871,10 @@ async function prepareVisualMedia(
 		if (info.size > maxBytesPerImage) {
 			throw new Error(`media_inspect file exceeds maxBytesPerImage (${info.size} > ${maxBytesPerImage}): ${path}`);
 		}
-		const data = await readFile(path);
-		const mediaType = detectImageMediaType(path, data);
-		if (mediaType === undefined) throw new Error(`media_inspect only supports PNG, JPEG, GIF, and WebP images: ${path}`);
+		const original = await readFile(path);
+		const detected = detectImageMediaType(path, original);
+		if (detected === undefined) throw new Error(`media_inspect only supports PNG, JPEG, GIF, and WebP images: ${path}`);
+		const { data, mediaType } = await downscaleForVision(path, original, detected);
 		prepared.push({
 			item: {
 				index: prepared.length + 1,
@@ -809,6 +887,56 @@ async function prepareVisualMedia(
 		});
 	}
 	return prepared;
+}
+
+/**
+ * Shrink oversized raster images before vision inspection. Uses macOS `sips` (no extra deps);
+ * if it is unavailable or fails, the original bytes are returned so inspection still proceeds.
+ * Animated GIFs are left untouched to preserve frames.
+ */
+async function downscaleForVision(
+	path: string,
+	data: Buffer,
+	mediaType: string,
+): Promise<{ data: Buffer; mediaType: string }> {
+	if (mediaType === "image/gif") return { data, mediaType };
+	const dimensions = await readImagePixelSize(path);
+	if (dimensions === undefined || Math.max(dimensions.width, dimensions.height) <= VISION_MAX_EDGE_PX) {
+		return { data, mediaType };
+	}
+	const preserveAlpha = mediaType === "image/png" || mediaType === "image/webp";
+	const resized = await resizeImageWithSips(path, VISION_MAX_EDGE_PX, preserveAlpha);
+	if (resized === undefined) return { data, mediaType };
+	return { data: resized, mediaType: preserveAlpha ? "image/png" : "image/jpeg" };
+}
+
+async function readImagePixelSize(path: string): Promise<{ width: number; height: number } | undefined> {
+	try {
+		const { stdout } = await execFileAsync("sips", ["-g", "pixelWidth", "-g", "pixelHeight", path], {
+			timeout: VISION_RESIZE_TIMEOUT_MS,
+		});
+		const width = Number(stdout.match(/pixelWidth:\s*(\d+)/u)?.[1]);
+		const height = Number(stdout.match(/pixelHeight:\s*(\d+)/u)?.[1]);
+		if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return undefined;
+		return { width, height };
+	} catch {
+		return undefined;
+	}
+}
+
+async function resizeImageWithSips(path: string, maxEdge: number, preserveAlpha: boolean): Promise<Buffer | undefined> {
+	const out = join(tmpdir(), `clanky-vision-${randomUUID()}.${preserveAlpha ? "png" : "jpg"}`);
+	const args = ["-Z", String(maxEdge)];
+	if (!preserveAlpha) args.push("-s", "format", "jpeg", "-s", "formatOptions", "85");
+	args.push(path, "--out", out);
+	try {
+		await execFileAsync("sips", args, { timeout: VISION_RESIZE_TIMEOUT_MS });
+		return await readFile(out);
+	} catch {
+		return undefined;
+	} finally {
+		await unlink(out).catch(() => {});
+	}
 }
 
 async function statVisualMediaPath(rawPath: string): Promise<{ path: string; info: Awaited<ReturnType<typeof stat>> }> {

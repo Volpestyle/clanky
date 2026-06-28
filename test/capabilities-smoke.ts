@@ -769,8 +769,8 @@ try {
 				if (href === "http://127.0.0.1:11434/api/chat") {
 					assert(body.model === "test-local-vision", "media_inspect sent images to the wrong Ollama model");
 					assert(body.think === false, "media_inspect should disable Ollama thinking for image inspection");
-					assert(body.options?.num_ctx === 8192, "media_inspect should bound Ollama vision context");
-					assert(body.options?.num_predict === 1024, "media_inspect should bound Ollama vision output");
+					assert(body.options?.num_ctx === 8192, "media_inspect should bound single-image Ollama vision context");
+					assert(body.options?.num_predict === 2048, "media_inspect should bound Ollama vision output");
 					assert(body.options?.temperature === 0, "media_inspect should use deterministic Ollama vision sampling");
 					const message = body.messages?.[0];
 					assert(message?.content?.includes("Describe the local visual artifact.") === true, "media_inspect omitted the prompt");
