@@ -20,6 +20,7 @@ import {
 	resolveDiscordScopeOptions,
 } from "./acceptance.ts";
 import { type DiscordCredentialKind, DiscordGateway } from "./gateway.ts";
+import { discordGatewaySessionStatusFromMessage, type DiscordGatewaySessionStatus } from "./gateway-status.ts";
 import { rememberDiscordMessageFacts } from "./memory.ts";
 import { buildPresenceSessionMessage } from "./presence-payload.ts";
 import type { DiscordHistoryEntry } from "./prompt.ts";
@@ -77,7 +78,9 @@ export interface DiscordPresenceHostOptions {
 	wakeNames?: string[];
 	/** Notified when a channel's presence session first gets a sessionId, so a
 	 * herdr pane mirror can be spawned (SPEC.md §5.6). */
-	onPresenceSession?: (info: { channelId: string; sessionId: string }) => void | Promise<void>;
+	onPresenceSession?: (info: DiscordGatewaySessionStatus) => void | Promise<void>;
+	/** Persist live gateway status for every accepted presence turn. */
+	onPresenceActivity?: (info: DiscordGatewaySessionStatus) => void | Promise<void>;
 	/** Route a bridge command (and the inbound message) to the main Clanky thread. */
 	onBridgeToMain?: (command: BridgeCommand, message: DiscordInboundMessage) => void | Promise<void>;
 	/** Handle a "hop in vc" / "leave vc" intent on an accepted message. */
@@ -189,14 +192,14 @@ export class DiscordPresenceHost {
 		return created;
 	}
 
-	private startPresenceMirror(message: DiscordInboundMessage, sessionId: string, traceTarget: string): void {
-		if (this.mirrored.has(message.channelId) || sessionId.length === 0) return;
-		this.mirrored.add(message.channelId);
+	private startPresenceMirror(info: DiscordGatewaySessionStatus, traceTarget: string): void {
+		if (this.mirrored.has(info.channelId) || info.sessionId.length === 0) return;
+		this.mirrored.add(info.channelId);
 		if (this.options.onPresenceSession === undefined) return;
-		logDiscordTrace(`mirror starting session=${shortDiscordId(sessionId)} ${traceTarget}`);
-		void Promise.resolve(this.options.onPresenceSession({ channelId: message.channelId, sessionId })).catch(
+		logDiscordTrace(`mirror starting session=${shortDiscordId(info.sessionId)} ${traceTarget}`);
+		void Promise.resolve(this.options.onPresenceSession(info)).catch(
 			(error: unknown) => {
-				this.mirrored.delete(message.channelId);
+				this.mirrored.delete(info.channelId);
 				console.error(`discord presence mirror failed ${traceTarget}:`, error);
 			},
 		);
@@ -283,7 +286,9 @@ export class DiscordPresenceHost {
 			});
 			const session = this.sessionFor(message.channelId);
 			const response = await session.send({ message: prompt });
-			this.startPresenceMirror(message, response.sessionId, traceTarget);
+			const sessionInfo = discordGatewaySessionStatusFromMessage(message, response.sessionId);
+			if (this.options.onPresenceActivity !== undefined) await this.options.onPresenceActivity(sessionInfo);
+			this.startPresenceMirror(sessionInfo, traceTarget);
 			const result = await response.result();
 
 			const text = result.message?.trim() ?? "";

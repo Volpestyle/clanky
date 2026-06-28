@@ -23,10 +23,6 @@
  *   CLANKY_FACE_HERDR_WORKSPACE_ID  herdr workspace that owns the main Clanky face
  *   CLANKY_REPO_DIR             repo checkout dir, for resolving the mirror script
  */
-import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { defineChannel, GET } from "eve/channels";
 import {
 	attachVoiceRuntime,
@@ -37,39 +33,27 @@ import {
 } from "./voice.ts";
 import { type BridgeCommand, DiscordPresenceHost } from "../lib/discord/host.ts";
 import { resolveDiscordCredentialKind, resolveDiscordToken } from "../lib/discord/gateway.ts";
+import {
+	type DiscordGatewayLock,
+	type DiscordGatewaySessionStatus,
+	type DiscordGatewayStatus,
+	acquireDiscordGatewayLock,
+	readDiscordGatewayStatus,
+	releaseDiscordGatewayLock,
+	resolveDiscordGatewayHealth,
+	writeDiscordGatewayStatus,
+} from "../lib/discord/gateway-status.ts";
 import { type GoLiveSink, GoLiveController, clearActiveGoLive, setActiveGoLive } from "../lib/discord/golive.ts";
 import { type DiscordInboundMessage, resolveDiscordScopeOptions } from "../lib/discord/acceptance.ts";
 import { buildGuildVoiceRuntime } from "../lib/discord/voice-runtime.ts";
 import type { VoiceIntent } from "../lib/discord/voice-intent.ts";
+import { spawnSessionPaneMirror } from "../lib/discord/pane-mirror-spawn.ts";
 import { herdrRequest } from "../lib/herdr-socket.ts";
-import {
-	getHerdrAgent,
-	nonEmptyString,
-	paneMatchesPlacement,
-	resolveClankyFacePanePlacement,
-	startHerdrAgentNearPlacement,
-} from "../lib/herdr-placement.ts";
 
 type DiscordGatewayState = {
 	host: DiscordPresenceHost | null;
 	startError: string | null;
 	lock: DiscordGatewayLock | null;
-};
-type DiscordGatewayLock =
-	| { status: "acquired"; path: string; ownerPid: number }
-	| { status: "held"; path: string; ownerPid?: number };
-type DiscordGatewayStatus = {
-	pid: number;
-	repo: string;
-	startedAt: string;
-	updatedAt: string;
-	state: "starting" | "ready" | "failed";
-	ready: boolean;
-	credentialKind: "bot-token" | "user-token";
-	voice: boolean;
-	scope: ReturnType<typeof resolveDiscordScopeOptions>;
-	sessions: { channelId: string; sessionId: string }[];
-	error?: string;
 };
 const DISCORD_GATEWAY_STATE_KEY = "__clankyDiscordGatewayState" as const;
 type DiscordGatewayGlobal = typeof globalThis & { [DISCORD_GATEWAY_STATE_KEY]?: DiscordGatewayState };
@@ -82,129 +66,6 @@ const discordGatewayStartedAt = new Date().toISOString();
 
 function eveHost(): string {
 	return process.env.CLANKY_EVE_HOST ?? "http://127.0.0.1:2000";
-}
-
-function mirrorScriptPath(): string {
-	return join(process.env.CLANKY_REPO_DIR ?? process.cwd(), "scripts", "discord-pane-mirror.ts");
-}
-
-function discordGatewayLockPath(): string {
-	const repo = process.env.CLANKY_REPO_DIR ?? process.cwd();
-	const hash = createHash("sha1").update(repo).digest("hex").slice(0, 16);
-	return join(tmpdir(), `clanky-discord-gateway-${hash}.lock`);
-}
-
-function acquireDiscordGatewayLock(): DiscordGatewayLock {
-	const path = discordGatewayLockPath();
-	for (let attempt = 0; attempt < 2; attempt += 1) {
-		try {
-			mkdirSync(path);
-			const lock: DiscordGatewayLock = { status: "acquired", path, ownerPid: process.pid };
-			writeFileSync(join(path, "owner.json"), JSON.stringify({ pid: process.pid, repo: process.cwd(), startedAt: new Date().toISOString() }));
-			process.once("exit", () => releaseDiscordGatewayLock(lock));
-			return lock;
-		} catch (error) {
-			const code = (error as NodeJS.ErrnoException).code;
-			if (code !== "EEXIST") throw error;
-			const ownerPid = readDiscordGatewayLockOwner(path);
-			if (ownerPid !== undefined && !isProcessAlive(ownerPid)) {
-				rmSync(path, { recursive: true, force: true });
-				continue;
-			}
-			return { status: "held", path, ...(ownerPid === undefined ? {} : { ownerPid }) };
-		}
-	}
-	return { status: "held", path, ownerPid: readDiscordGatewayLockOwner(path) };
-}
-
-function releaseDiscordGatewayLock(lock: DiscordGatewayLock | null): void {
-	if (lock?.status !== "acquired") return;
-	rmSync(lock.path, { recursive: true, force: true });
-}
-
-function readDiscordGatewayLockOwner(path: string): number | undefined {
-	try {
-		const parsed = JSON.parse(readFileSync(join(path, "owner.json"), "utf8")) as { pid?: unknown };
-		return typeof parsed.pid === "number" && Number.isInteger(parsed.pid) && parsed.pid > 0 ? parsed.pid : undefined;
-	} catch {
-		return undefined;
-	}
-}
-
-function discordGatewayStatusPath(lockPath: string): string {
-	return join(lockPath, "status.json");
-}
-
-function writeDiscordGatewayStatus(
-	lock: DiscordGatewayLock | null,
-	status: {
-		state: DiscordGatewayStatus["state"];
-		ready: boolean;
-		credentialKind: DiscordGatewayStatus["credentialKind"];
-		voice: boolean;
-		sessions: DiscordGatewayStatus["sessions"];
-		error?: string;
-	},
-): void {
-	if (lock?.status !== "acquired") return;
-	const snapshot: DiscordGatewayStatus = {
-		pid: process.pid,
-		repo: process.env.CLANKY_REPO_DIR ?? process.cwd(),
-		startedAt: discordGatewayStartedAt,
-		updatedAt: new Date().toISOString(),
-		state: status.state,
-		ready: status.ready,
-		credentialKind: status.credentialKind,
-		voice: status.voice,
-		scope: resolveDiscordScopeOptions(process.env),
-		sessions: status.sessions,
-		...(status.error === undefined ? {} : { error: status.error }),
-	};
-	writeFileSync(discordGatewayStatusPath(lock.path), JSON.stringify(snapshot, null, 2));
-}
-
-function readDiscordGatewayStatus(lock: DiscordGatewayLock | null): DiscordGatewayStatus | null {
-	if (lock === null) return null;
-	try {
-		const parsed = JSON.parse(readFileSync(discordGatewayStatusPath(lock.path), "utf8")) as unknown;
-		if (!isRecord(parsed)) return null;
-		return parsed as DiscordGatewayStatus;
-	} catch {
-		return null;
-	}
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isProcessAlive(pid: number): boolean {
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch {
-		return false;
-	}
-}
-
-/** Spawn a read-only herdr pane that tails a presence session's event stream. */
-async function spawnPaneMirror(channelId: string, sessionId: string): Promise<void> {
-	const slug = `discord-${channelId.slice(-6)}`;
-	const agent = `clanky:${slug}`;
-	const placement = await resolveClankyFacePanePlacement();
-	const existing = await getHerdrAgent(agent);
-	if (existing !== undefined) {
-		if (paneMatchesPlacement(existing, placement)) return;
-		const paneId = nonEmptyString(existing.pane_id);
-		if (paneId === undefined) return;
-		await herdrRequest("pane.close", { pane_id: paneId }).catch(() => undefined);
-	}
-	await startHerdrAgentNearPlacement({
-		name: agent,
-		focus: false,
-		argv: [process.execPath, mirrorScriptPath(), eveHost(), sessionId, slug],
-		placement,
-	});
 }
 
 /** Route a bridge command to the main Clanky face pane via the herdr socket. */
@@ -283,28 +144,36 @@ function ensureStarted(): void {
 	}
 	const voiceEnabled = process.env.CLANKY_DISCORD_VOICE === "1";
 	const credentialKind = resolveDiscordCredentialKind(process.env);
-	const sessions = new Map<string, string>();
+	const sessions = new Map<string, DiscordGatewaySessionStatus>();
 	const writeStatus = (status: {
 		state: DiscordGatewayStatus["state"];
 		ready: boolean;
 		error?: string;
 	}): void =>
-		writeDiscordGatewayStatus(discordGatewayState.lock, {
-			...status,
-			credentialKind,
-			voice: voiceEnabled,
-			sessions: [...sessions].map(([channelId, sessionId]) => ({ channelId, sessionId })),
-		});
+		writeDiscordGatewayStatus(
+			discordGatewayState.lock,
+			{
+				...status,
+				credentialKind,
+				voice: voiceEnabled,
+				sessions: [...sessions.values()],
+			},
+			{ startedAt: discordGatewayStartedAt },
+		);
 	writeStatus({ state: "starting", ready: false });
 	const presence: DiscordPresenceHost = new DiscordPresenceHost({
 		token,
 		credentialKind,
 		eveHost: eveHost(),
 		voice: voiceEnabled,
-		onPresenceSession: async ({ channelId, sessionId }) => {
-			sessions.set(channelId, sessionId);
+		onPresenceActivity: (info) => {
+			sessions.set(info.channelId, info);
 			writeStatus({ state: "ready", ready: presence.discordGateway.isReady() });
-			await spawnPaneMirror(channelId, sessionId);
+		},
+		onPresenceSession: async (info) => {
+			sessions.set(info.channelId, info);
+			writeStatus({ state: "ready", ready: presence.discordGateway.isReady() });
+			await spawnSessionPaneMirror(`discord-${info.channelId.slice(-6)}`, info.sessionId);
 		},
 		onBridgeToMain: (command) =>
 			routeBridgeToMain(command).catch((error: unknown) => console.error("discord bridge-to-main failed:", error)),
@@ -340,22 +209,15 @@ export default defineChannel({
 		GET("/discord-gateway/health", async () => {
 			ensureStarted();
 			const status = readDiscordGatewayStatus(discordGatewayState.lock);
-			const owner =
-				discordGatewayState.host !== null
-					? "this-context"
-					: discordGatewayState.lock?.status === "held" && discordGatewayState.lock.ownerPid === process.pid
-						? "other-context"
-						: discordGatewayState.lock?.status === "held"
-							? "other-process"
-							: "none";
-			return Response.json({
-				ok: discordGatewayState.startError === null,
-				running: owner !== "none",
-				ready: discordGatewayState.host?.discordGateway.isReady() ?? status?.ready ?? (owner === "other-context" ? null : false),
-				owner,
+			const health = resolveDiscordGatewayHealth({
 				lock: discordGatewayState.lock,
+				hostPresent: discordGatewayState.host !== null,
+				hostReady: discordGatewayState.host?.discordGateway.isReady(),
+				startError: discordGatewayState.startError,
+			});
+			return Response.json({
+				...health,
 				scope: resolveDiscordScopeOptions(process.env),
-				error: discordGatewayState.startError,
 				status,
 			});
 		}),
