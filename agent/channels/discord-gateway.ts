@@ -31,7 +31,7 @@ import {
 	leaveVoice,
 	recordActiveVoiceStreamWatchConnect,
 } from "./voice.ts";
-import { type BridgeCommand, DiscordPresenceHost } from "../lib/discord/host.ts";
+import { type BridgeCommand, DiscordPresenceHost, reportVoiceFault } from "../lib/discord/host.ts";
 import { resolveDiscordCredentialKind, resolveDiscordToken } from "../lib/discord/gateway.ts";
 import {
 	type DiscordGatewayLock,
@@ -98,12 +98,20 @@ async function handleVoiceIntent(
 	const member = await guild.members.fetch(message.authorId);
 	const channel = member.voice.channel;
 	if (channel === null) throw new Error(`${message.authorName ?? message.authorId} is not in a voice channel`);
-	attachVoiceRuntime(
-		buildGuildVoiceRuntime(guild, process.env, {
-			userId: message.authorId,
-			...(message.authorName === undefined ? {} : { userName: message.authorName }),
-		}),
-	);
+	const runtime = buildGuildVoiceRuntime(guild, process.env, {
+		userId: message.authorId,
+		...(message.authorName === undefined ? {} : { userName: message.authorName }),
+	});
+	// Surface an unexpected voice drop back into the channel that asked Clanky to
+	// join, so he never silently vanishes from VC (SPEC.md §5.3, no reconnect), and
+	// clear Go Live since the dropped session's ClankVox transport is gone too.
+	runtime.reportFault = (fault) =>
+		reportVoiceFault(message.channelId, fault, {
+			clearGoLive: clearActiveGoLive,
+			sendMessage: (channelId, text) => presence.discordGateway.sendMessage(channelId, text),
+			onError: (error) => console.error("voice drop notice failed:", error),
+		});
+	attachVoiceRuntime(runtime);
 	await joinVoice(guild.id, channel.id);
 
 	// Go Live needs the user-token raw seam + a live ClankVox to decode/publish.

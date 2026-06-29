@@ -25,6 +25,7 @@ import { rememberDiscordMessageFacts } from "./memory.ts";
 import { buildPresenceSessionMessage } from "./presence-payload.ts";
 import type { DiscordHistoryEntry } from "./prompt.ts";
 import { type VoiceIntent, detectVoiceIntent } from "./voice-intent.ts";
+import type { VoiceSessionFault } from "../voice/supervisor.ts";
 import { resolveWakeNameMatch, resolveWakeNames } from "./wake-names.ts";
 
 export interface BridgeCommand {
@@ -120,6 +121,31 @@ export function formatVoiceIntentSuccess(intent: VoiceIntent): string {
 export function formatVoiceIntentFailure(intent: VoiceIntent, error: unknown): string {
 	const action = intent === "join" ? "join" : "leave";
 	return `I couldn't ${action} VC: ${sentenceForDiscord(formatVoiceIntentFailureDetail(error))}`;
+}
+
+export function formatVoiceDropNotice(fault: VoiceSessionFault): string {
+	const cause = fault.kind === "clankvox_crashed" ? "the voice transport crashed" : "the realtime voice connection dropped";
+	return `I dropped out of VC: ${cause} (${fault.detail}). Say "hop in vc" to bring me back.`;
+}
+
+export interface VoiceFaultReporterDeps {
+	/** Drop the Go Live registry: the faulted session's ClankVox transport is gone. */
+	clearGoLive: () => void;
+	sendMessage: (channelId: string, text: string) => Promise<unknown>;
+	onError?: (error: unknown) => void;
+}
+
+/**
+ * React to an unexpected voice drop on the Discord-connected host: clear Go Live
+ * (mirroring explicit leave) before telling the channel Clanky fell out of VC.
+ * Dependency-injected so the policy is testable without a live gateway.
+ */
+export function reportVoiceFault(channelId: string, fault: VoiceSessionFault, deps: VoiceFaultReporterDeps): Promise<void> {
+	deps.clearGoLive();
+	return deps
+		.sendMessage(channelId, formatVoiceDropNotice(fault))
+		.then(() => undefined)
+		.catch((error: unknown) => deps.onError?.(error));
 }
 
 function formatVoiceIntentFailureDetail(error: unknown): string {

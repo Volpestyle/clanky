@@ -19,6 +19,7 @@
 		"smoke:discord": "node test/discord-acceptance-smoke.ts",
 		"smoke:discord:attachments": "node test/discord-recent-attachments-smoke.ts",
 		"smoke:media": "node test/media-generation-smoke.ts",
+		"smoke:media:inspect": "node test/media-inspect-sandbox-smoke.ts",
 		"smoke:model": "node test/codex-model-smoke.ts",
 		"smoke:send:routing": "node test/herdr-send-routing-smoke.ts",
 		"smoke:spawn:argv": "node test/herdr-spawn-argv-smoke.ts",
@@ -67,6 +68,7 @@
 		"clanky": "node bin/clanky.ts",
 		"clanky:install": "node bin/clanky.ts install",
 		"face": "node scripts/clanky.ts",
+		"clankvox:setup": "node scripts/setup-clankvox.ts",
 		"clanky:up": "node scripts/clanky-up.ts",
 		"clanky:status": "node scripts/clanky-up.ts status",
 		"clanky:down": "node scripts/clanky-up.ts down"

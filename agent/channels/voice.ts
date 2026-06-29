@@ -18,8 +18,11 @@ import type { ClankvoxIpcClient } from "../lib/voice/clankvoxIpcClient.ts";
 import {
 	type ClankvoxGuildLike,
 	type OpenAiRealtimeConnectOptions,
+	readLastVoiceFault,
+	recordVoiceFault,
 	startVoiceSession,
 	type VoiceExternalTtsConfig,
+	type VoiceFaultRecord,
 	type VoiceRealtimeConfig,
 	type VoiceSession,
 	type VoiceSessionFault,
@@ -38,6 +41,11 @@ export interface VoiceRuntime {
 	resolveSpeaker?: VoiceSpeakerResolver;
 	eveSessionHost?: string;
 	memoryContextLimit?: number;
+	/**
+	 * Surface an unexpected voice drop back to the user (e.g. a Discord notice).
+	 * Set by the Discord-connected host, which owns the channel to post into.
+	 */
+	reportFault?: (fault: VoiceSessionFault) => void | Promise<void>;
 }
 
 let runtime: VoiceRuntime | null = null;
@@ -64,25 +72,51 @@ export async function joinVoice(guildId: string, channelId: string): Promise<voi
 			);
 		},
 		onFault: (fault) => {
-			void handleVoiceFault(started, fault);
+			void handleVoiceFault(started, { guildId, channelId }, fault);
 		},
 	});
 	session = started;
 }
 
 /**
- * An unexpected realtime drop leaves a zombie session (ClankVox + Discord adapter
- * alive, brain dead). Tear it down and clear state so voiceStatus reflects reality.
- * We do not auto-reconnect (SPEC.md §2); the user can re-issue join.
+ * An unexpected drop (realtime socket close or ClankVox crash) leaves a zombie
+ * session: one half of the bridge is dead while the other lingers. Persist the
+ * fault for after-the-fact debugging, tell the user, then tear the session down
+ * and clear state so voiceStatus reflects reality. We do not auto-reconnect
+ * (SPEC.md §2); the user can re-issue join.
  */
-async function handleVoiceFault(faultedSession: VoiceSession, fault: VoiceSessionFault): Promise<void> {
+async function handleVoiceFault(
+	faultedSession: VoiceSession,
+	context: { guildId: string; channelId: string },
+	fault: VoiceSessionFault,
+): Promise<void> {
 	if (session !== faultedSession) return;
 	session = null;
-	process.stderr.write(`voice: realtime ${fault.kind} (${fault.detail}); session torn down\n`);
+	const record: VoiceFaultRecord = {
+		at: new Date().toISOString(),
+		guildId: context.guildId,
+		channelId: context.channelId,
+		kind: fault.kind,
+		detail: fault.detail,
+		...(fault.stderrTail !== undefined && fault.stderrTail.length > 0 ? { stderrTail: fault.stderrTail } : {}),
+	};
+	recordVoiceFault(record);
+	process.stderr.write(`voice: ${fault.kind} (${fault.detail}); session torn down\n`);
+	if (fault.stderrTail !== undefined) {
+		for (const line of fault.stderrTail) process.stderr.write(`voice: clankvox stderr | ${line}\n`);
+	}
+	const notify = runtime?.reportFault;
+	if (notify !== undefined) {
+		try {
+			await notify(fault);
+		} catch (error) {
+			console.error("voice fault notify failed:", error);
+		}
+	}
 	try {
 		await faultedSession.stop();
 	} catch {
-		// best-effort teardown; the realtime socket is already gone
+		// best-effort teardown; the realtime socket / ClankVox is already gone
 	}
 }
 
@@ -112,6 +146,8 @@ export function voiceStatus(): { runtimeAttached: boolean; sessionActive: boolea
 		voice.turnBuffer = sessionStatus.turnBuffer;
 		voice.stats = sessionStatus.stats;
 	}
+	const lastFault = readLastVoiceFault();
+	if (lastFault !== undefined) voice.lastFault = lastFault;
 	return { runtimeAttached: runtime !== null, sessionActive: session !== null, voice };
 }
 

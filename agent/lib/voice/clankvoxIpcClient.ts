@@ -107,6 +107,9 @@ type ClankvoxCommand =
 	| { type: "stream_publish_resume" }
 	| { type: "destroy" };
 
+/** Stderr lines retained for crash diagnostics (the binary logs panics here). */
+const CLANKVOX_STDERR_TAIL_LIMIT = 25;
+
 export class ClankvoxIpcClient extends EventEmitter {
 	private readonly guildId: string;
 	private readonly channelId: string;
@@ -114,6 +117,7 @@ export class ClankvoxIpcClient extends EventEmitter {
 	private child: ChildProcessByStdio<Writable, Readable, Readable> | undefined;
 	private stdoutBuffer = Buffer.alloc(0);
 	private stderrBuffer = "";
+	private readonly recentStderrLines: string[] = [];
 	private adapterProxy: ClankvoxVoiceAdapterProxy | undefined;
 	private destroyed = false;
 	private lastVoiceSessionId: string | undefined;
@@ -345,18 +349,17 @@ export class ClankvoxIpcClient extends EventEmitter {
 		const launch = resolveLaunch(options);
 		const child = spawn(launch.command, launch.args, {
 			cwd: launch.cwd,
-			env: {
-				...process.env,
-				OPUS_STATIC: "1",
-				LIBOPUS_STATIC: "1",
-				OPUS_NO_PKG: "1",
-				LIBOPUS_NO_PKG: "1",
-				OPUS_NO_PKG_CONFIG: "1",
-				CMAKE_POLICY_VERSION_MINIMUM: "3.5",
-			},
+			env: { ...process.env, ...clankvoxNativeBuildEnv },
 			stdio: ["pipe", "pipe", "pipe"],
 		});
 		this.child = child;
+		// A ChildProcess that emits 'error' (e.g. the binary can't be launched)
+		// with no listener throws an uncaught exception that kills the whole eve
+		// brain. Route it into the same lifecycle 'crashed' path so a launch
+		// failure faults the voice session cleanly instead.
+		child.once("error", (error: Error) => {
+			if (!this.destroyed) this.emit("crashed", { error: error.message });
+		});
 		child.stdout.on("data", (data: Buffer) => this.processStdoutChunk(data));
 		child.stderr.on("data", (data: Buffer) => this.processStderrChunk(data, options.log));
 		child.stderr.once("end", () => this.flushStderrBuffer(options.log));
@@ -442,24 +445,33 @@ export class ClankvoxIpcClient extends EventEmitter {
 	}
 
 	private processStderrChunk(data: Buffer, log: ((line: string) => void) | undefined): void {
-		if (log === undefined) return;
 		this.stderrBuffer += data.toString("utf8");
 		const lines = this.stderrBuffer.split(/\r?\n/);
 		this.stderrBuffer = lines.pop() ?? "";
 		for (const line of lines) {
 			const trimmed = line.trimEnd();
-			if (trimmed.length > 0) log(trimmed);
+			if (trimmed.length === 0) continue;
+			this.retainStderrLine(trimmed);
+			log?.(trimmed);
 		}
 	}
 
 	private flushStderrBuffer(log: ((line: string) => void) | undefined): void {
-		if (log === undefined || this.stderrBuffer.length === 0) {
-			this.stderrBuffer = "";
-			return;
-		}
 		const line = this.stderrBuffer.trimEnd();
 		this.stderrBuffer = "";
-		if (line.length > 0) log(line);
+		if (line.length === 0) return;
+		this.retainStderrLine(line);
+		log?.(line);
+	}
+
+	private retainStderrLine(line: string): void {
+		this.recentStderrLines.push(line);
+		while (this.recentStderrLines.length > CLANKVOX_STDERR_TAIL_LIMIT) this.recentStderrLines.shift();
+	}
+
+	/** Last few stderr lines, so a crash fault can carry the binary's own panic output. */
+	getRecentStderr(): readonly string[] {
+		return [...this.recentStderrLines];
 	}
 
 	private handleJsonMessage(payload: Buffer): void {
@@ -602,20 +614,59 @@ export function createClankvoxVoiceAdapterProxy(
 	};
 }
 
+export interface ClankvoxBinaryLocation {
+	/** clankvox source/build directory. */
+	cwd: string;
+	/** Platform binary filename. */
+	binName: string;
+	/** Expected prebuilt release binary path. */
+	releaseBin: string;
+}
+
+/**
+ * Where the prebuilt ClankVox binary lives. Shared by the launch path and
+ * `pnpm clankvox:setup` so the runtime and the builder never disagree on the
+ * path (and the "not built" error points at the exact file setup produces).
+ */
+export function resolveClankvoxBinaryLocation(env: NodeJS.ProcessEnv = process.env, cwdOverride?: string): ClankvoxBinaryLocation {
+	const cwd = resolve(cwdOverride ?? env.CLANKY_CLANKVOX_DIR ?? defaultClankvoxDir());
+	const binName = process.platform === "win32" ? "clankvox.exe" : "clankvox";
+	return { cwd, binName, releaseBin: join(cwd, "target", "release", binName) };
+}
+
+/**
+ * Env for building ClankVox's native deps (Opus via `audiopus_sys`). Statically
+ * links Opus and forces a CMake policy floor so the vendored Opus CMakeLists
+ * (which declares `cmake_minimum_required` < 3.5) still configures under
+ * CMake >= 4, where pre-3.5 compatibility was removed. Shared by the runtime
+ * spawn and `pnpm clankvox:setup` so a from-source build is identical either way.
+ */
+export const clankvoxNativeBuildEnv: Record<string, string> = {
+	OPUS_STATIC: "1",
+	LIBOPUS_STATIC: "1",
+	OPUS_NO_PKG: "1",
+	LIBOPUS_NO_PKG: "1",
+	OPUS_NO_PKG_CONFIG: "1",
+	CMAKE_POLICY_VERSION_MINIMUM: "3.5",
+};
+
 function resolveLaunch(options: ClankvoxLaunchOptions): { command: string; args: string[]; cwd: string } {
 	const configuredBin = options.bin ?? process.env.CLANKY_CLANKVOX_BIN;
 	if (configuredBin !== undefined && configuredBin.trim().length > 0) {
 		return { command: configuredBin.trim(), args: options.args ?? [], cwd: resolve(options.cwd ?? process.cwd()) };
 	}
 
-	const cwd = resolve(options.cwd ?? process.env.CLANKY_CLANKVOX_DIR ?? defaultClankvoxDir());
-	const binName = process.platform === "win32" ? "clankvox.exe" : "clankvox";
-	const releaseBin = join(cwd, "target", "release", binName);
+	const { cwd, releaseBin } = resolveClankvoxBinaryLocation(process.env, options.cwd);
 	if (existsSync(releaseBin)) return { command: releaseBin, args: [], cwd };
 	if (!existsSync(cwd)) {
 		throw new Error(`clankvox directory not found: ${cwd}. Set CLANKY_CLANKVOX_DIR or CLANKY_CLANKVOX_BIN.`);
 	}
-	return { command: "cargo", args: ["run", "--release", "--locked"], cwd };
+	// No inline `cargo run` build: compiling during a join blows the ready
+	// timeout and a build failure surfaces as a cryptic mid-join crash. Require a
+	// prebuilt binary and point at the one-command setup instead.
+	throw new Error(
+		`ClankVox is not built at ${releaseBin}. Run \`pnpm clankvox:setup\` to install the toolchain and build it, or set CLANKY_CLANKVOX_BIN to a prebuilt binary.`,
+	);
 }
 
 function defaultClankvoxDir(): string {

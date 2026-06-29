@@ -26,6 +26,8 @@ import { apnsConfigured } from "../lib/apns.ts";
 import { newTranscriptRunId, readTranscript } from "../lib/transcripts.ts";
 import { wrapTranscriptArgv } from "../tools/herdr_spawn.ts";
 import { resolveClankyDataPath } from "../lib/paths.ts";
+import { isAgentMdIngestionEnabled } from "../lib/agent-md.ts";
+import { listClankySkills } from "../lib/skill-inventory.ts";
 
 interface RelayRequest {
 	id?: string | number;
@@ -52,6 +54,7 @@ function rec(v: unknown): Record<string, unknown> {
 const VANILLA_HERDR_FALLBACK_LINES = 1000;
 const MAX_RELAY_UPLOAD_BYTES = 25 * 1024 * 1024;
 const RELAY_UPLOAD_DIR = "uploads/ios-terminal";
+const REPO = process.env.CLANKY_REPO_DIR?.trim() || process.cwd();
 
 function requestId(id: RelayRequest["id"]): string {
 	return id === undefined ? `relay_${Date.now().toString(36)}` : String(id);
@@ -197,6 +200,14 @@ async function dispatch(op: string, args: Record<string, unknown>): Promise<unkn
 			return herdrRequest("ping");
 		case "list":
 			return herdrRequest("agent.list");
+		case "list-skills": {
+			const agentMdEnabled = isAgentMdIngestionEnabled();
+			return {
+				type: "skills",
+				agentMdEnabled,
+				skills: await listClankySkills(REPO, { includeInherited: agentMdEnabled }),
+			};
+		}
 		case "workspaces":
 			return herdrRequest("workspace.list");
 		case "tabs":
@@ -393,23 +404,35 @@ const orderedInputQueues = new Map<string, Promise<void>>();
 
 // Live TUI faces attached via a `face-attach` op. Presence = connection alive;
 // a face dropping (crash or quit) clears on the WS `close` hook. Surfaced in
-// `/relay/health` as `face` so the iOS app can show headless vs face-attached.
+// `/relay/health` as `face` so clients can show a visible UI vs headless mode.
 const facePeers = new Set<WebSocketPeer>();
 
-type PendingFaceCommand = {
+// Command hosts are below the relay and own deterministic slash-command
+// execution. A visible face may also be a command host, but iOS should depend on
+// this capability, not on the visible TUI being open.
+const commandPeers = new Set<WebSocketPeer>();
+
+type PendingCommand = {
 	readonly client: WebSocketPeer;
 	readonly clientRequestId: RelayRequest["id"];
-	readonly face: WebSocketPeer;
+	readonly host: WebSocketPeer;
 };
 
-const pendingFaceCommands = new Map<string, PendingFaceCommand>();
+const pendingCommands = new Map<string, PendingCommand>();
 
 function facePresence(): { attached: boolean; count: number } {
 	return { attached: facePeers.size > 0, count: facePeers.size };
 }
 
-function attachedFacePeer(): WebSocketPeer | undefined {
-	return facePeers.values().next().value;
+function commandPresence(): { attached: boolean; count: number } {
+	return { attached: commandPeers.size > 0, count: commandPeers.size };
+}
+
+function attachedCommandPeer(): WebSocketPeer | undefined {
+	for (const peer of commandPeers) {
+		if (!facePeers.has(peer)) return peer;
+	}
+	return commandPeers.values().next().value ?? facePeers.values().next().value;
 }
 
 function streamsFor(peer: WebSocketPeer): Map<string, StreamHandle> {
@@ -486,50 +509,50 @@ function enqueueOrderedInput(peer: WebSocketPeer, req: RelayRequest, key: string
 	});
 }
 
-function startFaceCommand(peer: WebSocketPeer, req: RelayRequest): void {
-	const face = attachedFacePeer();
-	if (face === undefined) throw new Error("No Clanky face is attached. Start the Clanky face before running native slash commands.");
+function startCommand(peer: WebSocketPeer, req: RelayRequest): void {
+	const host = attachedCommandPeer();
+	if (host === undefined) throw new Error("No Clanky command host is attached. Start Clanky before running native slash commands.");
 	const commandLine = str(req.args?.command_line) ?? str(req.args?.commandLine);
-	if (commandLine === undefined) throw new Error("face-command requires command_line");
+	if (commandLine === undefined) throw new Error(`${req.op} requires command_line`);
 	const commandId = requestId(req.id);
-	pendingFaceCommands.set(commandId, { client: peer, clientRequestId: req.id, face });
-	reply(face, { type: "face.command.request", id: commandId, commandLine });
+	pendingCommands.set(commandId, { client: peer, clientRequestId: req.id, host });
+	reply(host, { type: commandPeers.has(host) ? "command.request" : "face.command.request", id: commandId, commandLine });
 }
 
-function forwardFaceCommandEvent(peer: WebSocketPeer, req: RelayRequest): void {
+function forwardCommandEvent(peer: WebSocketPeer, req: RelayRequest): void {
 	const commandId = str(req.args?.request_id) ?? str(req.args?.requestID) ?? requestId(req.id);
 	const event = req.args?.event;
-	const pending = pendingFaceCommands.get(commandId);
+	const pending = pendingCommands.get(commandId);
 	if (pending === undefined) return;
-	if (pending.face !== peer) throw new Error("face-command-event came from a different face peer");
+	if (pending.host !== peer) throw new Error(`${req.op} came from a different command host`);
 	reply(pending.client, { id: pending.clientRequestId, ok: true, stream: true, body: event });
-	if (isTerminalFaceCommandEvent(event)) pendingFaceCommands.delete(commandId);
+	if (isTerminalCommandEvent(event)) pendingCommands.delete(commandId);
 }
 
-function forwardFaceCommandClientMessage(peer: WebSocketPeer, req: RelayRequest): void {
+function forwardCommandClientMessage(peer: WebSocketPeer, req: RelayRequest): void {
 	const commandId = str(req.args?.request_id) ?? str(req.args?.requestID);
 	const message = req.args?.message;
-	if (commandId === undefined) throw new Error("face-command-client requires request_id");
-	const pending = pendingFaceCommands.get(commandId);
-	if (pending === undefined) throw new Error("No pending face command for request_id");
-	if (pending.client !== peer) throw new Error("face-command-client came from a different client peer");
-	reply(pending.face, { type: "face.command.client", id: commandId, message });
+	if (commandId === undefined) throw new Error(`${req.op} requires request_id`);
+	const pending = pendingCommands.get(commandId);
+	if (pending === undefined) throw new Error("No pending command for request_id");
+	if (pending.client !== peer) throw new Error(`${req.op} came from a different client peer`);
+	reply(pending.host, { type: commandPeers.has(pending.host) ? "command.client" : "face.command.client", id: commandId, message });
 	reply(peer, { id: req.id, ok: true, result: { sent: true } });
 }
 
-function closePendingFaceCommandsFor(peer: WebSocketPeer): void {
-	for (const [commandId, pending] of pendingFaceCommands) {
-		if (pending.client !== peer && pending.face !== peer) continue;
-		pendingFaceCommands.delete(commandId);
+function closePendingCommandsFor(peer: WebSocketPeer): void {
+	for (const [commandId, pending] of pendingCommands) {
+		if (pending.client !== peer && pending.host !== peer) continue;
+		pendingCommands.delete(commandId);
 		if (pending.client === peer) {
-			reply(pending.face, {
-				type: "face.command.client",
+			reply(pending.host, {
+				type: commandPeers.has(pending.host) ? "command.client" : "face.command.client",
 				id: commandId,
 				message: { type: "menu.cancel", sessionId: commandId },
 			});
 			continue;
 		}
-		if (pending.face === peer) {
+		if (pending.host === peer) {
 			reply(pending.client, {
 				id: pending.clientRequestId,
 				ok: true,
@@ -537,14 +560,14 @@ function closePendingFaceCommandsFor(peer: WebSocketPeer): void {
 				body: {
 					type: "menu.failed",
 					sessionId: commandId,
-					message: "The Clanky face disconnected before the command finished.",
+					message: "The Clanky command host disconnected before the command finished.",
 				},
 			});
 		}
 	}
 }
 
-function isTerminalFaceCommandEvent(event: unknown): boolean {
+function isTerminalCommandEvent(event: unknown): boolean {
 	if (event === null || typeof event !== "object" || Array.isArray(event)) return false;
 	const type = (event as { type?: unknown }).type;
 	return type === "menu.end" || type === "menu.failed";
@@ -867,7 +890,7 @@ export default defineChannel({
 			if (!isFrontdoorAuthorized(req)) return new Response("unauthorized", { status: 401 });
 			try {
 				const result = await herdrRequest("ping");
-				return Response.json({ ok: true, herdr: result, face: facePresence() });
+				return Response.json({ ok: true, herdr: result, face: facePresence(), commandHost: commandPresence() });
 			} catch (error) {
 				return Response.json({ ok: false, error: (error as Error).message }, { status: 502 });
 			}
@@ -919,20 +942,31 @@ export default defineChannel({
 					}
 					if (req.op === "face-detach") {
 						facePeers.delete(peer);
-						closePendingFaceCommandsFor(peer);
+						if (!commandPeers.has(peer)) closePendingCommandsFor(peer);
 						reply(peer, { id: req.id, ok: true, face: "detached" });
 						return;
 					}
-					if (req.op === "face-command") {
-						startFaceCommand(peer, req);
+					if (req.op === "command-attach") {
+						commandPeers.add(peer);
+						reply(peer, { id: req.id, ok: true, commandHost: "attached" });
 						return;
 					}
-					if (req.op === "face-command-event") {
-						forwardFaceCommandEvent(peer, req);
+					if (req.op === "command-detach") {
+						commandPeers.delete(peer);
+						if (!facePeers.has(peer)) closePendingCommandsFor(peer);
+						reply(peer, { id: req.id, ok: true, commandHost: "detached" });
 						return;
 					}
-					if (req.op === "face-command-client") {
-						forwardFaceCommandClientMessage(peer, req);
+					if (req.op === "command" || req.op === "face-command") {
+						startCommand(peer, req);
+						return;
+					}
+					if (req.op === "command-event" || req.op === "face-command-event") {
+						forwardCommandEvent(peer, req);
+						return;
+					}
+					if (req.op === "command-client" || req.op === "face-command-client") {
+						forwardCommandClientMessage(peer, req);
 						return;
 					}
 					const inputKey = orderedInputKey(req);
@@ -948,7 +982,8 @@ export default defineChannel({
 			},
 			close(peer: WebSocketPeer) {
 				facePeers.delete(peer);
-				closePendingFaceCommandsFor(peer);
+				commandPeers.delete(peer);
+				closePendingCommandsFor(peer);
 				closeStream(peer);
 			},
 		})),

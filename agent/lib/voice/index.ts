@@ -10,6 +10,7 @@ export * from "./discordVoiceSpeakerTranscription.ts";
 export * from "./discordVoiceTurnBuffer.ts";
 export * from "./elevenLabsTtsClient.ts";
 export * from "./eve-session.ts";
+export * from "./fault-log.ts";
 export * from "./liveValidation.ts";
 export * from "./liveValidationResult.ts";
 export * from "./localRealtimeClient.ts";

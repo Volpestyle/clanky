@@ -124,6 +124,30 @@ export function defineMcpOAuthAuthorization(config: McpOAuthConnectionConfig) {
 	});
 }
 
+export type McpOAuthState = "authorized" | "expired" | "unauthorized";
+
+// Cheap, local auth status for curated MCP connections: read the persisted
+// token store (no network, no LLM turn) and report whether each connection has
+// usable, refreshable, or no credentials. Drives the live status in the /mcp
+// and /auth menus.
+export async function readMcpOAuthStates(): Promise<Record<string, McpOAuthState>> {
+	const store = await readOAuthStore();
+	const states: Record<string, McpOAuthState> = {};
+	for (const [connectionName, principals] of Object.entries(store.connections ?? {})) {
+		states[connectionName] = oauthStateForPrincipals(principals);
+	}
+	return states;
+}
+
+function oauthStateForPrincipals(principals: Record<string, StoredMcpOAuthEntry>): McpOAuthState {
+	let refreshable = false;
+	for (const entry of Object.values(principals)) {
+		if (tokenResultFromEntry(entry) !== undefined) return "authorized";
+		if (entry.tokens?.refresh_token !== undefined) refreshable = true;
+	}
+	return refreshable ? "expired" : "unauthorized";
+}
+
 async function getStoredMcpOAuthToken(
 	config: McpOAuthConnectionConfig,
 	principal: ConnectionPrincipal,

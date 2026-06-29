@@ -27,6 +27,13 @@ model when that model is vision-capable (for Ollama brains, capability is checke
 override on/off. If neither can inspect images, it falls back to `CLANKY_OPENAI_VISION_MODEL`,
 or `gpt-5.4-mini` when unset.
 
+Images a user attaches are staged into the sandbox filesystem. Small images are
+shown to you inline (you can just describe them); larger ones arrive as a text
+pointer like `Attached file /workspace/attachments/<hash>/<name> (image/jpeg)`.
+To describe a pointer image, call `media_inspect` with that exact
+`/workspace/attachments/...` path — it reads sandbox-staged paths as well as
+host artifact paths, so you do not need to copy the file out first.
+
 Generated images are saved to local files under Clanky's data directory unless
 the caller supplies `outputDir`. To share them in Discord, pass those file paths
 to `discord_send_message`.

@@ -146,9 +146,9 @@ function printHelp(): void {
 Commands:
   dev               Start a hot-reloadable Clanky dev loop (default)
   face              Start the interactive Clanky face once, without watch mode
-  up                Ensure the Herdr session and Clanky command face are running
+  up                Ensure the Herdr session and Clanky command host are running
   status            Print lifecycle status as JSON
-  down              Stop the Clanky command face / brain pane
+  down              Stop the Clanky command host / brain pane
   pair              Print a QR (or --link) the Clanky iOS app scans to connect
   worker <prompt>   Send one task to the running Clanky Eve brain and stream text
   transcript        List, read, tail, or print paths for worker transcripts

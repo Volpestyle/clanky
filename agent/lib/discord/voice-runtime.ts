@@ -28,7 +28,7 @@ const DEFAULT_VOICE_INSTRUCTIONS = [
 	"Speak naturally and briefly, like a person on a call. You are the same Clanky",
 	"as in chat and the terminal: same memory, same character. For anything that",
 	"needs real work (web, code, builds, lookups), delegate rather than stalling",
-	"the conversation. Stay quiet when nothing needs saying.",
+	"the conversation.",
 ].join(" ");
 const DEFAULT_LOCAL_VOICE_LLM_MODEL = "qwen3.6:27b-mlx";
 const DEFAULT_LOCAL_VOICE_LLM_BASE_URL = "http://127.0.0.1:11434/v1";

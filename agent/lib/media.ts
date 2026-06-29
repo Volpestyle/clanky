@@ -19,6 +19,7 @@ import {
 } from "./model-selection.ts";
 import { guardedFetch } from "./net-guard.ts";
 import { resolveClankyDataPath } from "./paths.ts";
+import type { SandboxSession } from "eve/sandbox";
 
 export type ImageQuality = "low" | "medium" | "high" | "auto";
 export type ImageOutputFormat = "png" | "jpeg" | "webp";
@@ -136,6 +137,15 @@ export interface VisualInspectOptions {
 	env?: NodeJS.ProcessEnv;
 	fetchImpl?: typeof fetch;
 	generate?(request: VisualInspectGenerateRequest): Promise<VisualInspectGenerateResult>;
+	/**
+	 * Active sandbox session. Inbound user attachments are staged into the agent's
+	 * sandbox vfs (e.g. `/workspace/attachments/...`) — a path space the host
+	 * filesystem cannot see. When a requested path is missing on the host disk,
+	 * media reads fall back to this session so those staged paths resolve the same
+	 * way they do for `bash`/`read_file`. Omit it (e.g. in tests or non-agent
+	 * callers) to read host paths only.
+	 */
+	sandbox?: SandboxSession;
 }
 
 const DEFAULT_OPENAI_IMAGE_MODEL = "gpt-image-2";
@@ -380,7 +390,7 @@ export async function inspectVisualMedia(
 	);
 	const prompt = input.prompt?.trim() || DEFAULT_VISUAL_PROMPT;
 	const model = input.model?.trim() || env.CLANKY_OPENAI_VISION_MODEL?.trim() || DEFAULT_OPENAI_VISION_MODEL;
-	const prepared = await prepareVisualMedia(requestedPaths.slice(0, maxImages), maxBytesPerImage);
+	const prepared = await prepareVisualMedia(requestedPaths.slice(0, maxImages), maxBytesPerImage, options.sandbox);
 	const textPart: TextPart = {
 		type: "text",
 		text: `${prompt}\n\nImages attached as binary inputs:\n${prepared.map(({ item }) => `${item.index}. ${item.filename} (${item.mediaType}, ${item.bytes} bytes)`).join("\n")}`,
@@ -882,30 +892,94 @@ function isNodeErrorCode(error: unknown, code: string): boolean {
 async function prepareVisualMedia(
 	paths: readonly string[],
 	maxBytesPerImage: number,
+	sandbox?: SandboxSession,
 ): Promise<Array<{ item: VisualInspectItem; data: Buffer }>> {
 	const prepared: Array<{ item: VisualInspectItem; data: Buffer }> = [];
 	for (const rawPath of paths) {
-		const { path, info } = await statVisualMediaPath(rawPath);
-		if (!info.isFile()) throw new Error(`media_inspect path is not a file: ${path}`);
-		if (info.size > maxBytesPerImage) {
-			throw new Error(`media_inspect file exceeds maxBytesPerImage (${info.size} > ${maxBytesPerImage}): ${path}`);
+		const source = await loadVisualMediaSource(rawPath, maxBytesPerImage, sandbox);
+		try {
+			const detected = detectImageMediaType(source.displayPath, source.data);
+			if (detected === undefined) {
+				throw new Error(`media_inspect only supports PNG, JPEG, GIF, and WebP images: ${source.displayPath}`);
+			}
+			const { data, mediaType } = await downscaleForVision(source.toolPath, source.data, detected);
+			prepared.push({
+				item: {
+					index: prepared.length + 1,
+					path: source.displayPath,
+					filename: basename(source.displayPath),
+					mediaType,
+					bytes: data.byteLength,
+				},
+				data,
+			});
+		} finally {
+			await source.cleanup();
 		}
-		const original = await readFile(path);
-		const detected = detectImageMediaType(path, original);
-		if (detected === undefined) throw new Error(`media_inspect only supports PNG, JPEG, GIF, and WebP images: ${path}`);
-		const { data, mediaType } = await downscaleForVision(path, original, detected);
-		prepared.push({
-			item: {
-				index: prepared.length + 1,
-				path,
-				filename: basename(path),
-				mediaType,
-				bytes: data.byteLength,
-			},
-			data,
-		});
 	}
 	return prepared;
+}
+
+interface VisualMediaSource {
+	/** Path surfaced in results/labels — the path the model referenced. */
+	displayPath: string;
+	/** Real host path host-side tooling (`sips`) can operate on. */
+	toolPath: string;
+	data: Buffer;
+	cleanup: () => Promise<void>;
+}
+
+const noopCleanup = async (): Promise<void> => {};
+
+/**
+ * Resolves a model-supplied media path to bytes plus a real host path the
+ * downscaler can read.
+ *
+ * Tries the host filesystem first — that covers tool-generated artifacts
+ * (web_render screenshots, generated images, discord-media downloads) which
+ * live on the real disk. When the path is missing there, falls back to the
+ * sandbox vfs, where eve stages inbound user attachments under absolute vfs
+ * paths like `/workspace/attachments/...`. Sandbox bytes are materialized to a
+ * temp host file so `sips` downscaling still works, and that temp file is
+ * cleaned up by the returned `cleanup`.
+ */
+async function loadVisualMediaSource(
+	rawPath: string,
+	maxBytesPerImage: number,
+	sandbox?: SandboxSession,
+): Promise<VisualMediaSource> {
+	const host = await statVisualMediaPath(rawPath);
+	if (host !== undefined) {
+		if (!host.info.isFile()) throw new Error(`media_inspect path is not a file: ${host.path}`);
+		if (host.info.size > maxBytesPerImage) {
+			throw new Error(`media_inspect file exceeds maxBytesPerImage (${host.info.size} > ${maxBytesPerImage}): ${host.path}`);
+		}
+		return { displayPath: host.path, toolPath: host.path, data: await readFile(host.path), cleanup: noopCleanup };
+	}
+	const bytes = sandbox === undefined ? null : await readSandboxMedia(sandbox, rawPath);
+	if (bytes === null) {
+		throw new Error(`media_inspect path does not exist on the host filesystem or in the sandbox: ${rawPath}`);
+	}
+	if (bytes.byteLength > maxBytesPerImage) {
+		throw new Error(`media_inspect file exceeds maxBytesPerImage (${bytes.byteLength} > ${maxBytesPerImage}): ${rawPath}`);
+	}
+	const toolPath = join(tmpdir(), `clanky-vision-src-${randomUUID()}${extname(rawPath)}`);
+	await writeFile(toolPath, bytes, { mode: 0o600 });
+	return {
+		displayPath: rawPath,
+		toolPath,
+		data: bytes,
+		cleanup: () => unlink(toolPath).catch(() => {}),
+	};
+}
+
+/**
+ * Reads a media path from the sandbox vfs. Returns null when no file exists at
+ * that path (the same "missing" signal the host branch gets from ENOENT).
+ */
+async function readSandboxMedia(sandbox: SandboxSession, rawPath: string): Promise<Buffer | null> {
+	const bytes = await sandbox.readBinaryFile({ path: rawPath });
+	return bytes === null ? null : Buffer.from(bytes);
 }
 
 /**
@@ -958,14 +1032,21 @@ async function resizeImageWithSips(path: string, maxEdge: number, preserveAlpha:
 	}
 }
 
-async function statVisualMediaPath(rawPath: string): Promise<{ path: string; info: Awaited<ReturnType<typeof stat>> }> {
+/**
+ * Stats a media path on the host filesystem. Returns undefined when the path
+ * (after discord-media recovery) does not exist, so callers can fall back to
+ * the sandbox vfs instead of failing outright.
+ */
+async function statVisualMediaPath(
+	rawPath: string,
+): Promise<{ path: string; info: Awaited<ReturnType<typeof stat>> } | undefined> {
 	const path = resolve(rawPath);
 	try {
 		return { path, info: await stat(path) };
 	} catch (error) {
 		if (!isNodeErrorCode(error, "ENOENT")) throw error;
 		const recovered = await recoverDiscordMediaPath(path);
-		if (recovered === undefined) throw error;
+		if (recovered === undefined) return undefined;
 		return { path: recovered, info: await stat(recovered) };
 	}
 }

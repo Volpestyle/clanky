@@ -15,6 +15,10 @@ He is built on three off-the-shelf systems plus a thin layer of glue:
   and memory. It runs headless (`eve dev --no-ui`); what you see as Clanky is his
   own **face** — a pi-tui client (`scripts/clanky.ts`) that renders eve's event
   stream in a herdr pane.
+- **The command host** is the lifecycle process below eve. It owns or attaches
+  the headless brain and executes deterministic Clanky slash commands for both
+  iOS and any visible face, so command execution does not depend on a TUI being
+  open.
 - The **iOS app** is the *window* — it reaches the stage over the tailnet
   through an eve relay channel.
 
@@ -46,7 +50,8 @@ Stage, conductor, performers, window.
 flowchart TB
   subgraph mac["Mac mini — always on"]
     subgraph herdr["herdr (vanilla) — STAGE: persistent session 'clankies'"]
-      face["pane: clanky face<br/>pi-tui client · Clanky's face"]
+      host["pane: clanky<br/>headless command host"]
+      face["optional pane: clanky face<br/>pi-tui client · Clanky's face"]
       disc["pane: clanky:discord-*"]
       w1["pane: clanky / claude / codex / opencode<br/>performers"]
     end
@@ -58,6 +63,8 @@ flowchart TB
 
   discord -->|webhook| eve
   eve -->|spawns visible work| herdr
+  host <-->|command bridge| relay
+  host --> eve
   eve <-->|eve/client| face
   eve --> relay
   relay -->|Herdr local sockets| herdr
@@ -96,8 +103,9 @@ the live command list) instead of hand-editing `.env.local`. See
 
 ## Running Clanky
 
-Clanky's brain is the eve server; his face is a client of it. Install the local
-CLI once:
+Clanky's brain is the eve server; his command host is the lifecycle process that
+keeps command execution and safe restarts below eve. His face is an optional
+client of the same brain. Install the local CLI once:
 
 ```bash
 pnpm clanky:install
@@ -113,11 +121,11 @@ Then use `clanky` from anywhere:
   face on `eve unavailable 503`.
 - **`clanky face`** — Clanky's custom face (`scripts/clanky.ts`): a pi-tui client
   that renders eve's `eve/client` event stream, owns/attaches the headless brain
-  once without watch mode, and adds Clanky-specific slash commands. Use `/help`
+  once without watch mode, and can also register as a command host. Use `/help`
   in the face for the canonical command list. Config commands rewrite
   `.env.local` and restart the brain. Default port 2000 (`CLANKY_EVE_PORT`).
 - **`clanky up` / `clanky status` / `clanky down`** — manage the persistent
-  Herdr session and headless Eve brain.
+  Herdr session, headless command host, and Eve brain.
 - **`clanky worker <prompt>`** — send one task to the running Clanky Eve brain
   and stream text output.
 - **`clanky update`** — fast-forward this checkout, install dependencies, and

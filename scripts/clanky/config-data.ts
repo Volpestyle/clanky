@@ -393,16 +393,6 @@ export const CODING_HARNESS_LAUNCHER_OPTIONS: readonly MenuOption[] = [
 	{ value: "default", label: "default", hint: "use the CLI's configured model" },
 	{ value: "ollama", label: "ollama", hint: "launch through ollama with a model id" },
 ];
-export const MCP_ACTION_OPTIONS: readonly MenuOption[] = [
-	{ value: "status", label: "status", hint: "connections + dynamic server config" },
-	{ value: "list", label: "list tools", hint: "probe dynamic MCP servers" },
-	{ value: "add", label: "add dynamic", hint: "stdio/http/sse no-auth or static-token MCP" },
-	{ value: "auth", label: "auth connection", hint: "Linear, Figma, or another curated MCP connection" },
-	{ value: "disable", label: "disable dynamic", hint: "file-backed dynamic MCP" },
-	{ value: "enable", label: "enable dynamic", hint: "file-backed dynamic MCP" },
-	{ value: "remove", label: "remove dynamic", hint: "delete from the file-backed store" },
-	{ value: "connections", label: "connections", hint: "curated eve connection inventory" },
-];
 export const MCP_TRANSPORT_OPTIONS: readonly MenuOption[] = [
 	{ value: "stdio", label: "stdio", hint: "local command" },
 	{ value: "streamable-http", label: "streamable-http", hint: "HTTP MCP endpoint" },

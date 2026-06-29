@@ -18,12 +18,16 @@ export function renderClankySkillsPanel(
 	const innerWidth = Math.max(1, panelWidth - 4);
 	const agentSkills = entries.filter((entry) => entry.scope === "agent");
 	const bundledSkills = entries.filter((entry) => entry.scope === "bundled");
+	const inheritedSkills = entries.filter((entry) => entry.scope === "inherited");
 	const lines = [
 		`${theme.bold("Clanky skills")} ${theme.dim(`${entries.length} ${pluralWord(entries.length, "skill")}`)}`,
-		...wrapTextWithAnsi(theme.dim("agent = Eve-visible brain skills; bundled = operator/worker packages on disk"), innerWidth),
+		...wrapTextWithAnsi(theme.dim("agent = Eve-visible brain skills; bundled = operator/worker packages on disk; inherited = Codex/Claude roots when AGENTS.md ingestion is on"), innerWidth),
 	];
 	appendSkillSection(lines, "Agent skills", "agent", agentSkills, innerWidth, theme);
 	appendSkillSection(lines, "Bundled skills", "bundled", bundledSkills, innerWidth, theme);
+	if (inheritedSkills.length > 0) {
+		appendSkillSection(lines, "Inherited skills", "inherited", inheritedSkills, innerWidth, theme);
+	}
 	return renderClankyOutline(lines, panelWidth, theme.dim);
 }
 
@@ -58,7 +62,7 @@ function formatSkillRosterRows(
 	innerWidth: number,
 	theme: ClankySkillsPanelTheme,
 ): string[] {
-	const scopeWidth = 7;
+	const scopeWidth = 9;
 	const minNameWidth = 8;
 	const minDescriptionWidth = 12;
 	if (innerWidth < scopeWidth + 1 + minNameWidth) {
@@ -91,7 +95,7 @@ function formatNarrowSkillRosterRows(
 	innerWidth: number,
 	theme: ClankySkillsPanelTheme,
 ): string[] {
-	const scopeWidth = 7;
+	const scopeWidth = 9;
 	const nameWidth = Math.max(1, innerWidth - scopeWidth - 1);
 	const scope = skillScopeColumn(entry.scope, theme);
 	const name = theme.bold(truncateToWidth(entry.name, nameWidth, "", true));
@@ -104,7 +108,7 @@ function formatNarrowSkillRosterRows(
 }
 
 function skillScopeColumn(scope: ClankySkillInventoryEntry["scope"], theme: ClankySkillsPanelTheme): string {
-	const label = padVisible(scope, 7);
+	const label = padVisible(scope, 9);
 	return scope === "agent" ? theme.cyan(label) : theme.yellow(label);
 }
 

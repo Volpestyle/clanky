@@ -73,6 +73,7 @@ import {
 	authoredMcpConnectionHasApproval,
 	authoredMcpConnectionHasAuthorization,
 } from "../agent/lib/curated-mcp-connections.ts";
+import { readMcpOAuthStates, type McpOAuthState } from "../agent/lib/mcp-oauth.ts";
 import { inspectConnectionSearchOutput } from "../agent/lib/mcp-auth-probe.ts";
 import { isAutoApproveValue } from "../agent/lib/approvals.ts";
 import {
@@ -264,7 +265,6 @@ import {
 	LAYOUT_STATUS_OPTIONS,
 	LOCAL_EFFORT_OPTIONS,
 	LOCAL_EFFORT_STATUS_OPTIONS,
-	MCP_ACTION_OPTIONS,
 	MCP_CONNECTION_INFO_UNAVAILABLE,
 	MCP_DYNAMIC_NAME_RE,
 	MCP_TRANSPORT_OPTIONS,
@@ -357,11 +357,6 @@ const CLANKY_MOUSE_TRACKING_DISABLE = "\x1b[?1002l\x1b[?1006l";
 const MIN_TRANSCRIPT_ROWS = 4;
 const AGENTS_PANEL_WIDTH = 76;
 const runHostCommand = promisify(execFile);
-
-if (process.stdin.isTTY !== true || process.stdout.isTTY !== true) {
-	process.stderr.write("clanky: interactive Clanky face requires a TTY; use `clanky worker ...` or `clanky status` for noninteractive use\n");
-	process.exit(1);
-}
 
 const faceCapabilities = detectBannerCapabilities(process.stdout);
 const ansi = createClankyFaceAnsiTheme(faceCapabilities);
@@ -639,6 +634,8 @@ type SettingsMenuStatus =
 			readonly collapseLabel?: string;
 		};
 
+const STATUS_BAR_MAX_ROWS = 6;
+
 class ClankyStatusBarComponent implements Component {
 	private text = "";
 
@@ -652,11 +649,11 @@ class ClankyStatusBarComponent implements Component {
 		if (this.text.trim().length === 0) return [];
 		const topSpacer = this.text.startsWith("\n");
 		const bottomSpacer = this.text.endsWith("\n");
-		const content = this.text.replace(/^\n/u, "").replace(/\n$/u, "").split(/\r?\n/u)[0] ?? "";
+		const content = this.text.replace(/^\n/u, "").replace(/\n$/u, "");
 		const blank = " ".repeat(Math.max(1, width));
 		return [
 			...(topSpacer ? [blank] : []),
-			formatSingleStatusRow(content, width),
+			...formatStatusRows(content, width),
 			...(bottomSpacer ? [blank] : []),
 		];
 	}
@@ -717,8 +714,65 @@ let transcriptClickTarget: { readonly col: number; readonly row: number } | unde
 let chromeSelectionActive = false;
 const chromeSelection = new ClankyChromeSelection();
 const selectableOverlays: SelectableOverlayEntry[] = [];
+const IMAGE_PROVIDERS = ["openai", "xai", "gemini"] as const;
+type ImageProvider = (typeof IMAGE_PROVIDERS)[number];
+const IMAGE_MODEL_ENV: Record<ImageProvider, string> = {
+	openai: "CLANKY_OPENAI_IMAGE_MODEL",
+	xai: "CLANKY_XAI_IMAGE_MODEL",
+	gemini: "CLANKY_GEMINI_IMAGE_MODEL",
+};
+const IMAGE_MODEL_DEFAULT: Record<ImageProvider, string> = {
+	openai: DEFAULT_OPENAI_IMAGE_MODEL,
+	xai: "grok-imagine-image-quality",
+	gemini: "gemini-3.1-flash-image",
+};
+const IMAGE_PROVIDER_OPTIONS: readonly MenuOption[] = [
+	{ value: "openai", label: "openai", hint: "OpenAI gpt-image" },
+	{ value: "xai", label: "xai", hint: "Grok Imagine" },
+	{ value: "gemini", label: "gemini", hint: "Nano Banana" },
+];
+const IMAGE_MODEL_OPTIONS: Record<ImageProvider, readonly MenuOption[]> = {
+	openai: [
+		{ value: DEFAULT_OPENAI_IMAGE_MODEL, label: DEFAULT_OPENAI_IMAGE_MODEL },
+		{ value: ENTER_IMAGE_MODEL_OPTION, label: "enter model id" },
+	],
+	xai: [
+		{ value: "grok-imagine-image-quality", label: "grok-imagine-image-quality" },
+		{ value: "grok-imagine-image-fast", label: "grok-imagine-image-fast" },
+		{ value: ENTER_IMAGE_MODEL_OPTION, label: "enter model id" },
+	],
+	gemini: [
+		{ value: "gemini-3.1-flash-image", label: "gemini-3.1-flash-image", hint: "nano banana 2" },
+		{ value: "gemini-3-pro-image", label: "gemini-3-pro-image", hint: "nano banana pro" },
+		{ value: ENTER_IMAGE_MODEL_OPTION, label: "enter model id" },
+	],
+};
+const DEFAULT_XAI_VIDEO_MODEL = "grok-imagine-video";
+const VIDEO_MODEL_OPTIONS: readonly MenuOption[] = [
+	{ value: DEFAULT_XAI_VIDEO_MODEL, label: DEFAULT_XAI_VIDEO_MODEL },
+	{ value: ENTER_IMAGE_MODEL_OPTION, label: "enter model id" },
+];
+const AGENTS_TOGGLE_VALUE = "__agents_toggle_others__";
+let baseClient: Client;
+let client: Client;
+let session: ClientSession;
+let currentSessionLabel: string | undefined;
+let faceRenderer: ClankyFaceRenderer;
+const FACE_SESSION_STORE_PATH = resolveClankyDataPath("tui/sessions.json");
+const FACE_SESSION_STORE_LIMIT = 30;
+const FACE_SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 const COMMANDS = buildClankyPromptCommands();
+
+if (process.argv.includes("--command-host")) {
+	await runCommandHost();
+	process.exit(0);
+}
+
+if (process.stdin.isTTY !== true || process.stdout.isTTY !== true) {
+	process.stderr.write("clanky: interactive Clanky face requires a TTY; use `clanky worker ...` or `clanky status` for noninteractive use\n");
+	process.exit(1);
+}
 
 process.stdout.write("\x1b[2mstarting Clanky...\x1b[22m\n");
 await reportClankyFaceToHerdr("working", "starting Clanky face");
@@ -727,15 +781,11 @@ ownsServer = await ensureServer();
 await startCallbackProxy();
 await reportClankyFaceToHerdr("idle", "Clanky face ready");
 
-const baseClient = new Client({ host: brainHost, preserveCompletedSessions: true });
-const client = createAttachmentAwareClient(baseClient);
+baseClient = new Client({ host: brainHost, preserveCompletedSessions: true });
+client = createAttachmentAwareClient(baseClient);
 const initialInfo = await fetchInfo();
 if (initialInfo !== undefined) updateLatestInfo(initialInfo);
-let session: ClientSession = client.session();
-let currentSessionLabel: string | undefined;
-const FACE_SESSION_STORE_PATH = resolveClankyDataPath("tui/sessions.json");
-const FACE_SESSION_STORE_LIMIT = 30;
-const FACE_SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+session = client.session();
 
 const faceEnv = await readFaceEnv();
 headerVisible = parseBooleanFlag(faceEnv.CLANKY_HEADER) ?? headerVisible;
@@ -758,7 +808,7 @@ const transcriptViewport = new ClankyTranscriptViewport(maxTranscriptRows, {
 	dim: ansi.dim,
 	selected: ansi.cyan,
 }, { blockSpacing: 1, underfilledAlignment: transcriptUnderfilledAlignment() });
-const faceRenderer = new ClankyFaceRenderer(createFaceRenderSink());
+faceRenderer = new ClankyFaceRenderer(createFaceRenderSink());
 const setupFlow = createSetupFlow(createFlowHost());
 const commandRenderer: CommandRenderer = {
 	setupFlow,
@@ -887,7 +937,7 @@ uiReady = true;
 startBrainHealthMonitor();
 // Announce this face to the brain so the iOS app can show headless vs attached.
 // Reconnects across brain restarts and host changes via the getters.
-startFacePresence({ host: () => brainHost, token: resolveRelayTokenSync, pid: process.pid, onCommandRequest: runRemoteFaceCommand });
+startFacePresence({ host: () => brainHost, token: resolveRelayTokenSync, pid: process.pid, role: "face-command-host", onCommandRequest: runRemoteFaceCommand });
 refreshStatus("ready");
 tui.start();
 enableClankyMouseTracking();
@@ -905,6 +955,60 @@ function resolveRelayTokenSync(): string {
 	} catch {
 		return "";
 	}
+}
+
+async function runCommandHost(): Promise<void> {
+	process.stdout.write("\x1b[2mstarting Clanky command host...\x1b[22m\n");
+	await reportClankyFaceToHerdr("working", "starting Clanky command host");
+	await refreshEffortStatusSuffix();
+	ownsServer = await ensureServer();
+	await startCallbackProxy();
+
+	baseClient = new Client({ host: brainHost, preserveCompletedSessions: true });
+	client = createAttachmentAwareClient(baseClient);
+	const initialInfo = await fetchInfo();
+	if (initialInfo !== undefined) updateLatestInfo(initialInfo);
+	session = client.session();
+	faceRenderer = new ClankyFaceRenderer(createHeadlessFaceRenderSink());
+
+	startFacePresence({ host: () => brainHost, token: resolveRelayTokenSync, pid: process.pid, role: "command-host", onCommandRequest: runRemoteFaceCommand });
+	await reportClankyFaceToHerdr("idle", "Clanky command host ready");
+	process.stdout.write(`\x1b[2mClanky command host ready · eve server ${brainHost.replace(/^https?:\/\//u, "")}\x1b[22m\n`);
+
+	await waitForCommandHostShutdown();
+}
+
+function createHeadlessFaceRenderSink(): FaceRenderSink {
+	return {
+		insertMarkdown(markdown: string): FaceBlockHandle {
+			process.stdout.write(`${stripAnsi(markdown)}\n`);
+			return {
+				setMarkdown(nextMarkdown: string): void {
+					process.stdout.write(`${stripAnsi(nextMarkdown)}\n`);
+				},
+			};
+		},
+		setLoaderMessage(): void {},
+		setStatus(message: string): void {
+			currentStatusLabel = message;
+		},
+	};
+}
+
+async function waitForCommandHostShutdown(): Promise<void> {
+	await new Promise<void>((resolve) => {
+		const finish = (): void => {
+			process.off("SIGINT", finish);
+			process.off("SIGTERM", finish);
+			resolve();
+		};
+		process.once("SIGINT", finish);
+		process.once("SIGTERM", finish);
+	});
+	stopFacePresence();
+	await stopCallbackProxy();
+	if (ownsServer) await stopServer();
+	await reportClankyFaceToHerdr("unknown", "Clanky command host stopped");
 }
 
 function createAttachmentAwareClient(client: Client): Client {
@@ -2804,6 +2908,7 @@ function refreshStatus(label: string): void {
 }
 
 function refreshStatusView(): void {
+	if (!uiReady) return;
 	status.setText(formatStatusText(currentStatusLabel));
 	tui.requestRender();
 }
@@ -2913,6 +3018,30 @@ function formatSingleStatusRow(text: string, width: number): string {
 	const content = truncateToWidth(text, contentWidth, "", true);
 	const row = `${" ".repeat(paddingX)}${content}${" ".repeat(paddingX)}`;
 	return `${row}${" ".repeat(Math.max(0, safeWidth - visibleWidth(row)))}`;
+}
+
+// Wrap the status bar across rows so long transient messages (e.g. a modal's
+// auth result, surfaced via flow.renderOutput) stay fully readable instead of
+// being clipped to a single width-truncated line. Short status lines still
+// render as one row. Capped so a pathological message can't eat the screen.
+function formatStatusRows(text: string, width: number): string[] {
+	const safeWidth = Math.max(1, width);
+	const paddingX = safeWidth > 2 ? 1 : 0;
+	const contentWidth = Math.max(1, safeWidth - paddingX * 2);
+	const rows: string[] = [];
+	for (const line of text.split(/\r?\n/u)) {
+		if (line.trim().length === 0) {
+			rows.push("");
+			continue;
+		}
+		rows.push(...wrapTextWithAnsi(line, contentWidth));
+	}
+	if (rows.length === 0) rows.push("");
+	const limited =
+		rows.length > STATUS_BAR_MAX_ROWS
+			? [...rows.slice(0, STATUS_BAR_MAX_ROWS - 1), `${truncateToWidth(rows[STATUS_BAR_MAX_ROWS - 1] ?? "", Math.max(1, contentWidth - 1), "", true)}…`]
+			: rows;
+	return limited.map((row) => formatSingleStatusRow(row, width));
 }
 
 function formatBrainHealthStatus(health: BrainHealthState): string {
@@ -5867,40 +5996,6 @@ function formatLayoutStatus(): string {
 	].join("\n");
 }
 
-const IMAGE_PROVIDERS = ["openai", "xai", "gemini"] as const;
-type ImageProvider = (typeof IMAGE_PROVIDERS)[number];
-const IMAGE_MODEL_ENV: Record<ImageProvider, string> = {
-	openai: "CLANKY_OPENAI_IMAGE_MODEL",
-	xai: "CLANKY_XAI_IMAGE_MODEL",
-	gemini: "CLANKY_GEMINI_IMAGE_MODEL",
-};
-const IMAGE_MODEL_DEFAULT: Record<ImageProvider, string> = {
-	openai: DEFAULT_OPENAI_IMAGE_MODEL,
-	xai: "grok-imagine-image-quality",
-	gemini: "gemini-3.1-flash-image",
-};
-const IMAGE_PROVIDER_OPTIONS: readonly MenuOption[] = [
-	{ value: "openai", label: "openai", hint: "OpenAI gpt-image" },
-	{ value: "xai", label: "xai", hint: "Grok Imagine" },
-	{ value: "gemini", label: "gemini", hint: "Nano Banana" },
-];
-const IMAGE_MODEL_OPTIONS: Record<ImageProvider, readonly MenuOption[]> = {
-	openai: [
-		{ value: DEFAULT_OPENAI_IMAGE_MODEL, label: DEFAULT_OPENAI_IMAGE_MODEL },
-		{ value: ENTER_IMAGE_MODEL_OPTION, label: "enter model id" },
-	],
-	xai: [
-		{ value: "grok-imagine-image-quality", label: "grok-imagine-image-quality" },
-		{ value: "grok-imagine-image-fast", label: "grok-imagine-image-fast" },
-		{ value: ENTER_IMAGE_MODEL_OPTION, label: "enter model id" },
-	],
-	gemini: [
-		{ value: "gemini-3.1-flash-image", label: "gemini-3.1-flash-image", hint: "nano banana 2" },
-		{ value: "gemini-3-pro-image", label: "gemini-3-pro-image", hint: "nano banana pro" },
-		{ value: ENTER_IMAGE_MODEL_OPTION, label: "enter model id" },
-	],
-};
-
 function parseImageProvider(value: string | undefined): ImageProvider | undefined {
 	return value === "openai" || value === "xai" || value === "gemini" ? value : undefined;
 }
@@ -6005,12 +6100,6 @@ function imageModelUsage(): string {
 function currentImageModel(config: ClankyConfig): string {
 	return imageModelFor(config, currentImageProvider(config));
 }
-
-const DEFAULT_XAI_VIDEO_MODEL = "grok-imagine-video";
-const VIDEO_MODEL_OPTIONS: readonly MenuOption[] = [
-	{ value: DEFAULT_XAI_VIDEO_MODEL, label: DEFAULT_XAI_VIDEO_MODEL },
-	{ value: ENTER_IMAGE_MODEL_OPTION, label: "enter model id" },
-];
 
 function currentVideoModel(config: ClankyConfig): string {
 	const configured = config.xaiVideoModel?.trim();
@@ -6711,6 +6800,16 @@ async function configureMcp(
 	}
 }
 
+const MCP_ADD_DYNAMIC_VALUE = "__mcp_add_dynamic__";
+const MCP_CONNECTION_VALUE_PREFIX = "conn:";
+const MCP_DYNAMIC_VALUE_PREFIX = "dyn:";
+
+// The /mcp modal is an inventory browser: every curated connection and dynamic
+// server is a selectable row showing live status. Selecting a curated
+// connection authorizes/verifies it (and surfaces discovered tools); selecting
+// a dynamic server drills into a per-server submenu (view tools / toggle /
+// remove). `initialAction` ("auth"/"install") preserves the direct
+// /mcp auth and /auth mcp entry points by jumping straight to the picker.
 async function configureMcpInteractive(
 	flow: SetupFlow,
 	renderer: CommandRenderer,
@@ -6719,57 +6818,173 @@ async function configureMcpInteractive(
 ): Promise<string | undefined> {
 	flow.begin("Manage MCPs");
 	try {
-		flow.renderOutput(await mcpStatusText());
-		const dispatch = async (value: string): Promise<string | undefined> => {
-			const action = parseMcpAction(value);
-			if (action === undefined) return undefined;
-			switch (action) {
-				case "status":
-					return await mcpStatusText();
-				case "connections":
-					return await mcpConnectionsText();
-				case "list": {
-					const server = await selectDynamicMcpServer(flow, "Choose a dynamic MCP server to probe.", true, true);
-					if (server === undefined) return undefined;
-					return await mcpToolListText(server === "all" ? undefined : server);
-				}
-				case "add":
-					return await promptAndSaveMcpServer(flow);
-				case "remove":
-					return await promptAndRemoveMcpServer(flow, { backReturnsToMenu: true });
-				case "enable":
-				case "disable":
-					return await promptAndSetMcpServerEnabled(flow, action === "enable", { backReturnsToMenu: true });
-				case "auth": {
-					const connection = await selectMcpConnectionName(flow, undefined, true);
-					if (connection === undefined) return undefined;
-					return await runMcpConnectionAuthByName(connection, flow, renderer);
-				}
-				case "install": {
-					const connection = await selectMcpConnectionName(flow, "linear", true);
-					if (connection === undefined) return undefined;
-					return await runMcpConnectionAuthByName(connection, flow, renderer);
-				}
-				case "help":
-					return mcpUsage();
-			}
-		};
-
-		if (initialAction !== undefined) {
-			const result = await dispatch(initialAction);
-			if (result !== undefined) return result;
+		if (initialAction === "auth" || initialAction === "install") {
+			const connection = await selectMcpConnectionName(flow, initialAction === "install" ? "linear" : undefined, true);
+			if (connection === undefined) return options.backReturnsToMenu === true ? undefined : `/mcp ${initialAction} cancelled.`;
+			return await runMcpConnectionAuthByName(connection, flow, renderer);
 		}
 
+		let inventory = await mcpInventoryOptions();
+		let status = await mcpModalStatus();
+		const refresh = async (): Promise<void> => {
+			inventory = await mcpInventoryOptions();
+			status = await mcpModalStatus();
+		};
+
 		const result = await settingsLoop(flow, {
-			title: "Choose an MCP action.",
-			options: () => MCP_ACTION_OPTIONS,
-			initial: initialAction ?? "status",
-			dispatch,
+			title: "Select an MCP to connect, view, or manage.",
+			options: () => inventory,
+			renderStatus: () => status,
+			dispatch: async (value): Promise<string | undefined> => {
+				if (value === MCP_ADD_DYNAMIC_VALUE) {
+					flow.renderOutput(await promptAndSaveMcpServer(flow));
+					await refresh();
+					return undefined;
+				}
+				if (value.startsWith(MCP_CONNECTION_VALUE_PREFIX)) {
+					flow.renderOutput(await runMcpConnectionAuthByName(value.slice(MCP_CONNECTION_VALUE_PREFIX.length), flow, renderer));
+					await refresh();
+					return undefined;
+				}
+				if (value.startsWith(MCP_DYNAMIC_VALUE_PREFIX)) {
+					await mcpDynamicServerMenu(value.slice(MCP_DYNAMIC_VALUE_PREFIX.length), flow);
+					await refresh();
+					return undefined;
+				}
+				return undefined;
+			},
 		});
 		return result ?? (options.backReturnsToMenu === true ? undefined : "/mcp cancelled.");
 	} finally {
 		flow.end({ preserveDiagnostics: false });
 	}
+}
+
+// Build the inventory rows for the /mcp modal: curated connections first (with
+// live auth status), then dynamic servers (enabled/disabled + source), then the
+// add-dynamic action.
+async function mcpInventoryOptions(): Promise<MenuOption[]> {
+	const [info, store, states] = await Promise.all([fetchInfo(), listMcpServerConfigs(), readMcpOAuthStates()]);
+	const rows: MenuOption[] = [];
+	for (const connection of mcpConnections(info)) {
+		const live = mcpConnectionLiveStatus(connection, states);
+		rows.push({
+			value: `${MCP_CONNECTION_VALUE_PREFIX}${connection.connectionName}`,
+			label: connection.connectionName,
+			hint: `curated · ${live.label}`,
+			description: connection.description,
+		});
+	}
+	for (const name of Object.keys(store.servers).sort((a, b) => a.localeCompare(b))) {
+		const config = store.servers[name];
+		const state = config?.disabled === true ? "disabled" : "enabled";
+		rows.push({
+			value: `${MCP_DYNAMIC_VALUE_PREFIX}${name}`,
+			label: name,
+			hint: `dynamic · ${state} · ${dynamicMcpSourceHint(name, store)}`,
+			description: formatMcpConfigTarget(config),
+		});
+	}
+	rows.push({ value: MCP_ADD_DYNAMIC_VALUE, label: "add dynamic MCP", hint: "stdio/http/sse no-auth or static-token MCP" });
+	return rows;
+}
+
+async function mcpModalStatus(): Promise<SettingsMenuStatus> {
+	const [info, store, states] = await Promise.all([fetchInfo(), listMcpServerConfigs(), readMcpOAuthStates()]);
+	const collapsed = [statusTitle("MCPs"), formatMcpModalSummary(info, store, states)].join("\n");
+	const expanded = [
+		statusTitle("MCPs"),
+		statusSection("Curated connections"),
+		...formatMcpConnectionLines(info, states),
+		"",
+		statusSection("Dynamic servers"),
+		...formatDynamicMcpLines(store),
+	].join("\n");
+	return collapsibleMenuStatus(collapsed, expanded);
+}
+
+function formatMcpModalSummary(
+	info: AgentInfoResult | undefined,
+	store: Awaited<ReturnType<typeof listMcpServerConfigs>>,
+	states: Record<string, McpOAuthState>,
+): string {
+	const connections = mcpConnections(info);
+	const authed = connections.filter((c) => mcpConnectionHasAuthorization(c) && (states[c.connectionName] ?? "unauthorized") !== "unauthorized");
+	const needAuth = connections.filter((c) => mcpConnectionHasAuthorization(c) && (states[c.connectionName] ?? "unauthorized") === "unauthorized");
+	const dynamicNames = Object.keys(store.servers);
+	const disabled = dynamicNames.filter((name) => store.servers[name]?.disabled === true).length;
+	const curated =
+		info === undefined
+			? statusValue("unavailable", "warn")
+			: connections.length === 0
+				? statusValue("none", "muted")
+				: `${statusValue(`${authed.length} authorized`, authed.length > 0 ? "ok" : "muted")}${needAuth.length > 0 ? `, ${statusValue(`${needAuth.length} need auth`, "warn")}` : ""}`;
+	const dynamic =
+		dynamicNames.length === 0
+			? statusValue("none", "muted")
+			: `${dynamicNames.length}${disabled > 0 ? ` (${disabled} disabled)` : ""}`;
+	return [statusLine("curated", curated), statusLine("dynamic", dynamic)].join("\n");
+}
+
+// Per-server submenu for a dynamic MCP: view its live tool list, toggle it, or
+// remove it. File-backed servers can be toggled/removed; env-injected servers
+// are read-only here.
+async function mcpDynamicServerMenu(name: string, flow: SetupFlow): Promise<string | undefined> {
+	let store = await listMcpServerConfigs();
+	return await settingsLoop(flow, {
+		title: `Manage ${name}.`,
+		renderStatus: () => dynamicMcpServerStatusLine(name, store),
+		options: () => dynamicMcpServerOptions(name, store),
+		dispatch: async (value): Promise<string | undefined> => {
+			if (value === "tools") {
+				flow.renderOutput(await mcpToolListText(name));
+				return undefined;
+			}
+			if (value === "enable" || value === "disable") {
+				flow.renderOutput(await setDynamicMcpServerEnabled(name, value === "enable"));
+				store = await listMcpServerConfigs();
+				return undefined;
+			}
+			if (value === "remove") {
+				const result = await removeDynamicMcpServer(name);
+				flow.renderOutput(result);
+				return result;
+			}
+			return undefined;
+		},
+	});
+}
+
+function dynamicMcpServerStatusLine(name: string, store: Awaited<ReturnType<typeof listMcpServerConfigs>>): string {
+	const config = store.servers[name];
+	const lines = [statusTitle(name)];
+	if (config === undefined) {
+		lines.push(statusLine("config", "(unavailable)", "warn"));
+		return lines.join("\n");
+	}
+	const enabled = config.disabled !== true;
+	lines.push(
+		statusLine("state", enabled ? "enabled" : "disabled", enabled ? "ok" : "muted"),
+		statusLine("source", dynamicMcpSourceHint(name, store)),
+		statusLine("target", formatMcpConfigTarget(config)),
+	);
+	if (config.description !== undefined) lines.push(statusLine("description", config.description));
+	return lines.join("\n");
+}
+
+function dynamicMcpServerOptions(name: string, store: Awaited<ReturnType<typeof listMcpServerConfigs>>): MenuOption[] {
+	const fileBacked = store.fileServers[name] !== undefined;
+	const enabled = store.servers[name]?.disabled !== true;
+	const rows: MenuOption[] = [{ value: "tools", label: "view tools", hint: "connect and list this server's tools" }];
+	if (fileBacked) {
+		rows.push(
+			enabled
+				? { value: "disable", label: "disable", hint: "stop loading this server" }
+				: { value: "enable", label: "enable", hint: "load this server again" },
+			{ value: "remove", label: "remove", hint: "delete from the file-backed store" },
+		);
+	}
+	return rows;
 }
 
 async function runMcpInstallCommand(
@@ -7272,10 +7487,10 @@ function mcpConnections(info: AgentInfoResult | undefined): AgentInfoConnectionE
 }
 
 async function mcpStatusText(): Promise<string> {
-	const [info, store] = await Promise.all([fetchInfo(), listMcpServerConfigs()]);
+	const [info, store, states] = await Promise.all([fetchInfo(), listMcpServerConfigs(), readMcpOAuthStates()]);
 	return [
 		"Curated MCP connections (eve connections; OAuth/brokered auth):",
-		...formatMcpConnectionLines(info),
+		...formatMcpConnectionLines(info, states),
 		"",
 		`Dynamic MCP servers (${store.path} + CLANKY_MCP_SERVERS):`,
 		...formatDynamicMcpLines(store),
@@ -7285,7 +7500,8 @@ async function mcpStatusText(): Promise<string> {
 }
 
 async function mcpConnectionsText(): Promise<string> {
-	return ["Curated MCP connections (installed under agent/connections):", ...formatMcpConnectionLines(await fetchInfo())].join("\n");
+	const [info, states] = await Promise.all([fetchInfo(), readMcpOAuthStates()]);
+	return ["Curated MCP connections (installed under agent/connections):", ...formatMcpConnectionLines(info, states)].join("\n");
 }
 
 async function mcpToolListText(server: string | undefined): Promise<string> {
@@ -7294,19 +7510,38 @@ async function mcpToolListText(server: string | undefined): Promise<string> {
 	return statuses.map(formatMcpServerStatus).join("\n\n");
 }
 
-function formatMcpConnectionLines(info: AgentInfoResult | undefined): string[] {
+function formatMcpConnectionLines(info: AgentInfoResult | undefined, states: Record<string, McpOAuthState>): string[] {
 	if (info === undefined) return [MCP_CONNECTION_INFO_UNAVAILABLE];
 	const connections = mcpConnections(info);
 	if (connections.length === 0) return ["(none)"];
 	return connections.map((connection) => {
-		const auth = mcpConnectionAuthHint(connection);
+		const live = mcpConnectionLiveStatus(connection, states);
 		const approval = mcpConnectionHasApproval(connection) ? "approval" : "no approval";
-		return `- ${connection.connectionName}: ${connection.protocol}, ${auth}, ${approval} - ${connection.description}`;
+		return `- ${ansi.bold(connection.connectionName)}: ${statusValue(live.label, live.tone)} ${ansi.dim(`(${connection.protocol}, ${approval})`)} - ${ansi.dim(connection.description)}`;
 	});
 }
 
 function mcpConnectionAuthHint(connection: AgentInfoConnectionEntry): string {
 	return mcpConnectionHasAuthorization(connection) ? "oauth" : "no oauth";
+}
+
+// Live, locally-derived auth status for a curated connection: reads the
+// persisted OAuth token store (no network), so /mcp and /auth can show whether
+// each connection is actually authorized rather than just whether it requires
+// auth.
+function mcpConnectionLiveStatus(
+	connection: AgentInfoConnectionEntry,
+	states: Record<string, McpOAuthState>,
+): { label: string; tone: StatusTone } {
+	if (!mcpConnectionHasAuthorization(connection)) return { label: "no auth needed", tone: "muted" };
+	switch (states[connection.connectionName] ?? "unauthorized") {
+		case "authorized":
+			return { label: "authorized", tone: "ok" };
+		case "expired":
+			return { label: "authorized (token expired, refreshes on use)", tone: "ok" };
+		default:
+			return { label: "not authorized", tone: "warn" };
+	}
 }
 
 function mcpConnectionHasAuthorization(connection: AgentInfoConnectionEntry): boolean {
@@ -7636,7 +7871,8 @@ async function statusText(): Promise<string> {
 async function skillsOutcome(): Promise<PromptCommandOutcome> {
 	let entries: ClankySkillInventoryEntry[];
 	try {
-		entries = await listClankySkills(REPO);
+		const config = await readConfig();
+		entries = await listClankySkills(REPO, { includeInherited: agentMdEnabled(config) });
 	} catch (error) {
 		return { message: `Could not read Clanky skills: ${error instanceof Error ? error.message : String(error)}` };
 	}
@@ -7665,8 +7901,6 @@ class ClankySkillsPanelComponent implements Component {
 		});
 	}
 }
-
-const AGENTS_TOGGLE_VALUE = "__agents_toggle_others__";
 
 async function configureAgents(argument: string, flow: SetupFlow | undefined): Promise<string> {
 	// Headless/relay callers have no overlay surface; keep the printed roster.
@@ -9362,7 +9596,7 @@ function forwardOwnedServerOutput(stream: "stdout" | "stderr", chunk: Buffer): v
 	const text = chunk.toString("utf8");
 	if (isSuppressedOwnedServerOutput(text)) return;
 	appendOwnedServerStartupOutput(text);
-	if (!forwardServerOutput) return;
+	if (!forwardServerOutput || !uiReady) return;
 	insertMarkdown(`**eve ${stream}**\n\n\`\`\`\n${truncate(text.trim(), 4_000)}\n\`\`\``);
 }
 

@@ -1,13 +1,14 @@
 /**
- * Face presence — lets the brain (the eve server) know a TUI face is attached.
+ * Face / command-host presence — lets the brain (the eve server) know which
+ * companion process is attached.
  *
  * The eve `Client` the face uses is request/response HTTP, so the server can't
- * observe it. Instead the face holds a dedicated WebSocket to the brain's relay
- * (`/relay/ws`) and sends a `face-attach` op; the relay tracks the live peer and
- * reports `face.attached` in `/relay/health`. Presence = connection alive, so a
- * crashed face clears automatically when its socket closes. The iOS app reads
- * this to show "headless vs face-attached". See
- * clanky-ios/docs/native-menu-mirroring.md and the brain-topology notes.
+ * observe it. Instead a face or headless command host holds a dedicated
+ * WebSocket to the brain's relay (`/relay/ws`) and sends `face-attach`,
+ * `command-attach`, or both. The relay reports `face` and `commandHost` in
+ * `/relay/health`. Presence = connection alive, so a crashed companion clears
+ * automatically when its socket closes. See clanky-ios/docs/native-menu-mirroring.md
+ * and the brain-topology notes.
  *
  * Best-effort and self-healing: it reconnects across brain restarts and no-ops
  * when the socket cannot be opened. Host/token are getters so it always uses the
@@ -30,6 +31,7 @@ interface FacePresenceConfig {
 	readonly host: Getter;
 	readonly token: Getter;
 	readonly pid: number;
+	readonly role?: "face" | "command-host" | "face-command-host";
 	readonly onCommandRequest?: (request: FaceCommandRequest) => Promise<void> | void;
 }
 
@@ -93,7 +95,9 @@ function connect(): void {
 	const pid = config.pid;
 	ws.addEventListener("open", () => {
 		try {
-			ws.send(JSON.stringify({ op: "face-attach", args: { pid } }));
+			for (const op of attachOps(config?.role)) {
+				ws.send(JSON.stringify({ op, args: { pid } }));
+			}
 		} catch {
 			// ignore — close handler will reconnect
 		}
@@ -123,19 +127,30 @@ function scheduleReconnect(): void {
 	reconnectTimer = setTimeout(connect, RECONNECT_MS);
 }
 
+function attachOps(role: FacePresenceConfig["role"]): readonly string[] {
+	switch (role ?? "face-command-host") {
+		case "face":
+			return ["face-attach"];
+		case "command-host":
+			return ["command-attach"];
+		case "face-command-host":
+			return ["face-attach", "command-attach"];
+	}
+}
+
 function handleRelayMessage(ws: FaceSocket, data: unknown): void {
 	const payload = parseRelayPayload(data);
 	if (payload === undefined) return;
-	if (payload.type === "face.command.request") {
+	if (payload.type === "command.request" || payload.type === "face.command.request") {
 		const id = typeof payload.id === "string" || typeof payload.id === "number" ? String(payload.id) : "";
 		const commandLine = typeof payload.commandLine === "string" ? payload.commandLine : "";
 		if (id.length === 0 || commandLine.trim().length === 0) return;
 		const onCommandRequest = config?.onCommandRequest;
 		if (onCommandRequest === undefined) {
-			sendFaceCommandEvent(ws, id, {
+			sendCommandEvent(ws, id, {
 				type: "menu.failed",
 				sessionId: id,
-				message: "This Clanky face does not support native command mirroring.",
+				message: "This Clanky process does not support native command execution.",
 			});
 			return;
 		}
@@ -143,13 +158,13 @@ function handleRelayMessage(ws: FaceSocket, data: unknown): void {
 			id,
 			commandLine,
 			send(event) {
-				sendFaceCommandEvent(ws, id, event);
+				sendCommandEvent(ws, id, event);
 			},
 			waitForClientMessage() {
 				return waitForClientMessage(id);
 			},
 		})).catch((error: unknown) => {
-			sendFaceCommandEvent(ws, id, {
+			sendCommandEvent(ws, id, {
 				type: "menu.failed",
 				sessionId: id,
 				message: error instanceof Error ? error.message : String(error),
@@ -157,7 +172,7 @@ function handleRelayMessage(ws: FaceSocket, data: unknown): void {
 		});
 		return;
 	}
-	if (payload.type === "face.command.client") {
+	if (payload.type === "command.client" || payload.type === "face.command.client") {
 		const id = typeof payload.id === "string" || typeof payload.id === "number" ? String(payload.id) : "";
 		if (id.length === 0) return;
 		const message = isClankyMenuClientMessage(payload.message) ? payload.message : undefined;
@@ -165,8 +180,8 @@ function handleRelayMessage(ws: FaceSocket, data: unknown): void {
 	}
 }
 
-function sendFaceCommandEvent(ws: FaceSocket, requestId: string, event: ClankyMenuServerEvent): void {
-	ws.send(JSON.stringify({ op: "face-command-event", args: { request_id: requestId, event } }));
+function sendCommandEvent(ws: FaceSocket, requestId: string, event: ClankyMenuServerEvent): void {
+	ws.send(JSON.stringify({ op: "command-event", args: { request_id: requestId, event } }));
 }
 
 function waitForClientMessage(requestId: string): Promise<ClankyMenuClientMessage | undefined> {

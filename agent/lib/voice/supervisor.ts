@@ -180,8 +180,16 @@ export interface VoiceSessionConfig {
 }
 
 export interface VoiceSessionFault {
-	readonly kind: "socket_closed" | "socket_error";
+	readonly kind: "socket_closed" | "socket_error" | "clankvox_crashed";
 	readonly detail: string;
+	/** ClankVox's own stderr tail, present for `clankvox_crashed` faults. */
+	readonly stderrTail?: readonly string[];
+}
+
+interface ClankvoxCrashInfo {
+	code?: number | null;
+	signal?: NodeJS.Signals | null;
+	error?: string;
 }
 
 export type VoiceSpeakerResolver = (userId: string) => VoiceMemorySpeaker | undefined;
@@ -219,6 +227,12 @@ export async function startVoiceSession(config: VoiceSessionConfig): Promise<Voi
 	realtime.on("socket_error", (error) => handleFault({ kind: "socket_error", detail: error.message }));
 	realtime.on("socket_closed", (event) => {
 		handleFault({ kind: "socket_closed", detail: event.reason.length === 0 ? `code ${event.code}` : `code ${event.code}: ${event.reason}` });
+	});
+	// A ClankVox exit/crash drops the Discord voice connection but leaves the
+	// realtime brain alive; fault the session so it tears down (and records the
+	// binary's stderr) instead of lingering as a zombie with no diagnostics.
+	vox.on("crashed", (info: ClankvoxCrashInfo) => {
+		handleFault({ kind: "clankvox_crashed", detail: formatClankvoxCrashDetail(info), stderrTail: vox.getRecentStderr() });
 	});
 	const memoryBinding = bindVoiceMemory(config, realtime, stats, speakerTracker);
 	const eveSessionBinding = bindVoiceSessionMirror(config, realtime, stats, speakerTracker);
@@ -344,6 +358,13 @@ export async function buildVoiceConnectOptions(config: VoiceSessionConfig): Prom
 	});
 	if (memoryContext.length === 0) return connect;
 	return { ...connect, instructions: `${connect.instructions}\n\n${memoryContext}` };
+}
+
+function formatClankvoxCrashDetail(info: ClankvoxCrashInfo): string {
+	if (info.error !== undefined) return `process error: ${info.error}`;
+	if (info.signal !== undefined && info.signal !== null) return `exited via signal ${info.signal}`;
+	if (info.code !== undefined && info.code !== null) return `exited with code ${info.code}`;
+	return "process exited unexpectedly";
 }
 
 function initialVoiceSessionStats(): VoiceSessionStats {

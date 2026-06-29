@@ -144,13 +144,14 @@ eve provides Clanky's durable runtime primitives:
 | Voice in/out | `agent/channels/voice.ts` + ClankVox media |
 | Durable session state | eve sessions + `continuationToken` |
 | Scheduled/autonomous runs | `agent/schedules/*.md` (cron frontmatter) |
+| Slash-command execution | headless command host (`scripts/clanky.ts --command-host`) registered with the relay |
 | Visible face | custom face on `eve/client` (`clanky dev` while editing, `pnpm face` direct); `eve dev` for debugging |
 | Memory | eve session context + Clanky memory lib |
 
 **Clanky's face is a custom client on `eve/client`.** `eve dev`'s slash-command
 set is fixed and non-extensible, so Clanky's visible face (`scripts/clanky.ts`,
 run through `clanky dev` while editing or `pnpm face` directly) is our own
-terminal UI built on the public `eve/client`. It owns a headless
+terminal UI built on the public `eve/client`. It attaches to the same headless
 `eve dev --no-ui` brain (same sessions, memory, tools), starts a session over
 the default eve HTTP channel (`POST /eve/v1/session`,
 `POST /eve/v1/session/:id`, `GET /eve/v1/session/:id/stream`), and renders the
@@ -160,9 +161,12 @@ glyphs, an `expo-agent-spinners`-backed phase-aware working spinner with width
 presets, curated same-width cycles, exact spinner picks, custom cycles, and a
 configurable cycle rate, and a
 persistent bottom status line (model · effort · tokens · endpoint). On top it adds Clanky-specific slash
-commands `eve dev` can't. The live command list is the face's `/help` output and
-the shared `COMMANDS` registry in `scripts/clanky.ts`; this spec does not
-duplicate that list. Config commands rewrite `.env.local` and restart the brain.
+commands `eve dev` can't. The deterministic command executor is the command
+host registered with the relay; a visible face may also register as a command
+host, but iOS and other remote clients depend on command-host presence rather
+than a visible TUI. The live command list is `/help` and the shared `COMMANDS`
+registry in `scripts/clanky.ts`; this spec does not duplicate that list. Config
+commands rewrite `.env.local` and restart the brain through the host below Eve.
 The stock `eve dev` TUI stays available as a local dev/debug interface against
 the same runtime.
 
@@ -480,15 +484,17 @@ the pane already uses the subscription natively.
 ### 5.1 Always-on boot (Mac mini)
 
 1. herdr server runs with a persistent session: `herdr --session clankies`.
-2. The headless eve Clanky brain starts (`eve dev --no-ui`; channels listening,
-   schedules armed).
-3. A pane in `clankies` runs Clanky's custom face (`clanky dev` while editing, or
-   `clanky face` / `pnpm face` directly) and attaches to the brain over
-   `eve/client`.
-4. The eve relay channel listens on the tailnet for the iOS app.
+2. A pane in `clankies` runs Clanky's headless command host
+   (`scripts/clanky.ts --command-host` via `clanky up`). The host owns or
+   attaches the headless eve Clanky brain (`eve dev --no-ui`; channels
+   listening, schedules armed).
+3. Optional visible faces (`clanky dev`, `clanky face`, or `pnpm face`) attach
+   to the same brain over `eve/client`.
+4. The eve relay channel listens on the tailnet for the iOS app and forwards
+   deterministic slash commands to the command host.
 
-"Turning Clanky on" means the eve service and his face pane are up. The iOS app
-then shows him.
+"Turning Clanky on" means the command host and eve service are up. The iOS app
+can run commands without a visible face.
 
 ### 5.2 Discord presence — text (free-will chat)
 
@@ -612,6 +618,15 @@ to the gateway's Discord client via `attachVoiceRuntime()` on
 Because the voice presence is the same agent on its own session, a thing said in
 VC and a thing said in chat reach the same memory and character — and neither
 clogs the main face-pane thread.
+
+**ClankVox setup.** The Rust transport must be built before the first join:
+`pnpm clankvox:setup` is idempotent — it installs the Rust toolchain (unattended
+rustup) if missing, builds the release binary, and verifies it. The join path
+requires that prebuilt binary (resolved by `resolveClankvoxBinaryLocation`); it
+never compiles inline. If it is missing, the voice op faults the session with a
+"run `pnpm clankvox:setup`" message rather than crashing the brain. Override the
+source dir with `CLANKY_CLANKVOX_DIR` or point at a prebuilt binary with
+`CLANKY_CLANKVOX_BIN`.
 
 **Credential kind (bot vs user/self token).** `CLANKY_DISCORD_CREDENTIAL_KIND`
 selects `bot-token` (default) or `user-token`. Bot tokens cover text presence and
@@ -840,6 +855,14 @@ instruction files in the same always-on instruction surface. When
 dynamic instruction on each turn. This is opt-in because those files are trusted
 prompt material; the custom face exposes it through `/agent-md` and restarts the
 owned brain after setting changes.
+
+When filesystem agent files are enabled, Clanky also inherits the operator's
+Codex and Claude skill roots (`~/.codex/skills`, `~/.codex/skills/.system`, and
+`~/.claude/skills`) as dynamic Eve skills. The inherited inventory is exposed
+through `/skills` and relay `list-skills`; native clients can surface those as
+`$skill` invocations. If an inherited skill name collides with a Clanky-authored
+skill, the inherited skill is advertised with a non-colliding Eve runtime name
+while clients may still show the original `$name`.
 
 ## 10. Implementation status
 

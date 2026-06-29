@@ -14,8 +14,12 @@ export default defineTool({
 		maxImages: z.number().int().min(1).max(12).optional(),
 		maxBytesPerImage: z.number().int().min(1).max(20 * 1024 * 1024).optional(),
 	}),
-	async execute(input) {
-		return await inspectVisualMedia(input);
+	async execute(input, ctx) {
+		// User attachments are staged into the sandbox vfs (e.g. /workspace/attachments/...),
+		// which the host filesystem cannot see. Hand inspectVisualMedia the active sandbox so
+		// those paths resolve; host-disk artifacts (screenshots, generated images) still work.
+		const sandbox = await ctx.getSandbox().catch(() => undefined);
+		return await inspectVisualMedia(input, { sandbox });
 	},
 	toModelOutput(output) {
 		return {
