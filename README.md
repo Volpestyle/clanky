@@ -66,7 +66,7 @@ flowchart TB
   subgraph mac["Mac mini — always on"]
     subgraph herdr["herdr (vanilla) — STAGE: persistent session 'clankies'"]
       host["pane: clanky<br/>headless command host"]
-      face["optional pane: clanky face<br/>pi-tui client · Clanky's face"]
+      face["optional pane: clanky<br/>pi-tui client · Clanky's face"]
       disc["pane: clanky:discord-*"]
       w1["pane: clanky / claude / codex / opencode<br/>performers"]
     end
@@ -127,11 +127,6 @@ Then use `clanky` from anywhere:
   during editing, Clanky waits through the short hot-reload window, then
   restarts the recorded `.eve/dev-server.json` process instead of leaving the
   face on `eve unavailable 503`.
-- **`clanky face`** — Clanky's custom face (`scripts/clanky.ts`): a pi-tui client
-  that renders eve's `eve/client` event stream, owns/attaches the headless brain
-  once without watch mode, and can also register as a command host. Use `/help`
-  in the face for the canonical command list. Config commands rewrite
-  `.env.local` and restart the brain. Default port 2000 (`CLANKY_EVE_PORT`).
 - **`clanky up` / `clanky status` / `clanky down`** — manage the persistent
   Herdr session, headless command host, and Eve brain.
 - **`clanky worker <prompt>`** — send one task to the running Clanky Eve brain
@@ -142,9 +137,9 @@ Then use `clanky` from anywhere:
 
 Repo-local alternatives:
 
-- **`pnpm dev`** — eve's stock dev TUI (fixed slash-command set).
-- **`pnpm face`** — repo-local equivalent of `clanky face`; for code-editing
-  sessions, prefer `clanky dev` so the face and owned brain are both supervised.
+- **`pnpm dev`** — Clanky's custom face (`scripts/clanky.ts`) once, without
+  watch mode. For code-editing sessions, prefer `clanky dev` so the face and
+  owned brain are both supervised.
 
 ## Status
 

@@ -13,7 +13,7 @@
  * Credentials come from the eve agent's environment / connection config; nothing
  * is committed.
  */
-import { Client, Events, GatewayIntentBits, type Attachment, type Embed, type Message, Partials } from "discord.js";
+import { ChannelType, Client, Events, GatewayIntentBits, type Attachment, type Embed, type Message, Partials, Routes } from "discord.js";
 import type { DiscordRawGatewayClient } from "../voice/discordStreamDiscovery.ts";
 import type {
 	DiscordConversationKind,
@@ -177,16 +177,28 @@ export class DiscordGateway {
 	/** Send a reply to a channel via REST; returns the posted message ids. */
 	async sendMessage(channelId: string, text: string): Promise<string[]> {
 		const channel = await this.client.channels.fetch(channelId);
-		if (channel === null || !channel.isSendable()) {
+		if (channel === null) {
 			throw new Error(`discord channel ${channelId} is not sendable`);
 		}
 		const ids: string[] = [];
 		for (const chunk of chunkDiscordMessage(text)) {
-			const sent = await channel.send({ content: chunk, allowedMentions: { parse: [] } });
+			const sent = channel.isSendable()
+				? await channel.send({ content: chunk, allowedMentions: { parse: [] } })
+				: await this.sendGroupDmMessage(channel, chunk);
 			this.rememberSelfMessage(sent.id);
 			ids.push(sent.id);
 		}
 		return ids;
+	}
+
+	private async sendGroupDmMessage(channel: { id: string; type: ChannelType }, content: string): Promise<{ id: string }> {
+		if (channel.type !== ChannelType.GroupDM) throw new Error(`discord channel ${channel.id} is not sendable`);
+		const sent = (await this.client.rest.post(Routes.channelMessages(channel.id), {
+			body: { content, allowed_mentions: { parse: [] } },
+		})) as { id?: unknown };
+		const id = typeof sent.id === "string" ? sent.id : "";
+		if (id.length === 0) throw new Error(`discord group DM ${channel.id} send returned no message id`);
+		return { id };
 	}
 
 	async sendTyping(channelId: string): Promise<void> {

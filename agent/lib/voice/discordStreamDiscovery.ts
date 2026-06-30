@@ -19,7 +19,10 @@ export interface DiscordRawPacket {
 	d?: JsonRecord | null;
 }
 
+export type DiscordStreamKind = "guild" | "call";
+
 export interface DiscoveredDiscordStream {
+	kind: DiscordStreamKind;
 	streamKey: string;
 	guildId: string;
 	channelId: string;
@@ -40,7 +43,7 @@ export interface DiscordStreamDiscovery {
 	listStreams(): DiscoveredDiscordStream[];
 	findStream(target?: string, scope?: DiscordStreamScope): DiscoveredDiscordStream | undefined;
 	requestWatch(streamKey: string): void;
-	requestPublish(input: { guildId: string; channelId: string; preferredRegion?: string | null }): void;
+	requestPublish(input: { kind?: DiscordStreamKind; guildId: string; channelId: string; preferredRegion?: string | null }): void;
 	requestPublishStop(streamKey: string): void;
 	setPublishPaused(streamKey: string, paused: boolean): void;
 }
@@ -94,17 +97,25 @@ export function createDiscordStreamDiscovery(
 			sendGatewayPayload(client, { op: 20, d: { stream_key: streamKey } });
 		},
 		requestPublish(input) {
+			const kind = input.kind ?? "guild";
 			const guildId = input.guildId.trim();
 			const channelId = input.channelId.trim();
-			if (guildId.length === 0 || channelId.length === 0) return;
+			if (channelId.length === 0 || (kind === "guild" && guildId.length === 0)) return;
 			sendGatewayPayload(client, {
 				op: 18,
-				d: {
-					type: "guild",
-					guild_id: guildId,
-					channel_id: channelId,
-					preferred_region: input.preferredRegion?.trim() || null,
-				},
+				d:
+					kind === "call"
+						? {
+								type: "call",
+								channel_id: channelId,
+								preferred_region: input.preferredRegion?.trim() || null,
+							}
+						: {
+								type: "guild",
+								guild_id: guildId,
+								channel_id: channelId,
+								preferred_region: input.preferredRegion?.trim() || null,
+							},
 			});
 		},
 		requestPublishStop(streamKey: string) {
@@ -122,6 +133,10 @@ export function createDiscordStreamDiscovery(
 
 export function buildDiscordStreamKey(input: { guildId: string; channelId: string; userId: string }): string {
 	return `guild:${input.guildId}:${input.channelId}:${input.userId}`;
+}
+
+export function buildDiscordCallStreamKey(input: { channelId: string; userId: string }): string {
+	return `call:${input.channelId}:${input.userId}`;
 }
 
 export function deriveDiscordStreamWatchDaveChannelId(rtcServerId: string | null | undefined): string | undefined {
@@ -147,6 +162,7 @@ function handleVoiceStateUpdate(
 	if (data.self_stream === false) return removeStreamsForUser(streams, { guildId, userId });
 	if (data.self_stream !== true || channelId.length === 0) return undefined;
 	upsertStream(streams, {
+		kind: "guild",
 		streamKey: buildDiscordStreamKey({ guildId, channelId, userId }),
 		guildId,
 		channelId,
@@ -167,8 +183,9 @@ function handleStreamCreate(
 	const parts = streamKey === undefined ? undefined : parseStreamKey(streamKey);
 	if (streamKey === undefined || parts === undefined) return undefined;
 	const stream = upsertStream(streams, {
+		kind: parts.kind,
 		streamKey,
-		guildId: parts.guildId,
+		guildId: parts.guildId ?? "",
 		channelId: parts.channelId,
 		userId: parts.userId,
 		endpoint: stringValue(data.endpoint) || null,
@@ -188,6 +205,7 @@ function handleGuildCreate(data: JsonRecord, streams: Map<string, DiscoveredDisc
 		const userId = stringValue(entry.user_id);
 		if (channelId.length === 0 || userId.length === 0) continue;
 		upsertStream(streams, {
+			kind: "guild",
 			streamKey: buildDiscordStreamKey({ guildId, channelId, userId }),
 			guildId,
 			channelId,
@@ -208,8 +226,9 @@ function handleStreamServerUpdate(
 	const parts = streamKey === undefined ? undefined : parseStreamKey(streamKey);
 	if (streamKey === undefined || parts === undefined) return undefined;
 	const stream = upsertStream(streams, {
+		kind: parts.kind,
 		streamKey,
-		guildId: parts.guildId,
+		guildId: parts.guildId ?? "",
 		channelId: parts.channelId,
 		userId: parts.userId,
 		endpoint: stringValue(data.endpoint) || null,
@@ -226,6 +245,7 @@ function upsertStream(
 ): DiscoveredDiscordStream {
 	const existing = streams.get(input.streamKey);
 	const stream: DiscoveredDiscordStream = {
+		kind: input.kind ?? existing?.kind ?? "guild",
 		streamKey: input.streamKey,
 		guildId: input.guildId || existing?.guildId || "",
 		channelId: input.channelId || existing?.channelId || "",
@@ -285,14 +305,22 @@ function streamKeyFromParts(data: JsonRecord): string | undefined {
 	const guildId = stringValue(data.guild_id);
 	const channelId = stringValue(data.channel_id);
 	const userId = stringValue(data.user_id);
-	if (guildId.length === 0 || channelId.length === 0 || userId.length === 0) return undefined;
+	if (channelId.length === 0 || userId.length === 0) return undefined;
+	if (guildId.length === 0) return buildDiscordCallStreamKey({ channelId, userId });
 	return buildDiscordStreamKey({ guildId, channelId, userId });
 }
 
-function parseStreamKey(streamKey: string): { guildId: string; channelId: string; userId: string } | undefined {
-	const [kind, guildId, channelId, userId] = streamKey.split(":");
-	if (kind !== "guild" || guildId === undefined || channelId === undefined || userId === undefined) return undefined;
-	return { guildId, channelId, userId };
+function parseStreamKey(
+	streamKey: string,
+): { kind: DiscordStreamKind; guildId?: string; channelId: string; userId: string } | undefined {
+	const [kind, first, second, third] = streamKey.split(":");
+	if (kind === "guild" && first !== undefined && second !== undefined && third !== undefined) {
+		return { kind, guildId: first, channelId: second, userId: third };
+	}
+	if (kind === "call" && first !== undefined && second !== undefined) {
+		return { kind, channelId: first, userId: second };
+	}
+	return undefined;
 }
 
 function hasCredentials(stream: DiscoveredDiscordStream): boolean {

@@ -4,13 +4,14 @@
  * The face owns Clanky-specific slash commands and server lifecycle, then
  * renders the public eve/client event stream with pi-tui.
  *
- * Run: pnpm face   (CLANKY_EVE_PORT to change the port, default 2000)
+ * Run: pnpm dev   (CLANKY_EVE_PORT to change the port, default 2000)
  */
 import { type ChildProcess, execFile, execFileSync, spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { access, readFile, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseEnv, promisify } from "node:util";
 import {
 	Editor,
@@ -322,7 +323,7 @@ import {
 	truncate,
 } from "./clanky/util.ts";
 
-const REPO = process.env.CLANKY_REPO_DIR ?? process.cwd();
+const REPO = resolve(process.env.CLANKY_REPO_DIR ?? join(dirname(fileURLToPath(import.meta.url)), ".."));
 const PORT = resolvePort(process.env.CLANKY_EVE_PORT, 2000);
 const HOST = `http://127.0.0.1:${PORT}`;
 const BIND_HOST = process.env.CLANKY_EVE_HOST?.trim();
@@ -718,6 +719,7 @@ let connectionAuthPendingCount = 0;
 let mouseTrackingEnabled = false;
 let transcriptSelectionActive = false;
 let transcriptSelectionDragged = false;
+let transcriptScrollbarDragActive = false;
 let transcriptClickTarget: { readonly col: number; readonly row: number } | undefined;
 let chromeSelectionActive = false;
 const chromeSelection = new ClankyChromeSelection();
@@ -814,8 +816,15 @@ const selectableStatus = new ClankyChromeSelectableComponent(status, "status", c
 const selectableTypeahead = new ClankyChromeSelectableComponent(commandTypeaheadPanel, "typeahead", chromeSelection);
 const transcriptViewport = new ClankyTranscriptViewport(maxTranscriptRows, {
 	dim: ansi.dim,
+	scrollbarThumb: ansi.selectedDescription,
+	scrollbarTrack: ansi.dim,
 	selected: ansi.cyan,
-}, { blockSpacing: 1, underfilledAlignment: transcriptUnderfilledAlignment() });
+}, {
+	blockSpacing: 1,
+	scrollbar: true,
+	underfilledAlignment: transcriptUnderfilledAlignment(),
+	unicode: faceCapabilities.unicode,
+});
 faceRenderer = new ClankyFaceRenderer(createFaceRenderSink());
 const setupFlow = createSetupFlow(createFlowHost());
 const commandRenderer: CommandRenderer = {
@@ -1439,7 +1448,14 @@ function handleSelectionMouse(mouse: ClankySgrMouseEvent): void {
 			chromeSelectionActive = true;
 		} else {
 			const transcript = transcriptMouseTarget(mouse);
-			if (transcript.inside) {
+			if (transcript.inside && transcript.col === transcriptViewport.scrollbarHitColumn()) {
+				chromeSelection.clear();
+				chromeSelectionActive = false;
+				transcriptViewport.clearSelection();
+				transcriptSelectionActive = false;
+				transcriptScrollbarDragActive = true;
+				transcriptViewport.scrollToTrackRow(transcript.row);
+			} else if (transcript.inside) {
 				chromeSelection.clear();
 				chromeSelectionActive = false;
 				transcriptViewport.selectionPress(transcript.row, transcript.col);
@@ -1465,6 +1481,11 @@ function handleSelectionMouse(mouse: ClankySgrMouseEvent): void {
 		return;
 	}
 	if (mouse.kind === "drag") {
+		if (transcriptScrollbarDragActive) {
+			transcriptViewport.scrollToTrackRow(transcriptMouseTarget(mouse).row);
+			tui.requestRender();
+			return;
+		}
 		if (transcriptSelectionActive) {
 			transcriptSelectionDragged = true;
 			const transcript = transcriptMouseTarget(mouse);
@@ -1485,6 +1506,10 @@ function handleSelectionMouse(mouse: ClankySgrMouseEvent): void {
 		return;
 	}
 	// release
+	if (transcriptScrollbarDragActive) {
+		transcriptScrollbarDragActive = false;
+		return;
+	}
 	if (transcriptSelectionActive) {
 		transcriptSelectionActive = false;
 		if (transcriptViewport.hasSelection()) {
@@ -9622,6 +9647,7 @@ async function startServer(): Promise<void> {
 
 async function buildOwnedServerEnv(): Promise<NodeJS.ProcessEnv> {
 	const env = withClankyFaceHerdrEnv(buildEveDevServerEnv(process.env, HOST, PORT));
+	env.CLANKY_REPO_DIR = REPO;
 	const config = await readConfig();
 	startupModelFallback = missingApiKeyStartupFallback(config);
 	if (startupModelFallback !== undefined) {

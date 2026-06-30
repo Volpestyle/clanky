@@ -44,8 +44,9 @@ import {
 	writeDiscordGatewayStatus,
 } from "../lib/discord/gateway-status.ts";
 import { type GoLiveSink, GoLiveController, clearActiveGoLive, setActiveGoLive } from "../lib/discord/golive.ts";
+import { attachPrivateCallAutoAnswer, fetchPrivateCallContext, type PrivateCallInfo } from "../lib/discord/private-call.ts";
 import { type DiscordInboundMessage, resolveDiscordScopeOptions } from "../lib/discord/acceptance.ts";
-import { buildGuildVoiceRuntime } from "../lib/discord/voice-runtime.ts";
+import { buildGuildVoiceRuntime, buildPrivateCallVoiceRuntime } from "../lib/discord/voice-runtime.ts";
 import type { VoiceIntent } from "../lib/discord/voice-intent.ts";
 import { spawnSessionPaneMirror } from "../lib/discord/pane-mirror-spawn.ts";
 import { herdrRequest } from "../lib/herdr-socket.ts";
@@ -63,6 +64,7 @@ const discordGatewayState = ((globalThis as DiscordGatewayGlobal)[DISCORD_GATEWA
 	lock: null,
 });
 const discordGatewayStartedAt = new Date().toISOString();
+let activeVoiceTarget: { kind: "guild" | "call"; channelId: string } | null = null;
 
 function eveHost(): string {
 	return process.env.CLANKY_EVE_HOST ?? "http://127.0.0.1:2000";
@@ -81,17 +83,36 @@ async function routeBridgeToMain(command: BridgeCommand): Promise<void> {
 	await herdrRequest("agent.send", { target: mainAgent, text });
 }
 
-/** Resolve the speaker's current voice channel and join/leave it via ClankVox. */
-async function handleVoiceIntent(
+function activeVoiceSessionId(fallback?: string): string {
+	return getActiveVoiceVox()?.getLastVoiceSessionId() ?? fallback ?? "";
+}
+
+function activateGoLive(
 	presence: DiscordPresenceHost,
-	intent: VoiceIntent,
-	message: DiscordInboundMessage,
-): Promise<void> {
-	if (intent === "leave") {
-		clearActiveGoLive();
-		await leaveVoice();
-		return;
-	}
+	streamKind: "guild" | "call",
+	fallbackSessionId?: () => string | undefined,
+): void {
+	if (resolveDiscordCredentialKind(process.env) !== "user-token") return;
+	const sink: GoLiveSink = {
+		watch: (creds) => {
+			const vox = getActiveVoiceVox();
+			if (vox === null) return;
+			vox.streamWatchConnect({ ...creds, sessionId: activeVoiceSessionId(fallbackSessionId?.()) });
+			recordActiveVoiceStreamWatchConnect();
+		},
+		publish: (creds) =>
+			getActiveVoiceVox()?.streamPublishConnect({ ...creds, sessionId: activeVoiceSessionId(fallbackSessionId?.()) }),
+	};
+	setActiveGoLive(
+		new GoLiveController(presence.discordGateway.rawGatewayClient(), {
+			streamKind,
+			selfUserId: () => presence.discordGateway.selfUserId,
+			sink,
+		}),
+	);
+}
+
+async function joinGuildVoice(presence: DiscordPresenceHost, message: DiscordInboundMessage): Promise<void> {
 	if (message.guildId === undefined) throw new Error("voice join requires a guild message");
 	const client = presence.discordGateway.discordClient;
 	const guild = await client.guilds.fetch(message.guildId);
@@ -113,26 +134,77 @@ async function handleVoiceIntent(
 		});
 	attachVoiceRuntime(runtime);
 	await joinVoice(guild.id, channel.id);
+	activeVoiceTarget = { kind: "guild", channelId: channel.id };
+	activateGoLive(presence, "guild", () => guild.members.me?.voice.sessionId ?? undefined);
+}
 
-	// Go Live needs the user-token raw seam + a live ClankVox to decode/publish.
-	if (resolveDiscordCredentialKind(process.env) === "user-token") {
-		const sink: GoLiveSink = {
-			watch: (creds) => {
-				const vox = getActiveVoiceVox();
-				if (vox === null) return;
-				vox.streamWatchConnect({ ...creds, sessionId: guild.members.me?.voice.sessionId ?? "" });
-				recordActiveVoiceStreamWatchConnect();
-			},
-			publish: (creds) =>
-				getActiveVoiceVox()?.streamPublishConnect({ ...creds, sessionId: guild.members.me?.voice.sessionId ?? "" }),
-		};
-		setActiveGoLive(
-			new GoLiveController(presence.discordGateway.rawGatewayClient(), {
-				selfUserId: () => presence.discordGateway.selfUserId,
-				sink,
-			}),
-		);
+async function joinPrivateCall(
+	presence: DiscordPresenceHost,
+	channelId: string,
+	context: Pick<PrivateCallInfo, "peer" | "speakers"> = {},
+): Promise<void> {
+	if (resolveDiscordCredentialKind(process.env) !== "user-token") {
+		throw new Error("private Discord calls require CLANKY_DISCORD_CREDENTIAL_KIND=user-token");
 	}
+	const client = presence.discordGateway.discordClient;
+	const resolvedContext = context.peer === undefined && context.speakers === undefined ? await fetchPrivateCallContext(client, channelId) : context;
+	const runtime = buildPrivateCallVoiceRuntime(
+		client,
+		channelId,
+		process.env,
+		resolvedContext.peer,
+		resolvedContext.speakers,
+	);
+	runtime.reportFault = (fault) =>
+		reportVoiceFault(channelId, fault, {
+			clearGoLive: clearActiveGoLive,
+			sendMessage: (targetChannelId, text) => presence.discordGateway.sendMessage(targetChannelId, text),
+			onError: (error) => console.error("private call voice drop notice failed:", error),
+		});
+	attachVoiceRuntime(runtime);
+	// For Discord private calls, the DM channel id is also the voice server id
+	// that the voice gateway expects in Identify.
+	await joinVoice(channelId, channelId);
+	activeVoiceTarget = { kind: "call", channelId };
+	activateGoLive(presence, "call");
+}
+
+async function handlePrivateCallDeleted(channelId: string): Promise<void> {
+	if (activeVoiceTarget?.kind !== "call" || activeVoiceTarget.channelId !== channelId) return;
+	clearActiveGoLive();
+	await leaveVoice();
+	activeVoiceTarget = null;
+}
+
+/** Resolve the speaker's current voice channel and join/leave it via ClankVox. */
+async function handleVoiceIntent(
+	presence: DiscordPresenceHost,
+	intent: VoiceIntent,
+	message: DiscordInboundMessage,
+): Promise<void> {
+	if (intent === "leave") {
+		clearActiveGoLive();
+		await leaveVoice();
+		activeVoiceTarget = null;
+		return;
+	}
+	if (message.guildId === undefined) {
+		if (message.kind !== "dm") throw new Error("voice join requires a guild message, DM call, or group DM call");
+		await joinPrivateCall(presence, message.channelId, {
+			peer: {
+				userId: message.authorId,
+				...(message.authorName === undefined ? {} : { userName: message.authorName }),
+			},
+			speakers: [
+				{
+					userId: message.authorId,
+					...(message.authorName === undefined ? {} : { userName: message.authorName }),
+				},
+			],
+		});
+		return;
+	}
+	await joinGuildVoice(presence, message);
 }
 
 function ensureStarted(): void {
@@ -189,6 +261,15 @@ function ensureStarted(): void {
 			? (intent, message) => handleVoiceIntent(presence, intent, message)
 			: undefined,
 	});
+	if (voiceEnabled && credentialKind === "user-token") {
+		attachPrivateCallAutoAnswer({
+			client: presence.discordGateway.discordClient,
+			scope: resolveDiscordScopeOptions(process.env),
+			onIncoming: (call) => joinPrivateCall(presence, call.channelId, call),
+			onDeleted: (channelId) => handlePrivateCallDeleted(channelId),
+			onError: (error) => console.error("discord private call auto-answer failed:", error),
+		});
+	}
 	discordGatewayState.host = presence;
 	presence
 		.start()

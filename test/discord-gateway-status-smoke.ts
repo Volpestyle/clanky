@@ -1,8 +1,10 @@
-import { mkdtemp } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	acquireDiscordGatewayLock,
+	discordGatewayLockPath,
 	discordGatewaySessionStatusFromMessage,
 	discordGatewayToolStatus,
 	releaseDiscordGatewayLock,
@@ -68,6 +70,18 @@ try {
 } finally {
 	releaseDiscordGatewayLock(lock);
 }
+
+const staleRepo = await mkdtemp(join(tmpdir(), "clanky-discord-gateway-stale-"));
+const staleEnv: NodeJS.ProcessEnv = {
+	CLANKY_REPO_DIR: staleRepo,
+	CLANKY_DISCORD_PRESENCE: "1",
+	DISCORD_BOT_TOKEN: "test-token",
+};
+const stalePath = discordGatewayLockPath(staleEnv);
+await mkdir(stalePath);
+await writeFile(join(stalePath, "owner.json"), JSON.stringify({ pid: 999_999, repo: staleRepo }));
+const staleHealth = resolveDiscordGatewayHealth({ env: staleEnv });
+check("health clears dead-owner stale lock directories", staleHealth.owner === "none" && !existsSync(stalePath));
 
 console.log(failures === 0 ? "\nALL OK" : `\n${failures} FAILED`);
 process.exit(failures === 0 ? 0 : 1);

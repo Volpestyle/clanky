@@ -14,7 +14,7 @@ herdr panes, and Discord text/voice presence mirrors.
 
 ## Boundaries
 
-- Work from `/Users/james/dev/clanky` unless the user gives another checkout.
+- Work from `/Users/james/dev/clanky/clanky-agent` unless the user gives another checkout.
 - Use the configured `CLANKY_HOME` when set; otherwise inspect `~/.clanky`.
 - Do not delete or rewrite skills under `~/.claude` or `~/.agents` while debugging logs.
 - Prefer lifecycle status and herdr pane output first; only open raw JSONL,

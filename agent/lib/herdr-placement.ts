@@ -15,6 +15,8 @@ export interface StartHerdrAgentInput {
 	focus?: boolean;
 	split?: HerdrSplitDirection;
 	placement?: HerdrPanePlacement;
+	/// Target herdr session (name/path). Omit for the relay's env-bound session.
+	session?: string;
 }
 
 interface PaneLayoutRect {
@@ -43,6 +45,7 @@ export async function getHerdrAgent(target: string): Promise<HerdrAgentRecord | 
 
 export async function resolveClankyFacePanePlacement(
 	mainAgent = process.env.CLANKY_MAIN_AGENT ?? "clanky:main",
+	session?: string,
 ): Promise<HerdrPanePlacement> {
 	const facePlacement = placementFromEnv(
 		"CLANKY_FACE_HERDR_WORKSPACE_ID",
@@ -58,7 +61,7 @@ export async function resolveClankyFacePanePlacement(
 	);
 	if (hasPlacement(inheritedPlacement)) return inheritedPlacement;
 
-	const result = await herdrRequest("agent.get", { target: mainAgent }).catch(() => undefined);
+	const result = await herdrRequest("agent.get", { target: mainAgent }, session).catch(() => undefined);
 	return placementFromAgentGetResult(result);
 }
 
@@ -72,8 +75,8 @@ export async function startHerdrAgentNearPlacement(input: StartHerdrAgentInput):
 		split,
 		...startPlacement(input.placement),
 	};
-	const result = await herdrRequest("agent.start", params);
-	await ensureHerdrAgentRecordNearPlacement(agentFromGetResult(result), input.placement, split);
+	const result = await herdrRequest("agent.start", params, input.session);
+	await ensureHerdrAgentRecordNearPlacement(agentFromGetResult(result), input.placement, split, input.session);
 	return result;
 }
 
@@ -81,13 +84,14 @@ export async function ensureHerdrAgentRecordNearPlacement(
 	agent: HerdrAgentRecord | undefined,
 	placement: HerdrPanePlacement | undefined,
 	split: HerdrSplitDirection = "right",
+	session?: string,
 ): Promise<void> {
 	if (placement === undefined) return;
 	const targetPaneId = placement?.target_pane_id;
 	if (targetPaneId === undefined) return;
 	const paneId = nonEmptyString(agent?.pane_id);
 	if (paneId === undefined || paneId === targetPaneId) return;
-	const plan = await resolveMovePlan(placement, agent, split, paneId);
+	const plan = await resolveMovePlan(placement, agent, split, paneId, session);
 	if (plan === undefined) return;
 	const destination: Record<string, unknown> = {
 		type: "tab",
@@ -100,7 +104,7 @@ export async function ensureHerdrAgentRecordNearPlacement(
 		pane_id: paneId,
 		destination,
 		focus: false,
-	});
+	}, session);
 }
 
 export function paneMatchesPlacement(agent: HerdrAgentRecord, placement: HerdrPanePlacement): boolean {
@@ -160,6 +164,7 @@ async function resolveMovePlan(
 	agent: HerdrAgentRecord | undefined,
 	split: HerdrSplitDirection,
 	movedPaneId: string,
+	session?: string,
 ): Promise<PaneMovePlan | undefined> {
 	const targetPaneId = placement.target_pane_id;
 	if (targetPaneId === undefined) return undefined;
@@ -167,7 +172,7 @@ async function resolveMovePlan(
 	if (split !== "right") {
 		return fallbackTabId === undefined ? undefined : { tabId: fallbackTabId, targetPaneId, split };
 	}
-	const layout = await readPaneLayout(targetPaneId);
+	const layout = await readPaneLayout(targetPaneId, session);
 	const tabId = layout?.tab_id ?? fallbackTabId;
 	if (tabId === undefined) return undefined;
 	const panes = (layout?.panes ?? []).filter((pane) => pane.pane_id !== movedPaneId);
@@ -181,8 +186,8 @@ async function resolveMovePlan(
 	return { tabId, targetPaneId, split };
 }
 
-async function readPaneLayout(paneId: string): Promise<{ tab_id?: string; panes: PaneLayoutPane[] } | undefined> {
-	const result = await herdrRequest("pane.layout", { pane_id: paneId }).catch(() => undefined);
+async function readPaneLayout(paneId: string, session?: string): Promise<{ tab_id?: string; panes: PaneLayoutPane[] } | undefined> {
+	const result = await herdrRequest("pane.layout", { pane_id: paneId }, session).catch(() => undefined);
 	const layout = asRecord(asRecord(result)?.layout);
 	const tabId = nonEmptyString(layout?.tab_id);
 	const panesValue = Array.isArray(layout?.panes) ? layout.panes : [];

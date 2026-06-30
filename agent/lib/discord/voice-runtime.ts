@@ -5,10 +5,12 @@
  * connection that powers text presence also powers voice — no second client.
  * Provider credentials and realtime settings come from env; nothing committed.
  */
-import type { Guild } from "discord.js";
+import type { Client, Guild } from "discord.js";
 import type { VoiceRuntime } from "../../channels/voice.ts";
+import { createDiscordPrivateCallVoiceAdapter } from "./private-call.ts";
 import { resolveClankyDataPath } from "../paths.ts";
 import type { ClankvoxGuildLike } from "../voice/clankvoxIpcClient.ts";
+import type { DiscordRawGatewayClient } from "../voice/discordStreamDiscovery.ts";
 import {
 	parseElevenLabsPcmOutputFormat,
 	type ElevenLabsPcmOutputFormat,
@@ -87,6 +89,23 @@ export function buildGuildVoiceRuntime(guild: Guild, env: NodeJS.ProcessEnv, mem
 	};
 }
 
+export function buildPrivateCallVoiceRuntime(
+	client: Client,
+	channelId: string,
+	env: NodeJS.ProcessEnv,
+	memorySpeaker?: VoiceMemorySpeaker,
+	knownSpeakers: readonly VoiceMemorySpeaker[] = [],
+): VoiceRuntime {
+	return {
+		guild: createDiscordPrivateCallVoiceAdapter(client as unknown as DiscordRawGatewayClient, {
+			channelId,
+			selfUserId: () => client.user?.id,
+		}),
+		...buildVoiceRuntimeSettings(env, memorySpeaker),
+		resolveSpeaker: (userId) => resolvePrivateCallVoiceSpeaker(client, userId, memorySpeaker, knownSpeakers),
+	};
+}
+
 function resolveGuildVoiceSpeaker(
 	guild: Guild,
 	userId: string,
@@ -96,6 +115,23 @@ function resolveGuildVoiceSpeaker(
 	const member = guild.members.cache.get(userId);
 	const user = guild.client.users.cache.get(userId);
 	const userName = member?.displayName ?? user?.globalName ?? user?.username;
+	return {
+		userId,
+		...(userName === undefined ? {} : { userName }),
+	};
+}
+
+function resolvePrivateCallVoiceSpeaker(
+	client: Client,
+	userId: string,
+	fallback: VoiceMemorySpeaker | undefined,
+	knownSpeakers: readonly VoiceMemorySpeaker[],
+): VoiceMemorySpeaker {
+	if (fallback?.userId === userId) return fallback;
+	const known = knownSpeakers.find((speaker) => speaker.userId === userId);
+	if (known !== undefined) return known;
+	const user = client.users.cache.get(userId);
+	const userName = user === undefined ? undefined : (user.globalName ?? user.username);
 	return {
 		userId,
 		...(userName === undefined ? {} : { userName }),

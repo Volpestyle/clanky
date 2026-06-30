@@ -12,8 +12,10 @@
  *                        Authorization: Bearer). Fails closed when unset.
  */
 import { randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
+import { promisify } from "node:util";
 import { defineChannel, GET, WS } from "eve/channels";
 import type { WebSocketMessage, WebSocketPeer } from "eve/channels";
 import { isFrontdoorAuthorized } from "../lib/frontdoor-auth.ts";
@@ -55,6 +57,48 @@ const VANILLA_HERDR_FALLBACK_LINES = 1000;
 const MAX_RELAY_UPLOAD_BYTES = 25 * 1024 * 1024;
 const RELAY_UPLOAD_DIR = "uploads/ios-terminal";
 const REPO = process.env.CLANKY_REPO_DIR?.trim() || process.cwd();
+
+const execFileAsync = promisify(execFile);
+
+interface HerdrSessionInfo {
+	name: string;
+	default: boolean;
+	running: boolean;
+	socket_path?: string;
+	session_dir?: string;
+}
+
+/// The herdr session the relay process itself is bound to (its env default). A
+/// client that sends no `session` arg lands here, so the picker pre-selects it.
+function boundSessionName(): string | undefined {
+	const explicit = process.env.HERDR_SESSION?.trim();
+	if (explicit) return explicit;
+	const sock = process.env.HERDR_SOCKET_PATH?.trim();
+	if (sock) {
+		const match = sock.match(/\/sessions\/([^/]+)\/herdr\.sock$/);
+		return match ? match[1] : undefined;
+	}
+	return "default";
+}
+
+/// Enumerate the herdr sessions on this host. herdr exposes no `session.list`
+/// socket RPC, so we shell out to the CLI — the same path the Clanky TUI uses
+/// (scripts/clanky.ts). Degrades to the single bound session if the CLI is
+/// unavailable so a snapshot never fails just because enumeration did.
+async function listHerdrSessions(): Promise<{ sessions: HerdrSessionInfo[]; bound?: string }> {
+	const bound = boundSessionName();
+	try {
+		const { stdout } = await execFileAsync("herdr", ["session", "list", "--json"], { timeout: 2000, encoding: "utf8" });
+		const parsed = JSON.parse(stdout) as { sessions?: HerdrSessionInfo[] };
+		const sessions = Array.isArray(parsed.sessions) ? parsed.sessions : [];
+		return { sessions, bound };
+	} catch {
+		return {
+			sessions: [{ name: bound ?? "default", default: bound === undefined || bound === "default", running: true }],
+			bound,
+		};
+	}
+}
 
 function requestId(id: RelayRequest["id"]): string {
 	return id === undefined ? `relay_${Date.now().toString(36)}` : String(id);
@@ -172,9 +216,10 @@ function extensionForMediaType(mediaType: string): string {
 async function herdrReadWithFullFallback(
 	method: "pane.read" | "agent.read",
 	params: Record<string, unknown>,
+	session?: string,
 ): Promise<unknown> {
 	try {
-		return await herdrRequest(method, params);
+		return await herdrRequest(method, params, session);
 	} catch (error) {
 		if (params.source !== "full" || !isUnsupportedFullSourceError(error)) throw error;
 		const fallbackParams = {
@@ -182,7 +227,7 @@ async function herdrReadWithFullFallback(
 			source: "recent_unwrapped",
 			lines: VANILLA_HERDR_FALLBACK_LINES,
 		};
-		const fallback = await herdrRequest(method, fallbackParams);
+		const fallback = await herdrRequest(method, fallbackParams, session);
 		return annotateFullFallback(fallback, (error as Error).message);
 	}
 }
@@ -190,16 +235,23 @@ async function herdrReadWithFullFallback(
 // Map a relay op to a herdr socket API request. Returns the decoded result.
 async function dispatch(op: string, args: Record<string, unknown>): Promise<unknown> {
 	const target = str(args.agent) ?? str(args.pane);
+	// Per-request herdr session targeting: every socket call in this op routes to
+	// the session the client selected, or the relay's env-bound default when the
+	// client omits one. See herdrSocketPath() for how the token resolves.
+	const session = str(args.session);
+	const hreq = (method: string, params: Record<string, unknown> = {}) => herdrRequest(method, params, session);
 	switch (op) {
 		case "api": {
 			const method = str(args.method);
 			if (!method) throw new Error("api requires method");
-			return herdrRequest(method, rec(args.params));
+			return hreq(method, rec(args.params));
 		}
 		case "health":
-			return herdrRequest("ping");
+			return hreq("ping");
 		case "list":
-			return herdrRequest("agent.list");
+			return hreq("agent.list");
+		case "sessions":
+			return listHerdrSessions();
 		case "list-skills": {
 			const agentMdEnabled = isAgentMdIngestionEnabled();
 			return {
@@ -209,11 +261,11 @@ async function dispatch(op: string, args: Record<string, unknown>): Promise<unkn
 			};
 		}
 		case "workspaces":
-			return herdrRequest("workspace.list");
+			return hreq("workspace.list");
 		case "tabs":
-			return herdrRequest("tab.list", args.workspace_id ? { workspace_id: args.workspace_id } : {});
+			return hreq("tab.list", args.workspace_id ? { workspace_id: args.workspace_id } : {});
 		case "panes":
-			return herdrRequest("pane.list", args.workspace_id ? { workspace_id: args.workspace_id } : {});
+			return hreq("pane.list", args.workspace_id ? { workspace_id: args.workspace_id } : {});
 		case "create-tab": {
 			const workspaceId = str(args.workspace_id);
 			const cwd = str(args.cwd);
@@ -225,7 +277,7 @@ async function dispatch(op: string, args: Record<string, unknown>): Promise<unkn
 			const root: Record<string, unknown> = { type: "pane", command: argv };
 			if (cwd !== undefined) root.cwd = cwd;
 
-			const result = await herdrRequest("layout.apply", {
+			const result = await hreq("layout.apply", {
 				...(workspaceId === undefined ? {} : { workspace_id: workspaceId }),
 				...(label === undefined ? {} : { tab_label: label }),
 				focus,
@@ -241,7 +293,7 @@ async function dispatch(op: string, args: Record<string, unknown>): Promise<unkn
 		}
 		case "get":
 			if (!target) throw new Error("get requires agent or pane");
-			return args.pane ? herdrRequest("pane.get", { pane_id: target }) : herdrRequest("agent.get", { target });
+			return args.pane ? hreq("pane.get", { pane_id: target }) : hreq("agent.get", { target });
 		case "read": {
 			if (!target) throw new Error("read requires agent or pane");
 			const source = str(args.source) ?? "auto";
@@ -253,7 +305,7 @@ async function dispatch(op: string, args: Record<string, unknown>): Promise<unkn
 				try {
 					return await readTranscript(target, { lines: requestedLines });
 				} catch (error) {
-					const result = await herdrRequest("agent.read", { target, source: "recent_unwrapped", lines: requestedLines });
+					const result = await hreq("agent.read", { target, source: "recent_unwrapped", lines: requestedLines });
 					return {
 						source: "herdr-recent-unwrapped",
 						fallback: true,
@@ -267,7 +319,7 @@ async function dispatch(op: string, args: Record<string, unknown>): Promise<unkn
 			}
 			if (args.pane && source === "transcript") throw new Error("transcript reads require an agent name");
 			if (args.pane && source === "auto") {
-				const result = await herdrRequest("pane.read", { pane_id: target, source: "recent_unwrapped", lines: requestedLines });
+				const result = await hreq("pane.read", { pane_id: target, source: "recent_unwrapped", lines: requestedLines });
 				return {
 					source: "herdr-recent-unwrapped",
 					fallback: true,
@@ -283,27 +335,27 @@ async function dispatch(op: string, args: Record<string, unknown>): Promise<unkn
 			if (format !== undefined) params.format = format;
 			if (args.strip_ansi === true) params.strip_ansi = true;
 			return args.pane
-				? herdrReadWithFullFallback("pane.read", params)
-				: herdrReadWithFullFallback("agent.read", params);
+				? herdrReadWithFullFallback("pane.read", params, session)
+				: herdrReadWithFullFallback("agent.read", params, session);
 		}
 		case "send": {
 			const text = str(args.text);
 			if (!target || text === undefined) throw new Error("send requires agent/pane and text");
 			return args.pane
-				? herdrRequest("pane.send_input", { pane_id: target, text, keys: ["Enter"] })
-				: herdrRequest("agent.send", { target, text });
+				? hreq("pane.send_input", { pane_id: target, text, keys: ["Enter"] })
+				: hreq("agent.send", { target, text });
 		}
 		case "run": {
 			const pane = str(args.pane);
 			const text = str(args.text);
 			if (!pane || text === undefined) throw new Error("run requires pane and text");
-			return herdrRequest("pane.send_input", { pane_id: pane, text, keys: ["Enter"] });
+			return hreq("pane.send_input", { pane_id: pane, text, keys: ["Enter"] });
 		}
 		case "keys": {
 			const pane = str(args.pane);
 			const keys = Array.isArray(args.keys) ? (args.keys as unknown[]).map(String) : [];
 			if (!pane || keys.length === 0) throw new Error("keys requires pane and keys[]");
-			return herdrRequest("pane.send_keys", { pane_id: pane, keys });
+			return hreq("pane.send_keys", { pane_id: pane, keys });
 		}
 		case "upload":
 			return saveRelayUpload(args);
@@ -328,19 +380,29 @@ async function dispatch(op: string, args: Record<string, unknown>): Promise<unkn
 				...(str(args.target_pane_id) === undefined ? {} : { target_pane_id: str(args.target_pane_id) }),
 			};
 			const hasExplicitPlacement = Object.keys(explicitPlacement).length > 0;
+			// The Clanky face placement (CLANKY_FACE_* env / clanky:main) only exists
+			// in the relay's bound session. When the client targets a different
+			// session, skip it and let herdr place the new pane there.
+			const targetsBoundSession = session === undefined || session === boundSessionName();
+			const placement = hasExplicitPlacement
+				? explicitPlacement
+				: targetsBoundSession
+					? await resolveClankyFacePanePlacement(undefined, session)
+					: {};
 			return startHerdrAgentNearPlacement({
 				name,
 				argv: launchArgv,
 				cwd,
 				focus: args.focus === true,
 				...(split === undefined ? {} : { split }),
-				placement: hasExplicitPlacement ? explicitPlacement : await resolveClankyFacePanePlacement(),
+				placement,
+				...(session === undefined ? {} : { session }),
 			});
 		}
 		case "close": {
 			const pane = str(args.pane);
 			if (!pane) throw new Error("close requires pane");
-			return herdrRequest("pane.close", { pane_id: pane });
+			return hreq("pane.close", { pane_id: pane });
 		}
 		case "register-push": {
 			// The phone registers its APNs device token after pairing so Clanky can
@@ -368,7 +430,7 @@ async function dispatch(op: string, args: Record<string, unknown>): Promise<unkn
 			const pane = str(args.pane);
 			const text = typeof args.text === "string" ? args.text : undefined;
 			if (!pane || text === undefined) throw new Error("write requires pane and text");
-			return herdrRequest("pane.send_text", { pane_id: pane, text });
+			return hreq("pane.send_text", { pane_id: pane, text });
 		}
 		default:
 			throw new Error(`unknown op '${op}'`);
@@ -466,18 +528,21 @@ function closeStream(peer: WebSocketPeer, key?: string): void {
 }
 
 function orderedInputKey(req: RelayRequest): string | undefined {
+	// Scope the input-ordering key by session: pane ids are only unique within a
+	// herdr session, so two sessions' same-id panes must not share a queue.
+	const scope = str(req.args?.session) ?? "";
 	switch (req.op) {
 		case "write":
 		case "keys":
 		case "run": {
 			const pane = str(req.args?.pane);
-			return pane === undefined ? undefined : `pane:${pane}`;
+			return pane === undefined ? undefined : `${scope}|pane:${pane}`;
 		}
 		case "send": {
 			const pane = str(req.args?.pane);
-			if (pane !== undefined) return `pane:${pane}`;
+			if (pane !== undefined) return `${scope}|pane:${pane}`;
 			const agent = str(req.args?.agent);
-			return agent === undefined ? undefined : `agent:${agent}`;
+			return agent === undefined ? undefined : `${scope}|agent:${agent}`;
 		}
 		default:
 			return undefined;
@@ -576,6 +641,7 @@ function isTerminalCommandEvent(event: unknown): boolean {
 function subscribe(peer: WebSocketPeer, req: RelayRequest): void {
 	const subscriptions = Array.isArray(req.args?.subscriptions) ? req.args.subscriptions : [];
 	if (subscriptions.length === 0) throw new Error("subscribe requires subscriptions[]");
+	const session = str(req.args?.session);
 	const stream: HerdrStream = herdrStreamLines(
 		{
 			id: requestId(req.id),
@@ -590,6 +656,8 @@ function subscribe(peer: WebSocketPeer, req: RelayRequest): void {
 			reply(peer, { id: req.id, ok: true, stream: true, body });
 		},
 		(error) => reply(peer, { id: req.id, ok: false, stream: true, error: error.message }),
+		undefined,
+		session,
 	);
 	registerStream(peer, "events", { close: () => stream.close() });
 }
@@ -663,11 +731,12 @@ async function readPaneSnapshot(
 	format: string,
 	stripAnsi: boolean,
 	lines: number | undefined,
+	session?: string,
 ): Promise<PaneSnapshot> {
 	const params: Record<string, unknown> = { pane_id: pane, source, format, strip_ansi: stripAnsi };
 	if (lines !== undefined) params.lines = lines;
 	try {
-		const result = await herdrRequest("pane.read", params);
+		const result = await herdrRequest("pane.read", params, session);
 		return { text: snapshotText(result), source, fallback: false };
 	} catch (error) {
 		if (source !== "full" || !isUnsupportedFullSourceError(error)) throw error;
@@ -679,7 +748,7 @@ async function readPaneSnapshot(
 			strip_ansi: stripAnsi,
 			lines: lines ?? VANILLA_HERDR_FALLBACK_LINES,
 		};
-		const result = await herdrRequest("pane.read", fallbackParams);
+		const result = await herdrRequest("pane.read", fallbackParams, session);
 		return {
 			text: snapshotText(result),
 			source: fallbackSource,
@@ -702,6 +771,7 @@ function attach(peer: WebSocketPeer, req: RelayRequest): void {
 	const lines = typeof args.lines === "number" ? args.lines : undefined;
 	const intervalMs = Math.min(2000, Math.max(80, num(args.interval_ms, 180)));
 	const terminalId = str(args.terminal_id);
+	const session = str(args.session);
 	const key = `attach:${pane}`;
 
 	let closed = false;
@@ -728,7 +798,7 @@ function attach(peer: WebSocketPeer, req: RelayRequest): void {
 		const tick = async (): Promise<void> => {
 			if (closed) return;
 			try {
-				const snapshot = await readPaneSnapshot(pane, source, format, stripAnsi, lines);
+				const snapshot = await readPaneSnapshot(pane, source, format, stripAnsi, lines, session);
 				if (!closed && snapshot.text !== last) {
 					last = snapshot.text;
 					sendFrame({
@@ -753,7 +823,7 @@ function attach(peer: WebSocketPeer, req: RelayRequest): void {
 	const sendInitialSnapshot = async (): Promise<void> => {
 		if (closed) return;
 		try {
-			const snapshot = await readPaneSnapshot(pane, source, format, stripAnsi, lines);
+			const snapshot = await readPaneSnapshot(pane, source, format, stripAnsi, lines, session);
 			if (closed) return;
 			last = snapshot.text;
 			sendFrame({
@@ -794,6 +864,7 @@ function attach(peer: WebSocketPeer, req: RelayRequest): void {
 				rows: int(args.rows, 24),
 				cellWidthPx: int(args.cell_width_px, 0),
 				cellHeightPx: int(args.cell_height_px, 0),
+				...(session === undefined ? {} : { session }),
 			},
 			{
 				onFrame: (frame) => {
@@ -881,6 +952,7 @@ function attach(peer: WebSocketPeer, req: RelayRequest): void {
 				startPolling(reason);
 			}
 		},
+		session,
 	);
 }
 

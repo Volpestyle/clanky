@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { DiscordInboundMessage, DiscordScopeOptions } from "./acceptance.ts";
 import { resolveDiscordScopeOptions } from "./acceptance.ts";
 import { type DiscordCredentialKind, resolveDiscordCredentialKind, resolveDiscordToken } from "./gateway.ts";
@@ -113,7 +113,10 @@ export function readDiscordGatewayLock(env: NodeJS.ProcessEnv = process.env): Di
 	const path = discordGatewayLockPath(env);
 	if (!existsSync(path)) return null;
 	const ownerPid = readDiscordGatewayLockOwner(path);
-	if (ownerPid !== undefined && !isProcessAlive(ownerPid)) return null;
+	if (ownerPid !== undefined && !isProcessAlive(ownerPid)) {
+		rmSync(path, { recursive: true, force: true });
+		return null;
+	}
 	return { status: "held", path, ...(ownerPid === undefined ? {} : { ownerPid }) };
 }
 
@@ -253,7 +256,7 @@ function discordGatewayStatusPath(lockPath: string): string {
 }
 
 function discordGatewayRepo(env: NodeJS.ProcessEnv): string {
-	return env.CLANKY_REPO_DIR ?? process.cwd();
+	return resolve(env.CLANKY_REPO_DIR ?? process.cwd());
 }
 
 function readDiscordGatewayLockOwner(path: string): number | undefined {

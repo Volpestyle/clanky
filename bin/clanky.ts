@@ -112,9 +112,6 @@ async function runCommand(commandName: string, commandArgs: string[]): Promise<C
 			return { code: 0 };
 		case "dev":
 			return await runDev(commandArgs);
-		case "face":
-			assertInteractiveFaceTty();
-			return await runNodeScript("scripts/clanky.ts", commandArgs);
 		case "up":
 		case "status":
 		case "down":
@@ -145,7 +142,6 @@ function printHelp(): void {
 
 Commands:
   dev               Start a hot-reloadable Clanky dev loop (default)
-  face              Start the interactive Clanky face once, without watch mode
   up                Ensure the Herdr session and Clanky command host are running
   status            Print lifecycle status as JSON
   down              Stop the Clanky command host / brain pane
@@ -332,7 +328,10 @@ async function startDevBrain(): Promise<DevBrain> {
 }
 
 async function buildDevBrainEnv(): Promise<NodeJS.ProcessEnv> {
-	const env = buildEveDevServerEnv(process.env, clankyHost(), clankyPort());
+	const env: NodeJS.ProcessEnv = {
+		...buildEveDevServerEnv(process.env, clankyHost(), clankyPort()),
+		CLANKY_REPO_DIR: REPO,
+	};
 	const localEnv = await readLocalEnv();
 	const provider = process.env.CLANKY_MODEL_PROVIDER ?? localEnv.CLANKY_MODEL_PROVIDER ?? "codex";
 	const startupFallback = missingApiKeyStartupFallback(provider, process.env, localEnv);

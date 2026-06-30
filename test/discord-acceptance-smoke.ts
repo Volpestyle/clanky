@@ -1,6 +1,7 @@
 // Pure smoke for Clanky's Discord free-will gate (no credentials, no network).
 // Covers wake-name matching, the acceptance decision, [SKIP], and the
 // engagement window. Run: pnpm smoke:discord
+import { ChannelType } from "discord.js";
 import {
 	type DiscordAcceptanceDecision,
 	type DiscordInboundMessage,
@@ -19,6 +20,12 @@ import {
 	shouldCatchUpVoiceIntentMessage,
 } from "../agent/lib/discord/host.ts";
 import { extractDiscordMemoryCandidates } from "../agent/lib/discord/memory.ts";
+import {
+	fetchPrivateCallContext,
+	parseIncomingPrivateCallDispatch,
+	privateCallAllowedByScope,
+	rewritePrivateCallVoiceStatePayload,
+} from "../agent/lib/discord/private-call.ts";
 import { buildPresenceSessionMessage } from "../agent/lib/discord/presence-payload.ts";
 import {
 	formatCompactPresencePrompt,
@@ -29,8 +36,11 @@ import { applyEnvUpserts } from "../agent/lib/discord/env-file.ts";
 import { resolveDiscordCredentialKind } from "../agent/lib/discord/gateway.ts";
 import { detectVoiceIntent } from "../agent/lib/discord/voice-intent.ts";
 import {
+	buildDiscordCallStreamKey,
 	buildDiscordStreamKey,
+	createDiscordStreamDiscovery,
 	deriveDiscordStreamWatchDaveChannelId,
+	type DiscordRawPacket,
 } from "../agent/lib/voice/discordStreamDiscovery.ts";
 import { DEFAULT_DISCORD_WAKE_NAMES, resolveWakeNameMatch } from "../agent/lib/discord/wake-names.ts";
 
@@ -372,11 +382,114 @@ check(
 	buildDiscordStreamKey({ guildId: "g1", channelId: "c1", userId: "u1" }) === "guild:g1:c1:u1",
 );
 check(
+	"buildDiscordCallStreamKey shapes call:c:u",
+	buildDiscordCallStreamKey({ channelId: "dm1", userId: "u1" }) === "call:dm1:u1",
+);
+check(
 	"dave channel id is rtcServerId - 1",
 	deriveDiscordStreamWatchDaveChannelId("100") === "99",
 );
 check("dave channel id undefined for empty rtcServerId", deriveDiscordStreamWatchDaveChannelId(null) === undefined);
 check("dave channel id undefined for non-numeric", deriveDiscordStreamWatchDaveChannelId("abc") === undefined);
+{
+	const listeners: Array<(packet: DiscordRawPacket) => void> = [];
+	const sent: Array<{ op: number; d: unknown }> = [];
+	const discovery = createDiscordStreamDiscovery({
+		on(event, listener) {
+			if (event === "raw") listeners.push(listener);
+		},
+		removeListener(event, listener) {
+			if (event !== "raw") return;
+			const index = listeners.indexOf(listener);
+			if (index >= 0) listeners.splice(index, 1);
+		},
+		ws: {
+			_ws: {
+				send(_shardId, payload) {
+					sent.push(payload);
+				},
+			},
+			shards: { first: () => ({ id: 0 }) },
+		},
+	});
+	listeners[0]?.({
+		t: "STREAM_CREATE",
+		d: { stream_key: "call:dm1:u1", endpoint: "e", token: "t", rtc_server_id: "100" },
+	});
+	const streams = discovery.listStreams();
+	check("stream discovery parses call stream keys", streams[0]?.kind === "call" && streams[0].channelId === "dm1");
+	discovery.requestPublish({ kind: "call", guildId: "", channelId: "dm1", preferredRegion: "us-central" });
+	const publish = sent[0]?.d as Record<string, unknown>;
+	check("call Go Live publish uses call opcode payload", publish.type === "call" && publish.channel_id === "dm1");
+	discovery.stop();
+	check("stream discovery stop removes raw listener", listeners.length === 0);
+}
+
+// --- private call helpers -------------------------------------------------
+{
+	const call = parseIncomingPrivateCallDispatch({ channel_id: "dm1", ringing: ["self", "u1"] }, "self");
+	check("incoming private call detects self in ringing list", call?.channelId === "dm1");
+	check(
+		"incoming private call ignores calls not ringing self",
+		parseIncomingPrivateCallDispatch({ channel_id: "dm1", ringing: ["u1"] }, "self") === undefined,
+	);
+	check("private call scope allows DMs by default", privateCallAllowedByScope("dm1", {}));
+	check("private call scope respects blocked DMs", !privateCallAllowedByScope("dm1", { allowDms: false }));
+	check(
+		"private call scope respects channel allowlist",
+		privateCallAllowedByScope("dm1", { allowedChannelIds: ["dm1"] }) &&
+			!privateCallAllowedByScope("dm2", { allowedChannelIds: ["dm1"] }),
+	);
+	const rewritten = rewritePrivateCallVoiceStatePayload(
+		{ op: 4, d: { guild_id: "dm1", channel_id: "dm1", self_mute: false, self_deaf: false } },
+		"dm1",
+	);
+	const rewrittenData = rewritten.d as Record<string, unknown>;
+	check(
+		"private call adapter rewrites OP4 to null guild",
+		rewritten.op === 4 && rewrittenData.guild_id === null && rewrittenData.channel_id === "dm1",
+	);
+	const leave = rewritePrivateCallVoiceStatePayload({ op: 4, d: { guild_id: "dm1", channel_id: null } }, "dm1");
+	const leaveData = leave.d as Record<string, unknown>;
+	check(
+		"private call adapter preserves OP4 leave",
+		leaveData.guild_id === null && leaveData.channel_id === null,
+	);
+	const dmContext = await fetchPrivateCallContext(
+		{
+			channels: {
+				fetch: async () => ({
+					type: ChannelType.DM,
+					recipient: { id: "u1", username: "Ari", globalName: null },
+				}),
+			},
+			users: { cache: new Map() },
+		} as never,
+		"dm1",
+	);
+	check("private call context keeps one-on-one peer", dmContext.peer?.userId === "u1");
+	const groupContext = await fetchPrivateCallContext(
+		{
+			channels: {
+				fetch: async () => ({
+					type: ChannelType.GroupDM,
+					recipients: [
+						{ id: "u1", username: "Ari" },
+						{ id: "u2", username: "Bea" },
+					],
+				}),
+			},
+			users: { cache: new Map() },
+		} as never,
+		"gdm1",
+	);
+	check(
+		"private call context keeps group DM speakers without a single peer",
+		groupContext.peer === undefined &&
+			groupContext.speakers?.length === 2 &&
+			groupContext.speakers.some((speaker) => speaker.userId === "u2" && speaker.userName === "Bea"),
+	);
+}
 
 // --- voice intent --------------------------------------------------------
 check("'clanky hop in vc' -> join", detectVoiceIntent("clanky hop in vc") === "join");

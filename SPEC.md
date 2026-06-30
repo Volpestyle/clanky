@@ -61,7 +61,7 @@ flowchart TB
   subgraph mac["Mac mini — always on"]
     subgraph herdr["herdr (vanilla) — the STAGE: persistent session 'clankies'"]
       direction TB
-      face["pane: clanky face<br/>pi-tui client · main session"]
+      face["pane: clanky<br/>pi-tui client · main session"]
       disc["pane: clanky:discord-*<br/>presence-session mirror"]
       voice["pane: clanky:voice-*<br/>presence-session mirror + transcript"]
       w1["pane: claude<br/>delegated worker"]
@@ -145,12 +145,12 @@ eve provides Clanky's durable runtime primitives:
 | Durable session state | eve sessions + `continuationToken` |
 | Scheduled/autonomous runs | `agent/schedules/*.md` (cron frontmatter) |
 | Slash-command execution | headless command host (`scripts/clanky.ts --command-host`) registered with the relay |
-| Visible face | custom face on `eve/client` (`clanky dev` while editing, `pnpm face` direct); `eve dev` for debugging |
+| Visible face | custom face on `eve/client` (`clanky dev` while editing, `pnpm dev` direct) |
 | Memory | eve session context + Clanky memory lib |
 
 **Clanky's face is a custom client on `eve/client`.** `eve dev`'s slash-command
 set is fixed and non-extensible, so Clanky's visible face (`scripts/clanky.ts`,
-run through `clanky dev` while editing or `pnpm face` directly) is our own
+run through `clanky dev` while editing or `pnpm dev` directly) is our own
 terminal UI built on the public `eve/client`. It attaches to the same headless
 `eve dev --no-ui` brain (same sessions, memory, tools), starts a session over
 the default eve HTTP channel (`POST /eve/v1/session`,
@@ -175,8 +175,6 @@ runs the same path without entering the mode. The runner and renderer live in
 `agent/lib/clanky-face-bash.ts`, and each run is summarized into the TUI ledger
 so the brain stays aware. Config
 commands rewrite `.env.local` and restart the brain through the host below Eve.
-The stock `eve dev` TUI stays available as a local dev/debug interface against
-the same runtime.
 
 The face surfaces `input.requested` (tool-approval / human-input prompts) and
 `session.waiting`, then resumes the turn with explicit responses. `/approvals
@@ -496,7 +494,7 @@ the pane already uses the subscription natively.
    (`scripts/clanky.ts --command-host` via `clanky up`). The host owns or
    attaches the headless eve Clanky brain (`eve dev --no-ui`; channels
    listening, schedules armed).
-3. Optional visible faces (`clanky dev`, `clanky face`, or `pnpm face`) attach
+3. Optional visible faces (`clanky dev` or `pnpm dev`) attach
    to the same brain over `eve/client`.
 4. The eve relay channel listens on the tailnet for the iOS app and forwards
    deterministic slash commands to the command host.
@@ -596,13 +594,17 @@ performers are the visibility.
 Voice is the same presence model with a live media plane. The conductor's
 gateway already holds `GUILD_VOICE_STATES`, so "hop in vc" (a wake-addressed
 chat message, a voice op, or the existing `discord_voice_join` intent) makes
-Clanky join the caller's voice channel. The gateway handles that intent before
-starting the normal text presence turn, so success/failure is reported directly
-instead of asking the text model to infer whether a voice tool exists. On
-startup, the gateway also fetches recent messages from scoped channels and
-replays only recent voice intents, covering the restart window without replaying
-ordinary chat turns. The media path is the control plane in
-`agent/lib/voice/*` (ClankVox Rust transport for Discord RTP/Opus,
+Clanky join the caller's server voice channel. In user-token mode, the gateway
+also listens to raw private call events and answers scoped DM and group DM calls;
+the DM or group DM channel id is used as the private call voice server id and a
+`agent/lib/discord/private-call.ts` adapter rewrites ClankVox's guild-shaped OP4
+payloads into private-call OP4 payloads (`guild_id: null`). The gateway handles
+voice intents before starting the normal text presence turn, so success/failure
+is reported directly instead of asking the text model to infer whether a voice
+tool exists. On startup, the gateway also fetches recent messages from scoped
+channels and replays only recent server voice intents, covering the restart
+window without replaying ordinary chat turns. The media path is the control
+plane in `agent/lib/voice/*` (ClankVox Rust transport for Discord RTP/Opus,
 per-speaker OpenAI Realtime transcription, Realtime or ElevenLabs TTS), attached
 to the gateway's Discord client via `attachVoiceRuntime()` on
 `agent/channels/voice.ts`.
@@ -638,9 +640,9 @@ source dir with `CLANKY_CLANKVOX_DIR` or point at a prebuilt binary with
 
 **Credential kind (bot vs user/self token).** `CLANKY_DISCORD_CREDENTIAL_KIND`
 selects `bot-token` (default) or `user-token`. Bot tokens cover text presence and
-normal voice audio. **Go Live publish/watch is only exposed to user-token
-behavior**, so screen share requires a self token — set it (via the custom
-face's `/token … --user-token` slash command), and the gateway applies the discord.js
+server voice audio. User tokens cover private DM / group DM call answering and Go
+Live publish/watch. Set a user token via the custom face's
+`/token … --user-token` slash command; the gateway applies the discord.js
 user-token patches (`agent/lib/discord/user-token-patches.ts`: strip the `Bot `
 REST prefix, identify as a desktop client, use `/gateway`, synthesize the READY
 `application`). Automating a user account is against Discord's ToS; it is opt-in,
@@ -651,12 +653,14 @@ for a personal account, and off by default.
 `discordStreamDiscovery` control layer (watch op 20, publish op 18, stop 19,
 pause 22). `agent/lib/discord/golive.ts` wraps this as a `GoLiveController`
 (list / watch / go-live / stop / pause), registered active when Clanky is in a
-vc, and surfaced to him as the `discord_golive` tool. Discovered stream
-credentials (`endpoint`/`token`/`rtc_server_id`) are forwarded into ClankVox via
-`streamWatchConnect` / `streamPublishConnect` to decode others' streams or
-publish his own. **Live-gated:** the actual decode/publish needs a user token + a
-running ClankVox + a real call, so the forwarding sink is wired but unexercised
-offline; the opcode/discovery/tool layer is verified by `pnpm smoke:discord`.
+server vc or private call, and surfaced to him as the `discord_golive` tool.
+Discovered stream credentials (`endpoint`/`token`/`rtc_server_id`) are forwarded
+into ClankVox via `streamWatchConnect` / `streamPublishConnect` to decode
+others' streams or publish his own. Stream discovery supports both
+`guild:<guild>:<channel>:<user>` and `call:<channel>:<user>` keys. **Live-gated:**
+the actual decode/publish needs a user token + a running ClankVox + a real call,
+so the forwarding sink is wired but unexercised offline; the
+opcode/discovery/tool layer is verified by `pnpm smoke:discord`.
 
 ### 5.4 Continuity across surfaces
 
@@ -668,7 +672,7 @@ surface. They differ only in *which session thread* a turn lands on:
 | --- | --- | --- | --- |
 | custom face (`scripts/clanky.ts`) | main | — (it *is* the main thread) | the face pane |
 | Discord text | per-channel presence | no | `clanky:discord-*` mirror |
-| Discord voice | voice presence | no | `clanky:voice-*` mirror |
+| Discord server voice / private call | voice presence | no | `clanky:voice-*` mirror |
 | iOS app | main (via relay) | — | the face pane |
 
 This is what lets you talk to Clanky in the TUI and have him doing parallel work
@@ -795,7 +799,7 @@ clanky/
       voice/                 # Realtime/ClankVox control plane
       ...                    # memory, persona, herdr seam helpers
   scripts/
-    clanky.ts                # custom face on eve/client (pnpm face)
+    clanky.ts                # custom face on eve/client (pnpm dev)
     discord-pane-mirror.ts   # tails a presence session into a herdr pane
   bin/
     clanky.ts                # installed as ~/.local/bin/clanky
@@ -897,7 +901,7 @@ while clients may still show the original `$name`.
   Clanky-specific fork.
 - **Face surface — RESOLVED: custom face.** eve's stock TUI has a fixed,
   non-extensible slash-command set, so the face is `scripts/clanky.ts` (`pnpm
-  face`) on the public eve/client: it renders eve's event stream through pi-tui
+  dev`) on the public eve/client: it renders eve's event stream through pi-tui
   (`@earendil-works/pi-tui`), matching eve's look only where useful, and adds the
   slash commands eve can't (the live list is `/help`). It attaches to a running
   eve server or spawns/owns a headless one (eve allows one dev server per agent).

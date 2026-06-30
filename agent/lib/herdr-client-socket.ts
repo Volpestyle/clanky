@@ -29,6 +29,8 @@ export interface HerdrTerminalFrame {
 export interface HerdrTerminalAttachOptions extends Partial<HerdrTerminalGeometry> {
 	terminalId: string;
 	takeover?: boolean;
+	/// Target herdr session (name/path). Omit for the relay's env-bound session.
+	session?: string;
 }
 
 export interface HerdrTerminalAttachCallbacks {
@@ -82,7 +84,7 @@ export function attachHerdrTerminal(
 	callbacks: HerdrTerminalAttachCallbacks,
 ): HerdrTerminalAttachStream {
 	const geometry = normalizeGeometry(options);
-	const socket = createConnection(herdrClientSocketPath());
+	const socket = createConnection(herdrClientSocketPath(options.session));
 	let buffer: ByteBuffer = Buffer.alloc(0);
 	let closed = false;
 	let welcomeReceived = false;

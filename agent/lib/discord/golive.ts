@@ -10,6 +10,7 @@
 import {
 	createDiscordStreamDiscovery,
 	deriveDiscordStreamWatchDaveChannelId,
+	type DiscordStreamKind,
 	type DiscordRawGatewayClient,
 	type DiscordStreamDiscovery,
 	type DiscoveredDiscordStream,
@@ -31,6 +32,8 @@ export interface GoLiveSink {
 }
 
 export interface GoLiveControllerOptions {
+	/** Default publish target shape for `goLive()` calls. */
+	streamKind?: DiscordStreamKind;
 	/** Resolve the bot's own user id, to tell "publish my stream" from "watch theirs". */
 	selfUserId?: () => string | undefined;
 	/** ClankVox forwarding; when absent, streams are still discovered/requested. */
@@ -39,10 +42,12 @@ export interface GoLiveControllerOptions {
 
 export class GoLiveController {
 	private readonly discovery: DiscordStreamDiscovery;
+	private readonly streamKind: DiscordStreamKind;
 	private readonly selfUserId?: () => string | undefined;
 	private readonly sink?: GoLiveSink;
 
 	constructor(client: DiscordRawGatewayClient, options: GoLiveControllerOptions = {}) {
+		this.streamKind = options.streamKind ?? "guild";
 		this.selfUserId = options.selfUserId;
 		this.sink = options.sink;
 		this.discovery = createDiscordStreamDiscovery(client, {
@@ -70,7 +75,7 @@ export class GoLiveController {
 
 	/** Publish Clanky's own Go Live in a voice channel. */
 	goLive(input: { guildId: string; channelId: string; preferredRegion?: string | null }): void {
-		this.discovery.requestPublish(input);
+		this.discovery.requestPublish({ ...input, kind: this.streamKind });
 	}
 
 	stopPublish(streamKey: string): void {

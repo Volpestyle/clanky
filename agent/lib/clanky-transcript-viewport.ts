@@ -14,6 +14,10 @@ import { parseClankySgrMouse } from "./clanky-sgr-mouse.ts";
 export type ClankyTranscriptViewportTheme = {
 	readonly dim: (text: string) => string;
 	readonly selected: (text: string) => string;
+	// Right-gutter scrollbar styling: the track is the full extent, the thumb is
+	// the proportional handle painted brighter so it stands out against the track.
+	readonly scrollbarTrack: (text: string) => string;
+	readonly scrollbarThumb: (text: string) => string;
 };
 
 export type ClankyTranscriptViewportOptions = {
@@ -21,6 +25,13 @@ export type ClankyTranscriptViewportOptions = {
 	// separated paragraphs rather than one wall of text.
 	readonly blockSpacing?: number;
 	readonly underfilledAlignment?: TranscriptUnderfilledAlignment;
+	// Reserve a one-column right gutter and paint a proportional scrollbar there
+	// whenever content overflows the viewport. Opt-in so non-face consumers (and
+	// exact-line tests) keep the edge-to-edge layout.
+	readonly scrollbar?: boolean;
+	// Block-drawing thumb glyphs when the terminal renders unicode; ASCII fallback
+	// otherwise.
+	readonly unicode?: boolean;
 };
 
 export type ClankyTranscriptBlockHandle = {
@@ -72,9 +83,35 @@ const SELECTION_RESET = "\x1b[0m";
 
 const DEFAULT_THEME: ClankyTranscriptViewportTheme = {
 	dim: (text) => `\x1b[2m${text}\x1b[22m`,
+	scrollbarThumb: (text) => `\x1b[97m${text}\x1b[39m`,
+	scrollbarTrack: (text) => `\x1b[2m${text}\x1b[22m`,
 	selected: (text) => `\x1b[36m${text}\x1b[39m`,
 };
 const WHEEL_SCROLL_ROWS = 3;
+// Below this width the gutter is dropped: a scrollbar is useless on a sliver of a
+// terminal and reserving the column would eat scarce content space.
+const SCROLLBAR_MIN_WIDTH = 8;
+
+export type ClankyScrollbarGlyphs = {
+	readonly track: string;
+	readonly full: string;
+	readonly topHalf: string;
+	readonly bottomHalf: string;
+};
+
+export const UNICODE_SCROLLBAR_GLYPHS: ClankyScrollbarGlyphs = {
+	bottomHalf: "▄",
+	full: "█",
+	topHalf: "▀",
+	track: "│",
+};
+
+export const ASCII_SCROLLBAR_GLYPHS: ClankyScrollbarGlyphs = {
+	bottomHalf: "#",
+	full: "#",
+	topHalf: "#",
+	track: "|",
+};
 
 export class ClankyTranscriptViewport implements Component, Focusable {
 	private readonly blocks: TranscriptBlock[] = [];
@@ -91,6 +128,10 @@ export class ClankyTranscriptViewport implements Component, Focusable {
 	private lastFlattened: readonly string[] = [];
 	private lastWindowStart = 0;
 	private lastTopPad = 0;
+	private readonly scrollbarEnabled: boolean;
+	private readonly scrollbarGlyphs: ClankyScrollbarGlyphs;
+	private lastContentWidth = 80;
+	private lastScrollbarVisible = false;
 	focused = false;
 
 	constructor(
@@ -102,6 +143,8 @@ export class ClankyTranscriptViewport implements Component, Focusable {
 		this.theme = { ...DEFAULT_THEME, ...theme };
 		this.blockSpacing = Math.max(0, Math.floor(options.blockSpacing ?? 0));
 		this.underfilledAlignment = options.underfilledAlignment ?? "bottom";
+		this.scrollbarEnabled = options.scrollbar === true;
+		this.scrollbarGlyphs = (options.unicode ?? true) ? UNICODE_SCROLLBAR_GLYPHS : ASCII_SCROLLBAR_GLYPHS;
 	}
 
 	setUnderfilledAlignment(alignment: TranscriptUnderfilledAlignment): void {
@@ -272,8 +315,52 @@ export class ClankyTranscriptViewport implements Component, Focusable {
 			this.lastTopPad = 0;
 			visible = lines.slice(this.lastWindowStart, end);
 		}
-		if (this.selection === null) return visible;
-		return visible.map((line, index) => this.applyHighlight(line, this.lastWindowStart + index - this.lastTopPad));
+		const highlighted = this.selection === null
+			? visible
+			: visible.map((line, index) => this.applyHighlight(line, this.lastWindowStart + index - this.lastTopPad));
+		return this.applyScrollbar(highlighted, width, lines.length, maxRows);
+	}
+
+	// Returns the 0-based terminal column the scrollbar currently occupies, or
+	// undefined when no bar is drawn (gutter disabled, terminal too narrow, or
+	// content fits). Callers use it to route gutter clicks to a thumb drag.
+	scrollbarHitColumn(): number | undefined {
+		return this.lastScrollbarVisible ? this.lastContentWidth : undefined;
+	}
+
+	// Map a click/drag on track row `row` to a scroll position, inverting the same
+	// geometry the rendered thumb uses so the thumb tracks the pointer.
+	scrollToTrackRow(row: number, width = this.lastWidth): void {
+		this.lastWidth = width;
+		const totalRows = this.lastFlattened.length;
+		const visibleRows = this.visibleRowCount(width);
+		if (totalRows <= visibleRows) return;
+		const windowStart = clankyScrollbarWindowStartForRow(row, totalRows, visibleRows);
+		this.scrollbackRows = totalRows - visibleRows - windowStart;
+		this.clampScrollback(width, totalRows, visibleRows);
+	}
+
+	private applyScrollbar(rows: string[], width: number, totalRows: number, visibleRows: number): string[] {
+		if (this.gutterWidth(width) === 0) {
+			this.lastScrollbarVisible = false;
+			this.lastContentWidth = width;
+			return rows;
+		}
+		const contentWidth = Math.max(1, width - 1);
+		this.lastContentWidth = contentWidth;
+		this.lastScrollbarVisible = totalRows > visibleRows;
+		const column = computeClankyScrollbarColumn(totalRows, visibleRows, this.lastWindowStart, this.scrollbarGlyphs, {
+			thumb: this.theme.scrollbarThumb,
+			track: this.theme.scrollbarTrack,
+		});
+		return rows.map((line, index) => {
+			const pad = Math.max(0, contentWidth - visibleWidth(line));
+			return `${line}${" ".repeat(pad)}${column[index] ?? " "}`;
+		});
+	}
+
+	private gutterWidth(width: number): number {
+		return this.scrollbarEnabled && width >= SCROLLBAR_MIN_WIDTH ? 1 : 0;
 	}
 
 	selectionPress(row: number, col: number): void {
@@ -407,14 +494,15 @@ export class ClankyTranscriptViewport implements Component, Focusable {
 	}
 
 	private renderBlocks(width: number): RenderedBlock[] {
-		const childWidth = Math.max(1, this.focused ? width - 2 : width);
+		const contentWidth = Math.max(1, width - this.gutterWidth(width));
+		const childWidth = Math.max(1, this.focused ? contentWidth - 2 : contentWidth);
 		let cursor = 0;
 		return this.blocks.map((block, index) => {
 			const selected = index === this.selectedIndex;
 			const rawLines = block.component.render(childWidth);
 			const blockLines = block.collapsed ? collapsedLines(rawLines, childWidth, this.theme) : rawLines;
 			const bodyLines = blockLines.map((line, lineIndex) => {
-				if (!this.focused) return truncateToWidth(line, width, "", true);
+				if (!this.focused) return truncateToWidth(line, contentWidth, "", true);
 				const marker = selected && lineIndex === 0 ? ">" : " ";
 				const cursorMarker = selected && this.focused && lineIndex === 0 ? CURSOR_MARKER : "";
 				const prefix = selected ? this.theme.selected(`${marker} `) : `${marker} `;
@@ -438,6 +526,71 @@ export class ClankyTranscriptViewport implements Component, Focusable {
 		const maxScrollback = Math.max(0, totalRows - visibleRows);
 		this.scrollbackRows = clamp(this.scrollbackRows, 0, maxScrollback);
 	}
+}
+
+type ScrollbarColumnTheme = {
+	readonly track: (text: string) => string;
+	readonly thumb: (text: string) => string;
+};
+
+type ScrollbarGeometry = {
+	readonly trackCells: number;
+	// Thumb size and start expressed in half-cell "virtual" units (2 per row), so the
+	// thumb can land on half-cell boundaries via the half-block glyphs.
+	readonly thumb2: number;
+	readonly start2: number;
+	readonly range: number;
+};
+
+function clankyScrollbarGeometry(totalRows: number, visibleRows: number, windowStart: number): ScrollbarGeometry | null {
+	const trackCells = Math.max(0, Math.floor(visibleRows));
+	if (trackCells === 0 || totalRows <= 0 || totalRows <= visibleRows) return null;
+	const track2 = trackCells * 2;
+	const range = totalRows - visibleRows;
+	const thumb2 = clamp(Math.floor(track2 * (visibleRows / totalRows)), 1, track2);
+	const valueRatio = range === 0 ? 0 : clamp(windowStart, 0, range) / range;
+	const start2 = Math.round(valueRatio * (track2 - thumb2));
+	return { range, start2, thumb2, trackCells };
+}
+
+// Build the per-row scrollbar gutter for the visible window. Ports opentui's
+// 2x-virtual thumb: each cell spans two virtual slots, so a half-covered end cell
+// renders as a half block (▀/▄) for sub-cell-smooth thumb travel. Returns a blank
+// column (one space per row) when content fits.
+export function computeClankyScrollbarColumn(
+	totalRows: number,
+	visibleRows: number,
+	windowStart: number,
+	glyphs: ClankyScrollbarGlyphs,
+	theme: ScrollbarColumnTheme,
+): string[] {
+	const geometry = clankyScrollbarGeometry(totalRows, visibleRows, windowStart);
+	if (geometry === null) return Array.from({ length: Math.max(0, Math.floor(visibleRows)) }, () => " ");
+	const thumbEnd2 = geometry.start2 + geometry.thumb2;
+	const column: string[] = [];
+	for (let cell = 0; cell < geometry.trackCells; cell++) {
+		const cellStart2 = cell * 2;
+		const coverStart = Math.max(geometry.start2, cellStart2);
+		const coverage = Math.min(thumbEnd2, cellStart2 + 2) - coverStart;
+		if (coverage <= 0) {
+			column.push(theme.track(glyphs.track));
+		} else if (coverage >= 2) {
+			column.push(theme.thumb(glyphs.full));
+		} else {
+			column.push(theme.thumb(coverStart - cellStart2 === 0 ? glyphs.topHalf : glyphs.bottomHalf));
+		}
+	}
+	return column;
+}
+
+// Inverse of the thumb geometry: given a clicked track row, return the window-top
+// line index that puts the thumb under the pointer.
+export function clankyScrollbarWindowStartForRow(row: number, totalRows: number, visibleRows: number): number {
+	const geometry = clankyScrollbarGeometry(totalRows, visibleRows, 0);
+	if (geometry === null) return 0;
+	const thumbCells = Math.max(1, Math.ceil(geometry.thumb2 / 2));
+	const denominator = Math.max(1, geometry.trackCells - thumbCells);
+	return Math.round(clamp(row / denominator, 0, 1) * geometry.range);
 }
 
 export function isClankyTranscriptPageScrollInput(data: string, direction?: ScrollDirection): boolean {

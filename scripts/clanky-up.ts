@@ -15,18 +15,17 @@
  *
  * Env:
  *   CLANKY_SESSION     herdr session name (default "clankies")
- *   CLANKY_REPO_DIR    repo dir for the brain pane cwd (default process.cwd())
+ *   CLANKY_REPO_DIR    repo dir for the brain pane cwd (default this checkout)
  *   CLANKY_EVE_PORT    relay/eve port (default 2000)
- *   CLANKY_EVE_HOST    eve bind host (default "0.0.0.0"; bind the tailscale IP
- *                      for stricter exposure — the relay is bearer-gated anyway)
+ *   CLANKY_EVE_HOST    eve bind host (default "127.0.0.1" when Tailscale Serve
+ *                      owns the port, otherwise "0.0.0.0")
  *   CLANKY_BRAIN_AGENT herdr agent name for the brain pane (default "clanky")
  *   CLANKY_HERDR_BIN   herdr binary (default "herdr" on PATH)
  */
-import { spawn } from "node:child_process";
-import { execFile } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
-import { createConnection } from "node:net";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseEnv } from "node:util";
 import {
 	LOCAL_CONTEXT_TOKENS_ENV,
@@ -35,9 +34,10 @@ import {
 } from "../agent/lib/local-context.ts";
 
 const SESSION = process.env.CLANKY_SESSION ?? "clankies";
-const REPO = process.env.CLANKY_REPO_DIR ?? process.cwd();
+const REPO = resolve(process.env.CLANKY_REPO_DIR ?? join(dirname(fileURLToPath(import.meta.url)), ".."));
 const PORT = resolvePort(process.env.CLANKY_EVE_PORT, 2000);
-const HOST = process.env.CLANKY_EVE_HOST ?? "0.0.0.0";
+const TAILSCALE_BINARIES = ["tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"] as const;
+const HOST = process.env.CLANKY_EVE_HOST ?? defaultEveHost(PORT);
 const BRAIN_AGENT = process.env.CLANKY_BRAIN_AGENT ?? "clanky";
 const HERDR = process.env.CLANKY_HERDR_BIN ?? "herdr";
 const ENV_PATH = join(REPO, ".env.local");
@@ -52,6 +52,29 @@ function resolvePort(value: string | undefined, fallback: number): number {
 		throw new Error(`CLANKY_EVE_PORT must be an integer from 1 to 65535; got ${JSON.stringify(value)}`);
 	}
 	return parsed;
+}
+
+function defaultEveHost(port: number): string {
+	return tailscaleServeForwardsPort(port) ? "127.0.0.1" : "0.0.0.0";
+}
+
+function tailscaleServeForwardsPort(port: number): boolean {
+	for (const binary of TAILSCALE_BINARIES) {
+		try {
+			const output = execFileSync(binary, ["serve", "status", "--json"], {
+				encoding: "utf8",
+				stdio: ["ignore", "pipe", "ignore"],
+				timeout: 1500,
+			});
+			const parsed: unknown = JSON.parse(output);
+			const tcp = isRecord(parsed) ? parsed.TCP : undefined;
+			const entry = isRecord(tcp) ? tcp[String(port)] : undefined;
+			if (isRecord(entry) && typeof entry.TCPForward === "string" && entry.TCPForward.length > 0) return true;
+		} catch {
+			// Tailscale is optional; direct tailnet binding remains the fallback.
+		}
+	}
+	return false;
 }
 
 type SessionEntry = { name: string; running: boolean; socket_path: string; session_dir: string };
@@ -80,18 +103,17 @@ function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Resolve TCP reachability of the eve port, the real "brain is serving" signal.
-function portOpen(): Promise<boolean> {
-	return new Promise((resolve) => {
-		const socket = createConnection({ host: "127.0.0.1", port: PORT });
-		const done = (open: boolean) => {
-			socket.destroy();
-			resolve(open);
-		};
-		socket.setTimeout(1500, () => done(false));
-		socket.on("connect", () => done(true));
-		socket.on("error", () => done(false));
-	});
+async function brainServing(): Promise<boolean> {
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), 1500);
+	try {
+		const response = await fetch(`http://127.0.0.1:${PORT}/eve/v1/info`, { signal: controller.signal });
+		return response.ok;
+	} catch {
+		return false;
+	} finally {
+		clearTimeout(timeout);
+	}
 }
 
 async function listSessions(): Promise<SessionEntry[]> {
@@ -149,7 +171,7 @@ async function startBrain(): Promise<AgentEntry> {
 	]);
 	for (let i = 0; i < 60; i++) {
 		await sleep(500);
-		if (await portOpen()) {
+		if (await brainServing()) {
 			const brain = await findBrain();
 			if (brain) {
 				await waitForCommandHostAttachment(5000);
@@ -164,6 +186,7 @@ async function clankyCommandHostCommand(): Promise<string[]> {
 	const contextTokens = await contextTokensForOwnedBrain();
 	return [
 		"env",
+		`CLANKY_REPO_DIR=${REPO}`,
 		`CLANKY_EVE_HOST=${HOST}`,
 		...(contextTokens === undefined ? [] : [`${LOCAL_CONTEXT_TOKENS_ENV}=${contextTokens}`]),
 		process.execPath,
@@ -270,18 +293,23 @@ async function runUp(): Promise<number> {
 	const session = await ensureSession();
 	let brain = await findBrain();
 	let started = false;
-	let serving = await portOpen();
+	let serving = await brainServing();
 	if (brain && serving && await existingBrainNeedsCommandHostRestart()) {
 		await herdr(["--session", SESSION, "pane", "close", brain.pane_id]);
 		await waitForBrainPaneGone(brain.pane_id);
 		brain = undefined;
-		serving = await portOpen();
+		serving = await brainServing();
+	}
+	if (brain && !serving) {
+		await herdr(["--session", SESSION, "pane", "close", brain.pane_id]);
+		await waitForBrainPaneGone(brain.pane_id);
+		brain = undefined;
 	}
 	if (!brain || !serving) {
 		brain = await startBrain();
 		started = true;
 	}
-	serving = await portOpen();
+	serving = await brainServing();
 	await waitForCommandHostAttachment(2000);
 	process.stdout.write(`${JSON.stringify(statusJson(session, brain, serving, started))}\n`);
 	return serving ? 0 : 1;
@@ -290,7 +318,7 @@ async function runUp(): Promise<number> {
 async function runStatus(): Promise<number> {
 	const session = await sessionRunning();
 	const brain = session ? await findBrain() : undefined;
-	const serving = session ? await portOpen() : false;
+	const serving = session ? await brainServing() : false;
 	process.stdout.write(`${JSON.stringify(statusJson(session, brain, serving, false))}\n`);
 	return 0;
 }

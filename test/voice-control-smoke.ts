@@ -73,6 +73,7 @@ const vox: VoiceControlVox = {
 };
 
 const ownStream: DiscoveredDiscordStream = {
+	kind: "guild",
 	streamKey: "guild:g1:vc1:self",
 	guildId: "g1",
 	channelId: "vc1",

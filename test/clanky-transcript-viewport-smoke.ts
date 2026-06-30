@@ -1,10 +1,13 @@
 import { CURSOR_MARKER, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import {
 	ClankyTranscriptViewport,
+	clankyScrollbarWindowStartForRow,
 	clankyTranscriptMouseScrollDirection,
+	computeClankyScrollbarColumn,
 	isClankySgrMouseInput,
 	isClankyTranscriptMouseScrollInput,
 	isClankyTranscriptPageScrollInput,
+	UNICODE_SCROLLBAR_GLYPHS,
 } from "../agent/lib/clanky-transcript-viewport.ts";
 
 function assert(condition: boolean, message: string): asserts condition {
@@ -35,6 +38,12 @@ function assertFits(lines: readonly string[], width: number): void {
 
 function plain(lines: readonly string[]): string[] {
 	return lines.map((line) => line.replace(CURSOR_MARKER, "").replace(/\x1b\[[0-9;]*m/gu, "").trimEnd());
+}
+
+// Like plain(), but also drops the trailing scrollbar gutter glyph so content can
+// be compared independently of the bar.
+function plainContent(lines: readonly string[]): string[] {
+	return lines.map((line) => line.replace(CURSOR_MARKER, "").replace(/\x1b\[[0-9;]*m/gu, "").replace(/[█▀▄│ ]+$/u, ""));
 }
 
 let maxRows = 5;
@@ -217,5 +226,81 @@ const inertClickViewport = new ClankyTranscriptViewport(() => 3, { dim: (text) =
 inertClickViewport.addChild(new LineComponent(["plain", "body"]), { collapsed: true });
 inertClickViewport.render(80);
 assert(!inertClickViewport.toggleCollapsedAt(0), "plain collapsed blocks should ignore mouse toggles unless opted in");
+
+// --- scrollbar geometry (pure) ---
+const identityBar = { thumb: (text: string) => text, track: (text: string) => text };
+assert(
+	computeClankyScrollbarColumn(10, 5, 5, UNICODE_SCROLLBAR_GLYPHS, identityBar).join("") === "││▄██",
+	"scrollbar thumb should sit at the bottom of the track when pinned to newest rows",
+);
+assert(
+	computeClankyScrollbarColumn(10, 5, 0, UNICODE_SCROLLBAR_GLYPHS, identityBar).join("") === "██▀││",
+	"scrollbar thumb should sit at the top of the track when scrolled fully back",
+);
+assert(
+	computeClankyScrollbarColumn(3, 5, 0, UNICODE_SCROLLBAR_GLYPHS, identityBar).join("") === "     ",
+	"scrollbar column should be blank when content fits the viewport",
+);
+const thumbCells = computeClankyScrollbarColumn(100, 5, 0, UNICODE_SCROLLBAR_GLYPHS, identityBar).filter((cell) => cell !== "│").length;
+assert(thumbCells >= 1, "a tiny thumb should still render at least one cell");
+assert(clankyScrollbarWindowStartForRow(0, 10, 5) === 0, "clicking the top track row should scroll to the top");
+assert(clankyScrollbarWindowStartForRow(4, 10, 5) === 5, "clicking the bottom track row should scroll to the bottom");
+assert(clankyScrollbarWindowStartForRow(0, 3, 5) === 0, "a non-overflowing transcript should map every click to the top");
+
+// --- scrollbar integration ---
+const barViewport = new ClankyTranscriptViewport(() => 5, {
+	dim: (text) => text,
+	scrollbarThumb: (text) => text,
+	scrollbarTrack: (text) => text,
+	selected: (text) => text,
+}, { scrollbar: true });
+barViewport.addChild(new LineComponent(["l1", "l2", "l3", "l4", "l5", "l6", "l7", "l8", "l9", "l10"]));
+const barRows = barViewport.render(20);
+assertFits(barRows, 20);
+for (const row of barRows) assert(visibleWidth(row) === 20, "scrollbar rows should fill the full width including the gutter");
+assert(barRows.map((row) => row.at(-1)).join("") === "││▄██", "overflowing transcript should paint a thumb pinned to the bottom");
+assert(barViewport.scrollbarHitColumn() === 19, "scrollbar should report its gutter column when content overflows");
+barViewport.scroll(99, 20);
+const scrolledRows = barViewport.render(20);
+assert(scrolledRows.map((row) => row.at(-1)).join("") === "██▀││", "scrolling back should move the thumb to the top");
+assert(plainContent(scrolledRows).join("|") === "l1|l2|l3|l4|l5", "the gutter must not eat transcript content columns");
+barViewport.scrollToTrackRow(4, 20);
+assert(plainContent(barViewport.render(20)).join("|") === "l6|l7|l8|l9|l10", "dragging the thumb to the bottom row should jump to newest rows");
+barViewport.scrollToTrackRow(0, 20);
+assert(plainContent(barViewport.render(20)).join("|") === "l1|l2|l3|l4|l5", "dragging the thumb to the top row should jump to oldest rows");
+
+const fitsBarViewport = new ClankyTranscriptViewport(() => 5, {
+	dim: (text) => text,
+	scrollbarThumb: (text) => text,
+	scrollbarTrack: (text) => text,
+	selected: (text) => text,
+}, { scrollbar: true });
+fitsBarViewport.addChild(new LineComponent(["only", "two"]));
+const fitsRows = fitsBarViewport.render(20);
+assert(fitsRows.every((row) => row.at(-1) === " "), "a fitting transcript should leave the gutter blank");
+assert(fitsBarViewport.scrollbarHitColumn() === undefined, "no scrollbar column should be reported when content fits");
+assert(plain(fitsRows).join("|") === "|||only|two", "blank gutter should not change the plain transcript content");
+
+const focusedBarViewport = new ClankyTranscriptViewport(() => 3, {
+	dim: (text) => text,
+	scrollbarThumb: (text) => text,
+	scrollbarTrack: (text) => text,
+	selected: (text) => text,
+}, { scrollbar: true });
+focusedBarViewport.addChild(new LineComponent(["f1", "f2", "f3", "f4", "f5", "f6"]));
+focusedBarViewport.focused = true;
+const focusedBarRows = focusedBarViewport.render(20);
+for (const row of focusedBarRows) assert(visibleWidth(row) === 20, "focused scrollbar rows should still fill the full width with both gutters");
+assert("█▀▄│".includes(focusedBarRows[0]?.at(-1) ?? ""), "focused overflowing transcript should still paint a thumb in the right gutter");
+focusedBarViewport.scroll(99, 20);
+const focusedTopRows = focusedBarViewport.render(20);
+assert(focusedTopRows.some((row) => row.includes(CURSOR_MARKER)), "focused viewport should keep its selection cursor alongside the scrollbar");
+for (const row of focusedTopRows) assert(visibleWidth(row) === 20, "focused cursor row should account for both the prefix and the gutter");
+
+const narrowBarViewport = new ClankyTranscriptViewport(() => 3, { dim: (text) => text, selected: (text) => text }, { scrollbar: true });
+narrowBarViewport.addChild(new LineComponent(["a", "b", "c", "d", "e"]));
+const narrowRows = narrowBarViewport.render(6);
+assert(narrowRows.every((row) => visibleWidth(row) <= 6), "very narrow terminals should drop the gutter rather than overflow");
+assert(narrowBarViewport.scrollbarHitColumn() === undefined, "no scrollbar should render below the minimum width");
 
 console.log("clanky-transcript-viewport-smoke: ok");
