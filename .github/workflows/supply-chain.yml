@@ -1,0 +1,69 @@
+name: Supply chain
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - packages/**/package.json
+      - .github/workflows/supply-chain.yml
+  schedule:
+    # Weekly, Monday 09:00 UTC — catch newly disclosed advisories.
+    - cron: "0 9 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  guards:
+    name: pnpm guards enabled
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Hard policy gate: the supply-chain guards documented in AGENTS.md must
+      # stay enabled. Removing one is the kind of change CI should block.
+      - name: Assert pnpm-workspace guards
+        run: |
+          set -euo pipefail
+          required=(minimumReleaseAge strictPeerDependencies verifyStoreIntegrity onlyBuiltDependencies)
+          missing=0
+          for key in "${required[@]}"; do
+            if ! grep -qE "^${key}:" pnpm-workspace.yaml; then
+              echo "::error file=pnpm-workspace.yaml::supply-chain guard '${key}' is missing"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      # Frozen install also validates the lockfile and store integrity.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Hard fail only on critical advisories. Lower-severity findings
+      # (often transitive, e.g. via discord.js) are surfaced as a report so
+      # they are visible without blocking unrelated work.
+      - name: Audit (critical fails the job)
+        run: pnpm audit --prod --audit-level critical
+
+      - name: Audit report (full, non-blocking)
+        if: always()
+        run: pnpm audit --prod || true

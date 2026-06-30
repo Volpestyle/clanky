@@ -6,6 +6,8 @@
 
 **An always-on personal agent that lives inside a persistent [herdr](https://herdr.dev) session — reachable from anywhere through a native iOS app.**
 
+[![CI](https://github.com/Volpestyle/clanky/actions/workflows/ci.yml/badge.svg)](https://github.com/Volpestyle/clanky/actions/workflows/ci.yml)
+[![Supply chain](https://github.com/Volpestyle/clanky/actions/workflows/supply-chain.yml/badge.svg)](https://github.com/Volpestyle/clanky/actions/workflows/supply-chain.yml)
 [![built on eve](https://img.shields.io/badge/conductor-eve-7c3aed?style=flat-square)](https://eve.dev)
 [![stage herdr](https://img.shields.io/badge/stage-herdr-0ea5e9?style=flat-square)](https://herdr.dev)
 [![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A524-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org)
