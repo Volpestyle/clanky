@@ -12,6 +12,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 [![platform](https://img.shields.io/badge/platform-iOS%20%C2%B7%20Discord-111?style=flat-square)](#free-will-discord-presence)
 [![status](https://img.shields.io/badge/status-alpha-f59e0b?style=flat-square)](#status)
+[![license](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 
 [**Architecture**](SPEC.md) · [**Running**](#running-clanky) · [**Skills**](#skills) · [**Discord presence**](#free-will-discord-presence) · [**Status**](#status)
 
@@ -157,6 +158,10 @@ Clanky runs on the eve + herdr architecture described in [SPEC.md](SPEC.md).
 The free-will presence is wired and verified offline (`pnpm check`,
 `pnpm smoke:discord`); the live voice loop is gated on the bot token +
 ClankVox + Realtime credentials.
+
+## License
+
+[MIT](LICENSE) © James Volpe.
 
 <div align="center">
 <sub>Stage <strong>herdr</strong> · conductor <strong>eve</strong> · window <strong>iOS</strong> — see <a href="SPEC.md">SPEC.md</a> for the authoritative design.</sub>
