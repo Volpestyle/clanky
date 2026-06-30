@@ -1,12 +1,25 @@
+<div align="center">
+
+<img src="branding/clanky-logo-512.png" alt="Clanky" width="200" />
+
 # Clanky
 
-![Clanky](branding/clanky-logo-512.png)
+**An always-on personal agent that lives inside a persistent [herdr](https://herdr.dev) session — reachable from anywhere through a native iOS app.**
 
-Clanky is an always-on personal agent that lives inside a persistent
-[herdr](https://herdr.dev) session and is reachable from anywhere through a
-native iOS app.
+[![built on eve](https://img.shields.io/badge/conductor-eve-7c3aed?style=flat-square)](https://eve.dev)
+[![stage herdr](https://img.shields.io/badge/stage-herdr-0ea5e9?style=flat-square)](https://herdr.dev)
+[![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A524-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org)
+[![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
+[![platform](https://img.shields.io/badge/platform-iOS%20%C2%B7%20Discord-111?style=flat-square)](#free-will-discord-presence)
+[![status](https://img.shields.io/badge/status-alpha-f59e0b?style=flat-square)](#status)
 
-He is built on three off-the-shelf systems plus a thin layer of glue:
+[**Architecture**](SPEC.md) · [**Running**](#running-clanky) · [**Skills**](#skills) · [**Discord presence**](#free-will-discord-presence) · [**Status**](#status)
+
+</div>
+
+---
+
+Clanky is built on three off-the-shelf systems plus a thin layer of glue:
 
 - **herdr** is the *stage* — a vanilla terminal-agent multiplexer. Every agent
   is a visible pane, and herdr supplies the swarm coordination CLI.
@@ -144,3 +157,7 @@ Clanky runs on the eve + herdr architecture described in [SPEC.md](SPEC.md).
 The free-will presence is wired and verified offline (`pnpm check`,
 `pnpm smoke:discord`); the live voice loop is gated on the bot token +
 ClankVox + Realtime credentials.
+
+<div align="center">
+<sub>Stage <strong>herdr</strong> · conductor <strong>eve</strong> · window <strong>iOS</strong> — see <a href="SPEC.md">SPEC.md</a> for the authoritative design.</sub>
+</div>
