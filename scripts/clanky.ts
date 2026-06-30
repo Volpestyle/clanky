@@ -88,6 +88,7 @@ import { resolveClankyDataPath } from "../agent/lib/paths.ts";
 import { listPushDevices, type PushDevice } from "../agent/lib/push-registry.ts";
 import { buildTuiAttachmentMessage, createDroppedPathPasteRewriter } from "../agent/lib/tui-attachments.ts";
 import { createClankyFaceAnsiTheme, createClankyFaceMarkdownTheme } from "../agent/lib/clanky-face-theme.ts";
+import { ClankyBashResultComponent, runFaceBashCommand } from "../agent/lib/clanky-face-bash.ts";
 import {
 	AGENT_SPINNER_NAMES,
 	AGENT_SPINNER_CYCLE_NAME,
@@ -703,6 +704,13 @@ let activeTurn: ActivePromptTurn | undefined;
 let shutdownStarted = false;
 const tuiLedger = new TuiLedger();
 let activeLoader: Loader | undefined;
+// Inline shell escape (`!`): in bash mode a submitted line runs as a host shell
+// command in REPO instead of a brain prompt. `activeBashChild` is the in-flight
+// command (so Ctrl-C kills it instead of quitting); `bashRunning` counts live
+// commands for the status indicator.
+let bashMode = false;
+let activeBashChild: ChildProcess | undefined;
+let bashRunning = 0;
 let commandPaletteOverlay: OverlayHandle | undefined;
 let commandTypeaheadState: ClankyCommandTypeaheadState | undefined;
 let currentStatusLabel = "starting";
@@ -908,6 +916,11 @@ tui.addInputListener((data) => {
 		openCommandPalette();
 		return { consume: true };
 	}
+	// A running `!` shell command owns Ctrl-C: kill it instead of quitting Clanky.
+	if (matchesKey(data, Key.ctrl("c")) && activeBashChild !== undefined) {
+		activeBashChild.kill("SIGINT");
+		return { consume: true };
+	}
 	if (matchesKey(data, Key.ctrl("c"))) {
 		if (commandPaletteOverlay?.isFocused() === true) {
 			closeCommandPalette();
@@ -925,6 +938,8 @@ tui.addInputListener((data) => {
 		return { consume: true };
 	}
 	if (matchesKey(data, Key.escape) && handleActiveTurnEscape()) return { consume: true };
+	const bashInput = handleBashModeInput(data);
+	if (bashInput !== undefined) return bashInput;
 	const commandInput = handleCommandTypeaheadInput(data);
 	if (commandInput !== undefined) return commandInput;
 	const transcriptInput = handleTranscriptViewportGlobalInput(data);
@@ -1940,6 +1955,67 @@ class ClankyCommandTextResultComponent implements Component {
 	}
 }
 
+/**
+ * Toggle the inline shell escape. In bash mode the editor border switches to the
+ * accent color, the Clanky command typeahead is suppressed, and a submitted line
+ * runs as a host shell command instead of a brain prompt. Pressing `!` on an
+ * empty editor enters; Esc or backspace-on-empty exits. Mirrors the codex /
+ * opencode `!` shell mode while staying on the public pi-tui Editor API.
+ */
+function setBashMode(on: boolean): void {
+	if (bashMode === on) return;
+	bashMode = on;
+	editor.borderColor = on ? ansi.accent : ansi.dim;
+	refreshCommandSurface(editor.getText());
+	refreshStatusView();
+	tui.requestRender();
+}
+
+function handleBashModeInput(data: string): { consume?: boolean; data?: string } | undefined {
+	if (setupFlow.isWaitingForInput()) return undefined;
+	if (!bashMode && matchesKey(data, "!") && editor.getText().length === 0) {
+		setBashMode(true);
+		return { consume: true };
+	}
+	if (bashMode && matchesKey(data, Key.escape)) {
+		setBashMode(false);
+		return { consume: true };
+	}
+	if (bashMode && matchesKey(data, Key.backspace) && editor.getText().length === 0) {
+		setBashMode(false);
+		return { consume: true };
+	}
+	return undefined;
+}
+
+async function handleBashPrompt(command: string): Promise<void> {
+	const loader = new Loader(tui, ansi.accent, ansi.dim, `Running ${command}`, loaderIndicatorFor(agentSpinner));
+	const loaderBlock = insertTranscript(loader, { collapsible: false, pin: "bottom" });
+	loader.start();
+	bashRunning += 1;
+	refreshStatusView();
+	tui.requestRender();
+	try {
+		const result = await runFaceBashCommand(command, {
+			cwd: REPO,
+			env: process.env,
+			onSpawn: (child) => {
+				activeBashChild = child;
+			},
+		});
+		insertTranscript(new ClankyBashResultComponent(command, result, ansi));
+		const ok = result.code === 0 && !result.timedOut;
+		tuiLedger.record("!bash", `${command} -> ${result.timedOut ? "timed out" : `exit ${result.code}`}`, ok ? "success" : "error");
+	} finally {
+		activeBashChild = undefined;
+		bashRunning = Math.max(0, bashRunning - 1);
+		loader.stop();
+		loaderBlock.remove();
+		refreshStatusView();
+		tui.requestRender();
+	}
+}
+
 function formatCommandLogHeader(prompt: string, tone: CommandLogTone): string {
 	const command = slashCommandLabel(prompt);
 	const status = tone === "error" ? ansi.red("error") : ansi.green("done");
@@ -2061,6 +2137,16 @@ function rememberPrompt(prompt: string): void {
 async function submitEditorText(rawPrompt: string): Promise<void> {
 	const prompt = rawPrompt.trim();
 	if (prompt.length === 0) return;
+	// Inline shell escape: either bash mode is active or the line is `!`-prefixed
+	// (typed fast or recalled from history). Runs locally in REPO, independent of
+	// any in-flight brain turn, and stays in bash mode for the next command.
+	if (bashMode || prompt.startsWith("!")) {
+		const command = (prompt.startsWith("!") ? prompt.slice(1) : prompt).trim();
+		if (command.length === 0) return;
+		rememberPrompt(`!${command}`);
+		await handleBashPrompt(command);
+		return;
+	}
 	// Slash commands stay usable while a turn streams, so they are never gated on
 	// isResponding. A second plain prompt would collide with the active turn, so
 	// restore the text rather than dropping what the user typed.
@@ -2970,7 +3056,7 @@ function updateLatestInfo(info: AgentInfoResult): void {
 }
 
 function refreshCommandSurface(text: string): void {
-	const disabled = setupFlow.isWaitingForInput();
+	const disabled = setupFlow.isWaitingForInput() || bashMode;
 	commandTypeaheadState = disabled ? undefined : clankyCommandTypeaheadFor(COMMANDS, text, commandTypeaheadState);
 	commandTypeaheadPanel.setText(text, commandTypeaheadState, disabled);
 	tui.requestRender();
@@ -2982,6 +3068,9 @@ function formatStatusText(label: string): string {
 	const setupState = setupFlow.isWaitingForInput() ? "setup input" : "";
 	const authState = connectionAuthPendingCount > 0 ? `auth pending ${connectionAuthPendingCount}` : "";
 	const focusState = transcriptViewport.focused ? "transcript nav" : "";
+	const bashState = bashMode
+		? `${ansi.accent("shell")}${bashRunning > 0 ? ansi.dim(" running") : ansi.dim(` · ${displayHomePath(REPO)}`)}`
+		: "";
 	const brainState = formatBrainHealthStatus(brainHealth);
 	const parts = [
 		formatPrimaryStatusLabel(label),
@@ -2989,6 +3078,7 @@ function formatStatusText(label: string): string {
 		setupState,
 		authState,
 		focusState,
+		bashState,
 		model,
 		formatContextUsage(faceRenderer.lastUsage, currentContextSize),
 	]

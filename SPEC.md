@@ -165,7 +165,15 @@ commands `eve dev` can't. The deterministic command executor is the command
 host registered with the relay; a visible face may also register as a command
 host, but iOS and other remote clients depend on command-host presence rather
 than a visible TUI. The live command list is `/help` and the shared `COMMANDS`
-registry in `scripts/clanky.ts`; this spec does not duplicate that list. Config
+registry in `scripts/clanky.ts`; this spec does not duplicate that list. Beyond
+slash commands, the face has an inline shell escape (mirroring codex/opencode):
+pressing `!` on an empty input enters bash mode (accent border, suppressed
+typeahead), where a submitted line runs as a host shell command in the repo via
+the user's `$SHELL` and its output renders inline as a transcript block. Esc or
+backspace-on-empty exits; Ctrl-C kills a running command; a `!`-prefixed line
+runs the same path without entering the mode. The runner and renderer live in
+`agent/lib/clanky-face-bash.ts`, and each run is summarized into the TUI ledger
+so the brain stays aware. Config
 commands rewrite `.env.local` and restart the brain through the host below Eve.
 The stock `eve dev` TUI stays available as a local dev/debug interface against
 the same runtime.

@@ -63,6 +63,7 @@
 		"smoke:voice:config": "node test/voice-config-smoke.ts",
 		"smoke:approvals": "node test/approvals-smoke.ts",
 		"smoke:agent-md": "node test/agent-md-smoke.ts",
+		"smoke:bash": "node test/clanky-face-bash-smoke.ts",
 		"claude:login": "node scripts/claude-login.ts",
 		"codex:login": "node scripts/codex-login.ts",
 		"clanky": "node bin/clanky.ts",
