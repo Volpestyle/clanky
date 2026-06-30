@@ -9,14 +9,13 @@
 [![CI](https://github.com/Volpestyle/clanky/actions/workflows/ci.yml/badge.svg)](https://github.com/Volpestyle/clanky/actions/workflows/ci.yml)
 [![Supply chain](https://github.com/Volpestyle/clanky/actions/workflows/supply-chain.yml/badge.svg)](https://github.com/Volpestyle/clanky/actions/workflows/supply-chain.yml)
 [![built on eve](https://img.shields.io/badge/conductor-eve-7c3aed?style=flat-square)](https://eve.dev)
-[![stage herdr](https://img.shields.io/badge/stage-herdr-0ea5e9?style=flat-square)](https://herdr.dev)
 [![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A524-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 [![platform](https://img.shields.io/badge/platform-iOS%20%C2%B7%20Discord-111?style=flat-square)](#free-will-discord-presence)
 [![status](https://img.shields.io/badge/status-alpha-f59e0b?style=flat-square)](#status)
 [![license](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 
-[**Architecture**](SPEC.md) · [**Running**](#running-clanky) · [**Skills**](#skills) · [**Discord presence**](#free-will-discord-presence) · [**Status**](#status)
+[**Architecture**](SPEC.md) · [**Running**](#running-clanky) · [**Skills**](skills/README.md) · [**Discord presence**](#free-will-discord-presence) · [**Status**](#status)
 
 </div>
 
@@ -93,13 +92,6 @@ flowchart TB
 - **The swarm is decoupled from Clanky.** A herdr session is a swarm-ready
   environment on its own; agents coordinate with or without Clanky, and any one
   of them can take the orchestrator role.
-
-## Skills
-
-- `herdr` (vanilla, every agent): flat full-picture coordination — discover,
-  read, message, wait, and report presence across panes.
-- `clanky-herdr-operator` (coordinator only): the harvestable fan-out protocol —
-  spawn workers into a tagged run, monitor, unblock, harvest, clean up.
 
 ## Free-will Discord presence
 
