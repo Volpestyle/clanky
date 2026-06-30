@@ -8,7 +8,7 @@ Usage: spawn.sh --slug <task-slug> --task "<one-line summary>" \
 				(--prompt "<text>" | --prompt-file <path>) \
 				--harness <clanky|claude|codex|opencode|custom> \
 				[--run <run-id>] [--cwd <dir>] \
-				[--no-transcript] [-- <worker argv...>]
+				[--transcript|--no-transcript] [-- <worker argv...>]
 
 Spawns one worker agent named clanky:<slug> into the run's herdr tab.
 CLANKY_CODING_HARNESSES allowlists usable harnesses. Pass --harness explicitly;
@@ -60,6 +60,17 @@ config_value() {
 	done < "$ENV_FILE"
 }
 
+worker_transcript_default() {
+	local raw normalized
+	raw="$(config_value CLANKY_WORKER_TRANSCRIPTS)"
+	normalized="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+	case "$normalized" in
+		"" | 1 | true | yes | on | enabled | enable) printf '1' ;;
+		0 | false | no | off | disabled | disable) printf '0' ;;
+		*) printf '1' ;;
+	esac
+}
+
 VALID_HARNESSES=(clanky claude codex opencode custom)
 ALLOWED_HARNESS_LIST=()
 
@@ -101,7 +112,7 @@ parse_allowed_harnesses() {
 	fi
 }
 
-RUN_ID="" SLUG="" TASK="" PROMPT="" PROMPT_FILE="" WORKER_CWD="$PWD" HARNESS="" TRANSCRIPT=1
+RUN_ID="" SLUG="" TASK="" PROMPT="" PROMPT_FILE="" WORKER_CWD="$PWD" HARNESS="" TRANSCRIPT="$(worker_transcript_default)"
 ARGV=()
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -112,6 +123,7 @@ while [ $# -gt 0 ]; do
 		--prompt-file) PROMPT_FILE="$2"; shift 2 ;;
 		--cwd) WORKER_CWD="$2"; shift 2 ;;
 		--harness) HARNESS="$2"; shift 2 ;;
+		--transcript) TRANSCRIPT=1; shift ;;
 		--no-transcript) TRANSCRIPT=0; shift ;;
 		--) shift; ARGV=("$@"); break ;;
 		*) usage ;;
@@ -331,12 +343,13 @@ if [ -z "$TAB_ID" ]; then
 		| python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["tab"]["tab_id"])')"
 fi
 
-# Wrap the performer in Clanky's transcript runner so the worker produces a
-# durable, session-pinned transcript that peers read with `clanky transcript
-# read clanky:<slug>`. This mirrors agent/tools/herdr_spawn.ts: every spawn
-# entry point funnels through `clanky transcript-run`, never a raw performer
-# pane (SPEC.md §4.3). Pin CLANKY_HOME + HERDR_SESSION so the transcript lands
-# in the session root readers look in, even if the pane inherits a different env.
+# When enabled, wrap the performer in Clanky's transcript runner so the worker
+# produces a durable, session-pinned transcript that peers read with `clanky
+# transcript read clanky:<slug>`. This mirrors agent/tools/herdr_spawn.ts:
+# every spawn entry point resolves the same transcript default/override before
+# starting the pane (SPEC.md §4.3). Pin CLANKY_HOME + HERDR_SESSION so the
+# transcript lands in the session root readers look in, even if the pane
+# inherits a different env.
 if [ "$TRANSCRIPT" = "1" ]; then
 	if command -v clanky >/dev/null 2>&1; then
 		CLANKY_RUNNER=(clanky)

@@ -504,13 +504,17 @@ function voiceArguments(context: ArgumentContext): StaticArgumentSpec {
 function harnessArguments(context: ArgumentContext): StaticArgumentSpec {
 	const first = context.args[0]?.toLowerCase();
 	if (first === "allow") return values(["all", "clanky", "claude", "codex", "opencode", "custom"], ["/harness allow all"]);
+	if (first === "transcript" || first === "transcripts" || first === "worker-transcripts") {
+		return values(["on", "off", "status"], ["/harness transcripts on", "/harness transcripts off"]);
+	}
 	if (first === "claude" || first === "codex" || first === "opencode") {
 		return values(["default", "ollama", "--launcher", "--model"], [`/harness ${first} ollama qwen3-coder:30b`]);
 	}
 	if (first === "custom") return values(["--runtime", "clanky", "native", "opencode"], ["/harness custom --runtime native node worker.js"]);
-	return values(["status", "allow", "claude", "codex", "opencode", "custom"], [
+	return values(["status", "allow", "transcripts", "claude", "codex", "opencode", "custom"], [
 		"/harness status",
 		"/harness allow clanky claude codex",
+		"/harness transcripts off",
 		"/harness codex ollama qwen3-coder:30b",
 	]);
 }

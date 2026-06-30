@@ -31,6 +31,9 @@ creating. If tasks share mutable paths, sequence them (separate runs or a
 - `/harness allow` controls the allowed set. `/harness` also controls
   native-vs-Ollama launch models for Claude, Codex, and OpenCode workers; Codex
   Ollama mode is the CLI integration, not the app.
+- `/harness transcripts on|off` controls whether newly spawned workers are
+  transcript-wrapped by default. `herdr_spawn` can override one spawn with
+  `transcript: true` or `transcript: false`.
 - Do not pass `command` for normal harnesses. `command` is only for a full
   custom argv override; never pass `command: []`.
 - Spawned workers receive a short bootstrap that points them at
@@ -45,8 +48,8 @@ creating. If tasks share mutable paths, sequence them (separate runs or a
 
 Use `herdr_status` to list workers. For any worker that looks blocked, idle, or
 done, use `herdr_read` with the default `source: "auto"` first so durable
-transcripts are preferred. Use `source: "visible"` when you need the exact
-current TUI state.
+transcripts are preferred when that worker was launched with transcript capture.
+Use `source: "visible"` when you need the exact current TUI state.
 
 ## Unblock
 

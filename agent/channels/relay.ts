@@ -30,6 +30,7 @@ import { wrapTranscriptArgv } from "../tools/herdr_spawn.ts";
 import { resolveClankyDataPath } from "../lib/paths.ts";
 import { isAgentMdIngestionEnabled } from "../lib/agent-md.ts";
 import { listClankySkills } from "../lib/skill-inventory.ts";
+import { resolveWorkerTranscriptSetting } from "../lib/worker-transcripts.ts";
 
 interface RelayRequest {
 	id?: string | number;
@@ -366,12 +367,13 @@ async function dispatch(op: string, args: Record<string, unknown>): Promise<unkn
 			const cwd = str(args.cwd) ?? process.cwd();
 			// Remote-spawned workers funnel through the same transcript seam as the
 			// eve herdr_spawn tool and the operator spawn.sh, so a button in the iOS
-			// app yields the same durable, session-pinned transcript as a model tool
-			// call (SPEC.md §4.3). The raw `op:"api" method:"agent.start"` passthrough
-			// stays the explicit escape hatch; this op never starts an unwrapped pane
-			// unless the client opts out with transcript:false.
-			const launchArgv =
-				args.transcript === false ? argv : wrapTranscriptArgv({ agent: name, cwd, runId: newTranscriptRunId(), argv });
+			// app uses the same default/override policy as a model tool call
+			// (SPEC.md §4.3). The raw `op:"api" method:"agent.start"` passthrough
+			// stays the explicit escape hatch that never applies transcript policy.
+			const transcriptOverride = typeof args.transcript === "boolean" ? args.transcript : undefined;
+			const launchArgv = resolveWorkerTranscriptSetting({ override: transcriptOverride })
+				? wrapTranscriptArgv({ agent: name, cwd, runId: newTranscriptRunId(), argv })
+				: argv;
 			const split = str(args.split);
 			if (split !== undefined && split !== "right" && split !== "down") throw new Error("start split must be right or down");
 			const explicitPlacement: HerdrPanePlacement = {

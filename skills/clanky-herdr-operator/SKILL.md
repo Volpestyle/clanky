@@ -96,8 +96,10 @@ planning, exploration, review, and subagent behavior. Use `performer:
 "clanky"` only when the worker should be Clanky himself, via the installed
 `clanky worker` CLI.
 
-Clanky-spawned workers are transcript-wrapped by default. Read durable history
-with:
+Clanky-spawned workers are transcript-wrapped by default while
+`CLANKY_WORKER_TRANSCRIPTS` is on (managed by `/harness transcripts on|off`).
+Pass `--transcript` or `--no-transcript` to override the default for one spawn.
+Read durable history for wrapped workers with:
 
 ```bash
 clanky transcript read clanky:<slug> --lines 120

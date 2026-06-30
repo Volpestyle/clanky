@@ -216,9 +216,11 @@ profile, and starts the command as a visible herdr pane. Clanky then supervises
 by reading and steering the pane with `herdr_read` / `herdr_send`. Richer
 adapters can be added later, but the base protocol is always a visible pane.
 
-Clanky-spawned performers are wrapped with `clanky transcript-run` by default:
-Herdr still starts and owns the pane, while the runner passes terminal output
-through unchanged and appends a local transcript under
+Clanky-spawned performers are wrapped with `clanky transcript-run` by default
+when worker transcript capture is enabled (`CLANKY_WORKER_TRANSCRIPTS`, default
+on; `/harness transcripts on|off` writes it). Herdr still starts and owns the
+pane, while the runner passes terminal output through unchanged and appends a
+local transcript under
 `~/.clanky/herdr-transcripts/<herdr-session>/<agent>/<run-id>/`:
 
 ```
@@ -245,12 +247,14 @@ retained scrollback snapshots and attach-time live byte streams, not a
 retroactive lossless transcript — so there is no way to transcribe a pane after
 the fact. Every spawn entry point therefore funnels through one wrapping seam
 (`wrapTranscriptArgv` in `agent/tools/herdr_spawn.ts`):
-the eve `herdr_spawn` tool, the `clanky-herdr-operator` `spawn.sh`, and the relay
-`start` op all launch performers under `clanky transcript-run` with a pinned
-`HERDR_SESSION`/`CLANKY_HOME`. New spawn surfaces (a TUI `/spawn` slash command,
-an iOS app button) call this seam, never raw `herdr agent start`. The relay's raw
-`api`/`agent.start` passthrough stays the explicit, opt-in escape hatch that
-starts an unwrapped pane with no transcript.
+the eve `herdr_spawn` tool, the `clanky-herdr-operator` `spawn.sh`, the TUI
+`/spawn` command, and the relay `start` op all resolve the transcript default
+from `CLANKY_WORKER_TRANSCRIPTS` with pinned `HERDR_SESSION`/`CLANKY_HOME` when
+wrapping is enabled. Per-spawn overrides remain explicit: `herdr_spawn`
+`transcript: true|false`, relay `start` `transcript: true|false`, and operator
+`spawn.sh --transcript|--no-transcript`. New spawn surfaces call this seam, never
+raw `herdr agent start`. The relay's raw `api`/`agent.start` passthrough stays
+the explicit escape hatch that starts an unwrapped pane with no transcript.
 
 | Need | Source |
 | --- | --- |
@@ -258,9 +262,9 @@ starts an unwrapped pane with no transcript.
 | Send text or keys | Herdr |
 | Current TUI screen | Herdr `visible` |
 | Recent terminal screen buffer | Herdr `recent` / `recent_unwrapped` |
-| Full retained terminal scrollback | Herdr `full` when supported; otherwise transcript capture for Clanky-spawned panes |
-| Historical worker output | Clanky transcript |
-| Cross-agent audit trail | Clanky transcript |
+| Full retained terminal scrollback | Herdr `full` when supported; otherwise transcript capture for wrapped Clanky-spawned panes |
+| Historical worker output | Clanky transcript when capture is enabled |
+| Cross-agent audit trail | Clanky transcript when capture is enabled |
 
 Pi is **not** a performer. herdr can technically start any binary in a pane, so
 nothing stops a one-off `pi` pane, but Pi is not maintained as a performer —

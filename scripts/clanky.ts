@@ -78,6 +78,11 @@ import { readMcpOAuthStates, type McpOAuthState } from "../agent/lib/mcp-oauth.t
 import { inspectConnectionSearchOutput } from "../agent/lib/mcp-auth-probe.ts";
 import { isAutoApproveValue } from "../agent/lib/approvals.ts";
 import {
+	CLANKY_WORKER_TRANSCRIPTS_ENV,
+	parseWorkerTranscriptToggle,
+	workerTranscriptsEnabled,
+} from "../agent/lib/worker-transcripts.ts";
+import {
 	AGENT_MD_FILENAMES,
 	CLANKY_AGENT_MD_ENV,
 	CLANKY_AGENT_MD_ROOT_ENV,
@@ -295,6 +300,7 @@ import {
 	VOICE_REALTIME_PROVIDER_OPTIONS,
 	VOICE_SETTINGS,
 	VOICE_TTS_PROVIDER_OPTIONS,
+	WORKER_TRANSCRIPT_OPTIONS,
 	type VoiceRealtimeProvider,
 	type VoiceSetting,
 	type VoiceSettingUpdate,
@@ -1160,8 +1166,8 @@ function buildClankyPromptCommands(): ClankyPromptCommandSpec[] {
 		{
 			name: "harness",
 			aliases: ["coding-harness"],
-			description: "Configure allowed worker harnesses and launch models",
-			argumentHint: "[allow|clanky|claude|codex|opencode|custom|status] [default|ollama] [model]",
+			description: "Configure allowed worker harnesses, transcripts, and launch models",
+			argumentHint: "[allow|transcripts|clanky|claude|codex|opencode|custom|status] [default|ollama] [model]",
 			takesArgument: true,
 			build: (argument) => ({ type: "extension", name: "harness", argument }),
 		},
@@ -5168,10 +5174,13 @@ async function configureHarness(argument: string, flow: SetupFlow | undefined): 
 	if (first === "allow" || first === "allowed" || first === "allowlist") {
 		return await configureHarnessAllowlist(args.slice(1), config, flow);
 	}
+	if (first === "transcript" || first === "transcripts" || first === "worker-transcripts") {
+		return await configureHarnessTranscripts(args.slice(1), config, flow);
+	}
 
 	let harness = parseCodingHarnessId(args[0]);
 	if (args[0] !== undefined && harness === undefined) {
-		return `Unknown coding harness "${args[0]}". Use clanky, claude, codex, opencode, custom, or status.`;
+		return `Unknown coding harness "${args[0]}". Use clanky, claude, codex, opencode, custom, allow, transcripts, or status.`;
 	}
 
 	if (harness === undefined) {
@@ -5221,6 +5230,34 @@ async function configureHarnessAllowlist(
 	return await restartBrainMessage(update.message);
 }
 
+async function configureHarnessTranscripts(
+	args: readonly string[],
+	config: ClankyConfig,
+	flow: SetupFlow | undefined,
+): Promise<string> {
+	const mode = args[0]?.toLowerCase();
+	if (mode === "status" || mode === "show") return formatWorkerTranscriptStatus(config);
+	if (mode === "on" || mode === "enable" || mode === "enabled") return await saveWorkerTranscriptMode(true);
+	if (mode === "off" || mode === "disable" || mode === "disabled") return await saveWorkerTranscriptMode(false);
+	if (mode !== undefined) return `Unknown transcript mode "${mode}". Use on, off, or status.`;
+	if (flow === undefined) return `${formatWorkerTranscriptStatus(config)}\n\nUsage: /harness transcripts <on|off|status>`;
+
+	flow.begin("Configure worker transcripts");
+	try {
+		const selected = await selectOne(
+			flow,
+			`${formatWorkerTranscriptStatus(config)}\n\nChoose the default transcript mode for newly spawned workers.`,
+			WORKER_TRANSCRIPT_OPTIONS,
+			workerTranscriptsEnabled(configEnv(config)) ? "on" : "off",
+			true,
+		);
+		if (selected === undefined) return "/harness transcripts cancelled.";
+		return await saveWorkerTranscriptMode(selected === "on");
+	} finally {
+		flow.end({ preserveDiagnostics: false });
+	}
+}
+
 async function configureHarnessInteractive(flow: SetupFlow, config: ClankyConfig): Promise<string> {
 	const apply = async (update: HarnessInteractiveUpdate | string | undefined): Promise<string | undefined> => {
 		if (update === undefined) return undefined;
@@ -5248,6 +5285,17 @@ async function configureHarnessInteractive(flow: SetupFlow, config: ClankyConfig
 						});
 						if (selectedAllowedValues === undefined) return undefined;
 						return await apply(buildHarnessAllowlistUpdate(config, selectedCodingHarnesses(selectedAllowedValues)));
+					}
+					case "transcripts": {
+						const selected = await selectOne(
+							flow,
+							"Choose the default transcript mode for newly spawned workers.",
+							WORKER_TRANSCRIPT_OPTIONS,
+							workerTranscriptsEnabled(configEnv(config)) ? "on" : "off",
+							true,
+						);
+						if (selected === undefined) return undefined;
+						return await saveWorkerTranscriptMode(selected === "on");
 					}
 					case "launchers":
 						return await apply(await promptHarnessLauncherUpdate(flow, config));
@@ -5492,6 +5540,7 @@ function formatCodingHarnessConfig(config: ClankyConfig): string {
 		statusTitle("Coding harnesses"),
 		statusLine("allowed", allowed),
 		statusLine("selection", "explicit per /spawn or herdr_spawn call", "active"),
+		statusLine("worker transcripts", formatWorkerTranscriptMode(config), workerTranscriptsEnabled(configEnv(config)) ? "active" : "muted"),
 		statusLine("custom command", formatCustomHarnessCommand(config), config.codingHarnessCommand === undefined ? "muted" : "normal"),
 		"",
 		statusSection("Configured worker launchers"),
@@ -5505,13 +5554,43 @@ function formatCodingHarnessMenuStatus(config: ClankyConfig): SettingsMenuStatus
 			statusTitle("Harness"),
 			statusLine("selection", "explicit per spawn", "active"),
 			statusLine("allowed", formatAllowedHarnesses(config), "muted"),
+			statusLine("transcripts", formatWorkerTranscriptMode(config), workerTranscriptsEnabled(configEnv(config)) ? "active" : "muted"),
 		].join("\n"),
 		formatCodingHarnessConfig(config),
 	);
 }
 
 function formatCodingHarnessSummary(config: ClankyConfig): string {
-	return `explicit selection; allowed ${formatAllowedHarnesses(config)}`;
+	return `explicit selection; allowed ${formatAllowedHarnesses(config)}; transcripts ${formatWorkerTranscriptMode(config)}`;
+}
+
+async function saveWorkerTranscriptMode(enabled: boolean): Promise<string> {
+	await writeEnv({ [CLANKY_WORKER_TRANSCRIPTS_ENV]: enabled ? "1" : "0" });
+	return await restartBrainMessage(
+		enabled
+			? "Worker transcript capture enabled for newly spawned workers"
+			: "Worker transcript capture disabled for newly spawned workers",
+	);
+}
+
+function formatWorkerTranscriptStatus(config: ClankyConfig): string {
+	return [
+		statusTitle("Worker transcripts"),
+		statusLine("default", formatWorkerTranscriptMode(config), workerTranscriptsEnabled(configEnv(config)) ? "active" : "muted"),
+		statusLine("env", `${CLANKY_WORKER_TRANSCRIPTS_ENV}=${config.workerTranscripts ?? "(unset)"}`, "muted"),
+		ansi.dim("Usage: /harness transcripts [on|off|status]"),
+	].join("\n");
+}
+
+function formatWorkerTranscriptMode(config: ClankyConfig): string {
+	const parsed = parseWorkerTranscriptToggle(config.workerTranscripts);
+	if (parsed === undefined) {
+		if (config.workerTranscripts !== undefined && config.workerTranscripts.trim().length > 0) {
+			return `on (invalid ${config.workerTranscripts}; default)`;
+		}
+		return "on (default)";
+	}
+	return parsed ? "on" : "off";
 }
 
 function formatCustomHarnessCommand(config: ClankyConfig): string {
@@ -5579,6 +5658,13 @@ function codingHarnessEnv(config: ClankyConfig): CodingHarnessEnv {
 	};
 }
 
+function configEnv(config: ClankyConfig): NodeJS.ProcessEnv {
+	return {
+		...codingHarnessEnv(config),
+		[CLANKY_WORKER_TRANSCRIPTS_ENV]: config.workerTranscripts,
+	};
+}
+
 function harnessUsage(): string {
 	return [
 		"Usage:",
@@ -5586,6 +5672,8 @@ function harnessUsage(): string {
 		"/harness status",
 		"/harness allow all",
 		"/harness allow clanky claude codex opencode custom",
+		"/harness transcripts on",
+		"/harness transcripts off",
 		"/harness claude [default|ollama] [ollama-model]",
 		"/harness codex [default|ollama] [ollama-model]",
 		"/harness opencode [default|ollama] [ollama-model]",
@@ -8291,9 +8379,9 @@ async function spawnWorkerFromFace(argument: string, flow: SetupFlow | undefined
 	if (typeof request === "string") return request;
 
 	const config = await readConfig();
-	// Feed the configured harness allowlist/launch settings to the seam so /spawn
-	// resolves the same harness the eve brain would, then pin transcript home/session.
-	const env: NodeJS.ProcessEnv = { ...process.env, ...codingHarnessEnv(config) };
+	// Feed the configured harness and transcript settings to the seam so /spawn
+	// resolves the same defaults the eve brain would, then pin transcript home/session.
+	const env: NodeJS.ProcessEnv = { ...process.env, ...configEnv(config) };
 	try {
 		const result = await spawnClankyWorker({
 			slug: request.slug,
@@ -8414,6 +8502,7 @@ function formatSpawnWorkerConfig(config: ClankyConfig): string {
 		"Spawn worker:",
 		"harness: choose explicitly for this worker",
 		`allowed harnesses: ${formatAllowedHarnesses(config)}`,
+		`worker transcripts: ${formatWorkerTranscriptMode(config)}`,
 		`default cwd: ${displayHomePath(process.cwd())}`,
 	].join("\n");
 }
@@ -9135,6 +9224,7 @@ async function readConfig(): Promise<ClankyConfig> {
 	const codingHarnesses = get(CLANKY_CODING_HARNESS_ENV.allowed);
 	const codingHarnessCommand = get(CLANKY_CODING_HARNESS_ENV.command);
 	const codingHarnessRuntime = get(CLANKY_CODING_HARNESS_ENV.runtime);
+	const workerTranscripts = get(CLANKY_WORKER_TRANSCRIPTS_ENV);
 	const codingHarnessClaudeLauncher = get(codingHarnessLauncherEnvKey("claude"));
 	const codingHarnessClaudeModel = get(codingHarnessModelEnvKey("claude"));
 	const codingHarnessCodexLauncher = get(codingHarnessLauncherEnvKey("codex"));
@@ -9193,11 +9283,12 @@ async function readConfig(): Promise<ClankyConfig> {
 		if (autoApprove !== undefined) config.autoApprove = autoApprove;
 		if (agentMd !== undefined) config.agentMd = agentMd;
 		if (agentMdRoot !== undefined) config.agentMdRoot = agentMdRoot;
-			if (pet !== undefined) config.pet = pet;
-			if (codingHarness !== undefined) config.codingHarness = codingHarness;
+	if (pet !== undefined) config.pet = pet;
+		if (codingHarness !== undefined) config.codingHarness = codingHarness;
 	if (codingHarnesses !== undefined) config.codingHarnesses = codingHarnesses;
 	if (codingHarnessCommand !== undefined) config.codingHarnessCommand = codingHarnessCommand;
 	if (codingHarnessRuntime !== undefined) config.codingHarnessRuntime = codingHarnessRuntime;
+	if (workerTranscripts !== undefined) config.workerTranscripts = workerTranscripts;
 	if (codingHarnessClaudeLauncher !== undefined) config.codingHarnessClaudeLauncher = codingHarnessClaudeLauncher;
 	if (codingHarnessClaudeModel !== undefined) config.codingHarnessClaudeModel = codingHarnessClaudeModel;
 	if (codingHarnessCodexLauncher !== undefined) config.codingHarnessCodexLauncher = codingHarnessCodexLauncher;

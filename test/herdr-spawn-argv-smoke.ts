@@ -11,6 +11,12 @@ import {
 import { resolveClankyHome } from "../agent/lib/paths.ts";
 import { resolveTranscriptSession } from "../agent/lib/transcripts.ts";
 import {
+	CLANKY_WORKER_TRANSCRIPTS_ENV,
+	parseWorkerTranscriptToggle,
+	resolveWorkerTranscriptSetting,
+	workerTranscriptsEnabled,
+} from "../agent/lib/worker-transcripts.ts";
+import {
 	buildWorkerKickoff,
 	resolveClankyCliPath,
 	resolvePaneCwd,
@@ -38,6 +44,14 @@ function expectThrows(fn: () => unknown, label: string): void {
 }
 
 const task = "TASK";
+
+expectEqual(parseWorkerTranscriptToggle(undefined), undefined, "unset worker transcript toggle leaves default unresolved");
+expectEqual(parseWorkerTranscriptToggle("on"), true, "worker transcript toggle parses on");
+expectEqual(parseWorkerTranscriptToggle("0"), false, "worker transcript toggle parses off");
+expectEqual(workerTranscriptsEnabled({}), true, "worker transcripts default on");
+expectEqual(workerTranscriptsEnabled({ [CLANKY_WORKER_TRANSCRIPTS_ENV]: "off" }), false, "worker transcripts env disables default");
+expectEqual(resolveWorkerTranscriptSetting({ override: true, env: { [CLANKY_WORKER_TRANSCRIPTS_ENV]: "off" } }), true, "explicit transcript true overrides disabled default");
+expectEqual(resolveWorkerTranscriptSetting({ override: false, env: { [CLANKY_WORKER_TRANSCRIPTS_ENV]: "on" } }), false, "explicit transcript false overrides enabled default");
 
 // Ollama-launched codex isolates its CODEX_HOME so it can't clobber ~/.codex.
 const CODEX_OLLAMA_HOME = "/tmp/clanky-test-codex-home";
@@ -285,5 +299,9 @@ for (const unexpected of [
 }
 
 if (kickoff.includes("Herdr coordination")) throw new Error("kickoff should point at the worker skill, not inline the protocol");
+
+const unwrappedKickoff = buildWorkerKickoff({ agent: "clanky:docs", task: "Do the docs task.", cwd: process.cwd(), transcript: false });
+if (unwrappedKickoff.includes("clanky transcript read")) throw new Error("unwrapped kickoff should not point at a missing durable transcript");
+if (!unwrappedKickoff.includes("without Clanky's transcript capture")) throw new Error("unwrapped kickoff should explain transcript capture is disabled");
 
 console.log("herdr_spawn argv smoke OK");

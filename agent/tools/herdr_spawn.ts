@@ -25,6 +25,7 @@ import {
 import { resolveClankyHome } from "../lib/paths.ts";
 import { resolveClankyFacePanePlacement, startHerdrAgentNearPlacement } from "../lib/herdr-placement.ts";
 import { newTranscriptRunId, resolveTranscriptRunPath, resolveTranscriptSession } from "../lib/transcripts.ts";
+import { resolveWorkerTranscriptSetting } from "../lib/worker-transcripts.ts";
 
 const run = promisify(execFile);
 
@@ -163,16 +164,25 @@ export function buildWorkerKickoff(input: {
 	agent: string;
 	task: string;
 	cwd: string;
+	transcript?: boolean;
 	workerSkillPath?: string;
 }): string {
 	const workerSkillPath = input.workerSkillPath ?? resolveWorkerSkillPath();
+	const transcriptLines = input.transcript === false
+		? [
+				"This worker was launched without Clanky's transcript capture.",
+				"Use Herdr for current screen state, retained scrollback, and input routing.",
+			]
+		: [
+				"For durable worker history, use:",
+				`clanky transcript read ${input.agent} --lines N`,
+				"Use Herdr for current status, visible screen state, and sending input.",
+			];
 	return [
 		`You are ${input.agent}, a visible Clanky worker running in a Herdr pane.`,
 		`Host cwd: ${input.cwd}.`,
 		"",
-		"For durable worker history, use:",
-		`clanky transcript read ${input.agent} --lines N`,
-		"Use Herdr for current status, visible screen state, and sending input.",
+		...transcriptLines,
 		"",
 		"Before doing the task, read and follow this Clanky Herdr worker skill file:",
 		workerSkillPath,
@@ -285,14 +295,15 @@ export interface SpawnClankyWorkerResult {
 
 /**
  * The single spawn funnel (SPEC.md §4.3, §5.2): validate, resolve the harness,
- * wrap the performer in `clanky transcript-run`, and start a visible herdr pane.
+ * apply the transcript default/override, and start a visible herdr pane.
  * Every spawn surface (the eve `herdr_spawn` tool, the face `/spawn` command, the
- * operator skill, the relay) must route through here so workers always get a
- * durable transcript and a consistent pane identity.
+ * operator skill, the relay) must route through here so workers get a consistent
+ * transcript policy and pane identity.
  */
 export async function spawnClankyWorker(input: SpawnClankyWorkerInput): Promise<SpawnClankyWorkerResult> {
-	const { slug, task, harness, performer, codingRuntime, cwd, command, transcript = true } = input;
+	const { slug, task, harness, performer, codingRuntime, cwd, command } = input;
 	const env = input.env ?? process.env;
+	const transcript = resolveWorkerTranscriptSetting({ override: input.transcript, env });
 	if (!SLUG_RE.test(slug)) {
 		throw new Error(`invalid slug '${slug}' (use lowercase letters, digits, hyphens)`);
 	}
@@ -308,7 +319,7 @@ export async function spawnClankyWorker(input: SpawnClankyWorkerInput): Promise<
 	}
 
 	const paneCwd = await resolvePaneCwd(cwd);
-	const kickoff = buildWorkerKickoff({ agent, task, cwd: paneCwd });
+	const kickoff = buildWorkerKickoff({ agent, task, cwd: paneCwd, transcript });
 	const harnessProfile = resolveCodingHarness({
 		harness,
 		performer,
@@ -365,7 +376,7 @@ export async function spawnClankyWorker(input: SpawnClankyWorkerInput): Promise<
 export default defineTool({
 	needsApproval: never(),
 	description:
-		"Spawn an explicit allowed coding harness/performer (clanky, claude, codex, opencode, or custom command) as a visible herdr pane named clanky:<slug> and give it a task. The /harness TUI command controls the allowlist and default-vs-Ollama worker launch models. Load clanky-herdr-operator before spawn/fan-out work. Spawned workers receive only the Herdr worker coordination skill; Clanky's coding skills are available only when the runtime is clanky.",
+		"Spawn an explicit allowed coding harness/performer (clanky, claude, codex, opencode, or custom command) as a visible herdr pane named clanky:<slug> and give it a task. The /harness TUI command controls the allowlist, worker transcript default, and default-vs-Ollama worker launch models. Load clanky-herdr-operator before spawn/fan-out work. Spawned workers receive only the Herdr worker coordination skill; Clanky's coding skills are available only when the runtime is clanky.",
 	inputSchema: z.object({
 		slug: z.string().describe("kebab-case worker name; the pane is clanky:<slug>"),
 		task: z.string().describe("the kickoff brief the performer starts with"),
@@ -391,7 +402,7 @@ export default defineTool({
 		transcript: z
 			.boolean()
 			.optional()
-			.describe("wrap the performer in Clanky's local transcript runner; defaults to true, set false only for debugging"),
+			.describe("override the /harness transcripts default for this spawn; true wraps in Clanky's transcript runner, false starts unwrapped"),
 	}),
 	async execute(input) {
 		return await spawnClankyWorker({

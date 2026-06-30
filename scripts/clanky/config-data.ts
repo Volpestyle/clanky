@@ -386,8 +386,13 @@ export const CODING_RUNTIME_OPTIONS: readonly MenuOption[] = [
 ];
 export const CODING_HARNESS_ACTION_OPTIONS: readonly MenuOption[] = [
 	{ value: "allow", label: "allowed harnesses", hint: "toggle workers Clanky may use" },
+	{ value: "transcripts", label: "worker transcripts", hint: "capture durable worker output" },
 	{ value: "launchers", label: "launcher settings", hint: "choose default-vs-Ollama models" },
 	{ value: "custom", label: "custom command", hint: "set command + runtime for custom worker" },
+];
+export const WORKER_TRANSCRIPT_OPTIONS: readonly MenuOption[] = [
+	{ value: "on", label: "on", hint: "default" },
+	{ value: "off", label: "off" },
 ];
 export const CODING_HARNESS_LAUNCHER_OPTIONS: readonly MenuOption[] = [
 	{ value: "default", label: "default", hint: "use the CLI's configured model" },
@@ -446,6 +451,7 @@ export type ClankyConfig = {
 	codingHarnesses?: string;
 	codingHarnessCommand?: string;
 	codingHarnessRuntime?: string;
+	workerTranscripts?: string;
 	codingHarnessClaudeLauncher?: string;
 	codingHarnessClaudeModel?: string;
 	codingHarnessCodexLauncher?: string;
