@@ -1,0 +1,93 @@
+name: Supply chain
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - packages/**/package.json
+      - .github/workflows/supply-chain.yml
+  schedule:
+    # Weekly, Monday 09:00 UTC — catch newly disclosed advisories.
+    - cron: "0 9 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  guards:
+    name: pnpm guards enabled
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Hard policy gate: the supply-chain guards documented in AGENTS.md must
+      # stay enabled. This parses the YAML and asserts the guard *values*, not
+      # just key presence, so disabling a guard (e.g. strictPeerDependencies:
+      # false or minimumReleaseAge: 0) fails the job.
+      - name: Assert pnpm-workspace guards
+        run: |
+          python3 - <<'PY'
+          import sys, yaml
+
+          cfg = yaml.safe_load(open("pnpm-workspace.yaml")) or {}
+          errors = []
+
+          def require(ok, msg):
+              if not ok:
+                  errors.append(msg)
+
+          mra = cfg.get("minimumReleaseAge")
+          require(
+              isinstance(mra, int) and not isinstance(mra, bool) and mra > 0,
+              f"minimumReleaseAge must be a positive integer, got {mra!r}",
+          )
+          require(
+              cfg.get("strictPeerDependencies") is True,
+              f"strictPeerDependencies must be true, got {cfg.get('strictPeerDependencies')!r}",
+          )
+          require(
+              cfg.get("verifyStoreIntegrity") is True,
+              f"verifyStoreIntegrity must be true, got {cfg.get('verifyStoreIntegrity')!r}",
+          )
+          require(
+              isinstance(cfg.get("onlyBuiltDependencies"), list),
+              f"onlyBuiltDependencies must remain an explicit allowlist, got {cfg.get('onlyBuiltDependencies')!r}",
+          )
+
+          for e in errors:
+              print(f"::error file=pnpm-workspace.yaml::supply-chain guard violation: {e}")
+          sys.exit(1 if errors else 0)
+          PY
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      # Frozen install also validates the lockfile and store integrity.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Hard fail only on critical advisories. Lower-severity findings
+      # (often transitive, e.g. via discord.js) are surfaced as a report so
+      # they are visible without blocking unrelated work.
+      - name: Audit (critical fails the job)
+        run: pnpm audit --prod --audit-level critical
+
+      - name: Audit report (full, non-blocking)
+        if: always()
+        run: pnpm audit --prod || true
