@@ -25,19 +25,43 @@ jobs:
       - uses: actions/checkout@v4
 
       # Hard policy gate: the supply-chain guards documented in AGENTS.md must
-      # stay enabled. Removing one is the kind of change CI should block.
+      # stay enabled. This parses the YAML and asserts the guard *values*, not
+      # just key presence, so disabling a guard (e.g. strictPeerDependencies:
+      # false or minimumReleaseAge: 0) fails the job.
       - name: Assert pnpm-workspace guards
         run: |
-          set -euo pipefail
-          required=(minimumReleaseAge strictPeerDependencies verifyStoreIntegrity onlyBuiltDependencies)
-          missing=0
-          for key in "${required[@]}"; do
-            if ! grep -qE "^${key}:" pnpm-workspace.yaml; then
-              echo "::error file=pnpm-workspace.yaml::supply-chain guard '${key}' is missing"
-              missing=1
-            fi
-          done
-          exit "$missing"
+          python3 - <<'PY'
+          import sys, yaml
+
+          cfg = yaml.safe_load(open("pnpm-workspace.yaml")) or {}
+          errors = []
+
+          def require(ok, msg):
+              if not ok:
+                  errors.append(msg)
+
+          mra = cfg.get("minimumReleaseAge")
+          require(
+              isinstance(mra, int) and not isinstance(mra, bool) and mra > 0,
+              f"minimumReleaseAge must be a positive integer, got {mra!r}",
+          )
+          require(
+              cfg.get("strictPeerDependencies") is True,
+              f"strictPeerDependencies must be true, got {cfg.get('strictPeerDependencies')!r}",
+          )
+          require(
+              cfg.get("verifyStoreIntegrity") is True,
+              f"verifyStoreIntegrity must be true, got {cfg.get('verifyStoreIntegrity')!r}",
+          )
+          require(
+              isinstance(cfg.get("onlyBuiltDependencies"), list),
+              f"onlyBuiltDependencies must remain an explicit allowlist, got {cfg.get('onlyBuiltDependencies')!r}",
+          )
+
+          for e in errors:
+              print(f"::error file=pnpm-workspace.yaml::supply-chain guard violation: {e}")
+          sys.exit(1 if errors else 0)
+          PY
 
   audit:
     name: Dependency audit
