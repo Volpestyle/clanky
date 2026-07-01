@@ -237,7 +237,10 @@ $OP/spawn.sh --run "$RUN_ID" --slug opencode-fix --task "Fix flaky tests" \
 ```
 
 This setup intentionally gives workers autonomy inside their panes. Pick an
-explicit command after `--` when a task needs a different permission mode.
+explicit command after `--` when a task needs a different permission mode. For
+Claude Code, `--permission-mode auto` (the "auto mode" convention) auto-accepts
+edits and safe commands, so a self-driving worker won't stall on a bash-permission
+prompt the way `acceptEdits` can; reserve full bypass for when it is truly needed.
 
 ## 2. Monitor and wait
 
@@ -367,6 +370,15 @@ ones with `cleanup.sh <run-id> --rm`.
 **Tab closed by hand.** If the user closed the run tab, the workers are gone
 but the run dir remains. Harvest whatever sentinel files exist, then
 `cleanup.sh <run-id> --rm`.
+
+**Worker cwd went stale (removed/recreated worktree).** If a worktree a worker is
+rooted in is deleted — or deleted and recreated at the same path (a `git worktree`
+cleanup pass, a branch reset) — the worker's shell keeps the old, now-dangling
+directory inode: its `git`/file commands operate on a ghost, not the new tree.
+Restart the pane in the live path (`/exit`, then `cd <path> && <agent>`); a running
+TUI can't `cd` itself. The work itself survives even when the worktree directory is
+gone — the branch ref and objects outlive the working directory, so verify (and
+push) from the repo rather than assuming committed work was lost.
 
 ## Attribution contract (for remote clients)
 
