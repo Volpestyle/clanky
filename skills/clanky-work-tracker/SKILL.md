@@ -26,6 +26,13 @@ Treat the configured work tracker as part of the working context. Do not wait fo
 - For tracker-backed fan-out, pair this with `clanky-herdr-operator`. The tracker owns issue discovery, DAG/wave ordering, assignment, status transitions, comments, and final closure; the terminal stage owns visible worker execution, live state, unblocking, harvest, and synthesis.
 - Do not mark an issue done solely because a worker reports completion. The operator verifies the result first, then updates tracker status.
 
+## Living Docs (evolution log)
+
+- Some tracker artifacts are logs, not snapshots — demo recordings, status updates, decision records. Refresh them by appending a new dated entry, not by overwriting the prior content.
+- Keep one running Linear document (or description) per artifact, newest entry on top, each under a `## YYYY-MM-DD — <label>` heading. Use actual ISO dates, never "now"/"earlier". Reframe a superseded entry as historical rather than deleting it.
+- Before replacing any existing doc/description, capture its current content first so a prior version is never lost. Linear keeps document history, but do not treat it as your only copy.
+- Media embedded in an older entry stays valid: keep the old `![alt](assetUrl)` embed. The underlying upload persists and Linear re-signs the URL on save.
+
 ## Connection Pattern
 
 Use the configured role binding (`CLANKY_WORK_TRACKER` or `~/.clanky/integration-roles.json`) to identify the provider. If exact connection tools are unknown, discover them through eve's connection tool surface, then call the provider tool directly. Dynamic `mcp_list_tools` / `mcp_call` is only for runtime no-auth/static-token MCP servers, not OAuth work trackers.
