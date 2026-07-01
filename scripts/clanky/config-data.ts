@@ -34,6 +34,14 @@ export const PUSH_APNS_ENV = {
 	bundleId: "CLANKY_APNS_BUNDLE_ID",
 	environment: "CLANKY_APNS_ENV",
 } as const;
+export const PUSH_FCM_ENV = {
+	serviceAccountPath: "CLANKY_FCM_SERVICE_ACCOUNT_PATH",
+	projectId: "CLANKY_FCM_PROJECT_ID",
+	clientEmail: "CLANKY_FCM_CLIENT_EMAIL",
+	privateKey: "CLANKY_FCM_PRIVATE_KEY",
+	tokenUri: "CLANKY_FCM_TOKEN_URI",
+	googleApplicationCredentials: "GOOGLE_APPLICATION_CREDENTIALS",
+} as const;
 export const DEFAULT_APNS_BUNDLE_ID = "io.clanky.ios";
 export const DEFAULT_APNS_ENVIRONMENT = "sandbox";
 
@@ -409,7 +417,7 @@ export const PUSH_ACTION_OPTIONS: readonly MenuOption[] = [
 	{ value: "team-id", label: "Apple team ID", hint: "10-character developer team id" },
 	{ value: "bundle-id", label: "bundle id", hint: `default ${DEFAULT_APNS_BUNDLE_ID}` },
 	{ value: "env", label: "APNs environment", hint: "sandbox/development or production" },
-	{ value: "test", label: "send test notification", hint: "push to registered iOS devices" },
+	{ value: "test", label: "send test notification", hint: "push to registered devices" },
 	{ value: "clear", label: "clear APNs config", hint: "remove saved APNs env vars" },
 ];
 export const PUSH_APNS_ENV_OPTIONS: readonly MenuOption[] = [

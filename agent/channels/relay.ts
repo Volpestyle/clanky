@@ -22,9 +22,10 @@ import { isFrontdoorAuthorized } from "../lib/frontdoor-auth.ts";
 import { resolveClankyFacePanePlacement, startHerdrAgentNearPlacement, type HerdrPanePlacement } from "../lib/herdr-placement.ts";
 import { attachHerdrTerminal, type HerdrTerminalAttachStream } from "../lib/herdr-client-socket.ts";
 import { herdrRequest, herdrStreamLines, type HerdrStream } from "../lib/herdr-socket.ts";
-import { registerPushDevice, unregisterPushDevice } from "../lib/push-registry.ts";
+import { parsePushPlatform, registerPushDevice, unregisterPushDevice } from "../lib/push-registry.ts";
 import { ensurePushWatcher } from "../lib/push-watcher.ts";
 import { apnsConfigured } from "../lib/apns.ts";
+import { fcmConfigured } from "../lib/fcm.ts";
 import { newTranscriptRunId, readTranscript } from "../lib/transcripts.ts";
 import { wrapTranscriptArgv } from "../tools/herdr_spawn.ts";
 import { resolveClankyDataPath } from "../lib/paths.ts";
@@ -52,6 +53,10 @@ function int(v: unknown, fallback: number): number {
 
 function rec(v: unknown): Record<string, unknown> {
 	return v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+}
+
+function hasOwn(record: Record<string, unknown>, key: string): boolean {
+	return Object.prototype.hasOwnProperty.call(record, key);
 }
 
 const VANILLA_HERDR_FALLBACK_LINES = 1000;
@@ -407,20 +412,24 @@ async function dispatch(op: string, args: Record<string, unknown>): Promise<unkn
 			return hreq("pane.close", { pane_id: pane });
 		}
 		case "register-push": {
-			// The phone registers its APNs device token after pairing so Clanky can
-			// push when an agent goes blocked/done/error. Starts the watcher lazily.
+			// Mobile clients register their APNs/FCM device token after pairing so
+			// Clanky can push when an agent goes blocked/done/error. Starts the
+			// watcher lazily.
 			const token = str(args.token);
 			if (!token) throw new Error("register-push requires token");
 			const events = Array.isArray(args.events) ? (args.events as unknown[]).map(String) : [];
-			const platform = str(args.platform) ?? "ios";
+			const platform = hasOwn(args, "platform") ? parsePushPlatform(args.platform) : "ios";
+			if (platform === undefined) throw new Error("register-push platform must be ios or android");
 			await registerPushDevice({ token, platform, events });
 			ensurePushWatcher();
-			return { ok: true, registered: true, apnsConfigured: apnsConfigured() };
+			return { ok: true, registered: true, platform, apnsConfigured: apnsConfigured(), fcmConfigured: fcmConfigured() };
 		}
 		case "unregister-push": {
 			const token = str(args.token);
 			if (!token) throw new Error("unregister-push requires token");
-			await unregisterPushDevice(token);
+			const platform = hasOwn(args, "platform") ? parsePushPlatform(args.platform) : undefined;
+			if (hasOwn(args, "platform") && platform === undefined) throw new Error("unregister-push platform must be ios or android");
+			await unregisterPushDevice(token, platform);
 			return { ok: true, unregistered: true };
 		}
 		case "write": {
