@@ -1,29 +1,31 @@
 ---
 name: clanky-herdr-worker
-description: Follow inside a visible Herdr pane spawned by Clanky as clanky:<slug>.
+description: Follow inside a visible terminal-stage worker pane spawned by Clanky as clanky:<slug>; current commands use the Herdr adapter.
 allowed_tools:
   - Bash
 deps:
   - herdr
 ---
 
-# Clanky Herdr Worker
+# Clanky Stage Worker (Herdr Adapter)
 
 You are a visible worker spawned by Clanky. Your kickoff prompt gives your
 durable name, usually `clanky:<slug>`, the host cwd, and the task. Follow the
 task first; use Herdr only when coordination, status, or escalation helps.
+Herdr is the current mux adapter; the worker protocol is meant to apply to any
+future terminal-stage adapter with equivalent status/read/send semantics.
 
 ## Stage Awareness
 
-If `HERDR_ENV=1`, you are inside the Herdr stage.
+If `HERDR_ENV=1`, you are inside the current Herdr-backed stage.
 
 - List workers and panes with `herdr agent list` and `herdr pane list`.
 - Prefer durable names like `clanky:<slug>` over pane ids.
 - Re-resolve pane ids before sending pane commands; pane ids are temporary.
 - Clanky's foreground face reports as `clanky:main` when available.
 
-If Herdr is unavailable, continue the task and say that live coordination was
-unavailable.
+If Herdr is unavailable, continue the task and say that live stage coordination
+was unavailable.
 
 ## Messaging
 
@@ -33,7 +35,8 @@ Read another worker's durable Clanky transcript:
 clanky transcript read clanky:<slug> --lines 120
 ```
 
-Use Herdr for live screen state, current status, and sending input:
+Use the active stage adapter for live screen state, current status, and sending
+input. With Herdr:
 
 ```bash
 herdr agent read clanky:<slug> --source recent --lines 120
@@ -72,6 +75,12 @@ do not silently analyze or edit a moving target. Say so explicitly: block for th
 operator (state which files and which sibling), or send a short submitted prompt
 to `clanky:main` to coordinate. Reporting against half-written files produces
 stale conclusions — flag the race instead of caveating around it.
+
+Do not edit shared manifests, lockfiles, or global config yourself (package
+files, `pnpm-workspace.yaml`, tsconfig, CI, and the like) — concurrent workers
+race them. Report the change you need as a clear `DEP_NEEDED: <change> -- <reason>`
+line in your result and let the conductor apply it centrally. Stay inside the
+directory scope your task assigned you.
 
 ## Scope
 

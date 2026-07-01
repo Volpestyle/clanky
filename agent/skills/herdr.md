@@ -1,13 +1,13 @@
 ---
-description: Use when Clanky needs to inspect, read, or steer the live Herdr session from the Eve host.
+description: Use when Clanky needs to inspect, read, or steer the live terminal stage through the current Herdr adapter from the Eve host.
 ---
 
-# Herdr Host Control
+# Terminal Stage Host Control (Herdr Adapter)
 
-You are running from the Eve host process, not from inside a Herdr pane. This is
-the host-control counterpart to the vanilla pane-oriented `herdr` skill bundled
-under the repo-level `skills/herdr/` directory. Prefer the host tools over
-shelling out:
+You are running from the Eve host process, not from inside a pane. Herdr is the
+current mux adapter for Clanky's terminal-stage model; future tmux/Zellij/etc.
+adapters should expose equivalent stage semantics. Prefer the host tools over
+shelling out while the active adapter is Herdr:
 
 - Use `herdr_status` to list agents, panes, tabs, and workspaces.
 - Use `herdr_read` with the default `source: "auto"` to inspect worker history;
@@ -18,6 +18,11 @@ shelling out:
 - Use `herdr_send` to answer prompts, send text, or press keys in a pane.
 - Use `herdr_spawn` for watchable or parallel work that should become a visible
   `clanky:<slug>` pane.
+
+The tool names are Herdr-prefixed because the current implementation is Herdr.
+Do not treat that as a product requirement: new prompts, docs, and APIs should
+say terminal stage / mux adapter unless they are specifically calling Herdr
+commands or interpreting Herdr fields.
 
 If the task involves spawning, fan-out, or creating a performer, load
 `clanky-herdr-operator` before calling `herdr_spawn`. This skill is enough for
@@ -35,8 +40,8 @@ Clanky's host repo cwd, or pass a real host path. Do not use sandbox paths like
 Spawned workers receive a compact bootstrap pointing them to
 `skills/clanky-herdr-worker/SKILL.md` for coordination and completion only.
 They can read durable worker history through `clanky transcript read
-clanky:<slug> --lines N`; Herdr remains the live status, screen, and input
-control plane.
+clanky:<slug> --lines N`; the active mux adapter remains the live status,
+screen, and input control plane.
 Do not inject Clanky's coding skills into Claude Code, Codex, OpenCode, or
 custom worker prompts. Those runtimes should use their own native coding,
 planning, exploration, review, and subagent behavior. Use `performer:
@@ -50,7 +55,7 @@ as `keys: ["Enter"]` are valid for named agents and panes.
 Treat pane ids as temporary. Re-read status before sending to a pane if there is
 any chance the layout changed. Agent names such as `clanky:fix-tests` are the
 durable address when a named worker exists. The foreground Clanky face reports
-as `clanky:main` when it is running inside Herdr.
+as `clanky:main` when it is running inside the active stage.
 
 Do not spawn work just to have activity. If no workers are running, report that
 plainly.

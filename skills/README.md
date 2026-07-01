@@ -5,23 +5,25 @@ a `SKILL.md` (frontmatter + protocol) and optional `scripts/`. A skill is just a
 disk-loaded play-this-way document plus its allowed tools and deps — eve gates
 each one behind a `when_to_use` trigger and the listed `allowed_tools`.
 
-Two kinds live here: the vanilla `herdr` skill (every agent gets it, no fork) and
-Clanky-authored `clanky-*` operator/worker protocols. See [SPEC.md](../SPEC.md)
-§4.5 (skills model) and §5.5 (fan-out / swarm orchestration) for the
-authoritative design; the rule of thumb is a new skill only when both the trigger
-and the audience differ from an existing one.
+Two kinds live here: the current mux adapter skill (`herdr`, every agent gets it,
+no fork) and Clanky-authored `clanky-*` operator/worker protocols. See
+[SPEC.md](../SPEC.md) §4.5 (skills model) and §5.5 (fan-out / swarm
+orchestration) for the authoritative design; the rule of thumb is a new skill
+only when both the trigger and the audience differ from an existing one.
 
 ## Swarm coordination
 
 How Clanky and his performers see each other and fan work out across visible
-herdr panes. The operator/worker pair splits on role: the coordinator drives the
-fan-out, each worker follows inside its own pane.
+terminal-stage panes. Herdr is the current/default mux adapter, but the protocol
+should stay mux-agnostic so tmux, Zellij, or other adapters can expose equivalent
+status/read/send/spawn semantics. The operator/worker pair splits on role: the
+coordinator drives the fan-out, each worker follows inside its own pane.
 
 | Skill | Audience | What it does |
 | --- | --- | --- |
-| [`herdr`](herdr/SKILL.md) | every agent (vanilla) | Control herdr from inside it: manage workspaces/tabs, split panes, spawn agents, read output, wait for state changes, and report presence — over the local unix socket. The flat "everyone sees everyone" layer. |
-| [`clanky-herdr-operator`](clanky-herdr-operator/SKILL.md) | coordinator only | Run parallel subagents as named herdr panes: spawn workers into a tagged run tab, monitor and unblock them, harvest per-worker results, synthesize, and clean up — via bundled `scripts/` over the herdr CLI. |
-| [`clanky-herdr-worker`](clanky-herdr-worker/SKILL.md) | worker pane | The worker side of the protocol: how an agent spawned by Clanky as `clanky:<slug>` reports status and coordinates from inside its visible pane. |
+| [`herdr`](herdr/SKILL.md) | every agent (current adapter) | Control the current Herdr-backed stage: manage workspaces/tabs, split panes, spawn agents, read output, wait for state changes, and report presence — over the local unix socket. The flat "everyone sees everyone" layer. |
+| [`clanky-herdr-operator`](clanky-herdr-operator/SKILL.md) | coordinator only | Run parallel subagents as named terminal-stage panes through the Herdr adapter: spawn workers into a tagged run tab, monitor and unblock them, harvest per-worker results, synthesize, and clean up. |
+| [`clanky-herdr-worker`](clanky-herdr-worker/SKILL.md) | worker pane | The worker side of the mux-agnostic protocol: how an agent spawned by Clanky as `clanky:<slug>` reports status and coordinates from inside its visible pane. |
 
 ## Channels and trackers
 

@@ -4,20 +4,23 @@ Status: target architecture. This document is the source of truth for Clanky.
 
 ## 1. Summary
 
-Clanky is an always-on personal agent that lives inside a persistent
-[herdr](https://herdr.dev) session and is reachable from anywhere through a
-native iOS app. He is built on three off-the-shelf systems and a thin layer of
-glue:
+Clanky is an always-on personal agent that lives inside a persistent terminal
+stage and is reachable from anywhere through a native iOS app. Herdr is the
+current/default stage adapter; the architecture is mux-agnostic by design so
+tmux, Zellij, and other adapters can expose the same visible-pane model. He is
+built on three off-the-shelf systems and a thin layer of glue:
 
-- **herdr** is the *stage* — a vanilla, persistent terminal-agent multiplexer.
-  Every agent is a visible pane. herdr also provides the swarm coordination CLI.
+- **The terminal stage** is the visible mux layer. Herdr is the current/default
+  adapter and provides the swarm coordination CLI today. Every agent is a visible
+  pane.
 - **[eve](https://eve.dev)** is the *conductor* — Clanky's durable backend brain.
   eve owns inbound channels (Discord, voice), cron schedules, durable sessions,
   and memory. It runs headless (`eve dev --no-ui`); what you see as Clanky is his
   own **face** — a pi-tui client (`scripts/clanky.ts`) that renders eve's event
-  stream in a herdr pane.
+  stream in a stage pane.
 - **Performers** are panes — `clanky`, `claude`, `codex`, or `opencode` agents
-  that Clanky spawns into herdr for parallel or specialized work, all visible.
+  that Clanky spawns into the stage for parallel or specialized work, all
+  visible.
 - The **window** is the Clanky iOS app, which reaches the stage over the tailnet
   through an eve relay channel.
 
@@ -31,23 +34,24 @@ Codex OAuth implementation in `agent/lib` (§4.6).
 
 ### Goals
 
-- Clanky is **always on** (a Mac mini) and part of a persistent herdr session by
-  default.
+- Clanky is **always on** (a Mac mini) and part of a persistent terminal-stage
+  session by default.
 - Turning Clanky on shows him in the iOS app; everything he does is a **visible
-  TUI pane** in herdr.
+  TUI pane** in the active stage.
 - Inbound Discord and voice work surfaces **as panes**, not as hidden in-process
   subagents.
 - Clanky can spawn other agents — `clanky`, `claude`, `codex`, `opencode`, or
   custom commands — all visible.
-- **herdr stays vanilla.** No maintained fork. Remote access is solved without
-  patching herdr.
-- The swarm is **decoupled from Clanky**: a herdr session is a swarm-ready
+- **Mux adapters stay vanilla.** No maintained forks. Remote access is solved
+  above the mux layer, not by patching Herdr/tmux/Zellij.
+- The swarm is **decoupled from Clanky**: a stage session is a swarm-ready
   environment on its own. Agents coordinate with or without Clanky present, and
   any agent can take the orchestrator role on demand.
 
 ### Non-goals
 
-- No custom multiplexer, scheduler, or chat server. herdr and eve own those.
+- No custom multiplexer, scheduler, or chat server. The active mux adapter and
+  eve own those layers.
 - No hidden background agents. If it runs, it is a pane.
 - No legacy compatibility shims or alternate runtime surfaces.
 - Cloud (Mac-off) availability is out of scope for v1. The Mac mini is the host.
@@ -59,7 +63,7 @@ Stage, conductor, performers, window.
 ```mermaid
 flowchart TB
   subgraph mac["Mac mini — always on"]
-    subgraph herdr["herdr (vanilla) — the STAGE: persistent session 'clankies'"]
+    subgraph stage["terminal stage — Herdr adapter today"]
       direction TB
       face["pane: clanky<br/>pi-tui client · main session"]
       disc["pane: clanky:discord-*<br/>presence-session mirror"]
@@ -68,17 +72,17 @@ flowchart TB
       w2["pane: codex<br/>delegated worker"]
     end
     eve["eve service — the CONDUCTOR<br/>Discord gateway · channels · schedules · sessions · memory"]
-    relay["eve relay channel<br/>WS over Herdr sockets"]
+    relay["eve relay channel<br/>WS over stage adapter sockets"]
   end
 
   phone["Clanky iOS — the WINDOW"]
   discord["Discord<br/>text + voice"]
 
   discord -->|gateway WS + webhook| eve
-  eve -->|spawns visible work| herdr
+  eve -->|spawns visible work| stage
   eve --- face
   eve --> relay
-  relay -->|Herdr local sockets| herdr
+  relay -->|adapter sockets/API| stage
   phone <-->|tailnet| relay
 
   face -. swarm CLI .- w1
@@ -87,27 +91,30 @@ flowchart TB
 
 Read it as:
 
-- **herdr is the stage.** A vanilla, persistent named session (`clankies`) on
-  the Mac mini. It provides panes, the swarm coordination CLI
-  (`herdr agent list/read/send/wait`, `herdr pane report-agent`), and session
-  durability. No fork.
+- **The terminal stage is the mux boundary.** Herdr is the current/default
+  adapter: a vanilla, persistent named session (`clankies`) on the Mac mini. It
+  provides panes, the swarm coordination CLI (`herdr agent list/read/send/wait`,
+  `herdr pane report-agent`), and session durability. tmux, Zellij, and future
+  adapters should expose equivalent status/read/send/spawn/presence semantics
+  without changing Clanky's conductor model.
 - **eve is the conductor — Clanky's brain.** A long-lived local service that owns
   Discord/voice channels, cron schedules, durable session state, and memory. The
   visible Clanky face is a custom `eve/client` pi-tui, not eve's stock TUI. When
   eve has inbound or background work, it does not answer invisibly — it spawns or
-  routes to a herdr pane so the work is visible.
+  routes to a stage pane so the work is visible.
 - **Performers are panes.** `clanky`, `claude`, `codex`, or `opencode` agents
-  started with `herdr agent start`. (herdr can start any binary in a pane, but
-  the supported performer set is defined in §4.3.)
+  started through the active stage adapter. (Herdr starts them with
+  `herdr agent start`; the supported performer set is defined in §4.3.)
 - **The window is the iOS app.** It reaches the stage through an eve relay
   channel over the tailnet. One front door (eve) serves both chat with Clanky and
   visibility into every pane.
 
 ## 4. Roles in detail
 
-### 4.1 herdr — the stage (vanilla)
+### 4.1 Terminal stage — mux adapter boundary
 
-herdr is used unmodified. It provides:
+The stage is a mux adapter boundary, not a Herdr product requirement. Herdr is
+the current/default adapter and is used unmodified. It provides:
 
 - **Panes** — every agent is a real terminal, visible and attributable.
 - **A persistent named session** (`herdr --session clankies`) that survives
@@ -121,13 +128,15 @@ herdr is used unmodified. It provides:
   - presence: `herdr pane report-agent --state … --message …`
   - spawning: `herdr agent start <name> -- <argv…>`
 
-Constraint: **no fork.** herdr's native API is a local unix socket; remote
-access is provided by eve (4.4), not by patching herdr. If a herdr-side feature
+Constraint: **no mux forks.** Herdr's native API is a local unix socket; remote
+access is provided by eve (4.4), not by patching the mux. If a Herdr-side feature
 is genuinely needed (e.g. the old bridge subcommand), it is **upstreamed** to
-`ogulcancelik/herdr`, never carried as a private fork.
+`ogulcancelik/herdr`, never carried as a private fork. tmux/Zellij adapters
+should follow the same rule: adapt at Clanky's boundary or upstream generally
+useful mux features.
 
-Herdr is not Clanky's durable historical transcript store. Visible and recent
-pane reads are live-stage inspection. Historical output for workers Clanky
+The mux adapter is not Clanky's durable historical transcript store. Visible and
+recent pane reads are live-stage inspection. Historical output for workers Clanky
 spawns is captured by Clanky's transcript layer (§4.3).
 
 ### 4.2 eve — the conductor (Clanky's brain)
@@ -212,9 +221,10 @@ or `CLANKY_CODING_HARNESS_COMMAND` for custom harnesses.
 The launcher is either the native CLI default model or an Ollama CLI integration
 with a local model; Codex Ollama mode uses `ollama launch codex`, not
 `codex-app`. `herdr_spawn` rejects disallowed harnesses, resolves the selected
-profile, and starts the command as a visible herdr pane. Clanky then supervises
-by reading and steering the pane with `herdr_read` / `herdr_send`. Richer
-adapters can be added later, but the base protocol is always a visible pane.
+profile, and starts the command as a visible stage pane through the current Herdr
+adapter. Clanky then supervises by reading and steering the pane with
+`herdr_read` / `herdr_send`. Richer mux adapters can be added later, but the base
+protocol is always a visible pane.
 
 Clanky-spawned performers are wrapped with `clanky transcript-run` by default
 when worker transcript capture is enabled (`CLANKY_WORKER_TRANSCRIPTS`, default
@@ -276,12 +286,26 @@ protocol.
 
 ### 4.4 The window — iOS app, SSH lifecycle + eve relay channel
 
-Remote access must not require a herdr fork. Interaction goes through a **custom
-eve channel** (`defineChannel`, raw `WS` route) that relays Herdr's local unix
-sockets to the network: the API socket for normal pane/workspace ops, and the
-client terminal socket for durable Native terminal attach. But the relay lives
+Remote access must not require a mux fork. Interaction goes through a **custom
+eve channel** (`defineChannel`, raw `WS` route) that relays the active stage
+adapter to the network. With the current Herdr adapter, that means Herdr's local
+unix API socket for normal pane/workspace ops and the client terminal socket for
+durable Native terminal attach. But the relay lives
 *inside* the eve brain, so it cannot be what *starts* the brain — that bootstrap
 rides the one channel that is always present on the Mac: **SSH**.
+
+> **Proposed (ADR-0001, pending sign-off) — remote lifecycle direction.** The
+> React Native migration has no mature cross-platform SSH stack, so cold-start
+> moves off SSH to an always-on **supervisor** below the brain that exposes its
+> own tailnet `lifecycle` op (`up`/`status`/`down`). The supervisor is
+> `scripts/clanky-up.ts` promoted to a launchd daemon; it holds its **own**
+> lifecycle token minted at install (not the brain-minted relay token — the
+> relay cannot boot the brain that mints it), and it formalizes the §7 always-on
+> boot. Phasing: the RN app first ships against an **already-running relay** (QR
+> pairing + Tailscale, no on-device cold-start), then gains supervisor cold-start
+> at M6 ([VUH-294](https://linear.app/vuhlp/issue/VUH-294)), at which point SSH
+> lifecycle retires. The SSH description below is the **current, ratified** path
+> until sign-off flips ADR-0001 to Accepted. See `docs/adr/0001-remote-lifecycle-cold-start.md`.
 
 ```mermaid
 flowchart LR
@@ -289,14 +313,14 @@ flowchart LR
   subgraph mac["Mac mini"]
     sshd["sshd (always-on)<br/>runs scripts/clanky-up.ts"]
     relay["eve relay channel (WS)<br/>auth: bearer token"]
-    sock["Herdr local sockets<br/>herdr.sock API + herdr-client.sock terminal attach"]
-    herdr["herdr panes"]
+    sock["stage adapter sockets<br/>Herdr: herdr.sock API + herdr-client.sock terminal attach"]
+    stage["stage panes<br/>(Herdr adapter today)"]
   end
   phone <-->|tailnet, ssh key: ensure session + brain| sshd
   phone <-->|tailnet, bearer token: chat + pane steer| relay
-  sshd -->|herdr agent start| herdr
+  sshd -->|adapter start op| stage
   relay <-->|read scrollback / inject input / stream status / terminal attach| sock
-  sock --- herdr
+  sock --- stage
 ```
 
 - **Pairing (QR).** The primary connect path: `clanky pair` prints a
@@ -310,6 +334,7 @@ flowchart LR
   to ensure the `clankies` session exists and Clanky's brain (`eve dev --no-ui`)
   runs as a pane. Auth: an ed25519 key the app generates and holds in the iOS
   Keychain. Modes: `up` / `status` / `down`, each emitting JSON the app parses.
+  (Proposed to be superseded by the supervisor `lifecycle` op — ADR-0001.)
 - **Push (relay `register-push` + APNs).** After pairing, the phone registers its
   APNs device token (`register-push {token, events?, platform}`), persisted in
   `~/.config/clanky/push-tokens.json`; the relay returns `{ok, registered,
@@ -375,9 +400,9 @@ flowchart LR
     <path>` line for the Clanky TUI attachment parser. iOS inserts it through
     bracketed paste so the path lands in the terminal editor without submitting
     the prompt prematurely.
-- The brain is just another herdr pane — the lead pane — which is why lifecycle
+- The brain is just another stage pane — the lead pane — which is why lifecycle
   (SSH) sits below it and interaction (relay) sits inside it.
-- herdr stays vanilla; the glue is TypeScript inside the Clanky eve app.
+- The active mux stays vanilla; the glue is TypeScript inside the Clanky eve app.
 - The iOS app targets this relay + SSH contract.
 
 ### 4.5 Skills model
@@ -589,7 +614,7 @@ panes via `herdr_spawn` rather than blocking the chat turn, and it can hand a
 matter to main Clanky directly (`herdr_send` to the face pane, or a `/clanky
 direct` style escalation) when the human is really asking the foreground agent.
 
-The rule still holds: **eve owns inbound + durability; herdr owns visibility.**
+The rule still holds: **eve owns inbound + durability; the terminal stage owns visibility.**
 The presence session is the durability; its mirror pane and any delegated
 performers are the visibility.
 
@@ -758,7 +783,7 @@ attach to whichever session you point him at. You may run multiple sessions.
 
 **Off the shelf (no custom maintenance):**
 
-- herdr — stage, persistent session, swarm CLI.
+- terminal stage — persistent mux session and swarm CLI; Herdr is the current/default adapter.
 - eve — brain, channels, schedules, durable sessions (headless `eve dev --no-ui` + `eve/client`).
 - `@earendil-works/pi-tui` — the face's terminal UI toolkit (rendering primitives).
 - `clanky` / `claude` / `codex` / `opencode` — performer agents (pi is not a performer).
@@ -894,6 +919,16 @@ while clients may still show the original `$name`.
 
 ## 11. Open decisions
 
+- **Remote lifecycle / cold-start — PROPOSED (ADR-0001, pending sign-off).** The
+  React Native migration has no mature cross-platform SSH stack, so remote
+  cold-start moves off SSH to an always-on **supervisor** below the brain with its
+  own tailnet `lifecycle` op and its own install-minted credential (resolving the
+  bootstrap paradox: the brain-minted relay token cannot boot the brain). Interim:
+  the RN app ships against an already-running relay (QR + Tailscale, no on-device
+  cold-start); supervisor cold-start lands at M6 (VUH-294) and SSH lifecycle then
+  retires. Full context, options (keep-SSH-native-module vs supervisor vs hybrid),
+  and the auth / install / Eve-down analysis are in
+  `docs/adr/0001-remote-lifecycle-cold-start.md`.
 - **Relay transport fit — RESOLVED (Phase 2): Herdr terminal attach with
   snapshot fallback.** A raw eve WS channel carries live terminal screens via
   the `attach` op (§4.4). When the pane record includes `terminal_id`, the relay

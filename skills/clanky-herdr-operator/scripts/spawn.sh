@@ -37,7 +37,8 @@ WORKER_SKILL_PATH="$(cd -P "$SKILL_DIR/../clanky-herdr-worker" && pwd -P)/SKILL.
 RUN_ROOT="${CLANKY_HERDR_RUN_ROOT:-$HOME/.clanky/herdr-runs}"
 
 config_value() {
-	local key="$1" existing="${!key-}" line value first last
+	local key="$1"
+	local existing="${!key-}" line value first last
 	if [ -n "$existing" ]; then
 		printf '%s' "$existing"
 		return
@@ -102,7 +103,7 @@ parse_allowed_harnesses() {
 			echo "spawn.sh: unknown coding harness '$token' in allowlist" >&2
 			exit 2
 		fi
-		if ! harness_in_list "$id" "${ALLOWED_HARNESS_LIST[@]}"; then
+		if [ "${#ALLOWED_HARNESS_LIST[@]}" -eq 0 ] || ! harness_in_list "$id" "${ALLOWED_HARNESS_LIST[@]}"; then
 			ALLOWED_HARNESS_LIST+=("$id")
 		fi
 	done

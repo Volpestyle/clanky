@@ -23,6 +23,8 @@ Treat the configured work tracker as part of the working context. Do not wait fo
 - If the configured provider exposes inbox, notification, assigned-issue, or update-feed tools, check them at natural boundaries: when beginning work, before claiming status, and before finalizing. Do not busy-poll.
 - Keep tracker comments short and useful: what changed, what was verified, and what risk remains.
 - Preserve external issue id, identifier, URL, session id, and relevant file scope when reporting or cross-referencing tracker work.
+- For tracker-backed fan-out, pair this with `clanky-herdr-operator`. The tracker owns issue discovery, DAG/wave ordering, assignment, status transitions, comments, and final closure; the terminal stage owns visible worker execution, live state, unblocking, harvest, and synthesis.
+- Do not mark an issue done solely because a worker reports completion. The operator verifies the result first, then updates tracker status.
 
 ## Connection Pattern
 

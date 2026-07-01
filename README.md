@@ -4,7 +4,7 @@
 
 # Clanky
 
-**An always-on personal agent that lives inside a persistent [herdr](https://herdr.dev) session — reachable from anywhere through a native iOS app.**
+**An always-on personal agent that lives inside a persistent terminal stage — Herdr today, mux-agnostic by design — reachable from anywhere through a native iOS app.**
 
 [![CI](https://github.com/Volpestyle/clanky/actions/workflows/ci.yml/badge.svg)](https://github.com/Volpestyle/clanky/actions/workflows/ci.yml)
 [![Supply chain](https://github.com/Volpestyle/clanky/actions/workflows/supply-chain.yml/badge.svg)](https://github.com/Volpestyle/clanky/actions/workflows/supply-chain.yml)
@@ -23,13 +23,15 @@
 
 Clanky is built on three off-the-shelf systems plus a thin layer of glue:
 
-- **herdr** is the *stage* — a vanilla terminal-agent multiplexer. Every agent
-  is a visible pane, and herdr supplies the swarm coordination CLI.
+- **The terminal stage** is the visible mux layer. Herdr is the current/default
+  adapter and supplies the swarm coordination CLI today; the stage contract is
+  intentionally mux-agnostic so tmux, Zellij, and other adapters can expose the
+  same visible-pane model.
 - **[eve](https://eve.dev)** is the *conductor* — Clanky's durable backend brain.
   eve owns inbound channels (Discord, voice), cron schedules, durable sessions,
   and memory. It runs headless (`eve dev --no-ui`); what you see as Clanky is his
   own **face** — a pi-tui client (`scripts/clanky.ts`) that renders eve's event
-  stream in a herdr pane.
+  stream in a stage pane.
 - **The command host** is the lifecycle process below eve. It owns or attaches
   the headless brain and executes deterministic Clanky slash commands for both
   iOS and any visible face, so command execution does not depend on a TUI being
@@ -38,22 +40,22 @@ Clanky is built on three off-the-shelf systems plus a thin layer of glue:
   through an eve relay channel.
 
 When Clanky needs more than himself, he spawns **performers** — `clanky`,
-`claude`, `codex`, or `opencode` agents — as visible herdr panes, and
-orchestrates them through the herdr swarm CLI.
+`claude`, `codex`, or `opencode` agents — as visible stage panes, and
+orchestrates them through the active mux adapter.
 
 > **Architecture:** see [SPEC.md](SPEC.md) for the complete, authoritative
 > design. This README is a short orientation; the spec is the source of truth.
 
 ## What Clanky does
 
-- runs always-on (a Mac mini) as a member of a persistent herdr session
+- runs always-on (a Mac mini) as a member of a persistent terminal stage
 - shows up in the Clanky iOS app the moment he is on, with every pane visible
 - handles inbound Discord text and voice — surfacing the work **as visible
   panes**, not hidden background processes
 - spawns other agents (`clanky`, `claude`, `codex`, `opencode`, or custom
-  commands), all visible as TUIs in herdr
-- coordinates a swarm through the vanilla herdr CLI, and orchestrates harvestable
-  fan-out runs through the `clanky-herdr-operator` skill
+  commands), all visible as TUIs in the active stage
+- coordinates a swarm through the active mux adapter, and orchestrates
+  harvestable fan-out runs through the current `clanky-herdr-operator` skill
 - remembers durable preferences, project facts, and recurring context
 - runs scheduled jobs on a cron cadence
 
@@ -64,7 +66,7 @@ Stage, conductor, performers, window.
 ```mermaid
 flowchart TB
   subgraph mac["Mac mini — always on"]
-    subgraph herdr["herdr (vanilla) — STAGE: persistent session 'clankies'"]
+    subgraph stage["terminal stage (Herdr adapter today)"]
       host["pane: clanky<br/>headless command host"]
       face["optional pane: clanky<br/>pi-tui client · Clanky's face"]
       disc["pane: clanky:discord-*"]
@@ -77,19 +79,20 @@ flowchart TB
   discord["Discord (text + voice)"]
 
   discord -->|webhook| eve
-  eve -->|spawns visible work| herdr
+  eve -->|spawns visible work| stage
   host <-->|command bridge| relay
   host --> eve
   eve <-->|eve/client| face
   eve --> relay
-  relay -->|Herdr local sockets| herdr
+  relay -->|adapter sockets/API| stage
   phone <-->|tailnet| relay
 ```
 
-- **eve owns inbound and durability; herdr owns visibility.** Anything worth
-  watching becomes a pane.
-- **herdr stays vanilla** — no fork. Remote access is the eve relay channel.
-- **The swarm is decoupled from Clanky.** A herdr session is a swarm-ready
+- **eve owns inbound and durability; the terminal stage owns visibility.**
+  Anything worth watching becomes a pane.
+- **Mux adapters stay vanilla** — no forks. Remote access is the eve relay
+  channel; Herdr is the current adapter, not the product boundary.
+- **The swarm is decoupled from Clanky.** A stage session is a swarm-ready
   environment on its own; agents coordinate with or without Clanky, and any one
   of them can take the orchestrator role.
 
@@ -102,7 +105,7 @@ for himself when to speak — addressed by name ("hey clanky", "yo clank"),
 otherwise (`[SKIP]`). "Hop in vc" makes him join voice. Each conversation runs as
 a **presence session**: a separate eve session of the same agent, so it shares
 his memory, persona, and tools without clogging the main face-pane thread, and
-it is mirrored into a watchable herdr pane. With a user/self token
+it is mirrored into a watchable stage pane. With a user/self token
 (`CLANKY_DISCORD_CREDENTIAL_KIND=user-token`) he can also watch others' Go Live
 screen shares and publish his own (`discord_golive`). Configure the token and
 model from the custom face's `/token` and `/model` slash commands (`/help` is
@@ -128,7 +131,7 @@ Then use `clanky` from anywhere:
   restarts the recorded `.eve/dev-server.json` process instead of leaving the
   face on `eve unavailable 503`.
 - **`clanky up` / `clanky status` / `clanky down`** — manage the persistent
-  Herdr session, headless command host, and Eve brain.
+  stage session, headless command host, and Eve brain.
 - **`clanky worker <prompt>`** — send one task to the running Clanky Eve brain
   and stream text output.
 - **`clanky update`** — fast-forward this checkout, install dependencies, and
@@ -143,7 +146,7 @@ Repo-local alternatives:
 
 ## Status
 
-Clanky runs on the eve + herdr architecture described in [SPEC.md](SPEC.md).
+Clanky runs on the eve + terminal-stage architecture described in [SPEC.md](SPEC.md).
 The free-will presence is wired and verified offline (`pnpm check`,
 `pnpm smoke:discord`); the live voice loop is gated on the bot token +
 ClankVox + Realtime credentials.
@@ -153,5 +156,5 @@ ClankVox + Realtime credentials.
 [MIT](LICENSE) © James Volpe.
 
 <div align="center">
-<sub>Stage <strong>herdr</strong> · conductor <strong>eve</strong> · window <strong>iOS</strong> — see <a href="SPEC.md">SPEC.md</a> for the authoritative design.</sub>
+<sub>Stage <strong>terminal mux</strong> (Herdr adapter today) · conductor <strong>eve</strong> · window <strong>iOS</strong> — see <a href="SPEC.md">SPEC.md</a> for the authoritative design.</sub>
 </div>

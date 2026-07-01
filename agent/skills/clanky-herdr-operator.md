@@ -1,14 +1,18 @@
 ---
-description: Use when Clanky needs to fan out, monitor, unblock, or summarize visible Herdr workers named clanky:<slug>.
+description: Use when Clanky needs to fan out, monitor, unblock, or summarize visible terminal-stage workers named clanky:<slug> through the current Herdr adapter.
 ---
 
-# Clanky Herdr Operator
+# Clanky Stage Operator (Herdr Adapter)
 
 Load this skill before calling `herdr_spawn` to create a visible performer pane.
 Use the generic `herdr` skill for status/read/send-only work.
+For tracker-backed fan-out, also load `clanky-work-tracker`; the tracker owns
+planning and durable status, while the terminal stage owns visible execution.
 
-Use visible Herdr workers for work that benefits from parallelism, inspection,
-or human steering. Do not use hidden Eve subagents for watchable coding work.
+Use visible terminal-stage workers for work that benefits from parallelism,
+inspection, or human steering. Do not use hidden Eve subagents for watchable
+coding work. The current tool and skill names are Herdr-specific because Herdr is
+the active mux adapter; keep new docs and abstractions mux-agnostic.
 
 ## Spawn
 
@@ -24,6 +28,9 @@ creating. If tasks share mutable paths, sequence them (separate runs or a
   like `/workspace`.
 - Give the worker a complete brief: context, exact scope, verification command,
   and what to report back.
+- For tracker-backed work, include the issue id and acceptance criteria. The
+  conductor owns tracker transitions: assign/start before dispatch when useful,
+  verify after completion, then move/comment the issue.
 - Check `herdr_status.codingHarnesses` when choosing worker runtimes; it shows
   the allowed harnesses and launcher profiles.
 - Use `harness: "clanky"`, `"claude"`, `"codex"`, `"opencode"`, or `"custom"`
@@ -43,6 +50,13 @@ creating. If tasks share mutable paths, sequence them (separate runs or a
   planning, exploration, review, and subagent behavior.
 - Use `performer: "clanky"` only when the worker should be Clanky himself, via
   the installed `clanky worker` CLI.
+- Keep shared repo mutations lead-owned unless workers are isolated in separate
+  worktrees. Package installs, lockfiles, workspace manifests, and global config
+  are coordination points; ask workers to report `DEP_NEEDED: <change> --
+  <reason>` instead of editing those files concurrently.
+- For multi-wave runs, keep an operator ledger in the run directory, a
+  scratchpad, or the tracker with worker -> task/issue, cwd/scope, mutable
+  paths, dependencies, verification command, and next DAG-unblocked tasks.
 
 ## Monitor
 
@@ -50,6 +64,10 @@ Use `herdr_status` to list workers. For any worker that looks blocked, idle, or
 done, use `herdr_read` with the default `source: "auto"` first so durable
 transcripts are preferred when that worker was launched with transcript capture.
 Use `source: "visible"` when you need the exact current TUI state.
+
+Use waiters with timeouts for long work. A timeout is not a failure: inspect the
+worker's recent output, decide whether it is progressing, blocked, or dead, then
+steer, harvest, or re-arm the waiter.
 
 ## Unblock
 
@@ -66,10 +84,17 @@ Workers can message each other from inside their pane with the Herdr CLI. For a
 submitted prompt, they should resolve the target pane and use `herdr pane run`;
 `herdr agent send` writes literal text only.
 
+If a worker hits an external live-gate (dev server, paid API, production
+service, or user-owned live agent), do not start or mutate it unless the user has
+already authorized that side effect. Prefer synthetic/offline verification when
+it still answers the core question; otherwise report pending-live-gate.
+
 ## Synthesize
 
 The conductor owns the final answer. Read each worker's output, reconcile
 conflicts, and attribute the useful work by slug. Clean summaries beat raw logs.
+Verify before marking work complete: run the focused command from the brief,
+inspect diffs for scope creep, then update tracker/final status.
 When workers analyzed overlapping scope, fold their results into one
 implementation task and spawn that as a single edit-capable worker — do not send
 each analyzer off to implement its own plan, since their edits collide.

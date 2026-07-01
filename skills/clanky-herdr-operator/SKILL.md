@@ -1,22 +1,29 @@
 ---
 name: clanky-herdr-operator
-description: Run Clanky's parallel subagents as named herdr panes. Spawn workers into a tagged run tab, monitor and unblock them, harvest per-worker results, synthesize, and clean up, using bundled scripts over the herdr CLI.
-when_to_use: Use when running inside herdr (HERDR_ENV=1) and work should fan out to parallel visible workers, e.g. "spawn workers/subagents for these tasks", "run these refactors in parallel", "swarm this", "farm this out to agents", "check on the workers", "harvest the run", "clean up worker panes". Not for single quick tasks, Discord gateway side-requests, or when HERDR_ENV is unset.
+description: Run Clanky's parallel subagents as named terminal-stage panes through the current Herdr adapter. Spawn workers into a tagged run tab, monitor and unblock them, harvest per-worker results, synthesize, and clean up, using bundled scripts over the herdr CLI.
+when_to_use: Use when running inside the current Herdr adapter (HERDR_ENV=1) and work should fan out to parallel visible workers, e.g. "spawn workers/subagents for these tasks", "run these refactors in parallel", "swarm this", "farm this out to agents", "check on the workers", "harvest the run", "clean up worker panes". Not for single quick tasks, Discord gateway side-requests, or when HERDR_ENV is unset.
 allowed_tools:
   - Bash
 deps:
   - herdr
 ---
 
-# Clanky herdr Operator
+# Clanky Stage Operator (Herdr Adapter)
 
-This is Clanky's one multi-agent substrate: parallel workers run as herdr
-panes, visible and attributable, never as hidden processes.
+This is Clanky's current multi-agent substrate: parallel workers run as visible
+terminal-stage panes, visible and attributable, never as hidden processes. Herdr
+is the current mux adapter; the product model is mux-agnostic so tmux, Zellij,
+and other adapters can expose the same stage semantics later.
 
 This skill is a Clanky-specific overlay on top of the vanilla `herdr` skill.
 Use `herdr` for generic workspace, tab, pane, split, wait, read, send, and
 presence mechanics. Use this skill only for Clanky's run grouping, worker
 manifest, completion sentinels, harvest, synthesis, and cleanup protocol.
+For tracker-backed fan-out, also use `clanky-work-tracker`; the tracker owns
+planning and durable status, while this skill owns visible execution.
+The current scripts are Herdr-specific; when another mux adapter lands, add an
+equivalent adapter/tool surface rather than baking new behavior into raw Herdr
+commands.
 
 Before anything else, check that `HERDR_ENV=1`. If it is not set to `1`, say
 you are not running inside herdr and stop; never control herdr from outside
@@ -61,6 +68,40 @@ does) and use herdr reads for inspection.
 Pane and tab ids are not durable; they compact when panes close. Never store
 them across steps. Address workers by agent name (`clanky:<slug>`) and
 re-resolve the pane id with `herdr agent get` when a pane command needs one.
+
+## Two run shapes: ephemeral fan-out vs persistent pool
+
+- **Ephemeral fan-out** (this skill's baseline): one worker per independent task,
+  spawned and discarded. Correct for a one-shot swarm of unrelated or
+  write-overlapping tasks — maximal isolation, nothing to keep warm.
+- **Persistent pool** (default for a long, many-issue, tracker-backed effort):
+  keep a small set of **named, warm workers** across the whole run and route each
+  new task to the worker that already owns the touched scope. Warm context plus
+  domain locality beat cold spawns at scale — a worker that built a module carries
+  the context to extend it. Give pool workers stable identities (`clanky:worker1`
+  …) and keep an ownership map (worker -> paths/domain) in the ledger; when the
+  next task lands, dispatch it to the owner rather than spawning fresh. Hold a
+  worker deliberately **reserved** for a blocked capstone instead of force-fitting
+  busywork. Respawn only when a worker dies.
+
+For a pool, prefer the **tracker as the orchestration ledger** (queue + DAG +
+completion record): pull the next issue whose blockers are Done, dispatch it,
+verify, mark it Done, and file follow-up issues as work reveals itself. The run
+directory stays useful for sentinels and results, but do not maintain a second
+durable task ledger that drifts from the tracker.
+
+Drive each pool task under the worker harness's native **`/goal`** loop when the
+harness supports it (Claude, Codex): after the pane is ready, arm it with
+`herdr pane run "$PANE" "/goal <task + definition-of-done>"`. `/goal` gives an
+unambiguous terminal state and per-task turn/token cost, and enforces
+"prove done" inside the worker. This arming is being wired into the spawn seam
+([VUH-321](https://linear.app/vuhlp/issue/VUH-321)); until then, arm it by hand
+after spawn.
+
+The harness-owned form of this whole model — pool registry, tracker scheduler,
+parsed result contract, commit interlock — is [ADR-0002](../../docs/adr/0002-pool-orchestration-operating-model.md)
+([VUH-333](https://linear.app/vuhlp/issue/VUH-333)). Until those land, run the
+model by hand as above.
 
 ## 1. Spawn
 
@@ -115,10 +156,48 @@ what another writes, or both edit the same files), do not fan them out together:
 sequence them (separate runs, or a `blocked` handoff), or isolate each writer in
 its own git worktree. When unsure whether scopes overlap, assume they do.
 
+Two isolation strategies, by scope shape. When scopes are **cleanly disjoint**
+(each worker owns its own directory subtree), a single **scope-partitioned shared
+worktree** with lead-owned commits is the lighter default — no per-worker
+worktree setup, and integration seams stay visible in one tree. When writers
+**genuinely overlap**, give each its own git worktree. Either way the commit is
+**lead-owned**: never run `git add -A`/`git add .` or commit while any worker in
+the run is mid-edit — a blind stage captures another worker's half-written files.
+Wait for the run to quiesce (all workers `idle`/done) before committing, per the
+`/c` skill. This interlock is being made enforced ([VUH-337](https://linear.app/vuhlp/issue/VUH-337)).
+
 Write real briefs: context, exact scope, whether the worker may edit or should
 only explore/plan/review, the verification command, and what result.md must
 contain. The script appends the completion protocol (result.md, DONE/BLOCKED,
 autonomy) to every prompt — do not restate it.
+
+For tracker-backed work, include the issue id, acceptance criteria, and expected
+tracker transition in the brief. The operator owns tracker state: assign/start
+work before dispatch when possible, verify the result after the worker finishes,
+then move the issue and leave a concise comment. Do not let a worker's "done"
+claim substitute for operator verification.
+
+Keep shared repo mutations lead-owned unless each writer is isolated in its own
+worktree. Package installs, lockfiles, global config, workspace manifests, and
+other cross-cutting files are coordination points, not worker-local edits. Tell
+workers to report required dependency/config changes in a clear `DEP_NEEDED:
+<change> -- <reason>` line instead of editing shared manifests themselves; batch
+those changes centrally so concurrent workers do not race the lockfile.
+
+**Generated artifacts are shared mutations too.** A worker whose *source* edit is
+in scope can still rewrite a shared generated file as a side effect — e.g. a
+worker editing `project.yml` that runs `xcodegen generate` rewrites the tracked
+`project.pbxproj`, or a codegen/format step rewrites generated output. Two
+workers regenerating the same artifact (or one editing the generator input while
+another regenerates) race it just like a lockfile. Keep regeneration to a single
+owner or the lead, and treat generated project files, codegen output, and
+snapshots as coordination points, not worker-local edits.
+
+For multi-wave runs, keep an operator-owned ledger in the run directory,
+scratchpad, or tracker: worker -> task/issue, cwd/scope, mutable paths,
+dependencies, verification command, and next DAG-unblocked tasks. Update it as
+workers finish. This is separate from the manifest: the manifest records what
+was spawned; the ledger records orchestration state and handoffs.
 
 ### Worker command
 
@@ -180,6 +259,12 @@ When monitoring from Clanky's Eve tools, use `herdr_read` with the default
 `source: "auto"` for worker history, and `source: "visible"` only when the
 current TUI screen matters.
 
+Long-running waiters should have timeouts. A timeout is not a verdict: inspect
+the worker's recent output, decide whether it is progressing, blocked, or dead,
+then either steer it, harvest it, or re-arm the waiter with a fresh timeout.
+Avoid tight polling loops; use event waits for completion and explicit reads for
+progress checks.
+
 ## 3. Unblock or steer
 
 A `blocked` worker wrote what it needs to its `result.md` and is waiting.
@@ -203,6 +288,12 @@ Workers can also message each other with the Herdr CLI. For a submitted prompt,
 they should resolve the target pane and use `herdr pane run`; `herdr agent send`
 writes literal text only.
 
+If a worker hits an external live-gate (a dev server, production service, paid
+API, or user-owned live agent) do not start or mutate that system just to unblock
+the run unless the user has already authorized it. Steer the worker toward a
+synthetic/offline verification path when it still answers the core question;
+otherwise mark the result pending-live-gate and ask for permission.
+
 ## 4. Harvest and synthesize
 
 ```bash
@@ -213,6 +304,11 @@ prints every worker's state and `result.md`. Read them yourself from
 `$RUN_DIR/workers/*/result.md` when synthesizing — combine, reconcile
 conflicts, and report per-worker attribution (slug + what it did). The
 synthesis is your job, not a script's.
+
+Verify before marking work complete. Run the focused command that matches the
+brief, inspect diffs for scope creep, then update the tracker or final status.
+For a wave, summarize landed work, in-flight work, blockers, and next
+DAG-unblocked tasks rather than dumping raw worker logs.
 
 When several workers analyzed overlapping scope (the same files, the same
 change), fold their results into **one** implementation task here and spawn that
