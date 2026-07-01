@@ -864,7 +864,9 @@ blur them.
    MCP, etc.) use `auth: defineInteractiveAuthorization` — self-hosted, not the
    Vercel `connect()` helper, since Clanky does not adopt Vercel surfaces. Adding
    one is a small committed code change plus a dev-server reload; the model cannot
-   add a connection at runtime, which is the point for credentialed services.
+   add a connection at runtime, which is the point for credentialed services. A
+   read-only GitHub (version-control) connection for reading branches, PRs, and
+   diffs as data is the next planned connection (ADR-0003, Context lane).
 
 2. **First-party tools (`agent/tools/`)** — capabilities we author and own: the
    herdr spawn seam, `browser_control` (the custom browser-extension bridge),
@@ -926,6 +928,15 @@ while clients may still show the original `$name`.
 
 ## 11. Open decisions
 
+- **Context access / two lanes — PROPOSED (ADR-0003, pending sign-off).** Clanky's
+  own `read_file`/`grep`/`bash` are sandbox-only (`/workspace`) and blind to host
+  code; the persona now names that boundary and a two-lane model — a **Context
+  lane** (read work as data through the work-tracker, design, and a planned
+  read-only GitHub connection) and a **Work lane** (`herdr_spawn` a worker into a
+  host checkout to edit/build/review a diff in-tree or land a branch). GitHub gets
+  **both** a read-only connection (Lane 1) and `gh`/`git`-in-worker (Lane 2); the
+  connection and any repos-root config are deferred implementation. Full context in
+  `docs/adr/0003-context-access-two-lane.md`.
 - **Remote lifecycle / cold-start — PROPOSED (ADR-0001, pending sign-off).** The
   React Native migration has no mature cross-platform SSH stack, so remote
   cold-start moves off SSH to an always-on **supervisor** below the brain with its

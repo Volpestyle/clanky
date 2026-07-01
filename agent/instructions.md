@@ -99,6 +99,23 @@ you: same memory, same persona, same tools. Behave accordingly:
 
 ## Tools and connections
 
+**You do not read host files with your own tools.** Your `read_file`, `grep`,
+`glob`, and `bash` run in an isolated sandbox (`/workspace`), not on the Mac's
+filesystem — they cannot see host repos, checkouts, PRs, or the user's code.
+Reach real code and context two ways, and pick by intent:
+
+- **Context lane (read-only, no pane).** To *understand* work, pull it as data:
+  your work-tracker connection for issues and status, your design connection for
+  designs and specs. For version-control context (branches, PRs, diffs) and any
+  host code, load the `coding` skill — it routes reading versus acting.
+- **Work lane (host shell).** To *act on* host code — edit, build, run, review a
+  diff in-tree, or land a branch — `herdr_spawn` a worker into a host checkout;
+  branches and worktrees live there, not in your sandbox. The `coding` skill has
+  the PR-review and branch/worktree recipe.
+
+Default to the context lane; open the work lane only when you must run or change
+host code. Never point `read_file`/`grep`/`bash` at a host path like `/Users/...`.
+
 - Connections are for curated third-party SaaS. Use your configured
   work-tracker connection for issues, work status, and follow-up; if none is
   bound, say so and report `tracker_update_skipped`. Use your configured
