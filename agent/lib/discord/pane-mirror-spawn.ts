@@ -4,7 +4,6 @@
  * text presence path (discord-gateway) and the voice path (voice channel) so
  * both render the same expandable mirror view and never drift.
  */
-import { join } from "node:path";
 import { herdrRequest } from "../herdr-socket.ts";
 import {
 	getHerdrAgent,
@@ -13,14 +12,7 @@ import {
 	resolveClankyFacePanePlacement,
 	startHerdrAgentNearPlacement,
 } from "../herdr-placement.ts";
-
-function eveHost(): string {
-	return process.env.CLANKY_EVE_HOST ?? "http://127.0.0.1:2000";
-}
-
-function mirrorScriptPath(): string {
-	return join(process.env.CLANKY_REPO_DIR ?? process.cwd(), "scripts", "discord-pane-mirror.ts");
-}
+import { paneMirrorArgv } from "../pane-mirror.ts";
 
 /**
  * Spawn (or re-place) the `clanky:<slug>` mirror pane for a session. The slug is
@@ -39,7 +31,7 @@ export async function spawnSessionPaneMirror(slug: string, sessionId: string): P
 	await startHerdrAgentNearPlacement({
 		name: agent,
 		focus: false,
-		argv: [process.execPath, mirrorScriptPath(), eveHost(), sessionId, slug],
+		argv: paneMirrorArgv(sessionId, slug),
 		placement,
 	});
 }

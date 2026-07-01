@@ -363,7 +363,18 @@ flowchart LR
   clients must not simulate new tabs by starting a pane with only
   `workspace_id`, because Herdr will place that pane in the workspace's current
   tab.
-  Chat-with-Clanky uses eve's session routes (`/eve/v1/session`).
+  Chat-with-Clanky uses eve's session routes (`/eve/v1/session`). Each native
+  chat also binds to a Herdr mirror: after creating an eve session the app calls
+  `chat.mirror {session_id, slug, title?, tab_id?, pane_id?}`, which places (or,
+  by handle, reuses) a one-pane mirror tab in a dedicated **"Clanky" workspace**
+  — one tab per chat, materialized via `layout.apply` so the mirror is the tab
+  root with no orphan shell — and returns `{workspace_id, tab_id, pane_id}`;
+  `chat.close {tab_id?, pane_id?, close_tab?}` tears it down. The mirror pane runs
+  the shared session viewer (`scripts/discord-pane-mirror.ts`), so an iOS chat is
+  watchable on the desktop stage like the Discord/voice presences (§5.6). The
+  chat list is **device-persisted** (`{slug, sessionId, continuationToken, title,
+  tabId, paneId}`); per-chat status is reconciled against the workspace tree the
+  app already streams, so there is no server-side chat registry.
 - **Live terminal (relay `attach`/`write`).** For a true interactive terminal —
   the phone typing straight into a pane and seeing it live — the relay adds a
   held-open `attach` stream and a raw `write` op:
@@ -709,7 +720,7 @@ surface. They differ only in *which session thread* a turn lands on:
 | custom face (`scripts/clanky.ts`) | main | — (it *is* the main thread) | the face pane |
 | Discord text | per-channel presence | no | `clanky:discord-*` mirror |
 | Discord server voice / private call | voice presence | no | `clanky:voice-*` mirror |
-| iOS app | main (via relay) | — | the face pane |
+| iOS app | per-chat presence (relay `chat.mirror`) | no | a mirror tab per chat in the "Clanky" workspace |
 
 This is what lets you talk to Clanky in the TUI and have him doing parallel work
 while, independently, Discord text and voice presences carry on their own
@@ -753,14 +764,22 @@ select a block, Enter/Space (or Alt+Enter) or a left-click expand/collapse,
 PageUp/Down and the mouse wheel scroll; all interaction with the session happens
 over Discord.
 
-Both presence kinds spawn the mirror through one seam,
-`spawnSessionPaneMirror(slug, sessionId)` (`agent/lib/discord/pane-mirror-spawn.ts`):
-text channels mirror their presence session as `clanky:discord-<channel>` from
-the gateway's `onPresenceSession`; voice mirrors its **durability eve session**
-(§5.3 — the silent turn that runs the same brain on voice activity) as
-`clanky:voice-<channel>`, bootstrapped from `joinVoice` with a silent start turn
-so the voice subagent is visible immediately after joining. Voice transcript
-turns surface as `Voice <speaker>: …` inbound lines.
+The mirror **script** (`scripts/discord-pane-mirror.ts`) and its argv builder
+(`agent/lib/pane-mirror.ts`) are shared across presence kinds; only placement
+differs. Discord and voice spawn through one seam,
+`spawnSessionPaneMirror(slug, sessionId)` (`agent/lib/discord/pane-mirror-spawn.ts`),
+splitting near the face pane: text channels mirror their presence session as
+`clanky:discord-<channel>` from the gateway's `onPresenceSession`; voice mirrors
+its **durability eve session** (§5.3 — the silent turn that runs the same brain on
+voice activity) as `clanky:voice-<channel>`, bootstrapped from `joinVoice` with a
+silent start turn so the voice subagent is visible immediately after joining.
+Voice transcript turns surface as `Voice <speaker>: …` inbound lines. iOS native
+chats mirror through the relay `chat.mirror` op
+(`agent/lib/ios/chat-mirror-spawn.ts`): each chat is the **root pane of its own
+tab** (labeled with the chat slug) in a dedicated "Clanky" workspace — one tab per
+chat, materialized with `layout.apply` so no orphan shell pane is left — addressed
+by its `{workspace_id, tab_id, pane_id}` handles rather than a named agent
+(ADR-0004).
 
 ## 6. Decoupled swarm sessions (Clanky optional)
 
@@ -968,6 +987,14 @@ while clients may still show the original `$name`.
   `pane.attach` compatibility path over supported read sources. This keeps Herdr
   vanilla at runtime; upstream Herdr can add richer sources without forcing a
   Clanky-specific fork.
+- **iOS chat ↔ Herdr binding — PROPOSED (ADR-0004; implemented, pending
+  sign-off).** Each native iOS chat is a presence session (like Discord/voice),
+  mirrored as a one-pane tab in a dedicated "Clanky" workspace via the relay
+  `chat.mirror` / `chat.close` ops (§4.4, §5.6). The mirror is the tab root (no
+  orphan shell, `layout.apply`), and the chat list is device-persisted with
+  per-chat status reconciled from the live workspace tree — no server-side chat
+  registry. Backend + iOS have landed (green checks); ratification pending. Full
+  context in `docs/adr/0004-ios-native-chat-herdr-binding.md`.
 - **Face surface — RESOLVED: custom face.** eve's stock TUI has a fixed,
   non-extensible slash-command set, so the face is `scripts/clanky.ts` (`pnpm
   dev`) on the public eve/client: it renders eve's event stream through pi-tui

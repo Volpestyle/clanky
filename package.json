@@ -50,6 +50,7 @@
 		"smoke:transcript-routing": "node test/clanky-transcript-key-routing-smoke.ts",
 		"smoke:transcript-viewport": "node test/clanky-transcript-viewport-smoke.ts",
 		"smoke:mirror": "node test/discord-pane-mirror-smoke.ts",
+		"smoke:ios:chat-mirror": "node test/ios-chat-mirror-smoke.ts",
 		"smoke:chrome-selection": "node test/clanky-chrome-selection-smoke.ts",
 		"smoke:tui-ledger": "node test/clanky-tui-ledger-smoke.ts",
 		"smoke:sgr-mouse": "node test/clanky-sgr-mouse-smoke.ts",

@@ -20,6 +20,7 @@ import { defineChannel, GET, WS } from "eve/channels";
 import type { WebSocketMessage, WebSocketPeer } from "eve/channels";
 import { isFrontdoorAuthorized } from "../lib/frontdoor-auth.ts";
 import { resolveClankyFacePanePlacement, startHerdrAgentNearPlacement, type HerdrPanePlacement } from "../lib/herdr-placement.ts";
+import { closeIosChatMirror, mirrorIosChat } from "../lib/ios/chat-mirror-spawn.ts";
 import { attachHerdrTerminal, type HerdrTerminalAttachStream } from "../lib/herdr-client-socket.ts";
 import { herdrRequest, herdrStreamLines, type HerdrStream } from "../lib/herdr-socket.ts";
 import { parsePushPlatform, registerPushDevice, unregisterPushDevice } from "../lib/push-registry.ts";
@@ -410,6 +411,37 @@ async function dispatch(op: string, args: Record<string, unknown>): Promise<unkn
 			const pane = str(args.pane);
 			if (!pane) throw new Error("close requires pane");
 			return hreq("pane.close", { pane_id: pane });
+		}
+		case "chat.mirror": {
+			// Bind an iOS native chat to a herdr pane mirror (ADR-0004): a one-pane tab
+			// in the dedicated "Clanky" workspace, tailing the eve session read-only.
+			// Idempotent by the device-remembered {tab_id, pane_id} handles.
+			const sessionId = str(args.session_id);
+			const slug = str(args.slug);
+			if (sessionId === undefined || slug === undefined) throw new Error("chat.mirror requires session_id and slug");
+			const title = str(args.title);
+			const tabId = str(args.tab_id);
+			const paneId = str(args.pane_id);
+			return mirrorIosChat({
+				sessionId,
+				slug,
+				...(title === undefined ? {} : { title }),
+				...(tabId === undefined ? {} : { tabId }),
+				...(paneId === undefined ? {} : { paneId }),
+				...(session === undefined ? {} : { session }),
+			});
+		}
+		case "chat.close": {
+			// Tear down an iOS chat's presence: close the mirror pane, and its tab when
+			// close_tab is set (ADR-0004). Handles are the device-remembered ids.
+			const tabId = str(args.tab_id);
+			const paneId = str(args.pane_id);
+			return closeIosChatMirror({
+				...(tabId === undefined ? {} : { tabId }),
+				...(paneId === undefined ? {} : { paneId }),
+				...(args.close_tab === true ? { closeTab: true } : {}),
+				...(session === undefined ? {} : { session }),
+			});
 		}
 		case "register-push": {
 			// Mobile clients register their APNs/FCM device token after pairing so
