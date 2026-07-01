@@ -28,4 +28,4 @@ work. Routine changes that just follow the existing model do not need one.
 | --- | --- | --- |
 | [0001](0001-remote-lifecycle-cold-start.md) | Remote lifecycle / cold-start after the React Native migration | Proposed |
 | [0002](0002-pool-orchestration-operating-model.md) | Tracker-driven persistent-pool orchestration | Proposed |
-| [0003](0003-context-access-two-lane.md) | Two-lane context access: sandbox boundary, connections, PR/branch work lane | Proposed |
+| [0003](0003-context-access-two-lane.md) | Host context access: two lanes + a Seatbelt-sandboxed host-command tool (Codex approval model) | Proposed |

@@ -865,8 +865,10 @@ blur them.
    Vercel `connect()` helper, since Clanky does not adopt Vercel surfaces. Adding
    one is a small committed code change plus a dev-server reload; the model cannot
    add a connection at runtime, which is the point for credentialed services. A
-   read-only GitHub (version-control) connection for reading branches, PRs, and
-   diffs as data is the next planned connection (ADR-0003, Context lane).
+   curated GitHub connection was considered but is **not** planned: local
+   version-control reads (branches, PRs, diffs) come from a Seatbelt-sandboxed
+   host-command tool running the host `gh` read-only (ADR-0003, Context
+   lane), not a connection.
 
 2. **First-party tools (`agent/tools/`)** — capabilities we author and own: the
    herdr spawn seam, `browser_control` (the custom browser-extension bridge),
@@ -928,15 +930,22 @@ while clients may still show the original `$name`.
 
 ## 11. Open decisions
 
-- **Context access / two lanes — PROPOSED (ADR-0003, pending sign-off).** Clanky's
-  own `read_file`/`grep`/`bash` are sandbox-only (`/workspace`) and blind to host
-  code; the persona now names that boundary and a two-lane model — a **Context
-  lane** (read work as data through the work-tracker, design, and a planned
-  read-only GitHub connection) and a **Work lane** (`herdr_spawn` a worker into a
-  host checkout to edit/build/review a diff in-tree or land a branch). GitHub gets
-  **both** a read-only connection (Lane 1) and `gh`/`git`-in-worker (Lane 2); the
-  connection and any repos-root config are deferred implementation. Full context in
-  `docs/adr/0003-context-access-two-lane.md`.
+- **Host context access / two lanes — PROPOSED (ADR-0003, pending sign-off).**
+  Clanky's own `read_file`/`grep`/`bash` are sandbox-only (`justbash`, `/workspace`)
+  and blind to host code. The model: a **Context lane** (read work as data/reads —
+  work-tracker and design connections, plus a planned extensible **host-CLI tool**,
+  initially file reads + `gh`, governed by a per-CLI policy registry) and a **Work
+  lane** (`herdr_spawn` a visible pane for build /
+  run / land). The host-command tool adopts **Codex's approval model**
+  (`~/dev/codex`): a raw command surface + a skill (not narrow schemas), default
+  read-only enforced by macOS **Seatbelt** (`sandbox-exec`), a safe-command fast
+  path that auto-runs reads, and **approve-in-place** on-request escalation to
+  `workspace-write` surfaced through `agent/lib/approvals.ts`. An owner-only **yolo** mode
+  (full-access + never-ask) tops the approval ladder (read-only → auto → yolo),
+  clamped to owner-driven turns — untrusted presence turns stay gated. Local version-control
+  reads come from that tool running host `gh`, so **no GitHub connection is
+  planned**. Tool, Seatbelt profile, skill, and approvals wiring are deferred
+  implementation. Full context in `docs/adr/0003-context-access-two-lane.md`.
 - **Remote lifecycle / cold-start — PROPOSED (ADR-0001, pending sign-off).** The
   React Native migration has no mature cross-platform SSH stack, so remote
   cold-start moves off SSH to an always-on **supervisor** below the brain with its
