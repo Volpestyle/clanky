@@ -45,6 +45,7 @@ import {
 } from "eve/client";
 import { applyEnvRemovals, applyEnvUpserts } from "../agent/lib/discord/env-file.ts";
 import { apnsConfigFromEnv, sendApns } from "../agent/lib/apns.ts";
+import { fcmConfigFromEnv, sendFcm } from "../agent/lib/fcm.ts";
 import { browserBridgeStatus } from "../agent/lib/browser-bridge.ts";
 import { buildEveDevServerEnv } from "../agent/lib/eve-dev-env.ts";
 import { startFacePresence, stopFacePresence, type FaceCommandRequest } from "../agent/lib/face-presence.ts";
@@ -285,6 +286,7 @@ import {
 	PUSH_ACTION_OPTIONS,
 	PUSH_APNS_ENV,
 	PUSH_APNS_ENV_OPTIONS,
+	PUSH_FCM_ENV,
 	type PushApnsEnvironment,
 	type PushCommandAction,
 	SETTINGS_STATUS_COLLAPSE_ICON,
@@ -1269,7 +1271,7 @@ function buildClankyPromptCommands(): ClankyPromptCommandSpec[] {
 		{
 			name: "push",
 			aliases: ["notifications", "apns"],
-			description: "Configure iOS push notifications and APNs credentials",
+			description: "Configure push notifications and sender credentials",
 			argumentHint: "[status|test|key-path|key-id|team-id|bundle-id|env|clear] [value]",
 			takesArgument: true,
 			build: (argument) => ({ type: "extension", name: "push", argument }),
@@ -3856,23 +3858,30 @@ async function savePushConfigUpdate(update: PushConfigUpdate): Promise<string> {
 
 async function pushStatusText(config?: ClankyConfig): Promise<string> {
 	const effectiveConfig = config ?? await readConfig();
-	return formatPushStatus(effectiveConfig, await safeListPushDevices(), await pushKeyPathStatus(effectiveConfig.apnsKeyPath));
+	const env = await readPushEnv();
+	const fcm = fcmConfigFromEnv(env);
+	return formatPushStatus(effectiveConfig, await safeListPushDevices(), await pushKeyPathStatus(effectiveConfig.apnsKeyPath), fcm?.projectId);
 }
 
 async function formatPushMenuStatus(config: ClankyConfig, devices: readonly PushDevice[]): Promise<SettingsMenuStatus> {
-	const collapsed = formatPushSummary(config, devices);
-	const expanded = formatPushStatus(config, devices, await pushKeyPathStatus(config.apnsKeyPath));
+	const env = await readPushEnv();
+	const fcm = fcmConfigFromEnv(env);
+	const collapsed = formatPushSummary(config, devices, fcm !== undefined);
+	const expanded = formatPushStatus(config, devices, await pushKeyPathStatus(config.apnsKeyPath), fcm?.projectId);
 	return collapsibleMenuStatus(collapsed, expanded);
 }
 
-function formatPushSummary(config: ClankyConfig, devices: readonly PushDevice[]): string {
-	const configured = pushApnsConfigured(config);
+function formatPushSummary(config: ClankyConfig, devices: readonly PushDevice[], fcmReady: boolean): string {
+	const apnsReady = pushApnsConfigured(config);
+	const iosCount = devices.filter((device) => device.platform === "ios").length;
+	const androidCount = devices.filter((device) => device.platform === "android").length;
 	return [
 		statusTitle("Push notifications"),
 		[
-			statusInline("APNs", configured ? "configured" : "missing credentials", configured ? "ok" : "warn"),
+			statusInline("APNs", apnsReady ? "configured" : "missing credentials", apnsReady ? "ok" : "warn"),
+			statusInline("FCM", fcmReady ? "configured" : "missing credentials", fcmReady ? "ok" : "warn"),
 			statusInline("env", parsePushApnsEnvironment(config.apnsEnvironment) ?? DEFAULT_APNS_ENVIRONMENT, "muted"),
-			statusInline("devices", String(devices.length), devices.length > 0 ? "ok" : "warn"),
+			statusInline("devices", `${devices.length} (iOS ${iosCount}, Android ${androidCount})`, devices.length > 0 ? "ok" : "warn"),
 		].join("; "),
 	].join("\n");
 }
@@ -3881,14 +3890,20 @@ function formatPushStatus(
 	config: ClankyConfig,
 	devices: readonly PushDevice[],
 	keyPathStatus: "unset" | "readable" | "unreadable",
+	fcmProjectId: string | undefined,
 ): string {
-	const configured = pushApnsConfigured(config);
+	const apnsReady = pushApnsConfigured(config);
+	const fcmReady = fcmProjectId !== undefined;
 	const keyPath = config.apnsKeyPath;
 	const environment = parsePushApnsEnvironment(config.apnsEnvironment) ?? DEFAULT_APNS_ENVIRONMENT;
-	const deviceList = devices.length === 0 ? "(none)" : devices.map((device) => `${maskPushToken(device.token)} ${device.platform}`).join(", ");
+	const iosCount = devices.filter((device) => device.platform === "ios").length;
+	const androidCount = devices.filter((device) => device.platform === "android").length;
+	const deviceList = devices.length === 0
+		? "(none)"
+		: devices.map((device) => `${maskPushToken(device.token)} ${device.platform}${device.events.length === 0 ? "" : ` [${device.events.join(",")}]`}`).join(", ");
 	const lines = [
 		statusTitle("Push notifications"),
-		statusLine("APNs", configured ? "configured" : "missing credentials", configured ? "ok" : "warn"),
+		statusLine("APNs", apnsReady ? "configured" : "missing credentials", apnsReady ? "ok" : "warn"),
 		statusLine(
 			"key path",
 			keyPath === undefined ? "(unset)" : displayHomePath(keyPath),
@@ -3898,41 +3913,74 @@ function formatPushStatus(
 		statusLine("team id", config.apnsTeamId === undefined ? "(unset)" : config.apnsTeamId, config.apnsTeamId === undefined ? "warn" : "ok"),
 		statusLine("bundle id", config.apnsBundleId ?? DEFAULT_APNS_BUNDLE_ID, config.apnsBundleId === undefined ? "muted" : "ok"),
 		statusLine("environment", environment, environment === "sandbox" ? "muted" : "active"),
-		statusLine("registered devices", `${devices.length}${devices.length === 0 ? "" : ` (${deviceList})`}`, devices.length > 0 ? "ok" : "warn"),
+		statusLine("FCM", fcmReady ? `configured (${fcmProjectId})` : "missing credentials", fcmReady ? "ok" : "warn"),
+		statusLine(
+			"registered devices",
+			`${devices.length} (iOS ${iosCount}, Android ${androidCount})${devices.length === 0 ? "" : ` ${deviceList}`}`,
+			devices.length > 0 ? "ok" : "warn",
+		),
 	];
-	if (!configured) {
+	if (!apnsReady) {
 		lines.push("", "Run /push to set APNs key path, key id, and team id. Store only the .p8 file path, not the key contents.");
 	}
+	if (!fcmReady && androidCount > 0) {
+		lines.push("", `Set ${PUSH_FCM_ENV.serviceAccountPath} or ${PUSH_FCM_ENV.projectId}/${PUSH_FCM_ENV.clientEmail}/${PUSH_FCM_ENV.privateKey} before Android pushes can send.`);
+	}
 	if (devices.length === 0) {
-		lines.push("", "Register an iPhone from Clanky iOS Settings -> Enable notifications, then run /push test.");
+		lines.push("", "Register a mobile client from Clanky app settings -> Enable notifications, then run /push test.");
 	}
 	return lines.join("\n");
 }
+
+type PushTestSendResult = {
+	device: PushDevice;
+	result: {
+		ok: boolean;
+		status?: number;
+		reason?: string;
+	};
+};
 
 async function sendPushTestNotification(): Promise<string> {
 	const config = await readConfig();
 	const env = await readPushEnv();
 	const apns = apnsConfigFromEnv(env);
+	const fcm = fcmConfigFromEnv(env);
 	const devices = await safeListPushDevices();
-	if (apns === undefined) return `${await pushStatusText(config)}\n\nAPNs is not configured; set key path, key id, and team id first.`;
-	if (devices.length === 0) return `${await pushStatusText(config)}\n\nNo registered iOS devices. Enable notifications in the app first.`;
+	if (devices.length === 0) return `${await pushStatusText(config)}\n\nNo registered devices. Enable notifications in a mobile client first.`;
 	const note = {
 		title: "Clanky test",
 		body: "Push notifications are wired.",
 		collapseId: `clanky-test-${Date.now()}`,
 		data: { status: "test", test: "1" },
 	};
-	const results = await Promise.all(
-		devices.map(async (device) => ({ device, result: await sendApns(device.token, note, apns) })),
-	);
+	const iosDevices = devices.filter((device) => device.platform === "ios");
+	const androidDevices = devices.filter((device) => device.platform === "android");
+	const sends: Promise<PushTestSendResult>[] = [];
+	if (apns !== undefined) {
+		sends.push(...iosDevices.map(async (device) => ({ device, result: await sendApns(device.token, note, apns) })));
+	}
+	if (fcm !== undefined) {
+		sends.push(...androidDevices.map(async (device) => ({ device, result: await sendFcm(device.token, note, fcm) })));
+	}
+	if (sends.length === 0) {
+		return `${await pushStatusText(config)}\n\nNo configured sender matches the registered devices. Configure APNs for iOS or FCM for Android first.`;
+	}
+	const results = await Promise.all(sends);
 	const okCount = results.filter((entry) => entry.result.ok).length;
+	const skipped = [
+		...(apns === undefined && iosDevices.length > 0 ? [`${iosDevices.length} iOS (APNs missing)`] : []),
+		...(fcm === undefined && androidDevices.length > 0 ? [`${androidDevices.length} Android (FCM missing)`] : []),
+	];
 	const lines = [
 		statusTitle("Push test"),
-		statusLine("APNs host", apns.host, "muted"),
+		...(apns === undefined ? [] : [statusLine("APNs host", apns.host, "muted")]),
+		...(fcm === undefined ? [] : [statusLine("FCM project", fcm.projectId, "muted")]),
 		statusLine("sent", `${okCount}/${results.length}`, okCount === results.length ? "ok" : "warn"),
+		...(skipped.length === 0 ? [] : [statusLine("skipped", skipped.join(", "), "warn")]),
 		...results.map(({ device, result }) =>
 			statusLine(
-				maskPushToken(device.token),
+				`${maskPushToken(device.token)} ${device.platform}`,
 				result.ok ? "ok" : `${result.reason ?? `HTTP ${result.status ?? "?"}`}`,
 				result.ok ? "ok" : "bad",
 			),

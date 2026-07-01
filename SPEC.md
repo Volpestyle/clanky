@@ -310,18 +310,25 @@ flowchart LR
   to ensure the `clankies` session exists and Clanky's brain (`eve dev --no-ui`)
   runs as a pane. Auth: an ed25519 key the app generates and holds in the iOS
   Keychain. Modes: `up` / `status` / `down`, each emitting JSON the app parses.
-- **Push (relay `register-push` + APNs).** After pairing, the phone registers its
-  APNs device token (`register-push {token, events?, platform}`), persisted in
-  `~/.config/clanky/push-tokens.json`; the relay returns `{ok, registered,
-  apnsConfigured}` so clients can distinguish token registration from send-ready
-  APNs configuration. A poll-and-diff watcher (`pane.list` every 5s) pushes an
-  alert when an agent transitions to blocked/done/error, carrying the
-  pane/workspace ids so a tap deep-links into that pane's live terminal. APNs uses
+- **Push (relay `register-push` + APNs/FCM).** After pairing, mobile clients
+  register their push token (`register-push {token, platform, events?}` where
+  `platform` is `ios` or `android`; omitted platform defaults to `ios` for the
+  existing iOS client), persisted in `~/.config/clanky/push-tokens.json`; the
+  relay returns `{ok, registered, platform, apnsConfigured, fcmConfigured}` so
+  clients can distinguish token registration from send-ready sender
+  configuration. A poll-and-diff watcher (`pane.list` every 5s) pushes an alert
+  when an agent transitions to blocked/done/error, carrying the pane/workspace
+  ids so a tap deep-links into that pane's live terminal. iOS devices use APNs
   token-based auth (ES256 JWT over a .p8 key, `node:crypto` + `http2`), gated on
   `CLANKY_APNS_KEY_PATH` / `CLANKY_APNS_KEY_ID` / `CLANKY_APNS_TEAM_ID` (+
-  `CLANKY_APNS_BUNDLE_ID`, `CLANKY_APNS_ENV`); a no-op when unset. The face's
-  `/push` command is the local APNs setup surface: it stores only the `.p8` path,
-  shows masked registered device tokens, and can send a test notification.
+  `CLANKY_APNS_BUNDLE_ID`, `CLANKY_APNS_ENV`); Android devices use FCM HTTP v1
+  with service-account OAuth, gated on `CLANKY_FCM_SERVICE_ACCOUNT_PATH` (or
+  `GOOGLE_APPLICATION_CREDENTIALS`) plus optional `CLANKY_FCM_PROJECT_ID`, or the
+  env-only `CLANKY_FCM_PROJECT_ID` / `CLANKY_FCM_CLIENT_EMAIL` /
+  `CLANKY_FCM_PRIVATE_KEY` trio. Both senders no-op when unset. The face's
+  `/push` command is the local APNs setup surface and push status/test surface:
+  it stores only the `.p8` path, shows masked registered device tokens by
+  platform, and can send test notifications through configured senders.
 - **Interaction (relay).** The relay is a raw WS route, so it bypasses eve's
   session framing and carries terminal scrollback, status, and input injection
   faithfully. It adds explicit `start`/`create-tab`/`close` ops alongside

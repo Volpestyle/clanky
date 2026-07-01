@@ -1,29 +1,48 @@
 /**
  * Push watcher (SPEC §4.4). herdr's agent-status subscription is per-pane, so
  * rather than juggle a subscription per pane we poll `pane.list` and diff each
- * pane's agent_status. On a transition into a notify-worthy state we push an
- * APNs alert to every registered device. Push latency of a few seconds is fine
- * for "agent blocked / done".
+ * pane's agent_status. On a transition into a notify-worthy state we route a
+ * platform push to every registered device. Push latency of a few seconds is
+ * fine for "agent blocked / done".
  *
  * Started lazily on the first device registration (relay `register-push`), so it
  * never runs when no phone is listening. Idempotent.
  */
-import { apnsConfigured, sendApns } from "./apns.ts";
+import { apnsConfigured, sendApns, type ApnsNotification, type ApnsResult } from "./apns.ts";
+import { fcmConfigured, isStaleFcmTokenReason, sendFcm, type FcmResult } from "./fcm.ts";
 import { herdrRequest } from "./herdr-socket.ts";
-import { listPushDevices, unregisterPushDevice } from "./push-registry.ts";
+import { listPushDevices, type PushDevice, type PushPlatform, unregisterPushDevice } from "./push-registry.ts";
 
 const POLL_MS = 5000;
 const NOTIFY_STATUSES = new Set(["blocked", "error", "needs-human", "needs_human"]);
 const DONE_STATUS = "done";
 const STALE_TOKEN_REASONS = new Set(["BadDeviceToken", "Unregistered", "DeviceTokenNotForTopic"]);
 
-interface HerdrPaneLite {
+export interface HerdrPaneLite {
 	pane_id: string;
 	workspace_id?: string;
 	tab_id?: string;
 	agent?: string;
 	agent_status?: string;
 }
+
+export interface PushDeliveryDeps {
+	listDevices(): Promise<PushDevice[]>;
+	unregisterDevice(token: string, platform?: PushPlatform): Promise<void>;
+	apnsConfigured(): boolean;
+	fcmConfigured(): boolean;
+	sendApns(token: string, note: ApnsNotification): Promise<ApnsResult>;
+	sendFcm(token: string, note: ApnsNotification): Promise<FcmResult>;
+}
+
+const defaultPushDeliveryDeps: PushDeliveryDeps = {
+	listDevices: listPushDevices,
+	unregisterDevice: unregisterPushDevice,
+	apnsConfigured,
+	fcmConfigured,
+	sendApns,
+	sendFcm,
+};
 
 let started = false;
 const lastStatus = new Map<string, string>();
@@ -46,7 +65,7 @@ async function loop(): Promise<void> {
 				lastStatus.set(pane.pane_id, status);
 				// Skip the first poll so we don't alert for panes already blocked/done.
 				if (primed && status !== previous && shouldNotify(status)) {
-					await pushForPane(pane, status);
+					await sendPushForPane(pane, status);
 				}
 			}
 			const live = new Set(panes.map((pane) => pane.pane_id));
@@ -65,9 +84,11 @@ function shouldNotify(status: string): boolean {
 	return status === DONE_STATUS || NOTIFY_STATUSES.has(status);
 }
 
-async function pushForPane(pane: HerdrPaneLite, status: string): Promise<void> {
-	if (!apnsConfigured()) return;
-	const devices = await listPushDevices();
+export async function sendPushForPane(pane: HerdrPaneLite, status: string, deps: PushDeliveryDeps = defaultPushDeliveryDeps): Promise<void> {
+	const apnsReady = deps.apnsConfigured();
+	const fcmReady = deps.fcmConfigured();
+	if (!apnsReady && !fcmReady) return;
+	const devices = await deps.listDevices();
 	if (devices.length === 0) return;
 
 	const name = pane.agent ?? pane.pane_id;
@@ -86,9 +107,18 @@ async function pushForPane(pane: HerdrPaneLite, status: string): Promise<void> {
 
 	for (const device of devices) {
 		if (device.events.length > 0 && !device.events.includes(status)) continue;
-		const result = await sendApns(device.token, note);
-		if (!result.ok && result.reason && STALE_TOKEN_REASONS.has(result.reason)) {
-			await unregisterPushDevice(device.token);
+		if (device.platform === "ios") {
+			if (!apnsReady) continue;
+			const result = await deps.sendApns(device.token, note);
+			if (!result.ok && result.reason && STALE_TOKEN_REASONS.has(result.reason)) {
+				await deps.unregisterDevice(device.token, device.platform);
+			}
+			continue;
+		}
+		if (!fcmReady) continue;
+		const result = await deps.sendFcm(device.token, note);
+		if (!result.ok && result.reason !== undefined && isStaleFcmTokenReason(result.reason)) {
+			await deps.unregisterDevice(device.token, device.platform);
 		}
 	}
 }
