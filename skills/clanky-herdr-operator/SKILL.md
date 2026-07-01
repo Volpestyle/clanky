@@ -299,9 +299,14 @@ check its `DONE` file): a worker that already wrote `DONE` is finished, and
 re-prompting it to "write result.md / print CLANKY_WORKER_DONE" only wastes a
 turn on work it has done. Pane reads and `agent_status` lag the sentinel — let
 the sentinel decide whether a steer is needed at all.
-Workers can also message each other with the Herdr CLI. For a submitted prompt,
-they should resolve the target pane and use `herdr pane run`; `herdr agent send`
-writes literal text only.
+Workers message each other with `clanky msg <name> "message"` — it resolves the
+target against the live roster (a `clanky:<slug>`, label, or pane id), refuses an
+ambiguous or self target, and stamps the sender's verified `[from <self>]` so no
+one trusts a pane id a message claims for itself. Raw `herdr pane run` (resolve
+the pane fresh with `herdr agent get`) is the fallback for non-message input;
+`herdr agent send` writes literal text only. When a brief tells one worker to
+coordinate with another, give the sibling's durable name, not a pane id — pane
+ids compact and get misattributed.
 
 If a worker hits an external live-gate (a dev server, production service, paid
 API, or user-owned live agent) do not start or mutate that system just to unblock

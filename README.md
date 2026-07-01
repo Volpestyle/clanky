@@ -134,6 +134,11 @@ Then use `clanky` from anywhere:
   stage session, headless command host, and Eve brain.
 - **`clanky worker <prompt>`** — send one task to the running Clanky Eve brain
   and stream text output.
+- **`clanky msg <name> <text>`** — from inside a worker pane, send a peer worker
+  (or `clanky:main`) a submitted prompt. Resolves `<name>` (a `clanky:<slug>`,
+  pane label, or pane id) against the live roster, refuses an ambiguous or self
+  target, and stamps the message with the sender's verified `[from <self>]` so
+  the recipient never trusts a self-declared pane id.
 - **`clanky update`** — fast-forward this checkout, install dependencies, and
   refresh the `~/.local/bin/clanky` symlink. Use `clanky update --check` to run
   `pnpm check` after updating.

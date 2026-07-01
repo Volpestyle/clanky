@@ -73,6 +73,7 @@
 		"smoke:bash": "node test/clanky-face-bash-smoke.ts",
 		"smoke:discord:gateway-status": "node test/discord-gateway-status-smoke.ts",
 		"smoke:herdr:client-socket": "node test/herdr-client-socket-smoke.ts",
+		"smoke:herdr:message": "node test/herdr-message-smoke.ts",
 		"smoke:herdr:placement": "node test/herdr-placement-smoke.ts",
 		"smoke:local-context": "node test/local-context-smoke.ts",
 		"claude:login": "node scripts/claude-login.ts",

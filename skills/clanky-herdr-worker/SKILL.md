@@ -48,15 +48,38 @@ Send literal text without submitting:
 herdr agent send clanky:<slug> "message"
 ```
 
-Submit a prompt to another worker or to Clanky:
+Submit a prompt to another worker or to Clanky with `clanky msg`:
 
 ```bash
-PANE="$(herdr agent get clanky:<slug-or-main> | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["agent"]["pane_id"])')"
-herdr pane run "$PANE" "message"
+clanky msg <name> "message"
 ```
 
-`herdr agent send` writes literal text only; use `herdr pane run` for submitted
-prompts.
+`clanky msg` is the safe default for peer messaging. `<name>` is a durable name
+— a `clanky:<slug>`, a pane label, or a pane id — which it resolves against the
+LIVE roster, refusing an ambiguous or self target. It prefixes your verified
+`[from <self>]` (from `HERDR_PANE_ID`) so the recipient never has to trust a
+self-declared id, and fails closed outside a herdr pane. Drop to raw
+`herdr pane run "$PANE" "message"` (resolve `$PANE` fresh with `herdr agent get`)
+only when you need something `clanky msg` doesn't do, like sending bare keys.
+`herdr agent send` writes literal text without submitting.
+
+### Addressing and identity
+
+Resolve who is who from the live roster, never from a message's own claim about
+which pane it is — a relayed line that says "I'm w1:pEZ" is a hint, not an
+address, and pane ids are the least stable identifier (they compact when panes
+close). `clanky msg` enforces this for you; when you must address a pane by hand:
+
+- Address by durable name (label or `clanky:<slug>`) and resolve the pane id
+  fresh with `herdr agent get`; never reuse a pane id lifted from a message body.
+- Read the target pane first (`herdr agent read clanky:<slug> --source recent`)
+  and confirm its task/harness/repo match the sibling you mean before sending.
+- Prefix peer messages with `[from <self>]` so the recipient never has to trust a
+  self-declared id.
+
+If a pane's recent output doesn't match the sibling you intend, stop and
+re-resolve by name — a misaddressed status update lands in an uninvolved
+sibling's plan, not just its scrollback.
 
 ## Blocking
 

@@ -1,12 +1,13 @@
 #!/usr/bin/env node
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { watch } from "node:fs";
 import { lstat, mkdir, readlink, rm, symlink } from "node:fs/promises";
 import { readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseEnv } from "node:util";
+import { parseEnv, promisify } from "node:util";
 import { Client } from "eve/client";
+import { parsePaneRoster, resolveSelf, resolveTarget, stampMessage } from "../agent/lib/herdr-message.ts";
 import { serializeCommandLine } from "../agent/lib/coding-harness.ts";
 import { startTranscriptFileTail } from "../agent/lib/transcript-file-tail.ts";
 import { buildPairingLink, PAIRING_TOKEN_MISSING_MESSAGE, renderPairingQr } from "../agent/lib/pairing.ts";
@@ -83,6 +84,7 @@ type EveEvent = {
 const args = process.argv.slice(2);
 const command = args[0] ?? "dev";
 const rest = args.slice(1);
+const execFileAsync = promisify(execFile);
 
 function resolvePort(value: string | undefined, fallback: number): number {
 	const raw = value?.trim();
@@ -120,6 +122,8 @@ async function runCommand(commandName: string, commandArgs: string[]): Promise<C
 			return await runPair(commandArgs);
 		case "worker":
 			return await runWorker(commandArgs);
+		case "msg":
+			return await runMsg(commandArgs);
 		case "transcript":
 			return await runTranscriptCommand(commandArgs);
 		case "transcript-run":
@@ -149,6 +153,7 @@ Commands:
   down              Stop the Clanky command host / brain pane
   pair              Print a QR (or --link) the Clanky iOS app scans to connect
   worker <prompt>   Send one task to the running Clanky Eve brain and stream text
+  msg <name> <text> Send a peer worker a submitted prompt, stamped with your verified name
   transcript        List, read, tail, or print paths for worker transcripts
   transcript-run    Run a performer under Clanky's transcript capture
   install           Install this checkout's clanky binary into ~/.local/bin
@@ -748,6 +753,48 @@ async function runWorker(commandArgs: readonly string[]): Promise<CommandResult>
 		wroteText = true;
 	}
 	if (!wroteText) process.stdout.write("[no assistant text]\n");
+	return { code: 0 };
+}
+
+async function herdrCapture(herdrArgs: readonly string[]): Promise<string> {
+	const { stdout } = await execFileAsync("herdr", [...herdrArgs], { maxBuffer: 8 * 1024 * 1024 });
+	return stdout;
+}
+
+// `clanky msg <name> <text>` — provenance-stamped peer messaging between herdr
+// workers. It resolves the target against the LIVE roster (never a pane id a
+// message claimed for itself), refuses ambiguous/self targets, and prefixes the
+// message with the sender's verified `[from <name>]` (from HERDR_PANE_ID) so the
+// recipient never has to trust a self-declared id. See agent/lib/herdr-message.ts.
+async function runMsg(commandArgs: readonly string[]): Promise<CommandResult> {
+	const target = commandArgs[0];
+	const text = commandArgs.slice(1).join(" ").trim();
+	if (target === undefined || target.length === 0 || text.length === 0) {
+		process.stderr.write("Usage: clanky msg <name|pane-id> <message>\n");
+		return { code: 2 };
+	}
+	const selfPaneId = process.env.HERDR_PANE_ID;
+	if (selfPaneId === undefined || selfPaneId.length === 0) {
+		process.stderr.write(
+			"clanky msg: must run inside a herdr pane (HERDR_PANE_ID unset); cannot stamp a verified sender identity\n",
+		);
+		return { code: 1 };
+	}
+	const roster = parsePaneRoster(await herdrCapture(["pane", "list"]));
+	const self = resolveSelf(roster, selfPaneId);
+	const resolution = resolveTarget(roster, target, selfPaneId);
+	if (!resolution.ok) {
+		process.stderr.write(`clanky msg: ${resolution.reason}\n`);
+		if (resolution.candidates.length > 0) {
+			process.stderr.write("live panes:\n");
+			for (const candidate of resolution.candidates) {
+				process.stderr.write(`  ${candidate.name}\t${candidate.paneId}\t${candidate.agent ?? "?"}\t${candidate.status ?? "?"}\n`);
+			}
+		}
+		return { code: 1 };
+	}
+	await herdrCapture(["pane", "run", resolution.pane.paneId, stampMessage(self.name, text)]);
+	process.stdout.write(`sent to ${resolution.pane.name} (${resolution.pane.paneId}) as ${self.name}\n`);
 	return { code: 0 };
 }
 
