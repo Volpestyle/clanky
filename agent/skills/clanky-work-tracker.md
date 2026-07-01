@@ -22,3 +22,10 @@ At natural boundaries, update the tracker briefly: work started, meaningful
 blocker, verified completion, or residual risk. Do not busy-poll notifications,
 and do not mark work complete solely because a worker says it is done; verify
 the result first.
+
+Report as Clanky's own tracker identity, never as the owner: trackers suppress
+self-notifications, so writing as the owner leaves his inbox empty (Linear default
+= the `Clanky` bot actor fixed at `/mcp auth linear`; ADR-0005). `@mention` the
+owner (`@volpestyle`) once per issue you open or first touch — in the description
+on create, or your first status comment on an existing issue — which notifies and
+subscribes him so the rest of that issue's activity reaches his inbox.

@@ -26,6 +26,26 @@ Treat the configured work tracker as part of the working context. Do not wait fo
 - For tracker-backed fan-out, pair this with `clanky-herdr-operator`. The tracker owns issue discovery, DAG/wave ordering, assignment, status transitions, comments, and final closure; the terminal stage owns visible worker execution, live state, unblocking, harvest, and synthesis.
 - Do not mark an issue done solely because a worker reports completion. The operator verifies the result first, then updates tracker status.
 
+## Notifying the Owner
+
+The owner wants his tracker inbox to reflect your durable work. Most trackers —
+Linear included — never notify a user about their *own* activity, so this only
+works when you write as a tracker identity distinct from the owner (ADR-0005).
+
+- Act as Clanky's own tracker actor, never as the owner. On the default Linear
+  connection that is the `Clanky` bot member, fixed by which account authorized
+  `/mcp auth linear`. If your writes are attributed to the owner, every
+  notification self-suppresses and his inbox stays empty — do not "fix" that by
+  re-authing as the owner.
+- `@mention` the owner (`@volpestyle` on the default workspace) once per issue you
+  open or first touch: in the description when you create an issue, or in your
+  first status comment on a pre-existing issue you are driving. The mention both
+  notifies and subscribes the owner, so every later status change and comment
+  reaches his inbox without another mention.
+- The mention is a body token, not the author identity (that is the actor, set by
+  auth). Owner-created issues already subscribe him, so the mention rule is for the
+  issues he would not otherwise watch (Clanky-created or others').
+
 ## Living Docs (evolution log)
 
 - Some tracker artifacts are logs, not snapshots — demo recordings, status updates, decision records. Refresh them by appending a new dated entry, not by overwriting the prior content.
