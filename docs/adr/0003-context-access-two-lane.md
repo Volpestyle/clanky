@@ -114,14 +114,21 @@ applies only to **owner-driven turns** (the authenticated face and relay/iOS);
 the owner explicitly opts those in too. Enabling yolo is itself an owner-only
 privileged action, never something a Discord/voice turn can set.
 
-**Version control.** Because the host tool runs the already-authed host `gh`
-read-only, **VC reads (PRs, diffs, issues, CI, review comments) come from the host
-tool** — a curated GitHub OAuth connection is not needed and is dropped from scope.
-(Revisit only if Clanky must read GitHub while *off*-host, which the always-on Mac
-mini is not.) Local `git` is intentionally **not** granted: `gh` covers the
-GitHub-level context Clanky needs, and local git archaeology (blame/bisect/log on a
-working tree), if ever required, is a worker's job. This supersedes the earlier
-"GitHub = connection + `gh`-in-worker" direction.
+**Version control / GitHub — a curated connection.** GitHub is a **main integrated
+MCP**, a curated connection alongside Linear and Figma (`agent/connections/github.ts`,
+hosted GitHub OAuth MCP, `approval: gated(always())`), surfaced via
+`connection_search`. It is the first-class GitHub surface: structured reads (PRs,
+diffs, issues, CI, code search) plus **approval-gated collaboration writes** (comment,
+open/label issues, request review). GitHub API writes are SaaS writes like Linear's —
+brokered and gated by the connection, not host mutations — so they do not use the
+Seatbelt/pane path. The connection is bindable to **two roles**, either or both:
+`work_tracker` (GitHub Issues/PRs) and a new `version_control` / `code_host` role,
+chosen via `/integrations`; Linear stays the default `work_tracker` binding unless
+switched. The host-CLI `gh` (above) is now the **optional in-checkout local reader**
+for the diff of the repo Clanky is standing in; the connection covers everything
+off-host and in the hosted tier. (This **reverses an earlier draft of this ADR** that
+dropped the connection in favor of `gh`-only: GitHub is worth first-class
+integration, not just a local reader.) Local `git` is still not granted.
 
 ## Options considered
 

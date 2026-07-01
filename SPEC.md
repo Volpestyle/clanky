@@ -864,11 +864,11 @@ blur them.
    MCP, etc.) use `auth: defineInteractiveAuthorization` — self-hosted, not the
    Vercel `connect()` helper, since Clanky does not adopt Vercel surfaces. Adding
    one is a small committed code change plus a dev-server reload; the model cannot
-   add a connection at runtime, which is the point for credentialed services. A
-   curated GitHub connection was considered but is **not** planned: local
-   version-control reads (branches, PRs, diffs) come from a Seatbelt-sandboxed
-   host-command tool running the host `gh` read-only (ADR-0003, Context
-   lane), not a connection.
+   add a connection at runtime, which is the point for credentialed services.
+   **GitHub** is a curated connection alongside Linear and Figma
+   (`agent/connections/github.ts`, hosted OAuth), bindable to the `work_tracker`
+   and/or `version_control` roles; the Seatbelt-sandboxed host-command tool's `gh`
+   (ADR-0003) is the optional in-checkout local reader.
 
 2. **First-party tools (`agent/tools/`)** — capabilities we author and own: the
    herdr spawn seam, `browser_control` (the custom browser-extension bridge),
@@ -889,9 +889,11 @@ Decision rule: **OAuth or a shared first-party credential → a connection. No-a
 → a first-party tool.**
 
 **Role bindings.** Clanky's behavioral routing names logical roles, not vendors.
-Roles (work tracker, design tool, and future ones like finance) map to concrete
-connections through a runtime binding — `~/.clanky/integration-roles.json` with
-env overrides (`CLANKY_WORK_TRACKER`, `CLANKY_DESIGN_TOOL`) — surfaced to the model
+Roles (work tracker, design tool, version control, and future ones like finance) map
+to concrete connections through a runtime binding — `~/.clanky/integration-roles.json`
+with env overrides (`CLANKY_WORK_TRACKER`, `CLANKY_DESIGN_TOOL`, `CLANKY_VERSION_CONTROL`);
+one connection can fill more than one role (GitHub serves `work_tracker` and/or
+`version_control`) — surfaced to the model
 by a dynamic instruction (`agent/instructions/integrations.ts`, resolved on
 `turn.started`, read/written via `agent/lib/integration-roles.ts`). The custom face
 sets bindings with `/integrations` (lists roles, current bindings, and available
@@ -942,10 +944,11 @@ while clients may still show the original `$name`.
   path that auto-runs reads, and **approve-in-place** on-request escalation to
   `workspace-write` surfaced through `agent/lib/approvals.ts`. An owner-only **yolo** mode
   (full-access + never-ask) tops the approval ladder (read-only → auto → yolo),
-  clamped to owner-driven turns — untrusted presence turns stay gated. Local version-control
-  reads come from that tool running host `gh`, so **no GitHub connection is
-  planned**. Tool, Seatbelt profile, skill, and approvals wiring are deferred
-  implementation. Full context in `docs/adr/0003-context-access-two-lane.md`.
+  clamped to owner-driven turns — untrusted presence turns stay gated. **GitHub is a
+  curated connection** (main integrated MCP alongside Linear/Figma), bindable to the
+  `work_tracker` and/or `version_control` roles; the tool's `gh` is the optional
+  in-checkout reader. Tool, Seatbelt profile, skill, approvals wiring, and the GitHub
+  connection are deferred implementation. Full context in `docs/adr/0003-context-access-two-lane.md`.
 - **Remote lifecycle / cold-start — PROPOSED (ADR-0001, pending sign-off).** The
   React Native migration has no mature cross-platform SSH stack, so remote
   cold-start moves off SSH to an always-on **supervisor** below the brain with its
