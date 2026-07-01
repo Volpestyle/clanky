@@ -70,6 +70,12 @@ pane.
 
 ## Shared files
 
+Use the cwd/worktree Clanky assigned you. Do not create or switch to a separate
+git worktree unless your kickoff explicitly says this task is its own branch/PR.
+When you are assigned a PR-lane worktree, report the branch, worktree path, PR
+URL if one exists, verification, and any unresolved review-bot or human review
+comments in your result.
+
 If you notice a sibling worker is creating or editing files your task depends on,
 do not silently analyze or edit a moving target. Say so explicitly: block for the
 operator (state which files and which sibling), or send a short submitted prompt

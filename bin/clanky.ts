@@ -124,6 +124,8 @@ async function runCommand(commandName: string, commandArgs: string[]): Promise<C
 			return await runTranscriptCommand(commandArgs);
 		case "transcript-run":
 			return await runTranscriptRunner(commandArgs);
+		case "transcript-exec":
+			return await runTranscriptExec(commandArgs);
 		case "install":
 			await installCli();
 			return { code: 0 };
@@ -995,7 +997,7 @@ async function runTranscriptPtyBridge(
 ): Promise<CommandResult> {
 	const rawPath = join(run.dir, "stream.script.ansi");
 	await writeFile(rawPath, "");
-	const launch = scriptCommand(argv, rawPath);
+	const launch = await scriptCommand(argv, rawPath, run.dir);
 	const tail = await startTranscriptFileTail(run, rawPath);
 	return await new Promise((resolvePromise, reject) => {
 		const child = spawn(launch.command, launch.args, { cwd, stdio: "inherit" });
@@ -1031,11 +1033,29 @@ async function runTranscriptPtyBridge(
 	});
 }
 
-function scriptCommand(argv: readonly string[], outputPath: string): { command: string; args: string[] } {
+async function scriptCommand(argv: readonly string[], outputPath: string, runDir: string): Promise<{ command: string; args: string[] }> {
+	const argvPath = join(runDir, "script-argv.json");
+	await writeFile(argvPath, `${JSON.stringify({ argv })}\n`, { mode: 0o600 });
+	const execArgv = [process.execPath, CLI_PATH, "transcript-exec", argvPath];
 	if (process.platform === "darwin" || process.platform === "freebsd" || process.platform === "openbsd") {
-		return { command: "script", args: ["-q", "-e", "-F", outputPath, ...argv] };
+		return { command: "script", args: ["-q", "-e", "-F", outputPath, ...execArgv] };
 	}
-	return { command: "script", args: ["-q", "-f", "-e", "-c", serializeCommandLine(argv), outputPath] };
+	return { command: "script", args: ["-q", "-f", "-e", "-c", serializeCommandLine(execArgv), outputPath] };
+}
+
+async function runTranscriptExec(commandArgs: readonly string[]): Promise<CommandResult> {
+	if (commandArgs.length !== 1) throw new Error("transcript-exec requires an argv file");
+	const argvFile = commandArgs[0];
+	if (argvFile === undefined || argvFile.length === 0) throw new Error("transcript-exec requires an argv file");
+	const parsed = JSON.parse(await readFile(argvFile, "utf8")) as unknown;
+	if (!isTranscriptExecPayload(parsed)) throw new Error("invalid transcript-exec argv file");
+	return await runProcess(parsed.argv[0], parsed.argv.slice(1), { cwd: process.cwd() });
+}
+
+function isTranscriptExecPayload(value: unknown): value is { argv: [string, ...string[]] } {
+	if (value === null || typeof value !== "object" || !("argv" in value)) return false;
+	const argv = (value as { argv?: unknown }).argv;
+	return Array.isArray(argv) && argv.length > 0 && argv.every((arg) => typeof arg === "string" && arg.length > 0);
 }
 
 function directCommand(argv: readonly string[]): { command: string; args: string[] } {

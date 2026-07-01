@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -46,6 +46,27 @@ try {
 	const path = await run(process.execPath, [cli, "transcript", "path", "clanky:runner"], { env, encoding: "utf8" });
 	if (!path.stdout.trim().endsWith(join("clanky:runner", "run-1"))) {
 		throw new Error(`transcript path did not point at run: ${JSON.stringify(path.stdout)}`);
+	}
+
+	const metacharArg = "$(printf injected)";
+	const argvFile = join(home, "script-argv.json");
+	await writeFile(
+		argvFile,
+		`${JSON.stringify({
+			argv: [process.execPath, "-e", "console.log(JSON.stringify(process.argv.slice(1)))", metacharArg],
+		})}\n`,
+	);
+	const execRunner = await run(
+		process.execPath,
+		[cli, "transcript-exec", argvFile],
+		{ env, encoding: "utf8" },
+	);
+	const execStdout = execRunner.stdout.replace(/\r/g, "");
+	if (!execStdout.includes(JSON.stringify([metacharArg]))) {
+		throw new Error(`transcript exec helper did not preserve shell metacharacters: ${JSON.stringify(execRunner.stdout)}`);
+	}
+	if (execStdout.includes(JSON.stringify(["injected"]))) {
+		throw new Error(`transcript exec helper interpolated shell metacharacters: ${JSON.stringify(execRunner.stdout)}`);
 	}
 } finally {
 	await rm(home, { recursive: true, force: true });
