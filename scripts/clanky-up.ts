@@ -188,6 +188,7 @@ async function clankyCommandHostCommand(): Promise<string[]> {
 		"env",
 		`CLANKY_REPO_DIR=${REPO}`,
 		`CLANKY_EVE_HOST=${HOST}`,
+		`CLANKY_EVE_PORT=${PORT}`,
 		...(contextTokens === undefined ? [] : [`${LOCAL_CONTEXT_TOKENS_ENV}=${contextTokens}`]),
 		process.execPath,
 		"scripts/clanky.ts",
