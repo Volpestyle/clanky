@@ -39,19 +39,18 @@ and report what changed, what passed, and what risk remains.
 
 ## Getting context before you delegate
 
-You cannot read host code, PRs, or designs with your own `read_file`/`grep` —
-those see only your sandbox. Gather context as data first, then decide whether a
-worker is even needed:
+Your own `read_file`/`grep` see only your sandbox. Gather context as data
+first, then decide whether a worker is even needed:
 
 - **Issues and work status** — your work-tracker connection (Linear) via
   `connection_search`. Read the ticket, acceptance criteria, and comments
   directly; no pane.
 - **Designs and specs** — your design connection (Figma) via `connection_search`.
-- **Branches, PRs, diffs, review comments (GitHub)** — no curated connection is
-  bound yet, so read version-control state by spawning a short worker that runs
-  `gh`/`git` in the host checkout (e.g. `gh pr view <n>`, `gh pr diff <n>`) and
-  reports back. A read-only GitHub connection for this context lane is planned
-  (ADR-0003); prefer it once it lands.
+- **Host code, branches, PRs, diffs, review comments** — `host_command`, the
+  Seatbelt-sandboxed host shell (load the `host-command` skill): `rg`/`cat` for
+  code, `gh pr view <n>` / `gh pr diff <n>` for GitHub state. No pane needed
+  for reads. A curated GitHub connection is planned (ADR-0003 / VUH-358);
+  prefer it for off-host GitHub work once it lands.
 
 If a connection returns `needsAuthorization: true`, stop and say it needs
 authorization — do not fall back to guessed dynamic MCP.

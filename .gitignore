@@ -13,4 +13,3 @@ dist/
 .clanky-tmp/
 .legacy-backup/
 tmp/
-agents/clanky/src/voice/clankvox/target/

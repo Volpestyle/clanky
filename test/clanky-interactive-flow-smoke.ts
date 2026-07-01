@@ -199,7 +199,7 @@ multiPrompt.handleInput("cla");
 multiPrompt.handleInput(" ");
 multiPrompt.handleInput("\r");
 assert(
-	multiSelected !== undefined && multiSelected.includes("codex") && multiSelected.includes("claude"),
+	multiSelected?.includes("codex") === true && multiSelected?.includes("claude") === true,
 	"multi select should preserve initial values and toggle filtered values",
 );
 assertFits(multiPrompt.render(52), 52, "multi select");

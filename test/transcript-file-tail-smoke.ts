@@ -18,7 +18,6 @@ function testRun(dir: string): TranscriptRun {
 	return {
 		ansiPath: join(dir, "stream.ansi"),
 		dir,
-		eventsPath: join(dir, "events.ndjson"),
 		manifest: {
 			agent: "tail-smoke",
 			argv: ["bash", "-lc", "printf ok"],

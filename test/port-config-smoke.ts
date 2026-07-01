@@ -19,6 +19,6 @@ const ok = spawnSync(process.execPath, ["bin/clanky.ts", "help"], {
 expect(ok.status === 0, `empty port should use default and exit 0, got ${ok.status}`);
 
 const clankyUp = readFileSync("scripts/clanky-up.ts", "utf8");
-expect(clankyUp.includes("`CLANKY_EVE_PORT=${PORT}`"), "clanky-up should pass CLANKY_EVE_PORT to the command host");
+expect(clankyUp.includes("`CLANKY_EVE_PORT=${config.port}`"), "clanky-up should pass CLANKY_EVE_PORT to the command host");
 
 console.log("port config smoke OK");

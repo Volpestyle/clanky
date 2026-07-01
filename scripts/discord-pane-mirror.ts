@@ -15,7 +15,7 @@ import { Key, matchesKey, ProcessTerminal, truncateToWidth, TUI, type Component 
 import { detectBannerCapabilities } from "../agent/lib/clanky-banner.ts";
 import { ClankyFaceRenderer } from "../agent/lib/clanky-face-renderer.ts";
 import { createClankyFaceAnsiTheme, createClankyFaceMarkdownTheme, type ClankyFaceAnsiTheme } from "../agent/lib/clanky-face-theme.ts";
-import { type ClankyTranscriptBlockTheme } from "../agent/lib/clanky-transcript-block.ts";
+import type { ClankyTranscriptBlockTheme } from "../agent/lib/clanky-transcript-block.ts";
 import { ClankyTranscriptViewport } from "../agent/lib/clanky-transcript-viewport.ts";
 import { isClankyLeftMouseButton, parseClankySgrMouse } from "../agent/lib/clanky-sgr-mouse.ts";
 import { applyMirrorStreamEvent, createMirrorRenderSink, type MirrorView } from "../agent/lib/discord/pane-mirror-view.ts";

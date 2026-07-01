@@ -1,8 +1,9 @@
-import { type ChildProcessByStdio, spawn } from "node:child_process";
+import { type ChildProcessByStdio, execFileSync, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import type { Readable, Writable } from "node:stream";
+import { resolveClankyDataPath } from "../paths.ts";
 import { isRecord, type JsonRecord, stringValue } from "./json.ts";
 
 export interface ClankvoxLaunchOptions {
@@ -109,17 +110,83 @@ type ClankvoxCommand =
 
 /** Stderr lines retained for crash diagnostics (the binary logs panics here). */
 const CLANKVOX_STDERR_TAIL_LIMIT = 25;
+/** Default wait for the binary's process_ready / ready lifecycle events. */
+const CLANKVOX_READY_TIMEOUT_MS = 15_000;
+/** destroy(): grace before escalating to SIGTERM, then SIGKILL. */
+const CLANKVOX_DESTROY_SIGTERM_DELAY_MS = 250;
+const CLANKVOX_DESTROY_SIGKILL_DELAY_MS = 5_000;
+/**
+ * Upper bound for a single IPC frame. The largest legitimate frames are
+ * base64 JPEG video frames inside JSON (a few MB); anything past this means
+ * the length prefix is garbage and the stream is desynced.
+ */
+export const CLANKVOX_MAX_FRAME_BYTES = 32 * 1024 * 1024;
+const CLANKVOX_FRAME_HEADER_BYTES = 5;
+/** Binary audio frame header: u64 userId + 8 reserved + 2 reserved. */
+const CLANKVOX_BINARY_AUDIO_HEADER_BYTES = 18;
+
+export interface ClankvoxFrame {
+	format: number;
+	payload: Buffer;
+}
+
+export interface ClankvoxFrameDecodeResult {
+	frames: ClankvoxFrame[];
+	/** Fatal stream desync (unknown format byte or oversized length prefix). */
+	fault?: string;
+}
+
+/**
+ * Incremental decoder for the binary-framed stdout protocol
+ * (u8 format, u32le length, payload). The length prefix is untrusted: a single
+ * stray byte on stdout would otherwise permanently desync the stream (or buffer
+ * gigabytes waiting for a garbage length), so an unknown format byte or an
+ * over-cap length is a fatal fault rather than a silent skip.
+ */
+export class ClankvoxFrameDecoder {
+	private buffer: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+	private faulted = false;
+
+	push(chunk: Buffer): ClankvoxFrameDecodeResult {
+		if (this.faulted) return { frames: [] };
+		this.buffer = this.buffer.length === 0 ? chunk : Buffer.concat([this.buffer, chunk]);
+		const frames: ClankvoxFrame[] = [];
+		while (this.buffer.length >= CLANKVOX_FRAME_HEADER_BYTES) {
+			const format = this.buffer.readUInt8(0);
+			const length = this.buffer.readUInt32LE(1);
+			if (format !== 0 && format !== 1) {
+				this.faulted = true;
+				return { frames, fault: `unknown ipc frame format byte ${format}; stdout stream is desynced` };
+			}
+			if (length > CLANKVOX_MAX_FRAME_BYTES) {
+				this.faulted = true;
+				return {
+					frames,
+					fault: `ipc frame length ${length} exceeds cap ${CLANKVOX_MAX_FRAME_BYTES}; stdout stream is desynced`,
+				};
+			}
+			if (this.buffer.length < CLANKVOX_FRAME_HEADER_BYTES + length) break;
+			frames.push({ format, payload: this.buffer.subarray(CLANKVOX_FRAME_HEADER_BYTES, CLANKVOX_FRAME_HEADER_BYTES + length) });
+			this.buffer = this.buffer.subarray(CLANKVOX_FRAME_HEADER_BYTES + length);
+		}
+		return { frames };
+	}
+}
 
 export class ClankvoxIpcClient extends EventEmitter {
 	private readonly guildId: string;
 	private readonly channelId: string;
 	private readonly guild: ClankvoxGuildLike;
 	private child: ChildProcessByStdio<Writable, Readable, Readable> | undefined;
-	private stdoutBuffer = Buffer.alloc(0);
+	private readonly frameDecoder = new ClankvoxFrameDecoder();
 	private stderrBuffer = "";
 	private readonly recentStderrLines: string[] = [];
 	private adapterProxy: ClankvoxVoiceAdapterProxy | undefined;
 	private destroyed = false;
+	private crashEmitted = false;
+	private destroyPromise: Promise<void> | undefined;
+	private droppedFrameCount = 0;
+	private log: ((line: string) => void) | undefined;
 	private lastVoiceSessionId: string | undefined;
 	private lastVoiceStateUserId: string | undefined;
 
@@ -320,32 +387,72 @@ export class ClankvoxIpcClient extends EventEmitter {
 		this.send({ type: "stream_publish_resume" });
 	}
 
+	/**
+	 * Idempotent teardown. Memoized so concurrent callers (fault handler +
+	 * leave/rejoin) share one teardown, and short-circuited when the child has
+	 * already exited — waiting on child.once("exit") after exit already fired
+	 * would never settle and hang handleVoiceFault/leaveVoice forever.
+	 */
 	async destroy(): Promise<void> {
+		this.destroyPromise ??= this.runDestroy();
+		return await this.destroyPromise;
+	}
+
+	private async runDestroy(): Promise<void> {
 		this.destroyed = true;
 		this.forwardVoiceStateUpdate(null);
 		this.adapterProxy?.destroy();
 		this.adapterProxy = undefined;
 		this.send({ type: "destroy" });
 		const child = this.child;
-		if (child === undefined) return;
-		await new Promise<void>((resolveDone) => {
-			let done = false;
-			const finish = () => {
-				if (done) return;
-				done = true;
-				clearTimeout(termTimer);
-				clearTimeout(killTimer);
-				resolveDone();
-			};
-			child.once("exit", finish);
-			child.stdin.end();
-			const termTimer = setTimeout(() => child.kill("SIGTERM"), 250);
-			const killTimer = setTimeout(() => child.kill("SIGKILL"), 5_000);
-		});
 		this.child = undefined;
+		if (child === undefined) return;
+		if (child.exitCode === null && child.signalCode === null) {
+			await new Promise<void>((resolveDone) => {
+				let done = false;
+				const finish = () => {
+					if (done) return;
+					done = true;
+					clearTimeout(termTimer);
+					clearTimeout(killTimer);
+					resolveDone();
+				};
+				child.once("exit", finish);
+				if (child.exitCode !== null || child.signalCode !== null) {
+					// Exited between the check and the listener registration.
+					finish();
+				}
+				if (!child.stdin.destroyed) child.stdin.end();
+				const termTimer = setTimeout(() => child.kill("SIGTERM"), CLANKVOX_DESTROY_SIGTERM_DELAY_MS);
+				const killTimer = setTimeout(() => child.kill("SIGKILL"), CLANKVOX_DESTROY_SIGKILL_DELAY_MS);
+			});
+		}
+		clearClankvoxPidFile(child.pid);
+	}
+
+	/**
+	 * Synchronous last-resort kill for the brain's process-exit hook (no awaits
+	 * are possible there). Without it a brain shutdown leaves a zombie ClankVox
+	 * holding the Discord voice connection.
+	 */
+	killProcessSync(): void {
+		this.destroyed = true;
+		const child = this.child;
+		if (child === undefined || child.exitCode !== null || child.signalCode !== null) return;
+		try {
+			child.kill("SIGKILL");
+		} catch {
+			// already gone
+		}
+		clearClankvoxPidFile(child.pid);
 	}
 
 	private async spawnProcess(options: ClankvoxSpawnOptions): Promise<void> {
+		this.log = options.log;
+		// A previous brain that died without cleanup (SIGKILL, crash) can leave a
+		// ClankVox holding the Discord voice connection; reap it before spawning a
+		// second one against the same guild.
+		reapStaleClankvoxProcess(options.log);
 		const launch = resolveLaunch(options);
 		const child = spawn(launch.command, launch.args, {
 			cwd: launch.cwd,
@@ -353,31 +460,37 @@ export class ClankvoxIpcClient extends EventEmitter {
 			stdio: ["pipe", "pipe", "pipe"],
 		});
 		this.child = child;
+		writeClankvoxPidFile(child.pid);
 		// A ChildProcess that emits 'error' (e.g. the binary can't be launched)
 		// with no listener throws an uncaught exception that kills the whole eve
 		// brain. Route it into the same lifecycle 'crashed' path so a launch
 		// failure faults the voice session cleanly instead.
 		child.once("error", (error: Error) => {
-			if (!this.destroyed) this.emit("crashed", { error: error.message });
+			this.emitCrashed({ error: error.message });
+		});
+		// Same for stdin: an EPIPE between send()'s alive-check and the write is
+		// an async 'error' on the stream, not a throw at the call site.
+		child.stdin.on("error", (error: Error) => {
+			this.emitCrashed({ error: `stdin: ${error.message}` });
 		});
 		child.stdout.on("data", (data: Buffer) => this.processStdoutChunk(data));
 		child.stderr.on("data", (data: Buffer) => this.processStderrChunk(data, options.log));
 		child.stderr.once("end", () => this.flushStderrBuffer(options.log));
 		child.once("exit", (code, signal) => {
 			this.flushStderrBuffer(options.log);
-			if (!this.destroyed) this.emit("crashed", { code, signal });
+			this.emitCrashed({ code, signal });
 		});
 
 		await this.waitForLifecycleEvent(
 			"processReady",
-			options.timeoutMs ?? 15_000,
-			`clankvox process ready timeout after ${options.timeoutMs ?? 15_000}ms`,
+			options.timeoutMs ?? CLANKVOX_READY_TIMEOUT_MS,
+			`clankvox process ready timeout after ${options.timeoutMs ?? CLANKVOX_READY_TIMEOUT_MS}ms`,
 		);
 		this.setupAdapterProxy();
 		const ready = this.waitForLifecycleEvent(
 			"ready",
-			options.timeoutMs ?? 15_000,
-			`clankvox ready timeout after ${options.timeoutMs ?? 15_000}ms`,
+			options.timeoutMs ?? CLANKVOX_READY_TIMEOUT_MS,
+			`clankvox ready timeout after ${options.timeoutMs ?? CLANKVOX_READY_TIMEOUT_MS}ms`,
 		);
 		this.send({
 			type: "join",
@@ -428,19 +541,32 @@ export class ClankvoxIpcClient extends EventEmitter {
 		});
 	}
 
+	/** Emit "crashed" at most once; every failure surface funnels through here. */
+	private emitCrashed(info: JsonRecord): void {
+		if (this.destroyed || this.crashEmitted) return;
+		this.crashEmitted = true;
+		this.emit("crashed", info);
+	}
+
+	private noteDroppedFrame(reason: string): void {
+		this.droppedFrameCount += 1;
+		this.log?.(`clankvox ipc: dropped ${reason} frame (total dropped: ${this.droppedFrameCount})`);
+	}
+
 	private processStdoutChunk(data: Buffer): void {
-		this.stdoutBuffer = Buffer.concat([this.stdoutBuffer, data]);
-		while (this.stdoutBuffer.length >= 5) {
-			const format = this.stdoutBuffer.readUInt8(0);
-			const length = this.stdoutBuffer.readUInt32LE(1);
-			if (this.stdoutBuffer.length < 5 + length) return;
-			const payload = this.stdoutBuffer.subarray(5, 5 + length);
-			this.stdoutBuffer = this.stdoutBuffer.subarray(5 + length);
-			if (format === 0) {
-				this.handleJsonMessage(payload);
-			} else if (format === 1) {
-				this.handleBinaryAudio(payload);
+		const { frames, fault } = this.frameDecoder.push(data);
+		for (const frame of frames) {
+			if (frame.format === 0) {
+				this.handleJsonMessage(frame.payload);
+			} else {
+				this.handleBinaryAudio(frame.payload);
 			}
+		}
+		if (fault !== undefined) {
+			// A desynced stream cannot be trusted for any further command or event;
+			// fault the session (which tears it down and kills this process).
+			this.log?.(`clankvox ipc: ${fault}`);
+			this.emitCrashed({ error: fault });
 		}
 	}
 
@@ -476,7 +602,10 @@ export class ClankvoxIpcClient extends EventEmitter {
 
 	private handleJsonMessage(payload: Buffer): void {
 		const msg = parseJsonRecord(payload);
-		if (msg === undefined) return;
+		if (msg === undefined) {
+			this.noteDroppedFrame("malformed json");
+			return;
+		}
 		const type = stringValue(msg.type);
 		if (type === "process_ready") {
 			this.emit("processReady");
@@ -565,9 +694,12 @@ export class ClankvoxIpcClient extends EventEmitter {
 	}
 
 	private handleBinaryAudio(payload: Buffer): void {
-		if (payload.length < 18) return;
+		if (payload.length < CLANKVOX_BINARY_AUDIO_HEADER_BYTES) {
+			this.noteDroppedFrame("short binary audio");
+			return;
+		}
 		const userId = payload.readBigUInt64LE(0).toString();
-		this.emit("userAudio", userId, payload.subarray(18));
+		this.emit("userAudio", userId, payload.subarray(CLANKVOX_BINARY_AUDIO_HEADER_BYTES));
 	}
 
 	private forwardToGateway(payload: JsonRecord): void {
@@ -588,8 +720,69 @@ export class ClankvoxIpcClient extends EventEmitter {
 
 	private send(command: ClankvoxCommand): void {
 		const child = this.child;
-		if (child === undefined || child.stdin.destroyed || child.exitCode !== null) return;
+		if (child === undefined || child.stdin.destroyed || child.exitCode !== null || child.signalCode !== null) return;
 		child.stdin.write(`${JSON.stringify(command)}\n`);
+	}
+}
+
+function clankvoxPidFilePath(env: NodeJS.ProcessEnv = process.env): string {
+	return resolveClankyDataPath("voice/clankvox.pid", env);
+}
+
+function writeClankvoxPidFile(pid: number | undefined, env: NodeJS.ProcessEnv = process.env): void {
+	if (pid === undefined) return;
+	try {
+		const path = clankvoxPidFilePath(env);
+		mkdirSync(dirname(path), { recursive: true });
+		writeFileSync(path, `${pid}\n`);
+	} catch {
+		// Best-effort bookkeeping; a missing pid file only disables stale reaping.
+	}
+}
+
+/** Remove the pid file if it still belongs to this child (not a newer session's). */
+function clearClankvoxPidFile(pid: number | undefined, env: NodeJS.ProcessEnv = process.env): void {
+	if (pid === undefined) return;
+	try {
+		const path = clankvoxPidFilePath(env);
+		if (Number.parseInt(readFileSync(path, "utf8").trim(), 10) !== pid) return;
+		rmSync(path, { force: true });
+	} catch {
+		// nothing to clear
+	}
+}
+
+/**
+ * Kill a ClankVox left behind by a brain that died without cleanup (SIGKILL,
+ * crash). A stale process keeps holding the Discord voice connection, and a
+ * rejoin would otherwise fight it over the same guild's voice session. The pid
+ * is verified against the process command name so a recycled pid is never
+ * killed by mistake.
+ */
+export function reapStaleClankvoxProcess(log?: (line: string) => void, env: NodeJS.ProcessEnv = process.env): void {
+	let pid: number;
+	const path = clankvoxPidFilePath(env);
+	try {
+		pid = Number.parseInt(readFileSync(path, "utf8").trim(), 10);
+	} catch {
+		return;
+	}
+	try {
+		if (Number.isInteger(pid) && pid > 0 && pid !== process.pid) {
+			process.kill(pid, 0); // throws ESRCH when the pid is gone
+			const comm = execFileSync("ps", ["-p", String(pid), "-o", "comm="], { encoding: "utf8" }).trim();
+			if (comm.includes("clankvox")) {
+				log?.(`clankvox: reaping stale process ${pid} (${comm}) from a previous brain run`);
+				process.kill(pid, "SIGKILL");
+			}
+		}
+	} catch {
+		// pid already gone, or ps unavailable; either way there is nothing to reap
+	}
+	try {
+		rmSync(path, { force: true });
+	} catch {
+		// best-effort
 	}
 }
 

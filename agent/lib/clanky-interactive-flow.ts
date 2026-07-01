@@ -253,7 +253,7 @@ export class InteractiveSelectPrompt implements Component, Focusable {
 	private visibleMenuItems(items: readonly IndexedOption[], active: IndexedOption | undefined): { readonly items: readonly IndexedOption[]; readonly startIndex: number } {
 		if (items.length === 0) return { items, startIndex: 0 };
 		const maxVisible = Math.min(MAX_VISIBLE_OPTIONS, items.length);
-		const cursorMenuIndex = active?.placement === "menu" ? items.findIndex((item) => item === active) : 0;
+		const cursorMenuIndex = active?.placement === "menu" ? items.indexOf(active) : 0;
 		const startIndex = clamp(cursorMenuIndex - Math.floor(maxVisible / 2), 0, Math.max(0, items.length - maxVisible));
 		return { items: items.slice(startIndex, startIndex + maxVisible), startIndex };
 	}

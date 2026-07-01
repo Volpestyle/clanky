@@ -1,9 +1,10 @@
 # ADR-0003 — Host context access: two lanes + a Seatbelt-sandboxed host-command tool (Codex approval model)
 
-- **Status:** Proposed (pending sign-off)
+- **Status:** Accepted
 - **Date:** 2026-07-01
 - **Deciders:** James Volpe
-- **Issue:** Unfiled — file under the work tracker before ratifying.
+- **Issue:** [VUH-357](https://linear.app/vuhlp/issue/VUH-357) (host-command tool) ·
+  [VUH-358](https://linear.app/vuhlp/issue/VUH-358) (GitHub connection)
 - **Affects:** `SPEC.md` §9.2, §11 · `agent/instructions.md` · `agent/skills/coding.md` ·
   `agent/tools/<host-command tool>` (planned) · `agent/lib/approvals.ts` ·
   `agent/sandbox.ts` · reference: `~/dev/codex` (`codex-rs` sandboxing/seatbelt, Apache-2.0)
@@ -206,8 +207,9 @@ flowchart TB
 - A real read-only floor for an always-on agent on untrusted input: OS-enforced,
   not convention.
 - Escalation reuses the existing approvals infrastructure; no new approval channel.
-- The GitHub OAuth connection is dropped from scope as redundant with local `gh`;
-  SPEC §9.2 is updated to say so.
+- GitHub becomes a curated main-MCP connection (`agent/connections/github.ts`),
+  bindable as `work_tracker` and/or `version_control`; local `gh` stays the
+  in-checkout reader. SPEC §9.2 is updated to say so.
 - A repos-root convention (`~/dev`) is assumed by the tool's default cwd; other
   checkouts pass an explicit cwd.
 - The tool requires macOS (Seatbelt). If Clanky ever runs on Linux, mirror the

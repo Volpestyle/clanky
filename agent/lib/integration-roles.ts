@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { resolveClankyDataPath } from "./paths.ts";
 
@@ -54,7 +54,11 @@ export async function setRoleBinding(
 	}
 	const path = resolveRoleBindingsPath(env);
 	await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-	await writeFile(path, `${JSON.stringify(bindings, null, "\t")}\n`, { mode: 0o600 });
+	// Atomic replace: per-turn readers (turn.started resolvers) race this write,
+	// and an in-place write could expose a truncated/partial file to them.
+	const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
+	await writeFile(tmp, `${JSON.stringify(bindings, null, "\t")}\n`, { mode: 0o600 });
+	await rename(tmp, path);
 	return { path, bindings };
 }
 
@@ -75,16 +79,34 @@ export function roleLabel(role: IntegrationRole): string {
 	return INTEGRATION_ROLES.find((entry) => entry.key === role)?.label ?? role;
 }
 
+// Corrupt-store warnings fire once per process, not once per turn.
+let warnedUnreadableRoleStore = false;
+
+// Tolerant read (see normalizeConnectionName): an unreadable or malformed
+// store degrades to "no store" so defaults apply and the turn proceeds,
+// instead of throwing per-turn. setRoleBinding rewrites the file on next use.
 async function readRoleStore(env: NodeJS.ProcessEnv): Promise<IntegrationRoleStore> {
 	const path = resolveRoleBindingsPath(env);
+	let raw: string;
 	try {
-		const raw = await readFile(path, "utf8");
-		return { exists: true, bindings: parseRoleBindings(JSON.parse(raw) as unknown, path) };
+		raw = await readFile(path, "utf8");
 	} catch (error) {
-		if (typeof error === "object" && error !== null && (error as { code?: unknown }).code === "ENOENT") {
-			return { exists: false, bindings: {} };
+		if (typeof error === "object" && error !== null && (error as { code?: unknown }).code !== "ENOENT" && !warnedUnreadableRoleStore) {
+			warnedUnreadableRoleStore = true;
+			console.error(`integration roles: cannot read ${path}; using defaults:`, error);
 		}
-		throw error;
+		return { exists: false, bindings: {} };
+	}
+	try {
+		const parsed = JSON.parse(raw) as unknown;
+		if (!isRecord(parsed)) throw new Error(`${path} must be a JSON object`);
+		return { exists: true, bindings: parseRoleBindings(parsed) };
+	} catch (error) {
+		if (!warnedUnreadableRoleStore) {
+			warnedUnreadableRoleStore = true;
+			console.error(`integration roles: malformed ${path}; using defaults:`, error);
+		}
+		return { exists: false, bindings: {} };
 	}
 }
 
@@ -96,8 +118,7 @@ function defaultRoleBindings(): IntegrationRoleBindings {
 	return Object.fromEntries(INTEGRATION_ROLES.map((role) => [role.key, role.defaultConnection])) as IntegrationRoleBindings;
 }
 
-function parseRoleBindings(value: unknown, source: string): IntegrationRoleBindings {
-	if (!isRecord(value)) throw new Error(`${source} must be a JSON object`);
+function parseRoleBindings(value: Record<string, unknown>): IntegrationRoleBindings {
 	const bindings: IntegrationRoleBindings = {};
 	for (const role of INTEGRATION_ROLES) {
 		const normalized = normalizeConnectionName(value[role.key]);

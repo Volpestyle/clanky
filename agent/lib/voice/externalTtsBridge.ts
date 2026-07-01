@@ -36,6 +36,8 @@ export interface BindExternalTtsOutputOptions {
 const DEFAULT_ITEM_ID = "__default__";
 const OUTPUT_TEXT_DELTA_EVENTS = new Set(["response.output_text.delta"]);
 const OUTPUT_TEXT_DONE_EVENTS = new Set(["response.output_text.done"]);
+/** Items whose .done never arrives (cancelled responses) must not accumulate forever. */
+const MAX_BUFFERED_ITEMS = 32;
 
 export function bindExternalTtsOutput(options: BindExternalTtsOutputOptions): ExternalTtsOutputBinding {
 	return new ExternalTtsOutputBridge(options);
@@ -90,6 +92,11 @@ class ExternalTtsOutputBridge implements ExternalTtsOutputBinding {
 		const chunks = this.textByItemId.get(itemId) ?? [];
 		chunks.push(transcript.text);
 		this.textByItemId.set(itemId, chunks);
+		while (this.textByItemId.size > MAX_BUFFERED_ITEMS) {
+			const oldest = this.textByItemId.keys().next().value;
+			if (oldest === undefined) break;
+			this.textByItemId.delete(oldest);
+		}
 	}
 
 	private completeText(transcript: OpenAiRealtimeTranscript): void {

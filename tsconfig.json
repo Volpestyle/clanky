@@ -15,7 +15,7 @@
 		"agent/**/*.ts",
 		"bin/**/*.ts",
 		"test/**/*.ts",
-		"scripts/clanky.ts",
+		"scripts/**/*.ts",
 		"packages/**/*.ts",
 		"packages/**/*.mts"
 	]

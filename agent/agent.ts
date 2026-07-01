@@ -2,6 +2,18 @@ import { defineAgent } from "eve";
 import { localContextWindowTokensFromEnv } from "./lib/local-context.ts";
 import { brainContextWindowTokensFromEnv, createClankyModelFromEnv } from "./lib/model-selection.ts";
 
+// Crash-safety envelope for the always-on brain. Node >=24 terminates the
+// process on an unhandled rejection; a stray rejection in a channel or tool
+// must degrade (log and keep serving), never take the brain down. The face's
+// health monitor and supervisor handle a truly wedged brain.
+process.on("unhandledRejection", (reason) => {
+	const detail = reason instanceof Error ? reason.stack ?? reason.message : String(reason);
+	console.error(`clanky brain: unhandled rejection (continuing): ${detail}`);
+});
+process.on("uncaughtException", (error) => {
+	console.error(`clanky brain: uncaught exception (continuing): ${error.stack ?? error.message}`);
+});
+
 // Clanky's conductor model runs on one of the user's AI subscriptions via OAuth
 // (SPEC.md §4.6). Default: OpenAI Codex. CLANKY_MODEL_PROVIDER selects another:
 //   claude - Claude Pro/Max subscription (CLANKY_CLAUDE_MODEL)

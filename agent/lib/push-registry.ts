@@ -2,11 +2,18 @@
  * Device-token registry for mobile push (SPEC §4.4). Clients register an APNs
  * or FCM token over the relay after pairing; Clanky's push watcher reads this
  * list to decide who to notify. File-backed so registrations survive a brain
- * restart.
+ * restart. Lives at resolveClankyDataPath("push-tokens.json") — the shared
+ * Clanky home (~/.clanky by default); earlier builds defaulted to
+ * ~/.config/clanky, so load() copies that file forward when the current home
+ * has none.
  */
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { copyFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { resolveClankyDataPath } from "./paths.ts";
+
+const REGISTRY_FILENAME = "push-tokens.json";
 
 export type PushPlatform = "ios" | "android";
 
@@ -19,11 +26,12 @@ export interface PushDevice {
 }
 
 function registryPath(): string {
-	const home = process.env.CLANKY_HOME ?? join(homedir(), ".config", "clanky");
-	return join(home, "push-tokens.json");
+	return resolveClankyDataPath(REGISTRY_FILENAME);
 }
 
-let cache: Map<string, PushDevice> | undefined;
+// Keyed on the resolved path so a CLANKY_HOME change (tests, profile switches)
+// invalidates instead of serving another home's devices.
+let cache: { path: string; devices: Map<string, PushDevice> } | undefined;
 
 export function parsePushPlatform(value: unknown): PushPlatform | undefined {
 	if (typeof value !== "string") return undefined;
@@ -55,21 +63,70 @@ function parsePushDevice(value: unknown): PushDevice | undefined {
 	return { token, platform, events, registeredAt };
 }
 
-async function load(): Promise<Map<string, PushDevice>> {
-	if (cache) return cache;
-	try {
-		const raw = await readFile(registryPath(), "utf8");
-		const parsed = JSON.parse(raw) as unknown;
-		const list = Array.isArray(parsed) ? parsed : [];
-		cache = new Map();
-		for (const entry of list) {
-			const device = parsePushDevice(entry);
-			if (device !== undefined) cache.set(deviceKey(device), device);
-		}
-	} catch {
-		cache = new Map();
+function parseRegistry(raw: string): Map<string, PushDevice> {
+	const parsed = JSON.parse(raw) as unknown;
+	if (!Array.isArray(parsed)) throw new Error("expected a JSON array of devices");
+	const devices = new Map<string, PushDevice>();
+	for (const entry of parsed) {
+		const device = parsePushDevice(entry);
+		if (device !== undefined) devices.set(deviceKey(device), device);
 	}
-	return cache;
+	return devices;
+}
+
+// The registry used to live under CLANKY_HOME with a ~/.config/clanky default
+// while the rest of Clanky's data resolved to ~/.clanky. Copy (not move) a
+// legacy file into the current home the first time it is missing there, so
+// live registrations survive the path unification. COPYFILE_EXCL makes this a
+// no-op once the current file exists.
+async function migrateLegacyRegistry(path: string): Promise<void> {
+	const legacyHome = process.env.CLANKY_HOME ?? join(homedir(), ".config", "clanky");
+	const legacy = resolve(legacyHome, REGISTRY_FILENAME);
+	if (legacy === path) return;
+	try {
+		await mkdir(dirname(path), { recursive: true });
+		await copyFile(legacy, path, constants.COPYFILE_EXCL);
+		console.error(`push registry migrated from ${legacy} to ${path}`);
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException).code;
+		// ENOENT: no legacy file. EEXIST: current file already present.
+		if (code !== "ENOENT" && code !== "EEXIST") {
+			console.error(`push registry migration from ${legacy} failed:`, error);
+		}
+	}
+}
+
+async function load(): Promise<Map<string, PushDevice>> {
+	const path = registryPath();
+	if (cache !== undefined && cache.path === path) return cache.devices;
+	await migrateLegacyRegistry(path);
+	let raw: string;
+	try {
+		raw = await readFile(path, "utf8");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+			console.error(`push registry read failed (${path}):`, error);
+		}
+		cache = { path, devices: new Map() };
+		return cache.devices;
+	}
+	let devices: Map<string, PushDevice>;
+	try {
+		devices = parseRegistry(raw);
+	} catch (error) {
+		// Never silently reset live registrations: preserve the bytes, log
+		// loudly, then start fresh.
+		const backup = `${path}.corrupt-${new Date().toISOString().replaceAll(":", "-")}`;
+		console.error(`push registry corrupt; backing up to ${backup} and starting fresh:`, error);
+		try {
+			await rename(path, backup);
+		} catch (backupError) {
+			console.error(`push registry corrupt-file backup failed (${backup}):`, backupError);
+		}
+		devices = new Map();
+	}
+	cache = { path, devices };
+	return devices;
 }
 
 async function persist(map: Map<string, PushDevice>): Promise<void> {

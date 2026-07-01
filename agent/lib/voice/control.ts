@@ -28,6 +28,10 @@ export interface VoiceControlInput {
 	streamKey?: string;
 }
 
+export type VoiceControlPublicStream = Omit<DiscoveredDiscordStream, "endpoint" | "token"> & {
+	hasCredentials: boolean;
+};
+
 export interface VoiceControlResult {
 	ok: true;
 	op: VoiceControlOp;
@@ -42,7 +46,7 @@ export interface VoiceControlResult {
 	goLiveStopped?: boolean;
 	goLivePaused?: boolean;
 	note?: string;
-	streams?: DiscoveredDiscordStream[];
+	streams?: VoiceControlPublicStream[];
 }
 
 export interface VoiceControlVox {
@@ -86,7 +90,7 @@ export async function executeVoiceControl(
 				op: input.op,
 				guildId: context.guildId,
 				channelId: context.channelId,
-				streams: context.goLive?.listStreams() ?? [],
+				streams: (context.goLive?.listStreams() ?? []).map(publicStream),
 			};
 		case "music_play": {
 			const url = requiredUrl(input);
@@ -153,6 +157,14 @@ export async function executeVoiceControl(
 			return baseResult(input.op, context, { streamKey, goLivePaused: false });
 		}
 	}
+}
+
+function publicStream(stream: DiscoveredDiscordStream): VoiceControlPublicStream {
+	const { endpoint, token, ...rest } = stream;
+	return {
+		...rest,
+		hasCredentials: endpoint !== null && token !== null,
+	};
 }
 
 function baseResult(

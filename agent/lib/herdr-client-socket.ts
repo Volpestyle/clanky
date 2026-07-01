@@ -1,10 +1,13 @@
-import { createConnection, type Socket } from "node:net";
+import { createConnection } from "node:net";
 import { Buffer } from "node:buffer";
 import { herdrClientSocketPath } from "./herdr-socket.ts";
 
 type ByteBuffer = Buffer<ArrayBufferLike>;
 
-export const HERDR_CLIENT_PROTOCOL_VERSION = 14;
+// Herdr checks client version by strict equality; this must track the herdr
+// binary the session runs (0.7.1 = protocol 15: pane.attach + observe/control
+// stream variants appended — existing wire tags 0-7 unchanged).
+export const HERDR_CLIENT_PROTOCOL_VERSION = 15;
 const MAX_FRAME_SIZE = 2 * 1024 * 1024;
 const MAX_GRAPHICS_FRAME_SIZE = 32 * 1024 * 1024;
 const HANDSHAKE_TIMEOUT_MS = 5_000;
@@ -41,6 +44,20 @@ export interface HerdrTerminalAttachCallbacks {
 
 export interface HerdrTerminalAttachStream {
 	close(): void;
+	/// Inject raw input bytes into the attached terminal's PTY via
+	/// ClientMessage::Input — the low-latency keystroke path that skips the
+	/// per-request herdr API socket. Returns false while the handshake is still
+	/// in flight or after the stream closed, so callers can fall back to the
+	/// pane.send_text API path. A true return guarantees the input frame is
+	/// queued behind AttachTerminal on the same socket, so herdr processes it
+	/// in TerminalAttach mode (or drops it if the attach was rejected — a
+	/// rejected attach removes the client before later frames are handled).
+	sendInput(data: ByteBuffer): boolean;
+	/// Resize the server-owned terminal via ClientMessage::Resize without
+	/// tearing down the attach stream. Partial geometry merges over the last
+	/// geometry sent, so attach-time cell pixel sizes survive a cols/rows-only
+	/// resize. Same false semantics as sendInput.
+	resize(update: Partial<HerdrTerminalGeometry>): boolean;
 }
 
 interface WelcomeMessage {
@@ -83,7 +100,7 @@ export function attachHerdrTerminal(
 	options: HerdrTerminalAttachOptions,
 	callbacks: HerdrTerminalAttachCallbacks,
 ): HerdrTerminalAttachStream {
-	const geometry = normalizeGeometry(options);
+	let geometry = normalizeGeometry(options);
 	const socket = createConnection(herdrClientSocketPath(options.session));
 	let buffer: ByteBuffer = Buffer.alloc(0);
 	let closed = false;
@@ -162,7 +179,29 @@ export function attachHerdrTerminal(
 		}
 	});
 
-	return { close };
+	// welcomeReceived flips true in the same synchronous block that writes the
+	// AttachTerminal frame, so once a caller observes it the attach request is
+	// already queued ahead of anything sent below.
+	const writeToTerminal = (payload: ByteBuffer): boolean => {
+		if (closed || !welcomeReceived) return false;
+		try {
+			socket.write(frameMessage(payload));
+			return true;
+		} catch {
+			return false;
+		}
+	};
+
+	return {
+		close,
+		sendInput: (data) => writeToTerminal(encodeInput(data)),
+		resize: (update) => {
+			const next = normalizeGeometry({ ...geometry, ...update });
+			if (!writeToTerminal(encodeResize(next))) return false;
+			geometry = next;
+			return true;
+		},
+	};
 }
 
 export function encodeHello(geometry: HerdrTerminalGeometry): ByteBuffer {
@@ -184,6 +223,14 @@ export function encodeAttachTerminal(terminalId: string, takeover: boolean): Byt
 		encodeVarint(5), // ClientMessage::AttachTerminal
 		encodeString(terminalId),
 		encodeBool(takeover),
+	]);
+}
+
+export function encodeInput(data: ByteBuffer): ByteBuffer {
+	return concatBuffers([
+		encodeVarint(1), // ClientMessage::Input
+		encodeVarint(data.length), // Vec<u8> length prefix (bincode standard varint)
+		data,
 	]);
 }
 

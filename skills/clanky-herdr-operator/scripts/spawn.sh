@@ -8,7 +8,7 @@ Usage: spawn.sh --slug <task-slug> --task "<one-line summary>" \
 				(--prompt "<text>" | --prompt-file <path>) \
 				--harness <clanky|claude|codex|opencode|custom> \
 				[--run <run-id>] [--cwd <dir>] \
-				[--transcript|--no-transcript] [-- <worker argv...>]
+				[--transcript|--no-transcript] [--no-watch] [-- <worker argv...>]
 
 Spawns one worker agent named clanky:<slug> into the run's herdr tab.
 CLANKY_CODING_HARNESSES allowlists usable harnesses. Pass --harness explicitly;
@@ -17,7 +17,12 @@ Claude/Codex/OpenCode can launch through native CLIs or Ollama CLI integrations.
 In a custom argv, the token {KICKOFF} is replaced with the kickoff message;
 without the token the kickoff is appended as the final argument.
 
-Prints RUN_ID, RUN_DIR, AGENT, PANE_ID lines on success. Pass the same
+Each spawn also arms a detached one-shot completion watcher (clanky watch)
+that classifies the worker against the run's DONE/BLOCKED sentinels and wakes
+the spawning lead with one [worker <outcome>] message; --no-watch disarms it
+for this spawn. Watcher output lands in workers/<slug>/watch.log.
+
+Prints RUN_ID, RUN_DIR, AGENT, PANE_ID, WATCH lines on success. Pass the same
 --run to later spawns to group workers into one run.
 EOF
 	exit 2
@@ -113,7 +118,7 @@ parse_allowed_harnesses() {
 	fi
 }
 
-RUN_ID="" SLUG="" TASK="" PROMPT="" PROMPT_FILE="" WORKER_CWD="$PWD" HARNESS="" TRANSCRIPT="$(worker_transcript_default)"
+RUN_ID="" SLUG="" TASK="" PROMPT="" PROMPT_FILE="" WORKER_CWD="$PWD" HARNESS="" TRANSCRIPT="$(worker_transcript_default)" WATCH=1
 ARGV=()
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -126,6 +131,8 @@ while [ $# -gt 0 ]; do
 		--harness) HARNESS="$2"; shift 2 ;;
 		--transcript) TRANSCRIPT=1; shift ;;
 		--no-transcript) TRANSCRIPT=0; shift ;;
+		--watch) WATCH=1; shift ;;
+		--no-watch) WATCH=0; shift ;;
 		--) shift; ARGV=("$@"); break ;;
 		*) usage ;;
 	esac
@@ -344,6 +351,14 @@ if [ -z "$TAB_ID" ]; then
 		| python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["tab"]["tab_id"])')"
 fi
 
+# The clanky CLI serves both the transcript wrapper and the completion watcher.
+CLANKY_RUNNER=()
+if command -v clanky >/dev/null 2>&1; then
+	CLANKY_RUNNER=(clanky)
+elif command -v node >/dev/null 2>&1 && [ -f "$REPO_ROOT/bin/clanky.ts" ]; then
+	CLANKY_RUNNER=(node "$REPO_ROOT/bin/clanky.ts")
+fi
+
 # When enabled, wrap the performer in Clanky's transcript runner so the worker
 # produces a durable, session-pinned transcript that peers read with `clanky
 # transcript read clanky:<slug>`. This mirrors agent/tools/herdr_spawn.ts:
@@ -352,11 +367,7 @@ fi
 # transcript lands in the session root readers look in, even if the pane
 # inherits a different env.
 if [ "$TRANSCRIPT" = "1" ]; then
-	if command -v clanky >/dev/null 2>&1; then
-		CLANKY_RUNNER=(clanky)
-	elif command -v node >/dev/null 2>&1 && [ -f "$REPO_ROOT/bin/clanky.ts" ]; then
-		CLANKY_RUNNER=(node "$REPO_ROOT/bin/clanky.ts")
-	else
+	if [ ${#CLANKY_RUNNER[@]} -eq 0 ]; then
 		echo "spawn.sh: need 'clanky' on PATH or node + $REPO_ROOT/bin/clanky.ts to wrap the transcript; pass --no-transcript to start an unwrapped pane" >&2
 		exit 1
 	fi
@@ -366,19 +377,73 @@ else
 	LAUNCH_ARGV=("${ARGV[@]}")
 fi
 
+# The wake target for the completion watcher: the spawning lead's durable name
+# (pane label, else clanky:<slug> agent), resolved from HERDR_PANE_ID against
+# the live roster. Never a raw pane id — ids compact when panes close — so an
+# unresolvable or non-durable self falls back to clanky:main.
+resolve_notify_target() {
+	local self_pane="${HERDR_PANE_ID:-}"
+	if [ -z "$self_pane" ]; then
+		printf 'clanky:main'
+		return
+	fi
+	{ herdr pane list 2>/dev/null || true; } | python3 -c '
+import json, sys
+self_pane = sys.argv[1]
+name = "clanky:main"
+try:
+    panes = json.load(sys.stdin)["result"]["panes"]
+except Exception:
+    panes = []
+for pane in panes:
+    if pane.get("pane_id") == self_pane:
+        label = pane.get("label") or ""
+        agent = pane.get("agent") or ""
+        if label:
+            name = label
+        elif agent.startswith("clanky:"):
+            name = agent
+        break
+print(name)
+' "$self_pane"
+}
+
 PANE_ID="$(herdr agent start "$AGENT_NAME" --cwd "$WORKER_CWD" --tab "$TAB_ID" --no-focus -- "${LAUNCH_ARGV[@]}" \
 	| python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["agent"]["pane_id"])')"
 
 # Display-only pane title so humans and remote clients see the task at a glance.
 herdr pane report-metadata "$PANE_ID" --source clanky-orchestrator --title "$TASK" >/dev/null 2>&1 || true
 
+# Arm the detached one-shot completion watcher: wake-on-done is a property of
+# being spawned. The watcher resolves the pane fresh by durable name, classifies
+# against this run's DONE/BLOCKED sentinels, delivers one provenance-stamped
+# [worker <outcome>] message to the lead, and exits. It survives this script
+# (double-fork + nohup) and dies with the herdr session; its output is
+# inspectable in the worker's watch.log. Re-arming is the next spawn's job.
+WATCH_STATE=off
+WATCH_NOTIFY=""
+WATCH_PID=""
+if [ "$WATCH" = "1" ]; then
+	if [ ${#CLANKY_RUNNER[@]} -eq 0 ]; then
+		WATCH_STATE=unavailable
+		echo "spawn.sh: warning: cannot arm completion watcher (need 'clanky' on PATH or node + $REPO_ROOT/bin/clanky.ts); spawned without wake-on-done" >&2
+	else
+		WATCH_NOTIFY="$(resolve_notify_target)"
+		WATCH_PID="$( (nohup "${CLANKY_RUNNER[@]}" watch "$AGENT_NAME" --notify "$WATCH_NOTIFY" --run-dir "$RUN_DIR" \
+			>> "$WORKER_DIR/watch.log" 2>&1 & echo $!) )"
+		WATCH_STATE=armed
+	fi
+fi
+
 SPAWNED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 python3 - "$MANIFEST" "$RUN_ID" "$RUN_DIR" "$WORKSPACE_ID" "$TAB_ID" "$TAB_LABEL" \
-	"$AGENT_NAME" "$SLUG" "$TASK" "$WORKER_CWD" "$PANE_ID" "$SPAWNED_AT" "${ARGV[@]}" <<'EOF'
+	"$AGENT_NAME" "$SLUG" "$TASK" "$WORKER_CWD" "$PANE_ID" "$SPAWNED_AT" \
+	"$WATCH_STATE" "$WATCH_NOTIFY" "$WATCH_PID" "${ARGV[@]}" <<'EOF'
 import json, os, sys
 (path, run_id, run_dir, workspace_id, tab_id, tab_label,
- name, slug, task, cwd, pane_id, spawned_at) = sys.argv[1:13]
-argv = sys.argv[13:]
+ name, slug, task, cwd, pane_id, spawned_at,
+ watch_state, watch_notify, watch_pid) = sys.argv[1:16]
+argv = sys.argv[16:]
 if os.path.exists(path):
     with open(path) as f:
         manifest = json.load(f)
@@ -388,10 +453,20 @@ else:
 manifest["workspace_id"] = workspace_id
 manifest["tab_id"] = tab_id
 manifest["tab_label"] = tab_label
-manifest["workers"].append({
+worker = {
     "name": name, "slug": slug, "task": task, "cwd": cwd, "argv": argv,
     "pane_id_at_spawn": pane_id, "spawned_at": spawned_at,
-})
+}
+if watch_state == "armed":
+    worker["watch"] = {
+        "notify": watch_notify,
+        "pid": int(watch_pid) if watch_pid.isdigit() else None,
+        "log": os.path.join(run_dir, "workers", slug, "watch.log"),
+        "armed_at": spawned_at,
+    }
+else:
+    worker["watch"] = {"state": watch_state}
+manifest["workers"].append(worker)
 with open(path, "w") as f:
     json.dump(manifest, f, indent=1)
 EOF
@@ -400,3 +475,8 @@ echo "RUN_ID=$RUN_ID"
 echo "RUN_DIR=$RUN_DIR"
 echo "AGENT=$AGENT_NAME"
 echo "PANE_ID=$PANE_ID"
+if [ "$WATCH_STATE" = "armed" ]; then
+	echo "WATCH=armed notify=$WATCH_NOTIFY log=$WORKER_DIR/watch.log"
+else
+	echo "WATCH=$WATCH_STATE"
+fi

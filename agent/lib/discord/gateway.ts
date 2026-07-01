@@ -54,7 +54,11 @@ export interface DiscordGatewayOptions {
 
 export type DiscordInboundHandler = (message: DiscordInboundMessage) => void | Promise<void>;
 
-/** Split a reply into Discord's 2000-char-limited chunks on line boundaries. */
+/**
+ * Split a reply into Discord's 2000-char-limited chunks on line boundaries.
+ * Lines longer than the limit are split into successive full chunks (no content
+ * is dropped); normal lines keep the existing grouping behavior.
+ */
 export function chunkDiscordMessage(text: string, limit: number = DISCORD_MAX_MESSAGE_CHARS): string[] {
 	const trimmed = text.trim();
 	if (trimmed.length === 0) return [];
@@ -62,16 +66,47 @@ export function chunkDiscordMessage(text: string, limit: number = DISCORD_MAX_ME
 	const chunks: string[] = [];
 	let current = "";
 	for (const line of trimmed.split("\n")) {
-		const piece = line.length > limit ? line.slice(0, limit) : line;
-		if (current.length + piece.length + 1 > limit) {
+		if (line.length > limit) {
+			if (current.length > 0) {
+				chunks.push(current);
+				current = "";
+			}
+			const pieces = splitLineIntoChunks(line, limit);
+			chunks.push(...pieces.slice(0, -1));
+			// The tail piece stays open so following short lines can group with it.
+			current = pieces[pieces.length - 1] ?? "";
+			continue;
+		}
+		if (current.length + line.length + 1 > limit) {
 			if (current.length > 0) chunks.push(current);
-			current = piece;
+			current = line;
 		} else {
-			current = current.length === 0 ? piece : `${current}\n${piece}`;
+			current = current.length === 0 ? line : `${current}\n${line}`;
 		}
 	}
 	if (current.length > 0) chunks.push(current);
 	return chunks;
+}
+
+/** Split one over-long line into limit-sized pieces without splitting a surrogate pair. */
+function splitLineIntoChunks(line: string, limit: number): string[] {
+	const pieces: string[] = [];
+	let index = 0;
+	while (index < line.length) {
+		let end = Math.min(index + limit, line.length);
+		const isSurrogatePairBoundary =
+			end < line.length &&
+			line.charCodeAt(end - 1) >= 0xd800 &&
+			line.charCodeAt(end - 1) <= 0xdbff &&
+			line.charCodeAt(end) >= 0xdc00 &&
+			line.charCodeAt(end) <= 0xdfff;
+		// Back off one unit so a surrogate pair is never split, unless the piece
+		// would become empty (degenerate limit of 1).
+		if (isSurrogatePairBoundary && end - 1 > index) end -= 1;
+		pieces.push(line.slice(index, end));
+		index = end;
+	}
+	return pieces;
 }
 
 function conversationKind(message: Message): DiscordConversationKind {
@@ -87,7 +122,6 @@ export class DiscordGateway {
 	/** Recently-sent message ids, for reply-to-self detection (bounded FIFO). */
 	private readonly selfMessageIds: string[] = [];
 	private readonly selfMessageSet = new Set<string>();
-	private ready = false;
 
 	constructor(options: DiscordGatewayOptions) {
 		this.token = options.token;
@@ -156,21 +190,47 @@ export class DiscordGateway {
 
 	async start(handler: DiscordInboundHandler): Promise<void> {
 		this.client.on(Events.MessageCreate, (message) => {
-			this.ready = true;
 			void Promise.resolve(handler(this.normalize(message))).catch((error: unknown) => {
 				console.error("discord inbound handler failed:", error);
 			});
+		});
+		// Permanent lifecycle listeners for the client's whole lifetime. A discord.js
+		// Client is an EventEmitter, so an 'error' event without a listener throws and
+		// would kill the conductor; the rest surface session health in the logs
+		// (invalidation means discord.js has given up reconnecting).
+		this.client.on(Events.Error, (error) => {
+			console.error("discord client error:", error);
+		});
+		this.client.on(Events.Invalidated, () => {
+			console.error("discord session invalidated: discord.js will not reconnect; presence is down until the gateway restarts");
+		});
+		this.client.on(Events.ShardDisconnect, (event, shardId) => {
+			console.error(`discord shard ${shardId} disconnected (code ${event.code})`);
+		});
+		this.client.on(Events.ShardError, (error, shardId) => {
+			console.error(`discord shard ${shardId} error:`, error);
+		});
+		this.client.on(Events.ShardReconnecting, (shardId) => {
+			console.info(`discord shard ${shardId} reconnecting`);
+		});
+		this.client.on(Events.ShardResume, (shardId, replayedEvents) => {
+			console.info(`discord shard ${shardId} resumed (${replayedEvents} events replayed)`);
 		});
 		// User/self tokens need discord.js patched before login (no "Bot " prefix,
 		// /gateway instead of /gateway/bot, synthetic READY application).
 		if (this.credentialKind === "user-token") applyDiscordUserTokenPatches(this.client);
 		await new Promise<void>((resolve, reject) => {
-			this.client.once(Events.ClientReady, () => {
-				this.ready = true;
+			const onReady = (): void => {
+				this.client.off(Events.Error, onConnectError);
 				resolve();
-			});
-			this.client.once(Events.Error, reject);
-			this.client.login(this.token).catch(reject);
+			};
+			const onConnectError = (error: Error): void => {
+				this.client.off(Events.ClientReady, onReady);
+				reject(error);
+			};
+			this.client.once(Events.ClientReady, onReady);
+			this.client.once(Events.Error, onConnectError);
+			this.client.login(this.token).catch(onConnectError);
 		});
 	}
 
@@ -203,7 +263,7 @@ export class DiscordGateway {
 
 	async sendTyping(channelId: string): Promise<void> {
 		const channel = await this.client.channels.fetch(channelId);
-		if (channel !== null && channel.isTextBased() && "sendTyping" in channel) {
+		if (channel?.isTextBased() && "sendTyping" in channel) {
 			await channel.sendTyping().catch(() => {});
 		}
 	}
@@ -215,13 +275,14 @@ export class DiscordGateway {
 		return [...messages.values()].map((message) => this.normalize(message));
 	}
 
+	/** Live readiness from the client's ws status, never a latched boolean, so an
+	 * invalidated or disconnected session stops reporting ready. */
 	isReady(): boolean {
-		return this.ready || this.client.isReady();
+		return this.client.isReady();
 	}
 
 	async stop(): Promise<void> {
 		await this.client.destroy();
-		this.ready = false;
 	}
 }
 

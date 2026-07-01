@@ -2,12 +2,53 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { watch } from "node:fs";
 import { lstat, mkdir, readlink, rm, symlink } from "node:fs/promises";
-import { readFile, stat, writeFile } from "node:fs/promises";
+import { open, readFile, stat, writeFile } from "node:fs/promises";
+import { constants as osConstants } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseEnv, promisify } from "node:util";
+import { promisify } from "node:util";
 import { Client } from "eve/client";
+import {
+	DEFAULT_LOCAL_BASE_URL,
+	DEFAULT_LOCAL_MODEL,
+	formatEnvNameAlternatives,
+	firstEnvValue,
+	GEMINI_API_KEY_ENV_NAMES,
+	XAI_API_KEY_ENV_NAMES,
+} from "../agent/lib/config-defaults.ts";
+import { DEFAULT_EVE_PORT, parsePortValue, resolveEveBindHost, resolveEvePort } from "../agent/lib/eve-address.ts";
+import { readEnvLocal } from "../agent/lib/env-store.ts";
+import {
+	devServerRecordPath,
+	discoverDevServer,
+	hasChildExited,
+	isPidAlive,
+	normalizeHost,
+	probeEveHost,
+	readDevServerRecord,
+	resolveDevServerTimeouts,
+	stopDevServerChild,
+	stopDevServerRecord,
+	waitForDiscoveredDevServerHealth,
+	waitForHostHealth,
+	type DevServerRecord,
+	type DevServerTimeouts,
+	type DiscoveredDevServer,
+} from "../agent/lib/dev-server.ts";
 import { parsePaneRoster, resolveSelf, resolveTarget, stampMessage } from "../agent/lib/herdr-message.ts";
+import { herdrStreamLines, type HerdrRequest, type HerdrStream } from "../agent/lib/herdr-socket.ts";
+import {
+	classifyWorkerState,
+	formatWakeMessage,
+	isSettledAgentStatus,
+	parseWatchEventLine,
+	watcherSelfName,
+	workerRunPaths,
+	type WatchEvent,
+	type WorkerRunPaths,
+	type WorkerSentinels,
+	type WorkerWakeOutcome,
+} from "../agent/lib/worker-watch.ts";
 import { serializeCommandLine } from "../agent/lib/coding-harness.ts";
 import { startTranscriptFileTail } from "../agent/lib/transcript-file-tail.ts";
 import { buildPairingLink, PAIRING_TOKEN_MISSING_MESSAGE, renderPairingQr } from "../agent/lib/pairing.ts";
@@ -26,29 +67,59 @@ import {
 	newTranscriptRunId,
 	readTranscript,
 } from "../agent/lib/transcripts.ts";
+import { searchHerdrHistory } from "../agent/lib/history-search.ts";
+import { listPaneRecordings, readPaneRecording, startPaneRecorder } from "../agent/lib/pane-recorder.ts";
 
 const CLI_PATH = fileURLToPath(import.meta.url);
 const REPO = resolve(dirname(CLI_PATH), "..");
 const INSTALL_DIR = join(process.env.HOME ?? "", ".local/bin");
 const INSTALL_PATH = join(INSTALL_DIR, "clanky");
-const ENV_PATH = join(REPO, ".env.local");
-const DEV_SERVER_FILE = join(REPO, ".eve", "dev-server.json");
-const DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:11434/v1";
-const DEFAULT_LOCAL_MODEL = "qwen3-coder-next";
-const BRAIN_HEALTH_TIMEOUT_MS = 180_000;
+const DEV_SERVER_FILE = devServerRecordPath(REPO);
+const DEV_TIMEOUTS: DevServerTimeouts = resolveDevServerTimeouts(process.env);
 const BRAIN_OUTPUT_LIMIT = 8_000;
-const SERVER_STOP_TIMEOUT_MS = 5_000;
-const SERVER_KILL_TIMEOUT_MS = 2_000;
 const DEV_BRAIN_SUPERVISE_POLL_MS = 5_000;
 // Consecutive unhealthy polls before the supervisor restarts the owned brain.
 // ~15s tolerates eve's own hot-reload blips (which recover well within that)
 // while still rescuing a wedged worker that returns 503 indefinitely.
 const DEV_BRAIN_SUPERVISE_FAILS = 3;
-const DEV_SERVER_RECORD_STARTUP_GRACE_MS = 15_000;
-const DEV_SERVER_UNHEALTHY_SETTLE_MS = 5_000;
-const DEV_SERVER_RECORD_REPROBE_MS = 500;
 const CLANKY_STARTUP_MODEL_FALLBACK_PROVIDER_ENV = "CLANKY_STARTUP_MODEL_FALLBACK_PROVIDER";
 const CLANKY_STARTUP_MODEL_FALLBACK_ENV_NAMES_ENV = "CLANKY_STARTUP_MODEL_FALLBACK_ENV_NAMES";
+const TRANSCRIPT_FORWARDED_SIGNALS: readonly NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
+
+// Children this CLI owns (the dev brain, transcript performers). The crash
+// envelope below SIGTERMs them so a CLI bug never orphans an eve server.
+const ownedChildren = new Set<ChildProcess>();
+
+function trackOwnedChild(child: ChildProcess): () => void {
+	ownedChildren.add(child);
+	const untrack = (): void => {
+		ownedChildren.delete(child);
+	};
+	child.once("exit", untrack);
+	child.once("error", untrack);
+	return untrack;
+}
+
+// Crash-safety envelope: Node >=24 terminates on an unhandled rejection with no
+// cleanup, which would orphan the owned eve dev server. Log, kill owned
+// children, exit non-zero.
+let fatalErrorHandled = false;
+function handleFatalError(kind: string, reason: unknown): void {
+	if (fatalErrorHandled) return;
+	fatalErrorHandled = true;
+	const detail = reason instanceof Error ? reason.stack ?? reason.message : String(reason);
+	process.stderr.write(`clanky: fatal ${kind}: ${detail}\n`);
+	for (const child of ownedChildren) {
+		try {
+			if (!hasChildExited(child)) child.kill("SIGTERM");
+		} catch {
+			// Child already gone.
+		}
+	}
+	process.exit(1);
+}
+process.on("uncaughtException", (error) => handleFatalError("uncaughtException", error));
+process.on("unhandledRejection", (reason) => handleFatalError("unhandledRejection", reason));
 
 type CommandResult = {
 	code: number;
@@ -65,17 +136,6 @@ type DevBrain = {
 	readonly owned: boolean;
 };
 
-type DevServerRecord = {
-	readonly pid: number;
-	readonly updatedAt?: string;
-	readonly url: string;
-};
-type DiscoveredDevServer = {
-	readonly host: string;
-	readonly record: DevServerRecord;
-	readonly state: "healthy" | "reachable";
-};
-
 type EveEvent = {
 	type: string;
 	data?: unknown;
@@ -86,18 +146,8 @@ const command = args[0] ?? "dev";
 const rest = args.slice(1);
 const execFileAsync = promisify(execFile);
 
-function resolvePort(value: string | undefined, fallback: number): number {
-	const raw = value?.trim();
-	if (raw === undefined || raw.length === 0) return fallback;
-	const parsed = Number.parseInt(raw, 10);
-	if (!Number.isInteger(parsed) || String(parsed) !== raw || parsed < 1 || parsed > 65_535) {
-		throw new Error(`CLANKY_EVE_PORT must be an integer from 1 to 65535; got ${JSON.stringify(value)}`);
-	}
-	return parsed;
-}
-
 try {
-	resolvePort(process.env.CLANKY_EVE_PORT, 2000);
+	resolveEvePort(process.env);
 	const result = await runCommand(command, rest);
 	process.exit(result.code);
 } catch (error) {
@@ -124,12 +174,16 @@ async function runCommand(commandName: string, commandArgs: string[]): Promise<C
 			return await runWorker(commandArgs);
 		case "msg":
 			return await runMsg(commandArgs);
+		case "watch":
+			return await runWatch(commandArgs);
 		case "transcript":
 			return await runTranscriptCommand(commandArgs);
 		case "transcript-run":
 			return await runTranscriptRunner(commandArgs);
 		case "transcript-exec":
 			return await runTranscriptExec(commandArgs);
+		case "recorder":
+			return await runRecorderCommand(commandArgs);
 		case "install":
 			await installCli();
 			return { code: 0 };
@@ -154,8 +208,10 @@ Commands:
   pair              Print a QR (or --link) the Clanky iOS app scans to connect
   worker <prompt>   Send one task to the running Clanky Eve brain and stream text
   msg <name> <text> Send a peer worker a submitted prompt, stamped with your verified name
-  transcript        List, read, tail, or print paths for worker transcripts
+  watch <agent>     Watch one worker to completion, deliver one [worker <outcome>] wake, exit
+  transcript        List, read, search, tail, or print paths for worker transcripts
   transcript-run    Run a performer under Clanky's transcript capture
+  recorder          Inspect or seed the session-wide pane recorder store
   install           Install this checkout's clanky binary into ~/.local/bin
   update            Fast-forward this checkout, install deps, and refresh the binary
   help              Show this help
@@ -222,18 +278,24 @@ function superviseDevBrain(initial: DevBrain): DevBrainSupervisor {
 	};
 	removeChildExitRestart = installDevBrainExitRestart(child, restartOwnedDevBrain);
 
+	let ticking = false;
 	const tick = async (): Promise<void> => {
-		if (stopped || restarting) return;
-		const childExited = hasChildExited(child);
-		const state = childExited ? "down" : await probeHost(host);
-		if (stopped || restarting) return;
-		if (state === "healthy") {
-			failures = 0;
-			return;
+		if (stopped || restarting || ticking) return;
+		ticking = true;
+		try {
+			const childExited = hasChildExited(child);
+			const state = childExited ? "down" : await probeEveHost(host, DEV_TIMEOUTS.probeTimeoutMs);
+			if (stopped || restarting) return;
+			if (state === "healthy") {
+				failures = 0;
+				return;
+			}
+			failures = childExited ? DEV_BRAIN_SUPERVISE_FAILS : failures + 1;
+			if (failures < DEV_BRAIN_SUPERVISE_FAILS) return;
+			await restartOwnedDevBrain();
+		} finally {
+			ticking = false;
 		}
-		failures = childExited ? DEV_BRAIN_SUPERVISE_FAILS : failures + 1;
-		if (failures < DEV_BRAIN_SUPERVISE_FAILS) return;
-		await restartOwnedDevBrain();
 	};
 
 	const timer = setInterval(() => void tick(), DEV_BRAIN_SUPERVISE_POLL_MS);
@@ -251,10 +313,10 @@ function superviseDevBrain(initial: DevBrain): DevBrainSupervisor {
 }
 
 async function ensureDevBrain(): Promise<DevBrain> {
-	const discovered = await discoverDevServer();
+	const discovered = await discoverDevServer(DEV_SERVER_FILE, DEV_TIMEOUTS);
 	if (discovered !== undefined) {
 		if (discovered.state === "healthy") return { host: discovered.host, owned: false };
-		if (await waitForDiscoveredDevServerHealth(discovered)) return { host: discovered.host, owned: false };
+		if (await waitForDiscoveredDevServerHealth(discovered, DEV_TIMEOUTS)) return { host: discovered.host, owned: false };
 		await stopUnhealthyDevServerRecord(discovered);
 		return await startDevBrain();
 	}
@@ -263,10 +325,10 @@ async function ensureDevBrain(): Promise<DevBrain> {
 	if (staleRecord !== undefined) await stopStaleDevServerRecord(staleRecord);
 
 	const host = clankyHost();
-	const state = await probeHost(host);
+	const state = await probeEveHost(host, DEV_TIMEOUTS.probeTimeoutMs);
 	if (state === "healthy") return { host, owned: false };
 	if (state === "reachable") {
-		if (await waitForHostHealth(host, DEV_SERVER_UNHEALTHY_SETTLE_MS)) return { host, owned: false };
+		if (await waitForHostHealth(host, DEV_TIMEOUTS.unhealthySettleMs, DEV_TIMEOUTS)) return { host, owned: false };
 		throw new Error(`Eve dev server on ${host} is reachable but unhealthy, and no live ${DEV_SERVER_FILE} process was available to restart`);
 	}
 
@@ -328,9 +390,17 @@ async function startDevBrain(): Promise<DevBrain> {
 		env: await buildDevBrainEnv(),
 		stdio: ["ignore", "pipe", "pipe"],
 	});
+	trackOwnedChild(child);
 	child.stdout?.on("data", appendOutput);
 	child.stderr?.on("data", appendOutput);
-	await waitForDevBrainHealth(child, host, () => output.join(""));
+	try {
+		await waitForDevBrainHealth(child, host, () => output.join(""));
+	} catch (error) {
+		// A brain that never became healthy must not be left running (the known
+		// zombie-eve path): stop the child we just spawned before rethrowing.
+		await stopDevBrain(child);
+		throw error;
+	}
 	return { child, host, owned: true };
 }
 
@@ -339,7 +409,7 @@ async function buildDevBrainEnv(): Promise<NodeJS.ProcessEnv> {
 		...buildEveDevServerEnv(process.env, clankyHost(), clankyPort()),
 		CLANKY_REPO_DIR: REPO,
 	};
-	const localEnv = await readLocalEnv();
+	const localEnv = await readEnvLocal();
 	const provider = process.env.CLANKY_MODEL_PROVIDER ?? localEnv.CLANKY_MODEL_PROVIDER ?? "codex";
 	const startupFallback = missingApiKeyStartupFallback(provider, process.env, localEnv);
 	if (startupFallback !== undefined) {
@@ -372,30 +442,13 @@ function missingApiKeyStartupFallback(
 	env: NodeJS.ProcessEnv,
 	localEnv: Record<string, string>,
 ): StartupModelFallback | undefined {
-	if (provider === "xai" && !hasAnyEnvValue(env, localEnv, ["CLANKY_XAI_API_KEY", "XAI_API_KEY"])) {
-		return { provider, envNames: "CLANKY_XAI_API_KEY or XAI_API_KEY" };
+	if (provider === "xai" && firstEnvValue(XAI_API_KEY_ENV_NAMES, env, localEnv) === undefined) {
+		return { provider, envNames: formatEnvNameAlternatives(XAI_API_KEY_ENV_NAMES) };
 	}
-	if (provider === "gemini" && !hasAnyEnvValue(env, localEnv, ["CLANKY_GEMINI_API_KEY", "GEMINI_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY"])) {
-		return { provider, envNames: "CLANKY_GEMINI_API_KEY, GEMINI_API_KEY, or GOOGLE_GENERATIVE_AI_API_KEY" };
+	if (provider === "gemini" && firstEnvValue(GEMINI_API_KEY_ENV_NAMES, env, localEnv) === undefined) {
+		return { provider, envNames: formatEnvNameAlternatives(GEMINI_API_KEY_ENV_NAMES) };
 	}
 	return undefined;
-}
-
-function hasAnyEnvValue(env: NodeJS.ProcessEnv, localEnv: Record<string, string>, keys: readonly string[]): boolean {
-	return keys.some((key) => (env[key]?.trim() ?? localEnv[key]?.trim() ?? "").length > 0);
-}
-
-async function readLocalEnv(): Promise<Record<string, string>> {
-	try {
-		const parsed = parseEnv(await readFile(ENV_PATH, "utf8"));
-		const env: Record<string, string> = {};
-		for (const [key, value] of Object.entries(parsed)) {
-			if (value !== undefined) env[key] = value;
-		}
-		return env;
-	} catch {
-		return {};
-	}
 }
 
 // `clanky pair` — the QR source for the iOS app's one-time pairing (SPEC §4.4).
@@ -410,19 +463,21 @@ async function runPair(commandArgs: readonly string[]): Promise<CommandResult> {
 	const hostArg = readFlagValue(commandArgs, "--host");
 	const portArg = readFlagValue(commandArgs, "--port");
 
-	const localEnv = await readLocalEnv();
+	const localEnv = await readEnvLocal();
 	const token = process.env.CLANKY_RELAY_TOKEN ?? localEnv.CLANKY_RELAY_TOKEN ?? "";
 	if (token.length === 0) {
 		process.stderr.write(`clanky pair: ${PAIRING_TOKEN_MISSING_MESSAGE}\n`);
 		return { code: 1 };
 	}
 
-	const port = resolvePort(portArg ?? process.env.CLANKY_EVE_PORT ?? localEnv.CLANKY_EVE_PORT, 2000);
+	const port = parsePortValue(portArg ?? process.env.CLANKY_EVE_PORT ?? localEnv.CLANKY_EVE_PORT, DEFAULT_EVE_PORT);
 	const { relayUrl, url } = await buildPairingLink({
 		token,
 		port,
 		host: hostArg,
-		configuredHost: process.env.CLANKY_EVE_HOST ?? localEnv.CLANKY_EVE_HOST,
+		// Bind-host semantics (bare host, never a base URL); wildcard hosts are
+		// filtered by the pairing resolver. process.env wins over .env.local.
+		configuredHost: resolveEveBindHost({ ...localEnv, ...process.env }),
 		https: useHttps,
 	});
 
@@ -449,161 +504,55 @@ async function waitForDevBrainHealth(
 	child: ChildProcess,
 	host: string,
 	output: () => string,
-	timeoutMs = BRAIN_HEALTH_TIMEOUT_MS,
+	timeoutMs = DEV_TIMEOUTS.healthTimeoutMs,
 ): Promise<void> {
 	const deadline = Date.now() + timeoutMs;
 	for (;;) {
 		if (hasChildExited(child)) throw new Error(devBrainExitMessage(child, output()));
-		if ((await probeHost(host)) === "healthy") return;
+		if ((await probeEveHost(host, DEV_TIMEOUTS.probeTimeoutMs)) === "healthy") return;
 		if (Date.now() > deadline) throw new Error(`Clanky brain did not become healthy on ${host}`);
 		await sleep(500);
 	}
 }
 
-async function discoverDevServer(): Promise<DiscoveredDevServer | undefined> {
-	const record = await readDevServerRecord();
-	if (record === undefined || !isPidAlive(record.pid)) return undefined;
-	const host = normalizeHost(record.url);
-	if (host === undefined) return undefined;
-	const initialState = await probeHost(host);
-	if (initialState === "healthy" || initialState === "reachable") return { host, record, state: initialState };
-
-	const graceMs = devServerRecordStartupGraceMs(record);
-	if (graceMs <= 0) return undefined;
-	const deadline = Date.now() + graceMs;
-	while (Date.now() < deadline && isPidAlive(record.pid)) {
-		await sleep(Math.min(DEV_SERVER_RECORD_REPROBE_MS, Math.max(0, deadline - Date.now())));
-		const state = await probeHost(host);
-		if (state === "healthy" || state === "reachable") return { host, record, state };
-	}
-	return undefined;
-}
-
-async function waitForDiscoveredDevServerHealth(discovered: DiscoveredDevServer): Promise<boolean> {
-	const graceMs = Math.max(DEV_SERVER_UNHEALTHY_SETTLE_MS, devServerRecordStartupGraceMs(discovered.record));
-	if (graceMs <= 0) return false;
-	return await waitForHostHealth(discovered.host, graceMs, () => isPidAlive(discovered.record.pid));
-}
-
-async function waitForHostHealth(host: string, timeoutMs: number, shouldContinue: () => boolean = () => true): Promise<boolean> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline && shouldContinue()) {
-		await sleep(Math.min(DEV_SERVER_RECORD_REPROBE_MS, Math.max(0, deadline - Date.now())));
-		if ((await probeHost(host)) === "healthy") return true;
-	}
-	return false;
-}
-
 async function stopUnhealthyDevServerRecord(discovered: DiscoveredDevServer): Promise<void> {
 	process.stderr.write(`clanky: Eve dev server pid ${discovered.record.pid} at ${discovered.host} is reachable but unhealthy; restarting it for dev\n`);
-	await stopDevServerRecord(discovered.record, "unhealthy");
+	await stopRecordedDevServer(discovered.record, "unhealthy");
 }
 
 async function staleDevServerRecord(): Promise<DevServerRecord | undefined> {
-	const record = await readDevServerRecord();
+	const record = await readDevServerRecord(DEV_SERVER_FILE);
 	if (record === undefined || !isPidAlive(record.pid) || record.pid === process.pid) return undefined;
 	const host = normalizeHost(record.url);
 	if (host === undefined) return undefined;
-	return (await probeHost(host)) === "down" ? record : undefined;
+	return (await probeEveHost(host, DEV_TIMEOUTS.probeTimeoutMs)) === "down" ? record : undefined;
 }
 
 async function stopStaleDevServerRecord(record: DevServerRecord): Promise<void> {
 	const host = normalizeHost(record.url) ?? record.url;
 	process.stderr.write(`clanky: stale Eve dev server pid ${record.pid} is alive but ${host} is unreachable; stopping it before restart\n`);
-	await stopDevServerRecord(record, "stale");
+	await stopRecordedDevServer(record, "stale");
 }
 
-async function stopDevServerRecord(record: DevServerRecord, reason: "stale" | "unhealthy"): Promise<void> {
-	if (record.pid === process.pid) return;
-	try {
-		process.kill(record.pid, "SIGTERM");
-	} catch {
-		return;
-	}
-	if (await waitForPidExit(record.pid, SERVER_STOP_TIMEOUT_MS)) return;
-	process.stderr.write(`clanky: ${reason} Eve dev server pid ${record.pid} did not exit after SIGTERM; forcing stop\n`);
-	try {
-		process.kill(record.pid, "SIGKILL");
-	} catch {
-		return;
-	}
-	await waitForPidExit(record.pid, SERVER_KILL_TIMEOUT_MS);
-}
-
-function devServerRecordStartupGraceMs(record: DevServerRecord): number {
-	if (record.updatedAt === undefined) return 0;
-	const updatedAt = Date.parse(record.updatedAt);
-	if (!Number.isFinite(updatedAt)) return 0;
-	const ageMs = Math.max(0, Date.now() - updatedAt);
-	return Math.max(0, DEV_SERVER_RECORD_STARTUP_GRACE_MS - ageMs);
-}
-
-async function readDevServerRecord(): Promise<DevServerRecord | undefined> {
-	let text: string;
-	try {
-		text = await readFile(DEV_SERVER_FILE, "utf8");
-	} catch {
-		return undefined;
-	}
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(text);
-	} catch {
-		return undefined;
-	}
-	if (!isRecord(parsed)) return undefined;
-	if (typeof parsed.pid !== "number" || !Number.isSafeInteger(parsed.pid)) return undefined;
-	if (typeof parsed.url !== "string" || parsed.url.trim().length === 0) return undefined;
-	return {
-		pid: parsed.pid,
-		updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : undefined,
-		url: parsed.url,
-	};
-}
-
-async function probeHost(host: string): Promise<"healthy" | "reachable" | "down"> {
-	try {
-		const response = await fetch(`${host}/eve/v1/info`);
-		return response.ok ? "healthy" : "reachable";
-	} catch {
-		return "down";
-	}
+async function stopRecordedDevServer(record: DevServerRecord, reason: "stale" | "unhealthy"): Promise<void> {
+	await stopDevServerRecord(record, {
+		stopTimeoutMs: DEV_TIMEOUTS.stopTimeoutMs,
+		killTimeoutMs: DEV_TIMEOUTS.killTimeoutMs,
+		onForceKill: (pid) => {
+			process.stderr.write(`clanky: ${reason} Eve dev server pid ${pid} did not exit after SIGTERM; forcing stop\n`);
+		},
+		onIdentityMismatch: (pid) => {
+			process.stderr.write(`clanky: recorded Eve dev server pid ${pid} belongs to another process now; not signaling it\n`);
+		},
+	});
 }
 
 function clankyPort(): number {
-	return resolvePort(process.env.CLANKY_EVE_PORT, 2000);
+	return resolveEvePort(process.env);
 }
 
 function clankyHost(): string {
 	return `http://127.0.0.1:${clankyPort()}`;
-}
-
-function normalizeHost(value: string): string | undefined {
-	try {
-		const url = new URL(value);
-		if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
-		return url.origin;
-	} catch {
-		return undefined;
-	}
-}
-
-function isPidAlive(pid: number): boolean {
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch (error) {
-		return typeof error === "object" && error !== null && "code" in error && String(error.code) === "EPERM";
-	}
-}
-
-async function waitForPidExit(pid: number, timeoutMs: number): Promise<boolean> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (!isPidAlive(pid)) return true;
-		await sleep(100);
-	}
-	return !isPidAlive(pid);
 }
 
 function installDevBrainExitCleanup(child: ChildProcess | undefined): () => void {
@@ -630,36 +579,7 @@ function installDevBrainExitRestart(child: ChildProcess, restart: () => Promise<
 }
 
 async function stopDevBrain(child: ChildProcess): Promise<void> {
-	if (hasChildExited(child)) return;
-	child.kill("SIGTERM");
-	if (await waitForChildExit(child, SERVER_STOP_TIMEOUT_MS)) return;
-	child.kill("SIGKILL");
-	await waitForChildExit(child, SERVER_KILL_TIMEOUT_MS);
-}
-
-function hasChildExited(child: ChildProcess): boolean {
-	return child.exitCode !== null || child.signalCode !== null;
-}
-
-async function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
-	if (hasChildExited(child)) return true;
-	return await new Promise<boolean>((resolvePromise) => {
-		let settled = false;
-		const finish = (exited: boolean): void => {
-			if (settled) return;
-			settled = true;
-			clearTimeout(timeout);
-			child.off("exit", onExit);
-			child.off("error", onError);
-			resolvePromise(exited);
-		};
-		const onExit = (): void => finish(true);
-		const onError = (): void => finish(true);
-		const timeout = setTimeout(() => finish(false), timeoutMs);
-		child.once("exit", onExit);
-		child.once("error", onError);
-		if (hasChildExited(child)) finish(true);
-	});
+	await stopDevServerChild(child, { stopTimeoutMs: DEV_TIMEOUTS.stopTimeoutMs, killTimeoutMs: DEV_TIMEOUTS.killTimeoutMs });
 }
 
 function devBrainExitMessage(child: ChildProcess, output: string): string {
@@ -742,7 +662,7 @@ async function runWorker(commandArgs: readonly string[]): Promise<CommandResult>
 		process.stderr.write("clanky worker requires a prompt\n");
 		return { code: 2 };
 	}
-	const client = new Client({ host: `http://127.0.0.1:${resolvePort(process.env.CLANKY_EVE_PORT, 2000)}` });
+	const client = new Client({ host: `http://127.0.0.1:${resolveEvePort(process.env)}` });
 	const session = client.session();
 	const response = await session.send(prompt);
 	let wroteText = false;
@@ -798,6 +718,287 @@ async function runMsg(commandArgs: readonly string[]): Promise<CommandResult> {
 	return { code: 0 };
 }
 
+// Statuses flicker while a harness redraws; only a settle that survives this
+// re-probe window (or a sentinel file) is treated as a completion.
+const WATCH_SETTLE_DEBOUNCE_MS = 1_500;
+const WATCH_RESUBSCRIBE_DELAY_MS = 1_000;
+const WATCH_MAX_SUBSCRIBE_FAILURES = 5;
+
+// `clanky watch <agent>` — the one-shot completion watcher armed at the spawn
+// seam (agent/lib/worker-watch.ts). It blocks on herdr agent-status events for
+// one worker, classifies the outcome against the run dir's DONE/BLOCKED
+// sentinels (completion truth; agent_status is heuristic), delivers exactly one
+// `[worker <outcome>]` wake to the --notify target through the `clanky msg`
+// machinery (live-roster resolution + `[from watch:<slug>]` stamp), and exits.
+// Re-arming is the next spawn's (or the lead's) job.
+async function runWatch(commandArgs: readonly string[]): Promise<CommandResult> {
+	const options = parseWatchArgs(commandArgs);
+	const paths = options.runDir === undefined ? undefined : workerRunPaths(options.runDir, options.agent);
+	const deadline = options.timeoutMs === undefined ? undefined : Date.now() + options.timeoutMs;
+	let subscribeFailures = 0;
+	while (true) {
+		const probe = await probeWatchedAgent(options.agent);
+		if (probe.kind === "unreachable") {
+			process.stderr.write(`clanky watch: herdr unreachable: ${probe.message}\n`);
+			return { code: 1 };
+		}
+		const sentinels = paths === undefined ? undefined : await readWorkerSentinels(paths);
+		if (probe.kind === "gone") {
+			const state = classifyWorkerState({ paneAlive: false, sentinels });
+			return await deliverWorkerWake({
+				...options,
+				paths,
+				outcome: state === "running" || state === "idle" ? "dead" : state,
+			});
+		}
+		const state = classifyWorkerState({ paneAlive: true, agentStatus: probe.status, sentinels });
+		if (state === "done" || state === "blocked") {
+			return await deliverWorkerWake({ ...options, paths, outcome: state, agentStatus: probe.status });
+		}
+		// An arm-time settled status without a sentinel is not a completion (a
+		// worker still booting can read idle); wait for a post-arm settle event.
+		const wait = await waitForWorkerSettle({ agent: options.agent, paneId: probe.paneId, paths, deadline });
+		if (wait.kind === "deliver") {
+			return await deliverWorkerWake({ ...options, paths, outcome: wait.outcome, agentStatus: wait.agentStatus });
+		}
+		if (wait.kind === "timeout") {
+			const finalProbe = await probeWatchedAgent(options.agent);
+			const finalSentinels = paths === undefined ? undefined : await readWorkerSentinels(paths);
+			const finalStatus = finalProbe.kind === "alive" ? finalProbe.status : undefined;
+			const finalState = classifyWorkerState({
+				paneAlive: finalProbe.kind === "alive",
+				agentStatus: finalStatus,
+				sentinels: finalSentinels,
+			});
+			return await deliverWorkerWake({
+				...options,
+				paths,
+				outcome: finalState === "running" ? "timeout" : finalState,
+				agentStatus: finalStatus,
+			});
+		}
+		subscribeFailures = wait.subscribed ? 0 : subscribeFailures + 1;
+		if (subscribeFailures >= WATCH_MAX_SUBSCRIBE_FAILURES) {
+			process.stderr.write(`clanky watch: giving up after ${subscribeFailures} failed event subscriptions\n`);
+			return { code: 1 };
+		}
+		await sleep(WATCH_RESUBSCRIBE_DELAY_MS);
+	}
+}
+
+function parseWatchArgs(commandArgs: readonly string[]): {
+	agent: string;
+	notify: string;
+	runDir?: string;
+	timeoutMs?: number;
+} {
+	let agent: string | undefined;
+	let notify = "clanky:main";
+	let runDir: string | undefined;
+	let timeoutMs: number | undefined;
+	for (let i = 0; i < commandArgs.length; i++) {
+		const arg = commandArgs[i];
+		if (arg === "--notify") {
+			notify = requiredValue(commandArgs[++i], "--notify");
+			continue;
+		}
+		if (arg === "--run-dir") {
+			runDir = requiredValue(commandArgs[++i], "--run-dir");
+			continue;
+		}
+		if (arg === "--timeout") {
+			timeoutMs = parsePositiveInteger(commandArgs[++i], "--timeout");
+			continue;
+		}
+		if (arg?.startsWith("--notify=")) {
+			notify = requiredValue(arg.slice("--notify=".length), "--notify");
+			continue;
+		}
+		if (arg?.startsWith("--run-dir=")) {
+			runDir = requiredValue(arg.slice("--run-dir=".length), "--run-dir");
+			continue;
+		}
+		if (arg?.startsWith("--timeout=")) {
+			timeoutMs = parsePositiveInteger(arg.slice("--timeout=".length), "--timeout");
+			continue;
+		}
+		if (arg?.startsWith("-")) throw new Error(`unknown watch option ${arg}`);
+		if (agent !== undefined) throw new Error("watch accepts one worker agent");
+		agent = arg;
+	}
+	if (agent === undefined || agent.length === 0) {
+		throw new Error("Usage: clanky watch <agent> [--notify <target>] [--run-dir <run-dir>] [--timeout <ms>]");
+	}
+	return { agent, notify, runDir, timeoutMs };
+}
+
+type WatchedAgentProbe =
+	| { kind: "alive"; paneId: string; status?: string }
+	| { kind: "gone" }
+	| { kind: "unreachable"; message: string };
+
+// Resolve the worker fresh by durable name; never trust a stored pane id.
+async function probeWatchedAgent(agent: string): Promise<WatchedAgentProbe> {
+	let stdout: string;
+	try {
+		stdout = await herdrCapture(["agent", "get", agent]);
+	} catch (error) {
+		const err = error as NodeJS.ErrnoException & { stderr?: string };
+		if (typeof err.stderr === "string" && err.stderr.includes("agent_not_found")) return { kind: "gone" };
+		return { kind: "unreachable", message: err.stderr?.trim() || err.message };
+	}
+	let envelope: { result?: { agent?: { pane_id?: unknown; agent_status?: unknown } } };
+	try {
+		envelope = JSON.parse(stdout) as { result?: { agent?: { pane_id?: unknown; agent_status?: unknown } } };
+	} catch {
+		return { kind: "unreachable", message: "could not parse `herdr agent get` output as JSON" };
+	}
+	const agentInfo = envelope.result?.agent;
+	const paneId = typeof agentInfo?.pane_id === "string" ? agentInfo.pane_id : undefined;
+	if (paneId === undefined || paneId.length === 0) return { kind: "gone" };
+	const status = typeof agentInfo?.agent_status === "string" ? agentInfo.agent_status : undefined;
+	return { kind: "alive", paneId, status };
+}
+
+async function fileExists(path: string): Promise<boolean> {
+	return await stat(path).then(
+		() => true,
+		() => false,
+	);
+}
+
+async function readWorkerSentinels(paths: WorkerRunPaths): Promise<WorkerSentinels> {
+	const [done, blocked] = await Promise.all([fileExists(paths.donePath), fileExists(paths.blockedPath)]);
+	return { done, blocked };
+}
+
+type WorkerSettleWait =
+	| { kind: "deliver"; outcome: WorkerWakeOutcome; agentStatus?: string }
+	| { kind: "timeout" }
+	| { kind: "resubscribe"; subscribed: boolean };
+
+// One events.subscribe stream: agent-status changes for the worker's pane (no
+// status filter, so done AND blocked AND idle all fire) plus pane.closed /
+// pane.exited for pane death — a dead pane's status subscription goes silent
+// rather than closing, so death needs its own events.
+async function waitForWorkerSettle(input: {
+	agent: string;
+	paneId: string;
+	paths?: WorkerRunPaths;
+	deadline?: number;
+}): Promise<WorkerSettleWait> {
+	return await new Promise((resolvePromise) => {
+		let finished = false;
+		let subscribed = false;
+		let processing = Promise.resolve();
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		let stream: HerdrStream | undefined;
+		const finish = (result: WorkerSettleWait): void => {
+			if (finished) return;
+			finished = true;
+			if (timer !== undefined) clearTimeout(timer);
+			stream?.close();
+			resolvePromise(result);
+		};
+		const handleEvent = async (event: WatchEvent): Promise<void> => {
+			if (finished) return;
+			if (event.kind === "subscribed") {
+				subscribed = true;
+				// Close the arm->subscribe gap: a sentinel written before the
+				// subscription started produces no event, so re-check once.
+				const sentinels = input.paths === undefined ? undefined : await readWorkerSentinels(input.paths);
+				if (sentinels?.done === true) finish({ kind: "deliver", outcome: "done" });
+				else if (sentinels?.blocked === true) finish({ kind: "deliver", outcome: "blocked" });
+				return;
+			}
+			if (event.kind === "error") {
+				process.stderr.write(`clanky watch: subscription error: ${event.message}\n`);
+				finish({ kind: "resubscribe", subscribed });
+				return;
+			}
+			if (event.paneId !== input.paneId) return;
+			if (event.kind === "pane-gone") {
+				const sentinels = input.paths === undefined ? undefined : await readWorkerSentinels(input.paths);
+				const state = classifyWorkerState({ paneAlive: false, sentinels });
+				finish({ kind: "deliver", outcome: state === "running" || state === "idle" ? "dead" : state });
+				return;
+			}
+			if (!isSettledAgentStatus(event.status)) return;
+			await sleep(WATCH_SETTLE_DEBOUNCE_MS);
+			if (finished) return;
+			const sentinels = input.paths === undefined ? undefined : await readWorkerSentinels(input.paths);
+			const probe = await probeWatchedAgent(input.agent);
+			if (probe.kind === "unreachable") {
+				finish({ kind: "resubscribe", subscribed });
+				return;
+			}
+			const status = probe.kind === "alive" ? probe.status : undefined;
+			const state = classifyWorkerState({ paneAlive: probe.kind === "alive", agentStatus: status, sentinels });
+			if (state === "running") return;
+			finish({ kind: "deliver", outcome: state, agentStatus: status ?? event.status });
+		};
+		if (input.deadline !== undefined) {
+			timer = setTimeout(() => finish({ kind: "timeout" }), Math.max(0, input.deadline - Date.now()));
+		}
+		stream = herdrStreamLines(
+			{
+				id: `clanky_watch_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+				method: "events.subscribe",
+				params: {
+					subscriptions: [
+						{ type: "pane.agent_status_changed", pane_id: input.paneId },
+						{ type: "pane.closed" },
+						{ type: "pane.exited" },
+					],
+				},
+			} satisfies HerdrRequest,
+			(line) => {
+				const event = parseWatchEventLine(line);
+				if (event === undefined) return;
+				processing = processing.then(() => handleEvent(event)).catch(() => finish({ kind: "resubscribe", subscribed }));
+			},
+			() => finish({ kind: "resubscribe", subscribed }),
+			() => finish({ kind: "resubscribe", subscribed }),
+		);
+	});
+}
+
+async function deliverWorkerWake(input: {
+	agent: string;
+	notify: string;
+	paths?: WorkerRunPaths;
+	outcome: WorkerWakeOutcome;
+	agentStatus?: string;
+	timeoutMs?: number;
+}): Promise<CommandResult> {
+	const resultPath =
+		input.paths !== undefined && (await fileExists(input.paths.resultPath)) ? input.paths.resultPath : undefined;
+	const message = formatWakeMessage({
+		agent: input.agent,
+		outcome: input.outcome,
+		runId: input.paths?.runId,
+		resultPath,
+		agentStatus: input.agentStatus,
+		hasRunDir: input.paths !== undefined,
+		timeoutMs: input.timeoutMs,
+	});
+	const roster = parsePaneRoster(await herdrCapture(["pane", "list"]));
+	// The watcher legitimately wakes the pane that armed it, so the notify
+	// target resolves with no self-pane exclusion (empty self pane id).
+	let resolution = resolveTarget(roster, input.notify, "");
+	if (!resolution.ok && input.notify !== "clanky:main") {
+		process.stderr.write(`clanky watch: notify target failed (${resolution.reason}); falling back to clanky:main\n`);
+		resolution = resolveTarget(roster, "clanky:main", "");
+	}
+	if (!resolution.ok) {
+		process.stderr.write(`clanky watch: cannot deliver wake: ${resolution.reason}\nundelivered: ${message}\n`);
+		return { code: 1 };
+	}
+	await herdrCapture(["pane", "run", resolution.pane.paneId, stampMessage(watcherSelfName(input.agent), message)]);
+	process.stdout.write(`delivered to ${resolution.pane.name} (${resolution.pane.paneId}): ${message}\n`);
+	return { code: input.outcome === "timeout" ? 1 : 0 };
+}
+
 async function runTranscriptCommand(commandArgs: readonly string[]): Promise<CommandResult> {
 	const subcommand = commandArgs[0] ?? "help";
 	const restArgs = commandArgs.slice(1);
@@ -838,6 +1039,8 @@ async function runTranscriptCommand(commandArgs: readonly string[]): Promise<Com
 		}
 		case "tail":
 			return await tailTranscript(restArgs);
+		case "search":
+			return await searchTranscripts(restArgs);
 		default:
 			process.stderr.write(`clanky transcript: unknown command '${subcommand}'\n\n`);
 			printTranscriptHelp();
@@ -853,7 +1056,166 @@ Commands:
   read <agent> [--lines N] [--run-id ID] Read the latest transcript
   tail <agent> [--lines N] [--run-id ID] Follow transcript text
   path <agent> [--run-id ID]             Print the transcript run directory
+  search <query> [--limit N] [--regex] [--json]
+                                         Search worker transcripts and pane recordings
 `);
+}
+
+async function searchTranscripts(commandArgs: readonly string[]): Promise<CommandResult> {
+	let query: string | undefined;
+	let limit = 20;
+	let regex = false;
+	let json = false;
+	for (let i = 0; i < commandArgs.length; i++) {
+		const arg = commandArgs[i];
+		if (arg === "--limit") {
+			limit = parsePositiveInteger(commandArgs[++i], "--limit");
+			continue;
+		}
+		if (arg?.startsWith("--limit=")) {
+			limit = parsePositiveInteger(arg.slice("--limit=".length), "--limit");
+			continue;
+		}
+		if (arg === "--regex") {
+			regex = true;
+			continue;
+		}
+		if (arg === "--json") {
+			json = true;
+			continue;
+		}
+		if (arg?.startsWith("-")) throw new Error(`unknown search option ${arg}`);
+		if (query !== undefined) throw new Error("transcript search accepts one query (quote multi-word queries)");
+		query = arg;
+	}
+	if (query === undefined || query.length === 0) throw new Error("transcript search requires a query");
+	const result = await searchHerdrHistory(query, { limit, regex });
+	if (json) {
+		process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+		return { code: 0 };
+	}
+	if (result.matches.length === 0) {
+		process.stdout.write(`no matches (${result.engine})\n`);
+		return { code: 0 };
+	}
+	for (const match of result.matches) {
+		const where = match.kind === "pane" ? `pane ${match.paneId ?? match.id}` : `agent ${match.agent ?? "?"}`;
+		process.stdout.write(`${where}\t${match.id}/${match.file}:${match.lineNumber}\t${match.line}\n`);
+	}
+	if (result.truncated) process.stdout.write(`… truncated at ${limit} matches\n`);
+	return { code: 0 };
+}
+
+async function runRecorderCommand(commandArgs: readonly string[]): Promise<CommandResult> {
+	const subcommand = commandArgs[0] ?? "help";
+	const restArgs = commandArgs.slice(1);
+	switch (subcommand) {
+		case "help":
+		case "-h":
+		case "--help":
+			printRecorderHelp();
+			return { code: 0 };
+		case "list": {
+			const json = restArgs.includes("--json");
+			const recordings = await listPaneRecordings();
+			if (json) {
+				process.stdout.write(`${JSON.stringify(recordings, null, 2)}\n`);
+				return { code: 0 };
+			}
+			if (recordings.length === 0) {
+				process.stdout.write("no pane recordings\n");
+				return { code: 0 };
+			}
+			for (const recording of recordings) {
+				const state = recording.endedAt === undefined ? "open" : "ended";
+				const covered = recording.coveredBy === undefined ? "" : `\tcovered-by:${recording.coveredBy}`;
+				process.stdout.write(
+					`${recording.paneId}\t${state}\t${recording.recordingId}\t${recording.startedAt}${covered}\n`,
+				);
+			}
+			return { code: 0 };
+		}
+		case "read": {
+			const options = parseRecorderReadArgs(restArgs);
+			const result = await readPaneRecording(options.pane, {
+				lines: options.lines,
+				anchor: options.anchor,
+				skip: options.skip,
+			});
+			process.stdout.write(result.text);
+			if (result.text.length > 0 && !result.text.endsWith("\n")) process.stdout.write("\n");
+			return { code: 0 };
+		}
+		case "seed": {
+			// One-shot pane.read snapshot of every live pane into the store. Run
+			// before a herdr upgrade/handoff so pre-upgrade tails survive.
+			const handle = await startPaneRecorder({ seedOnly: true, log: (message) => process.stderr.write(`${message}\n`) });
+			if (handle === undefined) {
+				process.stderr.write("recorder seed: could not start (herdr unreachable?)\n");
+				return { code: 1 };
+			}
+			const recordings = await listPaneRecordings();
+			process.stdout.write(`seeded ${recordings.filter((recording) => recording.endedAt === undefined).length} open recording(s)\n`);
+			return { code: 0 };
+		}
+		default:
+			process.stderr.write(`clanky recorder: unknown command '${subcommand}'\n\n`);
+			printRecorderHelp();
+			return { code: 2 };
+	}
+}
+
+function printRecorderHelp(): void {
+	process.stdout.write(`Usage: clanky recorder <command> [args]
+
+Commands:
+  list [--json]                                List pane recordings for this Herdr session
+  read <pane> [--lines N] [--anchor head|tail] [--skip N]
+                                               Read recorded pane history (head reads from the start)
+  seed                                         Snapshot every live pane into the store once
+`);
+}
+
+function parseRecorderReadArgs(commandArgs: readonly string[]): {
+	pane: string;
+	lines: number;
+	anchor: "head" | "tail";
+	skip: number;
+} {
+	let pane: string | undefined;
+	let lines = 120;
+	let anchor: "head" | "tail" = "tail";
+	let skip = 0;
+	for (let i = 0; i < commandArgs.length; i++) {
+		const arg = commandArgs[i];
+		if (arg === "--lines") {
+			lines = parsePositiveInteger(commandArgs[++i], "--lines");
+			continue;
+		}
+		if (arg?.startsWith("--lines=")) {
+			lines = parsePositiveInteger(arg.slice("--lines=".length), "--lines");
+			continue;
+		}
+		if (arg === "--skip") {
+			skip = parseNonNegativeInteger(commandArgs[++i], "--skip");
+			continue;
+		}
+		if (arg?.startsWith("--skip=")) {
+			skip = parseNonNegativeInteger(arg.slice("--skip=".length), "--skip");
+			continue;
+		}
+		if (arg === "--anchor" || arg?.startsWith("--anchor=")) {
+			const value = arg === "--anchor" ? commandArgs[++i] : arg.slice("--anchor=".length);
+			if (value !== "head" && value !== "tail") throw new Error("--anchor must be head or tail");
+			anchor = value;
+			continue;
+		}
+		if (arg?.startsWith("-")) throw new Error(`unknown recorder option ${arg}`);
+		if (pane !== undefined) throw new Error("recorder read accepts one pane id");
+		pane = arg;
+	}
+	if (pane === undefined || pane.length === 0) throw new Error("recorder read requires a pane id");
+	return { pane, lines, anchor, skip };
 }
 
 function parseTranscriptReadArgs(
@@ -895,20 +1257,35 @@ async function tailTranscript(commandArgs: readonly string[]): Promise<CommandRe
 	process.stdout.write(result.text);
 	const file = join(result.path, "stream.txt");
 	let offset = await stat(file).then((s) => s.size);
+	// Read only the appended delta per watch event (a long-running performer's
+	// stream.txt grows without bound; re-reading the whole file each event does
+	// not scale). `reading` coalesces bursts of watch events.
+	let reading = false;
 	await new Promise<void>((resolvePromise, reject) => {
 		const watcher = watch(file, { persistent: true }, async () => {
+			if (reading) return;
+			reading = true;
 			try {
-				const buffer = await readFile(file);
-				if (buffer.byteLength <= offset) {
-					offset = buffer.byteLength;
+				const { size } = await stat(file);
+				if (size <= offset) {
+					offset = size;
 					return;
 				}
-				const next = buffer.subarray(offset);
-				offset = buffer.byteLength;
-				process.stdout.write(next);
+				const handle = await open(file, "r");
+				try {
+					const length = size - offset;
+					const chunk = Buffer.alloc(length);
+					const { bytesRead } = await handle.read(chunk, 0, length, offset);
+					offset += bytesRead;
+					process.stdout.write(chunk.subarray(0, bytesRead));
+				} finally {
+					await handle.close();
+				}
 			} catch (error) {
 				watcher.close();
 				reject(error);
+			} finally {
+				reading = false;
 			}
 		});
 		watcher.on("error", reject);
@@ -989,6 +1366,35 @@ async function runTranscriptProcess(
 	return await runTranscriptPipeCapture(run, argv, cwd);
 }
 
+// Trap SIGINT/SIGTERM/SIGHUP for the lifetime of a transcript run so a pane
+// close or kill can't take the wrapper down before the write chain flushes and
+// finishTranscriptRun records the run's end (otherwise runs look live forever
+// and performers are orphaned). Signals are forwarded to the performer; after
+// finalize the wrapper re-raises so its own exit status stays truthful.
+function installTranscriptSignalForwarding(child: ChildProcess): () => void {
+	const handlers = new Map<NodeJS.Signals, () => void>();
+	for (const signal of TRANSCRIPT_FORWARDED_SIGNALS) {
+		const forward = (): void => {
+			if (!hasChildExited(child)) child.kill(signal);
+		};
+		handlers.set(signal, forward);
+		process.on(signal, forward);
+	}
+	return () => {
+		for (const [signal, forward] of handlers) process.off(signal, forward);
+	};
+}
+
+// The performer died from (or we relayed) a signal: re-raise it on ourselves
+// with default disposition restored so the wrapper reports the same signal
+// instead of collapsing it to exit 1. The fallback exit covers hosts where the
+// re-raise is swallowed.
+function reRaiseSignal(signal: NodeJS.Signals): CommandResult {
+	process.kill(process.pid, signal);
+	const signalNumber = osConstants.signals[signal];
+	return { code: typeof signalNumber === "number" ? 128 + signalNumber : 1 };
+}
+
 async function runTranscriptPipeCapture(
 	run: Awaited<ReturnType<typeof createTranscriptRun>>,
 	argv: readonly string[],
@@ -997,6 +1403,8 @@ async function runTranscriptPipeCapture(
 	const launch = directCommand(argv);
 	return await new Promise((resolvePromise, reject) => {
 		const child = spawn(launch.command, launch.args, { cwd, stdio: ["inherit", "pipe", "pipe"] });
+		trackOwnedChild(child);
+		const removeSignalForwarding = installTranscriptSignalForwarding(child);
 		let writeChain = Promise.resolve();
 		let writeError: Error | undefined;
 		let settled = false;
@@ -1015,6 +1423,7 @@ async function runTranscriptPipeCapture(
 			settled = true;
 			await writeChain;
 			await finishTranscriptRun(run, { exitCode: code, signal });
+			removeSignalForwarding();
 			if (error !== undefined) {
 				reject(error);
 				return;
@@ -1023,6 +1432,10 @@ async function runTranscriptPipeCapture(
 			// the pane should reflect the performer, not Clanky's logging layer.
 			if (writeError !== undefined) {
 				process.stderr.write(`clanky: transcript write failed: ${writeError.message}\n`);
+			}
+			if (signal !== null) {
+				resolvePromise(reRaiseSignal(signal));
+				return;
 			}
 			resolvePromise({ code: code ?? 1 });
 		};
@@ -1048,6 +1461,8 @@ async function runTranscriptPtyBridge(
 	const tail = await startTranscriptFileTail(run, rawPath);
 	return await new Promise((resolvePromise, reject) => {
 		const child = spawn(launch.command, launch.args, { cwd, stdio: "inherit" });
+		trackOwnedChild(child);
+		const removeSignalForwarding = installTranscriptSignalForwarding(child);
 		let settled = false;
 		const forwardResize = (): void => {
 			if (child.killed) return;
@@ -1062,12 +1477,17 @@ async function runTranscriptPtyBridge(
 			process.off("SIGWINCH", forwardResize);
 			const writeError = await tail.stop();
 			await finishTranscriptRun(run, { exitCode: code, signal });
+			removeSignalForwarding();
 			if (error !== undefined) {
 				reject(error);
 				return;
 			}
 			if (writeError !== undefined) {
 				process.stderr.write(`clanky: transcript write failed: ${writeError.message}\n`);
+			}
+			if (signal !== null) {
+				resolvePromise(reRaiseSignal(signal));
+				return;
 			}
 			resolvePromise({ code: code ?? 1 });
 		};
@@ -1120,13 +1540,18 @@ function parsePositiveInteger(value: string | undefined, label: string): number 
 	return parsed;
 }
 
+function parseNonNegativeInteger(value: string | undefined, label: string): number {
+	const raw = requiredValue(value, label);
+	const parsed = Number.parseInt(raw, 10);
+	if (!Number.isInteger(parsed) || String(parsed) !== raw || parsed < 0) {
+		throw new Error(`${label} must be a non-negative integer; got ${JSON.stringify(value)}`);
+	}
+	return parsed;
+}
+
 function requiredValue(value: string | undefined, label: string): string {
 	if (value === undefined || value.length === 0) throw new Error(`${label} requires a value`);
 	return value;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function textFromEvent(event: EveEvent): string | undefined {

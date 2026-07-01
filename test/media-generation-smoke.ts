@@ -69,16 +69,14 @@ await expectThrow("xai image empty prompt", () => generateXaiImage({ prompt: "  
 }
 
 // --- off-catalog brains supply a context window so eve can compile compaction --------------
-{
-	check("codex brain has no override context window", brainContextWindowTokensFromEnv({ CLANKY_MODEL_PROVIDER: "codex" }) === undefined);
-	check("xai grok-4 context window", brainContextWindowTokensFromEnv({ CLANKY_MODEL_PROVIDER: "xai", CLANKY_XAI_MODEL: "grok-4" }) === 256_000);
-	check("xai unknown model falls back", brainContextWindowTokensFromEnv({ CLANKY_MODEL_PROVIDER: "xai", CLANKY_XAI_MODEL: "grok-future" }) === 131_072);
-	check(
-		"xai context window env override wins",
-		brainContextWindowTokensFromEnv({ CLANKY_MODEL_PROVIDER: "xai", CLANKY_XAI_MODEL: "grok-4", CLANKY_XAI_CONTEXT_TOKENS: "99999" }) === 99_999,
-	);
-	check("gemini default context window", brainContextWindowTokensFromEnv({ CLANKY_MODEL_PROVIDER: "gemini" }) === 1_048_576);
-}
+check("codex brain has no override context window", brainContextWindowTokensFromEnv({ CLANKY_MODEL_PROVIDER: "codex" }) === undefined);
+check("xai grok-4 context window", brainContextWindowTokensFromEnv({ CLANKY_MODEL_PROVIDER: "xai", CLANKY_XAI_MODEL: "grok-4" }) === 256_000);
+check("xai unknown model falls back", brainContextWindowTokensFromEnv({ CLANKY_MODEL_PROVIDER: "xai", CLANKY_XAI_MODEL: "grok-future" }) === 131_072);
+check(
+	"xai context window env override wins",
+	brainContextWindowTokensFromEnv({ CLANKY_MODEL_PROVIDER: "xai", CLANKY_XAI_MODEL: "grok-4", CLANKY_XAI_CONTEXT_TOKENS: "99999" }) === 99_999,
+);
+check("gemini default context window", brainContextWindowTokensFromEnv({ CLANKY_MODEL_PROVIDER: "gemini" }) === 1_048_576);
 
 console.log(failures === 0 ? "\nALL OK" : `\n${failures} FAILED`);
 process.exit(failures === 0 ? 0 : 1);

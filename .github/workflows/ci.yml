@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
 
 # Cancel superseded runs on the same ref.
@@ -36,6 +36,14 @@ jobs:
       - name: pnpm check
         run: pnpm check
 
+      # Biome lint (biome.jsonc; lint-only, no formatting).
+      - name: pnpm lint
+        run: pnpm lint
+
+      # docs/env-reference.md must match the CLANKY_* reads in the source.
+      - name: env reference is current
+        run: pnpm env:reference --check
+
   smoke:
     name: Smoke (offline)
     runs-on: ubuntu-latest
@@ -54,55 +62,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # Offline, deterministic smoke tests only. Tests gated on live
-      # credentials (model / Discord / relay / voice / media / MCP) are
-      # excluded; run those locally with their `pnpm smoke:*` scripts.
-      - name: Run offline smoke tests
-        run: |
-          set -euo pipefail
-          tests=(
-            banner-smoke
-            tui-no-reply-smoke
-            tui-input-request-queue-smoke
-            tui-session-store-smoke
-            tui-attachments-smoke
-            tui-prompt-history-smoke
-            tui-context-status-smoke
-            port-config-smoke
-            transcript-registry-smoke
-            transcript-file-tail-smoke
-            transcript-run-smoke
-            capabilities-smoke
-            approvals-smoke
-            agent-md-smoke
-            agent-spinners-smoke
-            local-context-smoke
-            clanky-face-renderer-smoke
-            clanky-face-layout-smoke
-            clanky-autocomplete-smoke
-            clanky-interactive-flow-smoke
-            clanky-transcript-block-smoke
-            clanky-transcript-key-routing-smoke
-            clanky-transcript-viewport-smoke
-            clanky-tui-ledger-smoke
-            clanky-sgr-mouse-smoke
-            clanky-clipboard-smoke
-            clanky-skills-smoke
-            clanky-skills-panel-smoke
-            clanky-pairing-smoke
-            clanky-chrome-selection-smoke
-            clanky-command-result-smoke
-            clanky-face-bash-smoke
-            herdr-spawn-argv-smoke
-            herdr-send-routing-smoke
-            herdr-placement-smoke
-            discord-gateway-status-smoke
-            voice-config-smoke
-            voice-control-smoke
-            voice-fault-smoke
-          )
-          for t in "${tests[@]}"; do
-            echo "::group::$t"
-            node "test/$t.ts"
-            echo "::endgroup::"
-          done
+      # Offline, deterministic smoke tests. scripts/run-smoke.ts globs
+      # test/*-smoke.ts and skips the live-gated set (credentials, live
+      # Herdr/eve/Discord, TTY); run those locally via their `pnpm smoke:*`
+      # scripts. New offline smoke tests are picked up automatically.
+      - name: pnpm smoke
+        run: pnpm smoke

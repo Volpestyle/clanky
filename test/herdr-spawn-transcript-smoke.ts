@@ -24,6 +24,9 @@ try {
 				"-lc",
 				'printf "early\\n"; printf "\\033[2J\\033[Hafter-clear\\n"; printf "late\\n"; sleep 5',
 			],
+			// The smoke pane closes seconds after spawn; do not arm a completion
+			// watcher that would wake the real lead pane.
+			watch: false,
 		},
 		undefined as never,
 	)) as { transcript?: { path?: string | null }; paneId?: string | null };
@@ -36,13 +39,13 @@ try {
 		if (!text.includes(expected)) throw new Error(`spawn transcript missing ${expected}: ${JSON.stringify(text)}`);
 	}
 
-	const auto = await readTool.execute({ agent, source: "auto", lines: 20 }, undefined as never);
+	const auto = await readTool.execute({ agent, source: "auto", lines: 20, anchor: "tail", skip: 0 }, undefined as never);
 	const autoText = (auto as { text?: unknown }).text;
 	if (typeof autoText !== "string" || !autoText.includes("early") || !autoText.includes("late")) {
 		throw new Error(`herdr_read auto did not return transcript text: ${JSON.stringify(auto)}`);
 	}
 
-	const visible = await readTool.execute({ agent, source: "visible", lines: 20 }, undefined as never);
+	const visible = await readTool.execute({ agent, source: "visible", lines: 20, anchor: "tail", skip: 0 }, undefined as never);
 	if (!JSON.stringify(visible).includes("late")) {
 		throw new Error(`herdr_read visible did not return live Herdr text: ${JSON.stringify(visible)}`);
 	}

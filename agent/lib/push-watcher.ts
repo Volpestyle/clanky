@@ -6,7 +6,9 @@
  * fine for "agent blocked / done".
  *
  * Started lazily on the first device registration (relay `register-push`), so it
- * never runs when no phone is listening. Idempotent.
+ * never runs when no phone is listening, and at brain boot when the registry
+ * already has devices (agent/channels/eve.ts calls ensurePushWatcherIfRegistered,
+ * so a restart does not silence pushes until the phone re-registers). Idempotent.
  */
 import { apnsConfigured, sendApns, type ApnsNotification, type ApnsResult } from "./apns.ts";
 import { fcmConfigured, isStaleFcmTokenReason, sendFcm, type FcmResult } from "./fcm.ts";
@@ -51,6 +53,21 @@ export function ensurePushWatcher(): void {
 	if (started) return;
 	started = true;
 	void loop();
+}
+
+/**
+ * Boot-time start: begins polling only when devices are already registered,
+ * so an idle brain with no paired phone never runs the loop. Idempotent and
+ * safe alongside relay's lazy ensurePushWatcher() on register-push.
+ */
+export async function ensurePushWatcherIfRegistered(): Promise<void> {
+	if (started) return;
+	try {
+		const devices = await listPushDevices();
+		if (devices.length > 0) ensurePushWatcher();
+	} catch (error) {
+		console.error("push watcher boot check failed:", error);
+	}
 }
 
 async function loop(): Promise<void> {
@@ -105,21 +122,29 @@ export async function sendPushForPane(pane: HerdrPaneLite, status: string, deps:
 		},
 	};
 
-	for (const device of devices) {
-		if (device.events.length > 0 && !device.events.includes(status)) continue;
-		if (device.platform === "ios") {
-			if (!apnsReady) continue;
-			const result = await deps.sendApns(device.token, note);
-			if (!result.ok && result.reason && STALE_TOKEN_REASONS.has(result.reason)) {
-				await deps.unregisterDevice(device.token, device.platform);
-			}
-			continue;
-		}
-		if (!fcmReady) continue;
-		const result = await deps.sendFcm(device.token, note);
-		if (!result.ok && result.reason !== undefined && isStaleFcmTokenReason(result.reason)) {
+	// Fan out per-device so one slow device or hung stream cannot block the
+	// others (each sender also carries its own deadline).
+	const sends = devices
+		.filter((device) => device.events.length === 0 || device.events.includes(status))
+		.map((device) => sendToDevice(device, note, apnsReady, fcmReady, deps));
+	for (const result of await Promise.allSettled(sends)) {
+		if (result.status === "rejected") console.error("push send failed:", result.reason);
+	}
+}
+
+async function sendToDevice(device: PushDevice, note: ApnsNotification, apnsReady: boolean, fcmReady: boolean, deps: PushDeliveryDeps): Promise<void> {
+	if (device.platform === "ios") {
+		if (!apnsReady) return;
+		const result = await deps.sendApns(device.token, note);
+		if (!result.ok && result.reason !== undefined && STALE_TOKEN_REASONS.has(result.reason)) {
 			await deps.unregisterDevice(device.token, device.platform);
 		}
+		return;
+	}
+	if (!fcmReady) return;
+	const result = await deps.sendFcm(device.token, note);
+	if (!result.ok && result.reason !== undefined && isStaleFcmTokenReason(result.reason)) {
+		await deps.unregisterDevice(device.token, device.platform);
 	}
 }
 

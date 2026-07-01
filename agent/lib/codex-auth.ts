@@ -13,6 +13,7 @@ import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { generatePkce } from "./oauth-pkce.ts";
+import { resolveClankyDataPath } from "./paths.ts";
 
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const AUTHORIZE_URL = "https://auth.openai.com/oauth/authorize";
@@ -42,11 +43,17 @@ interface RefreshResponse {
 	id_token?: string;
 }
 
+// Store path goes through the CLANKY_HOME-aware paths resolver. Migration
+// care: this file holds a live login, so when the resolved location has no
+// store yet, fall back to reading the legacy fixed ~/.clanky path a pre-
+// resolver build wrote — never orphan an existing credential. Writes always
+// target the resolved path, which completes the migration on next refresh.
 function authPath(): string {
-	return (
-		process.env.CLANKY_CODEX_AUTH ??
-		join(homedir(), ".clanky", "profiles", "default", "auth.json")
-	);
+	return process.env.CLANKY_CODEX_AUTH ?? resolveClankyDataPath("profiles/default/auth.json");
+}
+
+function legacyAuthPath(): string {
+	return join(homedir(), ".clanky", "profiles", "default", "auth.json");
 }
 
 /**
@@ -71,9 +78,12 @@ function decodeAccountId(token: string | undefined): string | null {
 }
 
 async function readStore(): Promise<Record<string, CodexCredentials | undefined>> {
-	const raw = await readFile(authPath(), "utf8").catch(() => "{}");
+	let raw = await readFile(authPath(), "utf8").catch(() => "");
+	if (raw.length === 0 && authPath() !== legacyAuthPath()) {
+		raw = await readFile(legacyAuthPath(), "utf8").catch(() => "");
+	}
 	try {
-		return JSON.parse(raw) as Record<string, CodexCredentials | undefined>;
+		return JSON.parse(raw.length === 0 ? "{}" : raw) as Record<string, CodexCredentials | undefined>;
 	} catch {
 		return {};
 	}

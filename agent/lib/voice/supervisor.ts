@@ -237,7 +237,7 @@ export async function startVoiceSession(config: VoiceSessionConfig): Promise<Voi
 	const memoryBinding = bindVoiceMemory(config, realtime, stats, speakerTracker);
 	const eveSessionBinding = bindVoiceSessionMirror(config, realtime, stats, speakerTracker);
 	const realtimeToolBinding = bindRealtimeVoiceControl(config, realtime, vox, speakerTracker);
-	const turnBuffer = bindClankvoxRealtimeBridge({
+	const bridge = bindClankvoxRealtimeBridge({
 		vox,
 		realtime,
 		onFlushSpeakers(userIds) {
@@ -246,7 +246,15 @@ export async function startVoiceSession(config: VoiceSessionConfig): Promise<Voi
 		onDecodedVideoFrame() {
 			stats.decodedVideoFrameCount += 1;
 		},
+		// Bridge/turn-buffer callbacks fire from vox event listeners; surfaced
+		// errors are degraded to a log line (the realtime clients already drop
+		// sends on a closed socket, and a real transport loss faults the session
+		// through socket_closed / crashed).
+		onError(error) {
+			process.stderr.write(`voice: bridge error (${error instanceof Error ? error.message : String(error)})\n`);
+		},
 	});
+	const turnBuffer = bridge.turnBuffer;
 	try {
 		await realtime.connect(await buildVoiceConnectOptions(config));
 	} catch (error) {
@@ -257,7 +265,7 @@ export async function startVoiceSession(config: VoiceSessionConfig): Promise<Voi
 		eveSessionBinding.dispose();
 		memoryBinding.dispose();
 		ttsBinding.dispose();
-		turnBuffer.dispose();
+		bridge.dispose();
 		await realtime.close().catch(() => {});
 		await vox.destroy().catch(() => {});
 		throw error;
@@ -293,7 +301,7 @@ export async function startVoiceSession(config: VoiceSessionConfig): Promise<Voi
 			eveSessionBinding.dispose();
 			memoryBinding.dispose();
 			ttsBinding.dispose();
-			turnBuffer.dispose();
+			bridge.dispose();
 			await realtime.close();
 			await vox.destroy();
 		},

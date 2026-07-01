@@ -13,7 +13,8 @@
  *   CLANKY_DISCORD_PRESENCE=1   opt in (set by the always-on runtime, not build)
  *   DISCORD_BOT_TOKEN           the agent-owned credential (bot or user/self token)
  *   CLANKY_DISCORD_CREDENTIAL_KIND  bot-token (default) | user-token (Go Live)
- *   CLANKY_EVE_HOST             loopback base URL of this eve server (default :2000)
+ *   CLANKY_EVE_BASE_URL         loopback base URL of this eve server (default :2000;
+ *                               legacy CLANKY_EVE_HOST URL values still honored)
  *   CLANKY_DISCORD_VOICE=1      include voice intents for "hop in vc"
  *   CLANKY_DISCORD_ALLOWED_GUILD_IDS    optional comma/space server allowlist
  *   CLANKY_DISCORD_ALLOWED_CHANNEL_IDS  optional comma/space channel/thread allowlist
@@ -23,7 +24,9 @@
  *   CLANKY_FACE_HERDR_WORKSPACE_ID  herdr workspace that owns the main Clanky face
  *   CLANKY_REPO_DIR             repo checkout dir, for resolving the mirror script
  */
+import { Events } from "discord.js";
 import { defineChannel, GET } from "eve/channels";
+import { resolveEveBaseUrl, resolveEvePort } from "../lib/eve-address.ts";
 import {
 	attachVoiceRuntime,
 	getActiveVoiceVox,
@@ -38,9 +41,11 @@ import {
 	type DiscordGatewaySessionStatus,
 	type DiscordGatewayStatus,
 	acquireDiscordGatewayLock,
+	readDiscordGatewayLock,
 	readDiscordGatewayStatus,
 	releaseDiscordGatewayLock,
 	resolveDiscordGatewayHealth,
+	scheduleDiscordGatewayStatusWrite,
 	writeDiscordGatewayStatus,
 } from "../lib/discord/gateway-status.ts";
 import { type GoLiveSink, GoLiveController, clearActiveGoLive, setActiveGoLive } from "../lib/discord/golive.ts";
@@ -55,6 +60,9 @@ type DiscordGatewayState = {
 	host: DiscordPresenceHost | null;
 	startError: string | null;
 	lock: DiscordGatewayLock | null;
+	/** Consecutive failed starts, for exponential backoff. Reset on success. */
+	retryAttempt: number;
+	retryTimer: NodeJS.Timeout | null;
 };
 const DISCORD_GATEWAY_STATE_KEY = "__clankyDiscordGatewayState" as const;
 type DiscordGatewayGlobal = typeof globalThis & { [DISCORD_GATEWAY_STATE_KEY]?: DiscordGatewayState };
@@ -62,12 +70,41 @@ const discordGatewayState = ((globalThis as DiscordGatewayGlobal)[DISCORD_GATEWA
 	host: null,
 	startError: null,
 	lock: null,
+	retryAttempt: 0,
+	retryTimer: null,
 });
 const discordGatewayStartedAt = new Date().toISOString();
+
+/** Bounded backoff for gateway start failures: 5s, 10s, 20s, ... capped at 5m. */
+const DISCORD_GATEWAY_START_RETRY_BASE_MS = 5_000;
+const DISCORD_GATEWAY_START_RETRY_MAX_MS = 300_000;
+
+/** Retry a failed gateway start with capped exponential backoff, so a transient
+ * failure (network blip, Discord outage) never latches the channel dead. */
+function scheduleDiscordGatewayStartRetry(): void {
+	if (discordGatewayState.retryTimer !== null) return;
+	const delayMs = Math.min(
+		DISCORD_GATEWAY_START_RETRY_BASE_MS * 2 ** discordGatewayState.retryAttempt,
+		DISCORD_GATEWAY_START_RETRY_MAX_MS,
+	);
+	discordGatewayState.retryAttempt += 1;
+	console.info(`discord presence start retry ${discordGatewayState.retryAttempt} scheduled in ${Math.round(delayMs / 1000)}s`);
+	const timer = setTimeout(() => {
+		discordGatewayState.retryTimer = null;
+		// Clear the latched failure so ensureStarted attempts a fresh start; the
+		// persisted status keeps reporting the last error until it succeeds.
+		discordGatewayState.startError = null;
+		ensureStarted();
+	}, delayMs);
+	timer.unref();
+	discordGatewayState.retryTimer = timer;
+}
 let activeVoiceTarget: { kind: "guild" | "call"; channelId: string } | null = null;
 
+// Base URL, never a bind host: iOS-cold-started brains export a bind host via
+// the lifecycle script, which must not leak into fetch targets (eve-address.ts).
 function eveHost(): string {
-	return process.env.CLANKY_EVE_HOST ?? "http://127.0.0.1:2000";
+	return resolveEveBaseUrl(resolveEvePort(process.env), process.env);
 }
 
 /** Route a bridge command to the main Clanky face pane via the herdr socket. */
@@ -207,9 +244,32 @@ async function handleVoiceIntent(
 	await joinGuildVoice(presence, message);
 }
 
+/** Tear the failed presence host down and hand recovery to the backoff timer. */
+function failDiscordGateway(
+	presence: DiscordPresenceHost,
+	message: string,
+	writeStatus: (status: { state: DiscordGatewayStatus["state"]; ready: boolean; error?: string }) => void,
+): void {
+	discordGatewayState.startError = message;
+	discordGatewayState.host = null;
+	writeStatus({ state: "failed", ready: false, error: message });
+	void presence.stop().catch((error: unknown) => console.error("discord presence teardown failed:", error));
+	releaseDiscordGatewayLock(discordGatewayState.lock);
+	discordGatewayState.lock = null;
+	scheduleDiscordGatewayStartRetry();
+}
+
 function ensureStarted(): void {
 	if (discordGatewayState.host !== null || discordGatewayState.startError !== null) return;
-	if (discordGatewayState.lock?.status === "held") return;
+	if (discordGatewayState.retryTimer !== null) return;
+	if (discordGatewayState.lock?.status === "held") {
+		// Re-probe instead of latching: readDiscordGatewayLock clears a stale lock
+		// whose owner process has died, letting this context take over.
+		const lock = readDiscordGatewayLock();
+		discordGatewayState.lock = lock;
+		if (lock !== null) return;
+		console.info("discord presence stale gateway lock cleared; starting");
+	}
 	const token = resolveDiscordToken(process.env);
 	if (process.env.CLANKY_DISCORD_PRESENCE !== "1" || token === undefined || token.length === 0) return;
 	if (discordGatewayState.lock === null) {
@@ -225,21 +285,32 @@ function ensureStarted(): void {
 	const voiceEnabled = process.env.CLANKY_DISCORD_VOICE === "1";
 	const credentialKind = resolveDiscordCredentialKind(process.env);
 	const sessions = new Map<string, DiscordGatewaySessionStatus>();
+	const buildStatusSnapshot = (status: {
+		state: DiscordGatewayStatus["state"];
+		ready: boolean;
+		error?: string;
+	}) => ({
+		...status,
+		credentialKind,
+		voice: voiceEnabled,
+		sessions: [...sessions.values()],
+	});
 	const writeStatus = (status: {
 		state: DiscordGatewayStatus["state"];
 		ready: boolean;
 		error?: string;
 	}): void =>
-		writeDiscordGatewayStatus(
-			discordGatewayState.lock,
-			{
-				...status,
-				credentialKind,
-				voice: voiceEnabled,
-				sessions: [...sessions.values()],
-			},
-			{ startedAt: discordGatewayStartedAt },
-		);
+		writeDiscordGatewayStatus(discordGatewayState.lock, buildStatusSnapshot(status), { startedAt: discordGatewayStartedAt });
+	// Hot-path variant (per accepted message): coalesced so the status file is not
+	// rewritten on every message.
+	const scheduleStatusWrite = (status: {
+		state: DiscordGatewayStatus["state"];
+		ready: boolean;
+		error?: string;
+	}): void =>
+		scheduleDiscordGatewayStatusWrite(discordGatewayState.lock, buildStatusSnapshot(status), {
+			startedAt: discordGatewayStartedAt,
+		});
 	writeStatus({ state: "starting", ready: false });
 	const presence: DiscordPresenceHost = new DiscordPresenceHost({
 		token,
@@ -248,11 +319,11 @@ function ensureStarted(): void {
 		voice: voiceEnabled,
 		onPresenceActivity: (info) => {
 			sessions.set(info.channelId, info);
-			writeStatus({ state: "ready", ready: presence.discordGateway.isReady() });
+			scheduleStatusWrite({ state: "ready", ready: presence.discordGateway.isReady() });
 		},
 		onPresenceSession: async (info) => {
 			sessions.set(info.channelId, info);
-			writeStatus({ state: "ready", ready: presence.discordGateway.isReady() });
+			scheduleStatusWrite({ state: "ready", ready: presence.discordGateway.isReady() });
 			await spawnSessionPaneMirror(`discord-${info.channelId.slice(-6)}`, info.sessionId);
 		},
 		onBridgeToMain: (command) =>
@@ -274,16 +345,30 @@ function ensureStarted(): void {
 	presence
 		.start()
 		.then(() => {
+			discordGatewayState.retryAttempt = 0;
 			writeStatus({ state: "ready", ready: presence.discordGateway.isReady() });
+			const client = presence.discordGateway.discordClient;
+			// Keep the persisted snapshot honest across shard drops/resumes: ready is
+			// re-derived from the live client, never a latched boolean.
+			client.on(Events.ShardDisconnect, () => {
+				if (discordGatewayState.host !== presence) return;
+				writeStatus({ state: "ready", ready: presence.discordGateway.isReady() });
+			});
+			client.on(Events.ShardResume, () => {
+				if (discordGatewayState.host !== presence) return;
+				writeStatus({ state: "ready", ready: presence.discordGateway.isReady() });
+			});
+			// Session invalidation means discord.js gave up reconnecting: restart the
+			// gateway through the same backoff path as a failed start.
+			client.once(Events.Invalidated, () => {
+				if (discordGatewayState.host !== presence) return;
+				console.error("discord presence session invalidated; scheduling gateway restart");
+				failDiscordGateway(presence, "discord session invalidated", writeStatus);
+			});
 		})
 		.catch((error: unknown) => {
-			const message = (error as Error).message;
-			discordGatewayState.startError = message;
-			discordGatewayState.host = null;
-			writeStatus({ state: "failed", ready: false, error: message });
-			releaseDiscordGatewayLock(discordGatewayState.lock);
-			discordGatewayState.lock = null;
 			console.error("discord presence failed to start:", error);
+			failDiscordGateway(presence, error instanceof Error ? error.message : String(error), writeStatus);
 		});
 }
 

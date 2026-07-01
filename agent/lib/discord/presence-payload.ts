@@ -142,8 +142,3 @@ function parseContentLength(value: string | null): number | undefined {
 function attachmentLabel(attachment: DiscordInboundAttachment): string {
 	return attachment.filename === undefined ? `attachment ${attachment.id}` : `${attachment.filename} (${attachment.id})`;
 }
-
-export const __presencePayloadTestHooks = {
-	isVisualAttachment,
-	resolveAttachmentMediaType,
-};

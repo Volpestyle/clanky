@@ -5,6 +5,7 @@
  * message is worth a model turn at all. Stage two is the model itself, which may
  * answer or emit [SKIP] (see isSkipReplyText).
  */
+import { TtlCache } from "../ttl-cache.ts";
 import { DEFAULT_DISCORD_WAKE_NAMES, resolveWakeNameMatch } from "./wake-names.ts";
 
 export type DiscordConversationKind = "dm" | "channel" | "group" | "thread" | "custom";
@@ -204,18 +205,20 @@ export function resolveDiscordScopeOptions(env: NodeJS.ProcessEnv): DiscordScope
 	};
 }
 
+/** Bound on distinct channel+user pairs remembered at once; LRU beyond this. */
+const MAX_ENGAGEMENT_ENTRIES = 4096;
+
 /**
  * Tracks recent engagement per channel+user so short follow-ups land without a
  * re-mention. The clock is injectable to keep the logic pure and testable.
+ * Entries expire at the window edge (TTL) and are capped, so channel+user
+ * pairs never seen again do not accumulate for the brain's whole uptime.
  */
 export class EngagementTracker {
-	private readonly lastEngagedAt = new Map<string, number>();
-	private readonly windowMs: number;
-	private readonly now: () => number;
+	private readonly engaged: TtlCache<string, true>;
 
 	constructor(windowMs: number = DEFAULT_ENGAGEMENT_WINDOW_MS, now: () => number = Date.now) {
-		this.windowMs = windowMs;
-		this.now = now;
+		this.engaged = new TtlCache({ maxEntries: MAX_ENGAGEMENT_ENTRIES, ttlMs: windowMs, now });
 	}
 
 	private key(channelId: string, userId: string): string {
@@ -223,20 +226,14 @@ export class EngagementTracker {
 	}
 
 	record(channelId: string, userId: string): void {
-		this.lastEngagedAt.set(this.key(channelId, userId), this.now());
+		this.engaged.set(this.key(channelId, userId), true);
 	}
 
 	isEngaged(channelId: string, userId: string): boolean {
-		const at = this.lastEngagedAt.get(this.key(channelId, userId));
-		if (at === undefined) return false;
-		if (this.now() - at > this.windowMs) {
-			this.lastEngagedAt.delete(this.key(channelId, userId));
-			return false;
-		}
-		return true;
+		return this.engaged.get(this.key(channelId, userId)) === true;
 	}
 
 	clear(channelId: string, userId: string): void {
-		this.lastEngagedAt.delete(this.key(channelId, userId));
+		this.engaged.delete(this.key(channelId, userId));
 	}
 }

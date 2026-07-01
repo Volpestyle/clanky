@@ -10,8 +10,8 @@ import {
 	type VoiceControlVox,
 } from "../agent/lib/voice/control.ts";
 import type { DiscoveredDiscordStream } from "../agent/lib/voice/discordStreamDiscovery.ts";
-import { type JsonRecord } from "../agent/lib/voice/json.ts";
-import { type OpenAiRealtimeTranscript } from "../agent/lib/voice/openAiRealtimeClient.ts";
+import type { JsonRecord } from "../agent/lib/voice/json.ts";
+import type { OpenAiRealtimeTranscript } from "../agent/lib/voice/openAiRealtimeClient.ts";
 import {
 	appendVoiceRealtimeTools,
 	bindRealtimeVoiceTools,
@@ -101,6 +101,13 @@ const goLive: VoiceControlGoLive = {
 		return ownStream;
 	},
 };
+
+const status = await executeVoiceControl({ op: "status" }, { guildId: "g1", channelId: "vc1", vox, goLive });
+const publicStream = status.streams?.[0] as Record<string, unknown> | undefined;
+check("voice status reports discovered Go Live streams", publicStream?.streamKey === ownStream.streamKey);
+check("voice status reports credential readiness", publicStream?.hasCredentials === true);
+check("voice status redacts Go Live endpoint", publicStream?.endpoint === undefined);
+check("voice status redacts Go Live token", publicStream?.token === undefined);
 
 await executeVoiceControl(
 	{ op: "music_play", url: "https://youtube.example/audio" },

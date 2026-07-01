@@ -6,12 +6,21 @@
  * scripts/clanky.ts to keep the face entrypoint navigable (SPEC.md §4.2).
  */
 import { BUILTIN_CODING_HARNESSES } from "../../agent/lib/coding-harness.ts";
+import { DEFAULT_LOCAL_BASE_URL } from "../../agent/lib/config-defaults.ts";
+
+// Model defaults come from agent/lib/config-defaults.ts (the single source;
+// bump there). Re-exported so the face keeps one import site for menu data.
+export {
+	DEFAULT_CLAUDE_MODEL,
+	DEFAULT_CODEX_MODEL,
+	DEFAULT_GEMINI_MODEL,
+	DEFAULT_LOCAL_BASE_URL,
+	DEFAULT_LOCAL_MODEL,
+	DEFAULT_OPENAI_VISION_MODEL,
+	DEFAULT_XAI_MODEL,
+} from "../../agent/lib/config-defaults.ts";
 
 export type SubscriptionProvider = "codex" | "claude";
-export const DEFAULT_CODEX_MODEL = "gpt-5.5";
-export const DEFAULT_CLAUDE_MODEL = "claude-opus-4-8";
-export const DEFAULT_LOCAL_MODEL = "qwen3-coder-next";
-export const DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:11434/v1";
 export const DEFAULT_LOCAL_VOICE_LLM_MODEL = "qwen3.6:27b-mlx";
 export const DEFAULT_LOCAL_VOICE_ASR_MODEL = "models/voice/whisper/ggml-large-v3-turbo.bin";
 export const DEFAULT_LOCAL_VOICE = "Samantha";
@@ -128,8 +137,6 @@ export const MODEL_OPTIONS: Record<SubscriptionProvider, readonly MenuOption[]> 
 		{ value: "keep-current", label: "keep current" },
 	],
 };
-export const DEFAULT_XAI_MODEL = "grok-4";
-export const DEFAULT_GEMINI_MODEL = "gemini-3-pro";
 export const XAI_MODEL_OPTIONS: readonly MenuOption[] = [
 	{ value: "grok-4", label: "grok-4", hint: "flagship, vision" },
 	{ value: "grok-4-fast", label: "grok-4-fast" },
@@ -310,8 +317,9 @@ export const DISCORD_TOKEN_ACTION_OPTIONS: readonly MenuOption[] = [
 	{ value: "set", label: "set credential", hint: "paste token and restart Clanky" },
 ];
 export const APPROVAL_OPTIONS: readonly MenuOption[] = [
-	{ value: "auto", label: "auto approve", hint: "run tool calls without prompts" },
-	{ value: "prompt", label: "prompt", hint: "restore per-tool approvals" },
+	{ value: "prompt", label: "prompt", hint: "per-tool approvals; host commands read-only sandboxed" },
+	{ value: "auto", label: "auto approve", hint: "run tool calls without prompts, still sandboxed" },
+	{ value: "yolo", label: "yolo", hint: "unsandboxed host commands, owner turns only; not persisted" },
 ];
 export const AGENT_MD_OPTIONS: readonly MenuOption[] = [
 	{ value: "on", label: "on", hint: "load AGENTS.md/agent.md files into instructions" },

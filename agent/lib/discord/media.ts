@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 import { guardedFetch } from "../net-guard.ts";
 import { inspectVisualMedia } from "../media.ts";
@@ -129,6 +129,29 @@ const DEFAULT_RECENT_ATTACHMENT_MESSAGE_LIMIT = 25;
 const DEFAULT_RECENT_ATTACHMENT_MEDIA_LIMIT = 20;
 const DOWNLOAD_CACHE_MAX_ENTRIES = 256;
 const downloadedMediaCache = new Map<string, DiscordDownloadedMedia>();
+
+const DISCORD_MEDIA_DIR = "discord-media";
+
+export interface DiscordMediaRetentionBudget {
+	/** Files younger than this are never deleted (fresh downloads may still be in use). */
+	minAgeMs: number;
+	/** Files older than this are deleted regardless of the byte budget. */
+	maxAgeMs: number;
+	/** Newest-first cap on total stored bytes. */
+	maxTotalBytes: number;
+}
+
+/** Conservative defaults: 30 days of media, 2 GiB on disk. */
+const DISCORD_MEDIA_RETENTION: DiscordMediaRetentionBudget = {
+	minAgeMs: 60 * 60 * 1000,
+	maxAgeMs: 30 * 24 * 60 * 60 * 1000,
+	maxTotalBytes: 2 * 1024 * 1024 * 1024,
+};
+
+const DISCORD_MEDIA_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
+// Downloads only happen in the long-lived brain process, so an in-process
+// throttle is enough to keep the sweep off the per-download hot path.
+let lastDiscordMediaSweepAt = 0;
 
 export async function discordDownloadMedia(
 	input: DiscordDownloadMediaInput,
@@ -502,15 +525,66 @@ function extensionForContentType(contentType: string | undefined): string {
 }
 
 async function writeDiscordMediaFile(filename: string, bytes: Buffer, env: NodeJS.ProcessEnv | undefined): Promise<string> {
-	const dir = resolveClankyDataPath("discord-media", env);
+	const dir = resolveClankyDataPath(DISCORD_MEDIA_DIR, env);
 	await mkdir(dir, { recursive: true, mode: 0o700 });
 	const path = join(dir, `${Date.now()}-${randomUUID()}-${filename}`);
 	await writeFile(path, bytes, { mode: 0o600 });
+	await maybeSweepDiscordMedia(dir);
 	return path;
 }
 
+async function maybeSweepDiscordMedia(dir: string): Promise<void> {
+	const now = Date.now();
+	if (now - lastDiscordMediaSweepAt < DISCORD_MEDIA_SWEEP_INTERVAL_MS) return;
+	lastDiscordMediaSweepAt = now;
+	await sweepDiscordMediaDir(dir, DISCORD_MEDIA_RETENTION, now).catch((error: unknown) =>
+		console.error("discord media retention sweep failed:", error),
+	);
+}
+
+/**
+ * Enforce the media retention budget: keep files newest-first until the byte
+ * budget is spent, drop anything older than `maxAgeMs`, and never touch files
+ * younger than `minAgeMs` (their paths may still be referenced by an in-flight
+ * tool result or vision pass). Stale download-cache entries self-heal: reads
+ * stat the cached path and drop entries whose file is gone.
+ */
+async function sweepDiscordMediaDir(
+	dir: string,
+	budget: DiscordMediaRetentionBudget = DISCORD_MEDIA_RETENTION,
+	now = Date.now(),
+): Promise<{ deletedFiles: number; deletedBytes: number }> {
+	const entries = await readdir(dir, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+		if (error.code === "ENOENT") return [];
+		throw error;
+	});
+	const files: Array<{ path: string; bytes: number; mtimeMs: number }> = [];
+	for (const entry of entries) {
+		if (!entry.isFile()) continue;
+		const path = join(dir, entry.name);
+		const info = await stat(path).catch(() => undefined);
+		if (info === undefined) continue;
+		files.push({ path, bytes: info.size, mtimeMs: info.mtimeMs });
+	}
+	files.sort((left, right) => right.mtimeMs - left.mtimeMs);
+	let keptBytes = 0;
+	let deletedFiles = 0;
+	let deletedBytes = 0;
+	for (const file of files) {
+		const ageMs = now - file.mtimeMs;
+		if (ageMs > budget.minAgeMs && (ageMs > budget.maxAgeMs || keptBytes + file.bytes > budget.maxTotalBytes)) {
+			await rm(file.path, { force: true });
+			deletedFiles += 1;
+			deletedBytes += file.bytes;
+			continue;
+		}
+		keptBytes += file.bytes;
+	}
+	return { deletedFiles, deletedBytes };
+}
+
 function discordMediaDownloadCacheKey(url: string, env: NodeJS.ProcessEnv): string {
-	return `${resolveClankyDataPath("discord-media", env)}\0${url}`;
+	return `${resolveClankyDataPath(DISCORD_MEDIA_DIR, env)}\0${url}`;
 }
 
 async function readCachedDownloadedMedia(cacheKey: string, maxBytes: number): Promise<DiscordDownloadedMedia | undefined> {
@@ -618,4 +692,5 @@ function probeWebp(bytes: Buffer): { width: number; height: number } | undefined
 export const __discordMediaTestHooks = {
 	isDiscordOwnedUrl,
 	probeImageDimensions,
+	sweepDiscordMediaDir,
 };

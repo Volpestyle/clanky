@@ -6,13 +6,12 @@
  *
  * Run: pnpm dev   (CLANKY_EVE_PORT to change the port, default 2000)
  */
-import { type ChildProcess, execFile, execFileSync, spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { access, readFile, writeFile } from "node:fs/promises";
+import { type ChildProcess, execFile, spawn } from "node:child_process";
+import { access } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseEnv, promisify } from "node:util";
+import { promisify } from "node:util";
 import {
 	Editor,
 	type EditorTheme,
@@ -43,12 +42,30 @@ import {
 	type SessionState,
 	type StreamOptions,
 } from "eve/client";
-import { applyEnvRemovals, applyEnvUpserts } from "../agent/lib/discord/env-file.ts";
+import { readEffectiveEnv, readEnvLocal, readEnvLocalSync, updateEnvLocal } from "../agent/lib/env-store.ts";
+import { parsePortValue, resolveEveBindHost, resolveEvePort } from "../agent/lib/eve-address.ts";
+import {
+	devServerRecordPath,
+	discoverDevServer,
+	hasChildExited,
+	isPidAlive,
+	normalizeHost,
+	probeEveHost,
+	resolveDevServerTimeouts,
+	resolveDurationMs,
+	stopDevServerChild,
+	stopDevServerRecord as stopDevServerRecordByPid,
+	waitForDiscoveredDevServerHealth,
+	waitForHostHealth,
+	type DevServerRecord,
+} from "../agent/lib/dev-server.ts";
 import { apnsConfigFromEnv, sendApns } from "../agent/lib/apns.ts";
 import { fcmConfigFromEnv, sendFcm } from "../agent/lib/fcm.ts";
 import { browserBridgeStatus } from "../agent/lib/browser-bridge.ts";
 import { buildEveDevServerEnv } from "../agent/lib/eve-dev-env.ts";
 import { startFacePresence, stopFacePresence, type FaceCommandRequest } from "../agent/lib/face-presence.ts";
+import { SURFACE_HEADER } from "../agent/lib/frontdoor-auth.ts";
+import { YOLO_ENV } from "../agent/lib/host-command/mode.ts";
 import type { ClankyMenuClientMessage, ClankyMenuServerEvent } from "../agent/lib/clanky-menu-protocol.ts";
 import { buildPairingLink, type PairingLink, renderPairingQr } from "../agent/lib/pairing.ts";
 import { listClankySkills, type ClankySkillInventoryEntry } from "../agent/lib/skill-inventory.ts";
@@ -102,7 +119,6 @@ import {
 	DEFAULT_AGENT_SPINNER_CYCLE_DWELL_MS,
 	AGENT_SPINNER_PRESET_NAMES,
 	AGENT_SPINNER_PRESETS,
-	normalizeAgentSpinnerCycleDwellMs,
 	normalizeAgentSpinnerSelection,
 	resolveAgentSpinner,
 	type AgentSpinnerSelection,
@@ -118,12 +134,12 @@ import {
 	type FaceRenderSink,
 } from "../agent/lib/clanky-face-renderer.ts";
 import {
-	resolveClankyChromeMouseTarget,
+	type resolveClankyChromeMouseTarget,
 	resolveClankyChromeMouseTargetFromBands,
 	resolveClankyCommandRows,
 	resolveClankyOverlayFrame,
 	resolveClankyOverlayMouseTarget,
-	resolveClankyTranscriptMouseTarget,
+	type resolveClankyTranscriptMouseTarget,
 	resolveClankyTranscriptMouseTargetFromBands,
 	resolveClankyTranscriptRows,
 	type ClankyFaceBandRows,
@@ -164,7 +180,6 @@ import { renderClankyOutline } from "../agent/lib/clanky-outline.ts";
 import { shouldRouteClankyTranscriptGlobalInput } from "../agent/lib/clanky-transcript-key-routing.ts";
 import {
 	ALL_CODING_HARNESSES,
-	BUILTIN_CODING_HARNESSES,
 	CLANKY_CODING_HARNESS_ENV,
 	CODING_HARNESS_IDS,
 	LAUNCHABLE_CODING_HARNESS_IDS,
@@ -172,8 +187,6 @@ import {
 	type CodingHarnessId,
 	type CodingHarnessLauncher,
 	type CodingRuntime,
-	type LaunchableCodingHarnessId,
-	type Performer,
 	codingHarnessLauncherEnvKey,
 	codingHarnessModelEnvKey,
 	parseAllowedCodingHarnesses,
@@ -190,8 +203,6 @@ import { type ClaudeCredentials, claudeCredentialStatus, loginClaude } from "../
 import { type CodexCredentials, codexCredentialStatus, loginCodex } from "../agent/lib/codex-auth.ts";
 import {
 	INTEGRATION_ROLES,
-	type IntegrationRole,
-	type IntegrationRoleBindings,
 	listAvailableConnections,
 	resolveRoleBindings,
 	roleLabel,
@@ -251,6 +262,7 @@ import {
 	DEFAULT_LOCAL_VOICE_SERVER_BASE_URL,
 	DEFAULT_LOCAL_VOICE_SMALL_MODEL,
 	DEFAULT_OPENAI_IMAGE_MODEL,
+	DEFAULT_OPENAI_VISION_MODEL,
 	DEFAULT_XAI_MODEL,
 	DISCORD_CREDENTIAL_KIND_OPTIONS,
 	DISCORD_DM_OPTIONS,
@@ -323,6 +335,7 @@ import {
 	isLocalEffortLevel,
 	isRecord,
 	normalizeCommandToken,
+	parseBooleanToggle,
 	parseIntegrationBinding,
 	parseIntegrationRole,
 	parseProvider,
@@ -330,36 +343,44 @@ import {
 	splitArgs,
 	truncate,
 } from "./clanky/util.ts";
+import {
+	CLANKY_TUI_INPUT_PLACEMENT_ENV,
+	CLANKY_TUI_SPINNER_ENV,
+	CLANKY_TUI_SPINNER_RATE_MS_ENV,
+	CLANKY_TUI_STATUS_PLACEMENT_ENV,
+	DEFAULT_TURN_TRACE_MODE,
+	layoutSettingsFromEnv,
+	parseAgentSpinnerCycleRateMs,
+	parseInputPlacement,
+	parseStatusPlacement,
+	parseTurnTraceMode,
+	type InputPlacement,
+	type LayoutSettings,
+	type StatusPlacement,
+	type TurnTraceMode,
+} from "./clanky/face-settings.ts";
 
 const REPO = resolve(process.env.CLANKY_REPO_DIR ?? join(dirname(fileURLToPath(import.meta.url)), ".."));
-const PORT = resolvePort(process.env.CLANKY_EVE_PORT, 2000);
+const PORT = resolveEvePort(process.env);
 const HOST = `http://127.0.0.1:${PORT}`;
-const BIND_HOST = process.env.CLANKY_EVE_HOST?.trim();
-const CALLBACK_PROXY_PORT = resolvePort(process.env.CLANKY_EVE_CALLBACK_PROXY_PORT, 3000);
-const HEALTH_TIMEOUT_MS = resolveDurationMs(process.env.CLANKY_EVE_HEALTH_TIMEOUT_MS, 180_000, "CLANKY_EVE_HEALTH_TIMEOUT_MS");
-const SERVER_STOP_TIMEOUT_MS = resolveDurationMs(process.env.CLANKY_EVE_STOP_TIMEOUT_MS, 5_000, "CLANKY_EVE_STOP_TIMEOUT_MS");
+const BIND_HOST = resolveEveBindHost(process.env);
+const CALLBACK_PROXY_PORT = parsePortValue(process.env.CLANKY_EVE_CALLBACK_PROXY_PORT, 3000, "CLANKY_EVE_CALLBACK_PROXY_PORT");
+const DEV_TIMEOUTS = resolveDevServerTimeouts(process.env);
+const HEALTH_TIMEOUT_MS = DEV_TIMEOUTS.healthTimeoutMs;
+const SERVER_STOP_TIMEOUT_MS = DEV_TIMEOUTS.stopTimeoutMs;
 const INTENTIONAL_RESTART_STOP_TIMEOUT_MS = resolveDurationMs(process.env.CLANKY_EVE_RESTART_STOP_TIMEOUT_MS, 1_000, "CLANKY_EVE_RESTART_STOP_TIMEOUT_MS");
-const SERVER_KILL_TIMEOUT_MS = resolveDurationMs(process.env.CLANKY_EVE_KILL_TIMEOUT_MS, 2_000, "CLANKY_EVE_KILL_TIMEOUT_MS");
-const DEV_SERVER_RECORD_STARTUP_GRACE_MS = 15_000;
-const DEV_SERVER_UNHEALTHY_SETTLE_MS = 5_000;
-const DEV_SERVER_RECORD_REPROBE_MS = 500;
+const SERVER_KILL_TIMEOUT_MS = DEV_TIMEOUTS.killTimeoutMs;
 const BRAIN_HEALTH_POLL_MS = resolveDurationMs(process.env.CLANKY_EVE_HEALTH_POLL_MS, 5_000, "CLANKY_EVE_HEALTH_POLL_MS");
-const ENV_PATH = join(REPO, ".env.local");
-const DEV_SERVER_FILE = join(REPO, ".eve", "dev-server.json");
+const DEV_SERVER_FILE = devServerRecordPath(REPO);
 const OWNED_SERVER_STARTUP_OUTPUT_LIMIT = 8_000;
-const DEFAULT_TURN_TRACE_MODE: TurnTraceMode = "no-reply";
 const CLANKY_FACE_HERDR_PANE_ID_ENV = "CLANKY_FACE_HERDR_PANE_ID";
 const CLANKY_FACE_HERDR_TAB_ID_ENV = "CLANKY_FACE_HERDR_TAB_ID";
 const CLANKY_FACE_HERDR_WORKSPACE_ID_ENV = "CLANKY_FACE_HERDR_WORKSPACE_ID";
-const CLANKY_TUI_INPUT_PLACEMENT_ENV = "CLANKY_TUI_INPUT_PLACEMENT";
-const CLANKY_TUI_STATUS_PLACEMENT_ENV = "CLANKY_TUI_STATUS_PLACEMENT";
-const CLANKY_TUI_SPINNER_ENV = "CLANKY_TUI_SPINNER";
-const CLANKY_TUI_SPINNER_RATE_MS_ENV = "CLANKY_TUI_SPINNER_RATE_MS";
 const CLANKY_STARTUP_MODEL_FALLBACK_PROVIDER_ENV = "CLANKY_STARTUP_MODEL_FALLBACK_PROVIDER";
 const CLANKY_STARTUP_MODEL_FALLBACK_ENV_NAMES_ENV = "CLANKY_STARTUP_MODEL_FALLBACK_ENV_NAMES";
 const SPAWN_USAGE =
 	"Usage: /spawn --harness <clanky|claude|codex|opencode|custom> [--cwd path] <slug> <task>. Run /spawn with no args for the menu. Slug is kebab-case; the pane is clanky:<slug>.";
-const SPAWN_SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
+const SPAWN_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 // Mode 1002 reports drag motion while a button is held (1000 only reports
 // press/release), which the transcript needs to track a selection gesture.
 const CLANKY_MOUSE_TRACKING_ENABLE = "\x1b[?1002h\x1b[?1006h";
@@ -395,86 +416,6 @@ const commandUiTheme = {
 	selectedDescription: ansi.selectedDescription,
 	yellow: ansi.yellow,
 };
-
-function resolvePort(value: string | undefined, fallback: number): number {
-	const raw = value?.trim();
-	if (raw === undefined || raw.length === 0) return fallback;
-	const parsed = Number.parseInt(raw, 10);
-	if (!Number.isInteger(parsed) || String(parsed) !== raw || parsed < 1 || parsed > 65_535) {
-		throw new Error(`CLANKY_EVE_PORT must be an integer from 1 to 65535; got ${JSON.stringify(value)}`);
-	}
-	return parsed;
-}
-
-function resolveDurationMs(value: string | undefined, fallback: number, envName: string): number {
-	const raw = value?.trim();
-	if (raw === undefined || raw.length === 0) return fallback;
-	const parsed = Number.parseInt(raw, 10);
-	if (!Number.isInteger(parsed) || String(parsed) !== raw || parsed < 1) {
-		throw new Error(`${envName} must be a positive integer number of milliseconds; got ${JSON.stringify(value)}`);
-	}
-	return parsed;
-}
-
-function parseAgentSpinnerCycleRateMs(value: string | undefined): number | undefined {
-	const raw = value?.trim().toLowerCase();
-	if (raw === undefined || raw.length === 0) return undefined;
-	if (raw === "fast") return 400;
-	if (raw === "normal" || raw === "default") return DEFAULT_AGENT_SPINNER_CYCLE_DWELL_MS;
-	if (raw === "slow") return 1_200;
-	const milliseconds = raw.endsWith("ms") ? Number.parseInt(raw.slice(0, -2), 10) : undefined;
-	if (milliseconds !== undefined && Number.isInteger(milliseconds) && `${milliseconds}ms` === raw) return validAgentSpinnerCycleRateMs(milliseconds);
-	if (raw.endsWith("s")) {
-		const seconds = Number.parseFloat(raw.slice(0, -1));
-		if (Number.isFinite(seconds) && seconds > 0 && `${seconds}s` === raw) return validAgentSpinnerCycleRateMs(Math.round(seconds * 1_000));
-	}
-	const parsed = Number.parseInt(raw, 10);
-	if (Number.isInteger(parsed) && String(parsed) === raw) return validAgentSpinnerCycleRateMs(parsed);
-	return undefined;
-}
-
-function validAgentSpinnerCycleRateMs(value: number): number | undefined {
-	const normalized = normalizeAgentSpinnerCycleDwellMs(value);
-	return normalized === value ? value : undefined;
-}
-
-function parseTurnTraceMode(value: string | undefined): TurnTraceMode | undefined {
-	const normalized = value?.trim().toLowerCase();
-	if (normalized === undefined || normalized.length === 0) return undefined;
-	if (normalized === "off" || normalized === "none" || normalized === "0" || normalized === "false") return "off";
-	if (normalized === "no-reply" || normalized === "noreply" || normalized === "empty") return "no-reply";
-	if (normalized === "all" || normalized === "on" || normalized === "1" || normalized === "true") return "all";
-	return undefined;
-}
-
-function parseBooleanFlag(value: string | undefined): boolean | undefined {
-	const normalized = value?.trim().toLowerCase();
-	if (normalized === undefined || normalized.length === 0) return undefined;
-	if (normalized === "on" || normalized === "1" || normalized === "true" || normalized === "show") return true;
-	if (normalized === "off" || normalized === "0" || normalized === "false" || normalized === "hide") return false;
-	return undefined;
-}
-
-function parseInputPlacement(value: string | undefined): InputPlacement | undefined {
-	const normalized = value?.trim().toLowerCase();
-	if (normalized === "top" || normalized === "above") return "top";
-	if (normalized === "bottom" || normalized === "below") return "bottom";
-	return undefined;
-}
-
-function parseStatusPlacement(value: string | undefined): StatusPlacement | undefined {
-	const normalized = value?.trim().toLowerCase().replace(/_/gu, "-");
-	if (normalized === "above" || normalized === "above-input" || normalized === "top") return "above-input";
-	if (normalized === "below" || normalized === "below-input" || normalized === "bottom") return "below-input";
-	return undefined;
-}
-
-function layoutSettingsFromEnv(env: NodeJS.ProcessEnv): LayoutSettings {
-	return {
-		inputPlacement: parseInputPlacement(env[CLANKY_TUI_INPUT_PLACEMENT_ENV]) ?? "bottom",
-		statusPlacement: parseStatusPlacement(env[CLANKY_TUI_STATUS_PLACEMENT_ENV]) ?? "above-input",
-	};
-}
 
 type ClankyExtensionCommandName =
 	| "discord-token"
@@ -627,14 +568,6 @@ type BrainHealthState =
 	| { state: "unhealthy"; checkedAt: number; status: number; statusText: string; detail?: string }
 	| { state: "down"; checkedAt: number; detail: string };
 
-type TurnTraceMode = "off" | "no-reply" | "all";
-type InputPlacement = "top" | "bottom";
-type StatusPlacement = "above-input" | "below-input";
-type LayoutSettings = {
-	readonly inputPlacement: InputPlacement;
-	readonly statusPlacement: StatusPlacement;
-};
-
 type SettingsMenuStatus =
 	| string
 	| {
@@ -669,12 +602,6 @@ class ClankyStatusBarComponent implements Component {
 	}
 }
 
-interface DevServerRecord {
-	readonly pid: number;
-	readonly updatedAt?: string;
-	readonly url: string;
-}
-
 interface DiscoveredHost {
 	readonly host: string;
 	readonly record: DevServerRecord;
@@ -701,11 +628,16 @@ let brainRestartInProgress = false;
 let brainHealthGeneration = 0;
 let herdrSessionNameCache: string | undefined;
 let herdrWorkspaceNameCache: string | null | undefined;
+let tmuxSessionNameCache: string | null | undefined;
 let uiReady = false;
 let turnTraceMode = parseTurnTraceMode(process.env.CLANKY_TURN_TRACE) ?? DEFAULT_TURN_TRACE_MODE;
-let headerVisible = parseBooleanFlag(process.env.CLANKY_HEADER) ?? true;
+let headerVisible = parseBooleanToggle(process.env.CLANKY_HEADER) ?? true;
+// Yolo is face-session state by design (ADR-0003): injected into the owned
+// brain's env on restart, never written to .env.local, so a cold start always
+// comes back gated.
+let yoloArmed = isAutoApproveValue(process.env[YOLO_ENV]);
 let layoutSettings: LayoutSettings = layoutSettingsFromEnv(process.env);
-let agentSpinnerCycleRateMs = parseAgentSpinnerCycleRateMs(process.env[CLANKY_TUI_SPINNER_RATE_MS_ENV]) ?? DEFAULT_AGENT_SPINNER_CYCLE_DWELL_MS;
+let agentSpinnerCycleRateMs = parseAgentSpinnerCycleRateMs(process.env[CLANKY_TUI_SPINNER_RATE_MS_ENV], DEFAULT_AGENT_SPINNER_CYCLE_DWELL_MS) ?? DEFAULT_AGENT_SPINNER_CYCLE_DWELL_MS;
 let agentSpinner: ResolvedAgentSpinner = resolveAgentSpinner(process.env[CLANKY_TUI_SPINNER_ENV], { unicode: faceCapabilities.unicode, cycleDwellMs: agentSpinnerCycleRateMs });
 let runningTurn: Promise<void> | undefined;
 let isResponding = false;
@@ -782,6 +714,60 @@ const FACE_SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 const COMMANDS = buildClankyPromptCommands();
 
+// Crash-safety envelope: Node >=24 terminates on an unhandled rejection with
+// no cleanup, which previously left SGR mouse tracking + raw mode enabled
+// (corrupt terminal) and the owned eve dev server running. Restore the
+// terminal, stop the owned server, then exit non-zero.
+let fatalErrorHandled = false;
+async function handleFatalError(kind: string, reason: unknown): Promise<void> {
+	if (fatalErrorHandled) return;
+	fatalErrorHandled = true;
+	shutdownStarted = true;
+	try {
+		stopBrainHealthMonitor();
+	} catch {
+		// Best-effort: never let cleanup mask the original failure.
+	}
+	try {
+		stopFacePresence();
+	} catch {
+		// Best-effort.
+	}
+	try {
+		disableClankyMouseTracking();
+	} catch {
+		// Best-effort.
+	}
+	try {
+		if (uiReady) tui.stop();
+	} catch {
+		// Best-effort.
+	}
+	process.stderr.write(`clanky: fatal ${kind}: ${formatError(reason)}\n`);
+	try {
+		await reportClankyFaceToHerdr("unknown", `Clanky face crashed (${kind})`);
+	} catch {
+		// Best-effort.
+	}
+	try {
+		await stopCallbackProxy();
+	} catch {
+		// Best-effort.
+	}
+	try {
+		if (ownsServer) await stopServer();
+	} catch {
+		// Best-effort.
+	}
+	process.exit(1);
+}
+process.on("uncaughtException", (error) => {
+	void handleFatalError("uncaughtException", error);
+});
+process.on("unhandledRejection", (reason) => {
+	void handleFatalError("unhandledRejection", reason);
+});
+
 if (process.argv.includes("--command-host")) {
 	await runCommandHost();
 	process.exit(0);
@@ -794,21 +780,29 @@ if (process.stdin.isTTY !== true || process.stdout.isTTY !== true) {
 
 process.stdout.write("\x1b[2mstarting Clanky...\x1b[22m\n");
 await reportClankyFaceToHerdr("working", "starting Clanky face");
+void warmStageCaches();
 await refreshEffortStatusSuffix();
 ownsServer = await ensureServer();
 await startCallbackProxy();
 await reportClankyFaceToHerdr("idle", "Clanky face ready");
 
-baseClient = new Client({ host: brainHost, preserveCompletedSessions: true });
+// The face is an owner surface: declare it so owner-gated behavior
+// (host_command yolo) recognizes face turns (agent/lib/frontdoor-auth.ts).
+baseClient = new Client({
+	host: brainHost,
+	preserveCompletedSessions: true,
+	headers: { [SURFACE_HEADER]: "face" },
+});
 client = createAttachmentAwareClient(baseClient);
 const initialInfo = await fetchInfo();
 if (initialInfo !== undefined) updateLatestInfo(initialInfo);
 session = client.session();
 
 const faceEnv = await readFaceEnv();
-headerVisible = parseBooleanFlag(faceEnv.CLANKY_HEADER) ?? headerVisible;
+headerVisible = parseBooleanToggle(faceEnv.CLANKY_HEADER) ?? headerVisible;
+turnTraceMode = parseTurnTraceMode(faceEnv.CLANKY_TURN_TRACE) ?? turnTraceMode;
 layoutSettings = layoutSettingsFromEnv(faceEnv);
-agentSpinnerCycleRateMs = parseAgentSpinnerCycleRateMs(faceEnv[CLANKY_TUI_SPINNER_RATE_MS_ENV]) ?? agentSpinnerCycleRateMs;
+agentSpinnerCycleRateMs = parseAgentSpinnerCycleRateMs(faceEnv[CLANKY_TUI_SPINNER_RATE_MS_ENV], DEFAULT_AGENT_SPINNER_CYCLE_DWELL_MS) ?? agentSpinnerCycleRateMs;
 agentSpinner = resolveAgentSpinner(faceEnv[CLANKY_TUI_SPINNER_ENV], { unicode: faceCapabilities.unicode, cycleDwellMs: agentSpinnerCycleRateMs });
 
 const tui = new TUI(new ProcessTerminal());
@@ -982,11 +976,7 @@ process.once("SIGTERM", handleProcessShutdownSignal);
 function resolveRelayTokenSync(): string {
 	const fromEnv = process.env.CLANKY_RELAY_TOKEN;
 	if (fromEnv !== undefined && fromEnv.trim().length > 0) return fromEnv;
-	try {
-		return parseEnv(readFileSync(ENV_PATH, "utf8")).CLANKY_RELAY_TOKEN ?? "";
-	} catch {
-		return "";
-	}
+	return readEnvLocalSync().CLANKY_RELAY_TOKEN ?? "";
 }
 
 async function runCommandHost(): Promise<void> {
@@ -996,7 +986,13 @@ async function runCommandHost(): Promise<void> {
 	ownsServer = await ensureServer();
 	await startCallbackProxy();
 
-	baseClient = new Client({ host: brainHost, preserveCompletedSessions: true });
+	// The command host brokers owner-driven face commands from the relay, so it
+	// is an owner surface like the interactive face.
+	baseClient = new Client({
+		host: brainHost,
+		preserveCompletedSessions: true,
+		headers: { [SURFACE_HEADER]: "face" },
+	});
 	client = createAttachmentAwareClient(baseClient);
 	const initialInfo = await fetchInfo();
 	if (initialInfo !== undefined) updateLatestInfo(initialInfo);
@@ -1208,8 +1204,8 @@ function buildClankyPromptCommands(): ClankyPromptCommandSpec[] {
 		{
 			name: "approvals",
 			aliases: ["yolo"],
-			description: "Auto-approve all tool calls or restore per-tool prompting",
-			argumentHint: "[auto|prompt|status]",
+			description: "Approval ladder: per-tool prompting, auto-approve, or transient yolo (unsandboxed host commands, owner turns only)",
+			argumentHint: "[prompt|auto|yolo|status]",
 			takesArgument: true,
 			build: (argument) => ({ type: "extension", name: "approvals", argument }),
 		},
@@ -2110,18 +2106,6 @@ function statusValue(value: string, tone: StatusTone = "normal"): string {
 	}
 }
 
-function statusPresence(present: boolean | undefined): string {
-	return present === true ? statusValue("set", "ok") : statusValue("unset", "warn");
-}
-
-function statusOnOff(enabled: boolean): string {
-	return enabled ? statusValue("on", "ok") : statusValue("off", "muted");
-}
-
-function statusAllowedBlocked(allowed: boolean): string {
-	return allowed ? statusValue("allowed", "ok") : statusValue("blocked", "warn");
-}
-
 function firstMeaningfulLine(text: string): string | undefined {
 	const line = text.split(/\r?\n/u).map((entry) => entry.trim()).find((entry) => entry.length > 0);
 	return line === undefined ? undefined : truncate(line, 96);
@@ -2291,6 +2275,16 @@ async function runRemoteFaceCommand(request: FaceCommandRequest): Promise<void> 
 			return;
 		}
 		const outcome = await handleClankyCommand(parsed, renderer);
+		// Same guard as the local path: never swap the module-level session while
+		// a streaming turn is in flight, or the turn's events land in limbo.
+		if (outcome.newSession === true && isResponding) {
+			emit({ type: "menu.failed", sessionId, message: "Clanky is still responding; wait for the current turn to finish before starting a new session." });
+			return;
+		}
+		if (outcome.resumeSession !== undefined && isResponding) {
+			emit({ type: "menu.failed", sessionId, message: "Clanky is still responding; wait for the current turn to finish before resuming another session." });
+			return;
+		}
 		if (outcome.message !== undefined && outcome.message.length > 0) {
 			emit({ type: "menu.line", sessionId, text: stripAnsi(outcome.message), tone: outcome.message.toLowerCase().includes("unknown ") ? "error" : "success" });
 		}
@@ -2874,6 +2868,7 @@ function buildBannerFields(info: AgentInfoResult | undefined): BannerFields {
 	const stage = bannerStage();
 	fields.stage = stage.value;
 	fields.stageLabel = stage.label;
+	if (yoloArmed) fields.approvals = "YOLO — unsandboxed host commands, owner turns only";
 	return fields;
 }
 
@@ -2919,22 +2914,40 @@ function herdrStageValue(session: string, workspace: string | undefined, pane: s
 	return parts.join(" · ");
 }
 
+// Stage-name lookups (herdr/tmux CLIs, up to 1s each) previously ran as
+// blocking execFileSync inside the render path. They are now warmed once,
+// asynchronously, by warmStageCaches(); the render-path accessors only read
+// the caches and fall back to cheap defaults while the warmers run.
 function herdrSessionName(): string {
 	const envSession = process.env.HERDR_SESSION?.trim();
 	if (envSession !== undefined && envSession.length > 0) return envSession;
-	if (herdrSessionNameCache !== undefined) return herdrSessionNameCache;
+	return herdrSessionNameCache ?? "default";
+}
+
+async function warmStageCaches(): Promise<void> {
+	if (process.env.HERDR_ENV === "1") {
+		const envSession = process.env.HERDR_SESSION?.trim();
+		if ((envSession === undefined || envSession.length === 0) && herdrSessionNameCache === undefined) {
+			herdrSessionNameCache = await fetchHerdrSessionName();
+		}
+		if (herdrWorkspaceNameCache === undefined) {
+			const workspaceId = (process.env.HERDR_WORKSPACE_ID ?? process.env.CLANKY_FACE_HERDR_WORKSPACE_ID)?.trim();
+			herdrWorkspaceNameCache = await fetchHerdrWorkspaceName(workspaceId);
+		}
+	} else if (process.env.TMUX !== undefined && process.env.TMUX.length > 0 && tmuxSessionNameCache === undefined) {
+		tmuxSessionNameCache = await fetchTmuxSessionName();
+	}
+	if (uiReady) refreshBannerView();
+}
+
+async function fetchHerdrSessionName(): Promise<string> {
 	const socketPath = process.env.HERDR_SOCKET_PATH?.trim();
 	try {
-		const output = execFileSync("herdr", ["session", "list", "--json"], {
-			encoding: "utf8",
-			timeout: 1000,
-			stdio: ["ignore", "pipe", "ignore"],
-		});
-		herdrSessionNameCache = parseHerdrSessionName(JSON.parse(output) as unknown, socketPath) ?? "default";
+		const { stdout } = await runHostCommand("herdr", ["session", "list", "--json"], { timeout: 2000 });
+		return parseHerdrSessionName(JSON.parse(stdout) as unknown, socketPath) ?? "default";
 	} catch {
-		herdrSessionNameCache = "default";
+		return "default";
 	}
-	return herdrSessionNameCache;
 }
 
 function parseHerdrSessionName(payload: unknown, socketPath: string | undefined): string | undefined {
@@ -2952,18 +2965,18 @@ function parseHerdrSessionName(payload: unknown, socketPath: string | undefined)
 
 function herdrWorkspaceName(workspaceId: string | undefined): string | undefined {
 	if (herdrWorkspaceNameCache !== undefined) return herdrWorkspaceNameCache ?? undefined;
+	// Cache not warmed yet: show the raw id until warmStageCaches() resolves it.
 	const trimmedWorkspaceId = workspaceId?.trim();
+	return trimmedWorkspaceId !== undefined && trimmedWorkspaceId.length > 0 ? trimmedWorkspaceId : undefined;
+}
+
+async function fetchHerdrWorkspaceName(workspaceId: string | undefined): Promise<string | null> {
 	try {
-		const output = execFileSync("herdr", ["workspace", "list"], {
-			encoding: "utf8",
-			timeout: 1000,
-			stdio: ["ignore", "pipe", "ignore"],
-		});
-		herdrWorkspaceNameCache = parseHerdrWorkspaceName(JSON.parse(output) as unknown, trimmedWorkspaceId) ?? trimmedWorkspaceId ?? null;
+		const { stdout } = await runHostCommand("herdr", ["workspace", "list"], { timeout: 2000 });
+		return parseHerdrWorkspaceName(JSON.parse(stdout) as unknown, workspaceId) ?? workspaceId ?? null;
 	} catch {
-		herdrWorkspaceNameCache = trimmedWorkspaceId ?? null;
+		return workspaceId ?? null;
 	}
-	return herdrWorkspaceNameCache ?? undefined;
 }
 
 function parseHerdrWorkspaceName(payload: unknown, workspaceId: string | undefined): string | undefined {
@@ -2980,15 +2993,16 @@ function parseHerdrWorkspaceName(payload: unknown, workspaceId: string | undefin
 
 /** tmux exposes the pane via `TMUX_PANE` but not the session name; ask tmux. */
 function tmuxSessionName(): string | undefined {
+	return tmuxSessionNameCache ?? undefined;
+}
+
+async function fetchTmuxSessionName(): Promise<string | null> {
 	try {
-		const name = execFileSync("tmux", ["display-message", "-p", "#S"], {
-			encoding: "utf8",
-			timeout: 1000,
-			stdio: ["ignore", "pipe", "ignore"],
-		}).trim();
-		return name.length > 0 ? name : undefined;
+		const { stdout } = await runHostCommand("tmux", ["display-message", "-p", "#S"], { timeout: 2000 });
+		const name = stdout.trim();
+		return name.length > 0 ? name : null;
 	} catch {
-		return undefined;
+		return null;
 	}
 }
 
@@ -3289,7 +3303,7 @@ async function promptDiscordToken(flow: SetupFlow, config: ClankyConfig): Promis
 					step = "kind";
 					continue;
 				}
-				const parsed = parseOnOff(voiceValue);
+				const parsed = parseBooleanToggle(voiceValue);
 				if (parsed === undefined) return undefined;
 				voice = parsed;
 				step = "token";
@@ -3315,7 +3329,7 @@ async function promptDiscordToken(flow: SetupFlow, config: ClankyConfig): Promis
 function formatDiscordCredentialStatus(config: ClankyConfig): string {
 	const tokenState = config.discordTokenPresent === true ? "set" : "unset";
 	const credentialKind = config.discordCredentialKind === "user-token" ? "user-token" : "bot-token";
-	const voiceEnabled = parseVoiceToggle(config.discordVoice) === true;
+	const voiceEnabled = parseBooleanToggle(config.discordVoice) === true;
 	return [
 		statusTitle("Discord credential"),
 		statusLine("token", tokenState, config.discordTokenPresent === true ? "ok" : "warn"),
@@ -3346,7 +3360,7 @@ async function configureDiscordScope(argument: string, flow: SetupFlow | undefin
 	if (command === "help") return discordScopeUsage();
 
 	if (command === "dms" || command === "dm" || command === "allow-dms") {
-		const value = parseOnOff(args[1]);
+		const value = parseBooleanToggle(args[1]);
 		if (value === undefined) {
 			if (flow === undefined) return `Usage: /discord-scope dms on|off\n\n${discordScopeStatusText(config)}`;
 			return await configureDiscordScopeFocused(flow, config, "Configure Discord DMs", () => promptDiscordScopeDms(flow, config));
@@ -3549,7 +3563,7 @@ async function promptDiscordScopeDms(
 		configBooleanDefaultTrue(config.discordAllowDms) ? "on" : "off",
 		true,
 	);
-	const enabled = parseOnOff(selected);
+	const enabled = parseBooleanToggle(selected);
 	return enabled === undefined ? undefined : buildDiscordScopeDmsUpdate(enabled);
 }
 
@@ -3990,9 +4004,7 @@ async function sendPushTestNotification(): Promise<string> {
 }
 
 async function readPushEnv(): Promise<NodeJS.ProcessEnv> {
-	const content = await readFile(ENV_PATH, "utf8").catch(() => "");
-	const fileEnv = content.trim().length === 0 ? {} : parseEnv(content);
-	return { ...process.env, ...fileEnv };
+	return await readEffectiveEnv();
 }
 
 async function safeListPushDevices(): Promise<readonly PushDevice[]> {
@@ -4109,23 +4121,6 @@ function pushUsage(): string {
 		"/push test",
 		"/push clear",
 	].join("\n");
-}
-
-function parseOnOff(value: string | undefined): boolean | undefined {
-	const normalized = value?.trim().toLowerCase();
-	if (normalized === "on" || normalized === "yes" || normalized === "true" || normalized === "1" || normalized === "allow") {
-		return true;
-	}
-	if (
-		normalized === "off" ||
-		normalized === "no" ||
-		normalized === "false" ||
-		normalized === "0" ||
-		normalized === "block"
-	) {
-		return false;
-	}
-	return undefined;
 }
 
 function uniqueStrings(values: readonly string[]): string[] {
@@ -4296,7 +4291,7 @@ async function buildAuthStatus(config?: ClankyConfig): Promise<{ collapsed: stri
 	const current = config ?? (await readConfig());
 	const [claude, codex] = await Promise.all([claudeCredentialStatus(), codexCredentialStatus()]);
 	const discordKind = current.discordCredentialKind === "user-token" ? "user-token" : "bot-token";
-	const discordVoice = parseVoiceToggle(current.discordVoice) === true ? "on" : "off";
+	const discordVoice = parseBooleanToggle(current.discordVoice) === true ? "on" : "off";
 	const xaiReady = current.xaiApiKeyPresent === true ? "set" : "unset";
 	const geminiReady = current.geminiApiKeyPresent === true ? "set" : "unset";
 	return {
@@ -5226,7 +5221,7 @@ async function configureHarness(argument: string, flow: SetupFlow | undefined): 
 		return await configureHarnessTranscripts(args.slice(1), config, flow);
 	}
 
-	let harness = parseCodingHarnessId(args[0]);
+	const harness = parseCodingHarnessId(args[0]);
 	if (args[0] !== undefined && harness === undefined) {
 		return `Unknown coding harness "${args[0]}". Use clanky, claude, codex, opencode, custom, allow, transcripts, or status.`;
 	}
@@ -5797,8 +5792,8 @@ async function configureApprovals(argument: string, flow: SetupFlow | undefined)
 		return await configureApprovalsInteractive(flow);
 	}
 	if (mode === "status" || mode === "show") return formatApprovalsStatus(await readConfig());
-	if (mode !== "auto" && mode !== "prompt") {
-		return `Unknown approvals mode "${mode}". Use auto, prompt, or status.`;
+	if (mode !== "auto" && mode !== "prompt" && mode !== "yolo") {
+		return `Unknown approvals mode "${mode}". Use prompt, auto, yolo, or status.`;
 	}
 	return await saveApprovalsMode(mode);
 }
@@ -5811,9 +5806,9 @@ async function configureApprovalsInteractive(flow: SetupFlow): Promise<string> {
 			title: "Choose the approval mode.",
 			options: () => APPROVAL_OPTIONS,
 			renderStatus: () => formatApprovalsStatus(config),
-			initial: isAutoApproveValue(config.autoApprove) ? "auto" : "prompt",
+			initial: yoloArmed ? "yolo" : isAutoApproveValue(config.autoApprove) ? "auto" : "prompt",
 			dispatch: async (mode) => {
-				if (mode !== "auto" && mode !== "prompt") return undefined;
+				if (mode !== "auto" && mode !== "prompt" && mode !== "yolo") return undefined;
 				return await saveApprovalsMode(mode);
 			},
 		});
@@ -5823,20 +5818,39 @@ async function configureApprovalsInteractive(flow: SetupFlow): Promise<string> {
 	}
 }
 
-async function saveApprovalsMode(mode: "auto" | "prompt"): Promise<string> {
+async function saveApprovalsMode(mode: "auto" | "prompt" | "yolo"): Promise<string> {
+	if (mode === "yolo") {
+		// Yolo never touches .env.local: it is injected into the owned brain's
+		// environment and evaporates on a cold start (ADR-0003).
+		if (!ownsServer) {
+			return "Yolo needs the face-owned brain (start with `clanky dev`): it is injected into the brain environment on restart, never saved to .env.local.";
+		}
+		yoloArmed = true;
+		if (uiReady) refreshBannerView();
+		return await restartBrainMessage(
+			"Yolo armed for this brain session: host commands run unsandboxed without prompts on owner turns; presence and autonomous turns stay gated. Not persisted — /approvals prompt disarms",
+		);
+	}
+	const disarmed = yoloArmed;
+	yoloArmed = false;
+	if (uiReady) refreshBannerView();
 	await writeEnv({ CLANKY_AUTO_APPROVE: mode === "auto" ? "1" : "0" });
+	const suffix = disarmed ? " Yolo disarmed." : "";
 	return await restartBrainMessage(
 		mode === "auto"
-			? "Auto-approve enabled; Clanky will run all tool calls without asking"
-			: "Auto-approve disabled; per-tool approval policy restored",
+			? `Auto-approve enabled; Clanky will run all tool calls without asking.${suffix}`
+			: `Auto-approve disabled; per-tool approval policy restored.${suffix}`,
 	);
 }
 
 function formatApprovalsStatus(config: ClankyConfig): string {
+	if (yoloArmed) {
+		return "Approvals: yolo (host commands unsandboxed, never ask; owner turns only — transient, cleared on cold start). Usage: /approvals [prompt|auto|yolo|status]";
+	}
 	const state = isAutoApproveValue(config.autoApprove)
-		? "auto (Clanky runs every tool without asking)"
-		: "prompt (per-tool approval policy applies)";
-	return `Approvals: ${state}. Usage: /approvals [auto|prompt|status]`;
+		? "auto (Clanky runs every tool without asking; host commands stay sandboxed)"
+		: "prompt (per-tool approval policy applies; host commands are read-only sandboxed)";
+	return `Approvals: ${state}. Usage: /approvals [prompt|auto|yolo|status]`;
 }
 
 async function configureAgentMd(argument: string, flow: SetupFlow | undefined): Promise<string> {
@@ -5992,7 +6006,12 @@ async function configureTrace(argument: string, flow: SetupFlow | undefined): Pr
 	}
 	if (normalized === "status" || normalized === "show") return formatTraceStatus();
 	if (mode === undefined) return `Unknown trace mode "${argument}". Use /trace off|no-reply|all.`;
+	return await saveTurnTraceMode(mode);
+}
+
+async function saveTurnTraceMode(mode: TurnTraceMode): Promise<string> {
 	turnTraceMode = mode;
+	await writeEnv({ CLANKY_TURN_TRACE: mode });
 	return formatTraceStatus();
 }
 
@@ -6007,8 +6026,7 @@ async function configureTraceInteractive(flow: SetupFlow): Promise<string> {
 			dispatch: async (selected) => {
 				const mode = parseTurnTraceMode(selected);
 				if (mode === undefined) return undefined;
-				turnTraceMode = mode;
-				return formatTraceStatus();
+				return await saveTurnTraceMode(mode);
 			},
 		});
 		return result ?? "/trace cancelled.";
@@ -6078,7 +6096,7 @@ async function configureLayoutInteractive(flow: SetupFlow): Promise<string> {
 				if (setting === "spinner-rate") return await configureAgentSpinnerCycleRateInteractive(flow);
 				if (setting === "header") {
 					const current = headerVisible ? "on" : "off";
-					const selected = parseBooleanFlag(await selectOne(flow, "Show the sticky header.", LAYOUT_HEADER_OPTIONS, current, true, current));
+					const selected = parseBooleanToggle(await selectOne(flow, "Show the sticky header.", LAYOUT_HEADER_OPTIONS, current, true, current));
 					return selected === undefined ? undefined : await saveHeaderVisible(selected);
 				}
 				return undefined;
@@ -6105,7 +6123,7 @@ async function configureHeader(argument: string): Promise<string> {
 	if (mode.length === 0 || mode === "toggle") {
 		return await saveHeaderVisible(!headerVisible);
 	}
-	const next = parseBooleanFlag(mode);
+	const next = parseBooleanToggle(mode);
 	if (next === undefined) return `Unknown header mode "${argument}". Use /header on|off|toggle|status.`;
 	return await saveHeaderVisible(next);
 }
@@ -6151,7 +6169,7 @@ async function saveAgentSpinner(name: AgentSpinnerSelection): Promise<string> {
 async function configureAgentSpinnerCycleRate(value: string | undefined): Promise<string> {
 	const normalized = value?.trim().toLowerCase();
 	if (normalized === undefined || normalized.length === 0 || normalized === "status" || normalized === "show") return formatAgentSpinnerCycleRateStatus();
-	const next = parseAgentSpinnerCycleRateMs(value);
+	const next = parseAgentSpinnerCycleRateMs(value, DEFAULT_AGENT_SPINNER_CYCLE_DWELL_MS);
 	if (next === undefined) return formatAgentSpinnerCycleRateUsage(value);
 	return await saveAgentSpinnerCycleRate(next);
 }
@@ -6162,10 +6180,10 @@ async function configureAgentSpinnerCycleRateInteractive(flow: SetupFlow): Promi
 		defaultValue: `${agentSpinnerCycleRateMs}`,
 		message: "Set spinner cycle rate in ms per style.",
 		placeholder: "fast, normal, slow, 400, 400ms, or 1.2s",
-		validate: (value) => parseAgentSpinnerCycleRateMs(value) === undefined ? formatAgentSpinnerCycleRateUsage(value) : undefined,
+		validate: (value) => parseAgentSpinnerCycleRateMs(value, DEFAULT_AGENT_SPINNER_CYCLE_DWELL_MS) === undefined ? formatAgentSpinnerCycleRateUsage(value) : undefined,
 	});
 	if (selected === undefined) return undefined;
-	const next = parseAgentSpinnerCycleRateMs(selected);
+	const next = parseAgentSpinnerCycleRateMs(selected, DEFAULT_AGENT_SPINNER_CYCLE_DWELL_MS);
 	return next === undefined ? formatAgentSpinnerCycleRateUsage(selected) : await saveAgentSpinnerCycleRate(next);
 }
 
@@ -6348,10 +6366,6 @@ function imageModelUsage(): string {
 	].join("\n");
 }
 
-function currentImageModel(config: ClankyConfig): string {
-	return imageModelFor(config, currentImageProvider(config));
-}
-
 function currentVideoModel(config: ClankyConfig): string {
 	const configured = config.xaiVideoModel?.trim();
 	return configured !== undefined && configured.length > 0 ? configured : DEFAULT_XAI_VIDEO_MODEL;
@@ -6458,7 +6472,7 @@ async function configureVisionModelInteractive(flow: SetupFlow, config: ClankyCo
 				{ value: "select", label: "select vision model", hint: config.visionModel ?? "dedicated model (e.g. qwen3-vl:32b)" },
 				{ value: "on", label: "turn override on", hint: "use the selected vision model" },
 				{ value: "off", label: "turn override off", hint: "use the brain model for vision" },
-				{ value: "openai", label: "OpenAI fallback model", hint: config.openAiVisionModel ?? "gpt-5.4-mini" },
+				{ value: "openai", label: "OpenAI fallback model", hint: config.openAiVisionModel ?? DEFAULT_OPENAI_VISION_MODEL },
 				{ value: "clear", label: "clear override", hint: "remove the dedicated vision model" },
 			],
 			renderStatus: () => formatVisionModelMenuStatus(config),
@@ -6480,7 +6494,7 @@ async function configureVisionModelInteractive(flow: SetupFlow, config: ClankyCo
 				const value = await flow.readText({
 					message: action === "openai" ? "Set the OpenAI fallback vision model." : "Select the dedicated vision model for media_inspect.",
 					defaultValue: current ?? "",
-					placeholder: action === "openai" ? "gpt-5.4-mini" : "qwen3-vl:32b",
+					placeholder: action === "openai" ? DEFAULT_OPENAI_VISION_MODEL : "qwen3-vl:32b",
 					validate: requiredVisionModelText,
 					allowBack: true,
 				});
@@ -6522,7 +6536,7 @@ function formatVisionModelStatus(config: ClankyConfig): string {
 		statusLine("override", enabled ? "on" : "off", enabled ? "ok" : "muted"),
 		statusLine("selected override model", `${selected}${config.visionModel === undefined ? "" : ` (${provider})`}`, enabled ? "active" : "muted"),
 		statusLine("active when off", "brain model", enabled ? "muted" : "active"),
-		statusLine("OpenAI fallback vision model", config.openAiVisionModel ?? "gpt-5.4-mini"),
+		statusLine("OpenAI fallback vision model", config.openAiVisionModel ?? DEFAULT_OPENAI_VISION_MODEL),
 	].join("\n");
 }
 
@@ -6533,7 +6547,7 @@ function formatVisionModelMenuStatus(config: ClankyConfig): SettingsMenuStatus {
 		[
 			statusTitle("Vision"),
 			statusLine("active", active, enabled ? "active" : "ok"),
-			statusLine("OpenAI fallback", config.openAiVisionModel ?? "gpt-5.4-mini", "muted"),
+			statusLine("OpenAI fallback", config.openAiVisionModel ?? DEFAULT_OPENAI_VISION_MODEL, "muted"),
 		].join("\n"),
 		formatVisionModelStatus(config),
 	);
@@ -6708,7 +6722,7 @@ async function promptVoiceSettingValue(
 				true,
 			);
 		case "eve-session": {
-			const enabled = parseVoiceToggle(config.voiceEveSession) ?? true;
+			const enabled = parseBooleanToggle(config.voiceEveSession) ?? true;
 			return await selectOne(flow, "Enable the Eve continuity session for voice turns.", VOICE_EVE_SESSION_OPTIONS, enabled ? "on" : "off", true);
 		}
 		case "memory-limit":
@@ -6916,7 +6930,7 @@ function buildVoiceSettingUpdate(setting: VoiceSetting, rawValue: string): Voice
 			};
 		}
 		case "eve-session": {
-			const enabled = parseVoiceToggle(value);
+			const enabled = parseBooleanToggle(value);
 			if (enabled === undefined) return `Unknown Eve voice session value "${value}". Use on or off.`;
 			return {
 				updates: { CLANKY_VOICE_EVE_SESSION: enabled ? "1" : "off" },
@@ -8058,14 +8072,15 @@ async function installBrowserBridgeMessage(): Promise<string> {
 // shell. `/pair link` prints just the deep link for narrow panes or AirDrop.
 async function configurePairing(argument: string): Promise<string> {
 	const linkOnly = argument.trim().toLowerCase() === "link";
-	const fileEnv = parseEnv(await readFile(ENV_PATH, "utf8").catch(() => ""));
+	const fileEnv = await readEnvLocal();
 	const token = process.env.CLANKY_RELAY_TOKEN ?? fileEnv.CLANKY_RELAY_TOKEN ?? "";
 	let link: PairingLink;
 	try {
 		link = await buildPairingLink({
 			token,
 			port: PORT,
-			configuredHost: process.env.CLANKY_EVE_HOST ?? fileEnv.CLANKY_EVE_HOST,
+			// Bind-host semantics (bare host, never a base URL); process.env wins.
+			configuredHost: resolveEveBindHost({ ...fileEnv, ...process.env }),
 		});
 	} catch (error) {
 		return error instanceof Error ? error.message : String(error);
@@ -8103,12 +8118,16 @@ async function statusText(): Promise<string> {
 		statusLine("eve brain", formatBrainHealthSummary(brainHealth), brainHealth.state === "healthy" ? "ok" : brainHealth.state === "unknown" ? "muted" : "warn"),
 		statusLine("running conductor", formatRunningConductorSummary(config), startupModelFallback !== undefined && config.provider === startupModelFallback.provider ? "warn" : "active"),
 		statusLine("auth", `claude=${formatCredStatus(claudeAuth)}; codex=${formatCredStatus(codexAuth)}`, claudeAuth.present || codexAuth.present ? "ok" : "warn"),
-		statusLine("approvals", isAutoApproveValue(config.autoApprove) ? "auto (no prompts)" : "prompt", isAutoApproveValue(config.autoApprove) ? "warn" : "ok"),
+		statusLine(
+			"approvals",
+			yoloArmed ? "yolo (unsandboxed host commands, transient)" : isAutoApproveValue(config.autoApprove) ? "auto (no prompts)" : "prompt",
+			yoloArmed ? "bad" : isAutoApproveValue(config.autoApprove) ? "warn" : "ok",
+		),
 		statusLine("agent files", formatAgentMdSummary(config), agentMdEnabled(config) ? "active" : "muted"),
 		statusLine("coding harness", formatCodingHarnessSummary(config), "active"),
 		statusLine("image model", `${currentImageProvider(config)}=${imageModelFor(config, currentImageProvider(config))}`, "active"),
 		statusLine("video model", `${config.videoProvider?.trim() || "xai"}=${currentVideoModel(config)}`, "active"),
-		statusLine("vision model", `${isTruthyEnvValue(config.visionEnabled) ? `override=${config.visionModel ?? "(none)"}` : "brain model"}; openai fallback=${config.openAiVisionModel ?? "gpt-5.4-mini"}`, isTruthyEnvValue(config.visionEnabled) ? "active" : "ok"),
+		statusLine("vision model", `${isTruthyEnvValue(config.visionEnabled) ? `override=${config.visionModel ?? "(none)"}` : "brain model"}; openai fallback=${config.openAiVisionModel ?? DEFAULT_OPENAI_VISION_MODEL}`, isTruthyEnvValue(config.visionEnabled) ? "active" : "ok"),
 		...formatVoiceStatusLines(config),
 		statusLine("integrations", formatIntegrationSummary(bindings, connections)),
 		statusLine("mcp", formatMcpStatusSummary(info, mcpStore)),
@@ -8623,19 +8642,7 @@ function formatDiscordScopeList(raw: string | undefined, fallback: string): stri
 }
 
 function configBooleanDefaultTrue(raw: string | undefined): boolean {
-	return parseToggle(raw) ?? true;
-}
-
-function parseToggle(value: string | undefined): boolean | undefined {
-	const normalized = value?.trim().toLowerCase();
-	if (normalized === undefined || normalized.length === 0) return undefined;
-	if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on" || normalized === "enable" || normalized === "enabled") {
-		return true;
-	}
-	if (normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off" || normalized === "disable" || normalized === "disabled") {
-		return false;
-	}
-	return undefined;
+	return parseBooleanToggle(raw) ?? true;
 }
 
 async function selectProvider(
@@ -8904,8 +8911,8 @@ function settingsStatusToggleOption(status: Exclude<SettingsMenuStatus, string>,
 function formatVoiceConfig(config: ClankyConfig): string {
 	const realtimeProvider = parseVoiceRealtimeProvider(config.voiceRealtimeProvider) ?? "openai";
 	const memoryLimit = parseVoiceMemoryLimit(config.voiceMemoryContextLimit ?? "16") ?? 16;
-	const eveSessionEnabled = parseVoiceToggle(config.voiceEveSession) ?? true;
-	const discordVoiceEnabled = parseVoiceToggle(config.discordVoice) === true;
+	const eveSessionEnabled = parseBooleanToggle(config.voiceEveSession) ?? true;
+	const discordVoiceEnabled = parseBooleanToggle(config.discordVoice) === true;
 	const discordCredentialKind = config.discordCredentialKind === "user-token" ? "user-token" : "bot-token";
 	const discordCredential = config.discordTokenPresent === true ? discordCredentialKind : "unset";
 	const realtimeModel = voiceRealtimeModelLabel(config, realtimeProvider);
@@ -8951,7 +8958,7 @@ function formatVoiceMenuStatus(config: ClankyConfig): SettingsMenuStatus {
 
 function formatVoiceSummary(config: ClankyConfig): string {
 	const realtimeProvider = parseVoiceRealtimeProvider(config.voiceRealtimeProvider) ?? "openai";
-	const discordVoiceEnabled = parseVoiceToggle(config.discordVoice) === true;
+	const discordVoiceEnabled = parseBooleanToggle(config.discordVoice) === true;
 	const discordCredentialKind = config.discordCredentialKind === "user-token" ? "user-token" : "bot-token";
 	const discordCredential = config.discordTokenPresent === true ? discordCredentialKind : "unset";
 	const memoryLimit = parseVoiceMemoryLimit(config.voiceMemoryContextLimit ?? "16") ?? 16;
@@ -8969,7 +8976,7 @@ function formatVoiceSummary(config: ClankyConfig): string {
 		[
 			statusInline("TTS", inferredVoiceTtsProvider(config), "ok"),
 			statusInline("memory", String(memoryLimit)),
-			statusInline("Eve", (parseVoiceToggle(config.voiceEveSession) ?? true) ? "on" : "off", (parseVoiceToggle(config.voiceEveSession) ?? true) ? "ok" : "muted"),
+			statusInline("Eve", (parseBooleanToggle(config.voiceEveSession) ?? true) ? "on" : "off", (parseBooleanToggle(config.voiceEveSession) ?? true) ? "ok" : "muted"),
 		].join("; "),
 	];
 	if (realtimeProvider === "local") {
@@ -8981,8 +8988,8 @@ function formatVoiceSummary(config: ClankyConfig): string {
 function formatVoiceStatusLines(config: ClankyConfig): string[] {
 	const realtimeProvider = parseVoiceRealtimeProvider(config.voiceRealtimeProvider) ?? "openai";
 	const memoryLimit = parseVoiceMemoryLimit(config.voiceMemoryContextLimit ?? "16") ?? 16;
-	const eveSessionEnabled = parseVoiceToggle(config.voiceEveSession) ?? true;
-	const discordVoiceEnabled = parseVoiceToggle(config.discordVoice) === true;
+	const eveSessionEnabled = parseBooleanToggle(config.voiceEveSession) ?? true;
+	const discordVoiceEnabled = parseBooleanToggle(config.discordVoice) === true;
 	const discordCredentialKind = config.discordCredentialKind === "user-token" ? "user-token" : "bot-token";
 	const discordCredential = config.discordTokenPresent === true ? discordCredentialKind : "unset";
 	const lines = [
@@ -9144,18 +9151,6 @@ function parseLocalTtsEngine(value: string | undefined): "say" | "command" | und
 	return undefined;
 }
 
-function parseVoiceToggle(value: string | undefined): boolean | undefined {
-	const normalized = value?.trim().toLowerCase();
-	if (normalized === undefined || normalized.length === 0) return undefined;
-	if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on" || normalized === "enable" || normalized === "enabled") {
-		return true;
-	}
-	if (normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off" || normalized === "disable" || normalized === "disabled") {
-		return false;
-	}
-	return undefined;
-}
-
 function parseVoiceMemoryLimit(value: string | undefined): number | undefined {
 	const trimmed = value?.trim();
 	if (trimmed === undefined || trimmed.length === 0 || !/^-?\d+$/.test(trimmed)) return undefined;
@@ -9225,14 +9220,10 @@ function requiredVisionModelText(value: string): string | undefined {
 }
 
 async function readConfig(): Promise<ClankyConfig> {
-	const content = await readFile(ENV_PATH, "utf8").catch(() => "");
-	const get = (key: string): string | undefined => {
-		for (const raw of content.split("\n")) {
-			const match = raw.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/);
-			if (match?.[1] === key) return match[2]?.trim().replace(/^["']|["']$/g, "");
-		}
-		return undefined;
-	};
+	// The saved-config view: reads the durable .env.local map (what the config
+	// menus display and edit), with process.env only as a per-key fallback below.
+	const fileEnv = await readEnvLocal();
+	const get = (key: string): string | undefined => fileEnv[key];
 	const provider = parseProvider(get("CLANKY_MODEL_PROVIDER")) ?? "codex";
 	const config: ClankyConfig = { provider };
 	const codexModel = get("CLANKY_CODEX_MODEL");
@@ -9376,25 +9367,22 @@ async function readConfig(): Promise<ClankyConfig> {
 	return config;
 }
 
+// All .env.local reads/writes go through agent/lib/env-store.ts (atomic,
+// locked, process.env-wins precedence — see that module for the rule).
 async function readFaceEnv(): Promise<NodeJS.ProcessEnv> {
-	const content = await readFile(ENV_PATH, "utf8").catch(() => "");
-	const fileEnv = content.trim().length === 0 ? {} : parseEnv(content);
-	return { ...fileEnv, ...process.env };
+	return await readEffectiveEnv();
 }
 
 async function writeEnv(updates: Record<string, string>): Promise<void> {
-	await updateEnv(updates, []);
+	await updateEnvLocal({ updates });
 }
 
 async function removeEnv(keys: string[]): Promise<void> {
-	await updateEnv({}, keys);
+	await updateEnvLocal({ removals: keys });
 }
 
 async function updateEnv(updates: Record<string, string>, removals: readonly string[]): Promise<void> {
-	const existing = await readFile(ENV_PATH, "utf8").catch(() => "");
-	const withoutRemovals = removals.length === 0 ? existing : applyEnvRemovals(existing, removals);
-	const next = Object.keys(updates).length === 0 ? withoutRemovals : applyEnvUpserts(withoutRemovals, updates);
-	await writeFile(ENV_PATH, next, "utf8");
+	await updateEnvLocal({ updates, removals });
 }
 
 async function restartBrainMessage(prefix: string): Promise<string> {
@@ -9448,7 +9436,7 @@ function appendRestartSentence(prefix: string, sentence: string): string {
 async function restartAttachedDevServerMessage(): Promise<string | undefined> {
 	const discovered = await discoverDevServerHost();
 	if (discovered === undefined || !sameHost(discovered.host, brainHost)) return undefined;
-	if (!canRestartAttachedDevServer(discovered.record)) return undefined;
+	if (!(await canRestartAttachedDevServer(discovered.record))) return undefined;
 
 	const preservedSession = await preserveCurrentSessionForRestart();
 	brainRestartInProgress = true;
@@ -9458,7 +9446,7 @@ async function restartAttachedDevServerMessage(): Promise<string | undefined> {
 	refreshStatus("restarting");
 
 	try {
-		await stopDevServerRecord(discovered.record, "restart");
+		await stopRecordedDevServer(discovered.record, "restart");
 		const restarted = await waitForAttachedDevServerRestart(discovered);
 		if (!restarted) throw new Error(`Eve dev server did not come back healthy on ${discovered.host}`);
 	} catch (error) {
@@ -9503,22 +9491,22 @@ async function waitForAttachedDevServerRestart(discovered: DiscoveredHost): Prom
 	const deadline = Date.now() + HEALTH_TIMEOUT_MS;
 	while (Date.now() < deadline) {
 		if (!isPidAlive(oldPid) && (await probe(targetHost)) === "healthy") return true;
-		await new Promise((resolve) => setTimeout(resolve, DEV_SERVER_RECORD_REPROBE_MS));
+		await new Promise((resolve) => setTimeout(resolve, DEV_TIMEOUTS.reprobeMs));
 	}
 	return false;
 }
 
-function canRestartAttachedDevServer(record: DevServerRecord): boolean {
-	if (parseBooleanFlag(process.env.CLANKY_RESTART_ATTACHED_EVE) === true) return true;
-	const parent = parentPid(record.pid);
-	return parent !== undefined && processAncestorPids().has(parent);
+async function canRestartAttachedDevServer(record: DevServerRecord): Promise<boolean> {
+	if (parseBooleanToggle(process.env.CLANKY_RESTART_ATTACHED_EVE) === true) return true;
+	const parent = await parentPid(record.pid);
+	return parent !== undefined && (await processAncestorPids()).has(parent);
 }
 
-function processAncestorPids(pid = process.pid): Set<number> {
+async function processAncestorPids(pid = process.pid): Promise<Set<number>> {
 	const ancestors = new Set<number>();
 	let current = pid;
 	for (let depth = 0; depth < 32; depth += 1) {
-		const parent = parentPid(current);
+		const parent = await parentPid(current);
 		if (parent === undefined || parent <= 1 || ancestors.has(parent)) break;
 		ancestors.add(parent);
 		current = parent;
@@ -9526,14 +9514,12 @@ function processAncestorPids(pid = process.pid): Set<number> {
 	return ancestors;
 }
 
-function parentPid(pid: number): number | undefined {
+// Async (execFile, not execFileSync): ps can take up to a second and this runs
+// from command handlers on the UI thread.
+async function parentPid(pid: number): Promise<number | undefined> {
 	try {
-		const output = execFileSync("ps", ["-o", "ppid=", "-p", String(pid)], {
-			encoding: "utf8",
-			stdio: ["ignore", "pipe", "ignore"],
-			timeout: 1000,
-		}).trim();
-		const parsed = Number.parseInt(output, 10);
+		const { stdout } = await runHostCommand("ps", ["-o", "ppid=", "-p", String(pid)], { timeout: 2000 });
+		const parsed = Number.parseInt(stdout.trim(), 10);
 		return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
 	} catch {
 		return undefined;
@@ -9632,125 +9618,29 @@ async function fetchDiscordGatewayHealth(): Promise<unknown> {
 }
 
 async function probe(host = brainHost): Promise<"healthy" | "reachable" | "down"> {
-	try {
-		return (await fetch(`${host}/eve/v1/info`)).ok ? "healthy" : "reachable";
-	} catch {
-		return "down";
-	}
+	return await probeEveHost(host, DEV_TIMEOUTS.probeTimeoutMs);
 }
 
 async function discoverDevServerHost(): Promise<DiscoveredHost | undefined> {
-	const record = await readDevServerRecord();
-	if (record === undefined || !isPidAlive(record.pid)) return undefined;
-	const host = normalizeHost(record.url);
-	if (host === undefined) return undefined;
+	const discovered = await discoverDevServer(DEV_SERVER_FILE, DEV_TIMEOUTS);
+	if (discovered === undefined) return undefined;
+	const record = discovered.record;
 	const source = `.eve/dev-server.json pid ${record.pid}${record.updatedAt === undefined ? "" : ` updated ${record.updatedAt}`}`;
-	const initialState = await probe(host);
-	if (initialState === "healthy" || initialState === "reachable") return { host, record, source, state: initialState };
-
-	const graceMs = devServerRecordStartupGraceMs(record);
-	if (graceMs <= 0) return undefined;
-	const deadline = Date.now() + graceMs;
-	while (Date.now() < deadline && isPidAlive(record.pid)) {
-		await new Promise((resolve) => setTimeout(resolve, Math.min(DEV_SERVER_RECORD_REPROBE_MS, Math.max(0, deadline - Date.now()))));
-		const state = await probe(host);
-		if (state === "healthy" || state === "reachable") return { host, record, source, state };
-	}
-	return undefined;
+	return { host: discovered.host, record, source, state: discovered.state };
 }
 
-async function readDevServerRecord(): Promise<DevServerRecord | undefined> {
-	let text: string;
-	try {
-		text = await readFile(DEV_SERVER_FILE, "utf8");
-	} catch {
-		return undefined;
-	}
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(text);
-	} catch {
-		return undefined;
-	}
-	if (!isRecord(parsed)) return undefined;
-	if (typeof parsed.pid !== "number" || !Number.isSafeInteger(parsed.pid)) return undefined;
-	if (typeof parsed.url !== "string" || parsed.url.trim().length === 0) return undefined;
-	return {
-		pid: parsed.pid,
-		updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : undefined,
-		url: parsed.url,
-	};
-}
-
-function isPidAlive(pid: number): boolean {
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch (error) {
-		return typeof error === "object" && error !== null && "code" in error && String(error.code) === "EPERM";
-	}
-}
-
-function normalizeHost(value: string): string | undefined {
-	try {
-		const url = new URL(value);
-		if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
-		return url.origin;
-	} catch {
-		return undefined;
-	}
-}
-
-async function waitForDiscoveredDevServerHealth(discovered: DiscoveredHost): Promise<boolean> {
-	const graceMs = Math.max(DEV_SERVER_UNHEALTHY_SETTLE_MS, devServerRecordStartupGraceMs(discovered.record));
-	return await waitForHostHealth(discovered.host, graceMs, () => isPidAlive(discovered.record.pid));
-}
-
-async function waitForHostHealth(host: string, timeoutMs: number, shouldContinue: () => boolean = () => true): Promise<boolean> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline && shouldContinue()) {
-		await new Promise((resolve) => setTimeout(resolve, Math.min(DEV_SERVER_RECORD_REPROBE_MS, Math.max(0, deadline - Date.now()))));
-		if ((await probe(host)) === "healthy") return true;
-	}
-	return false;
-}
-
-function devServerRecordStartupGraceMs(record: DevServerRecord): number {
-	if (record.updatedAt === undefined) return 0;
-	const updatedAt = Date.parse(record.updatedAt);
-	if (!Number.isFinite(updatedAt)) return 0;
-	const ageMs = Math.max(0, Date.now() - updatedAt);
-	return Math.max(0, DEV_SERVER_RECORD_STARTUP_GRACE_MS - ageMs);
-}
-
-async function stopDevServerRecord(record: DevServerRecord, reason: "restart" | "unhealthy"): Promise<void> {
-	if (record.pid === process.pid) return;
-	try {
-		process.kill(record.pid, "SIGTERM");
-	} catch {
-		return;
-	}
-	const stopTimeoutMs = reason === "restart" ? INTENTIONAL_RESTART_STOP_TIMEOUT_MS : SERVER_STOP_TIMEOUT_MS;
-	if (await waitForPidExit(record.pid, stopTimeoutMs)) return;
-	if (reason !== "restart") {
-		process.stderr.write(`  \x1b[33m${reason} Eve dev server pid ${record.pid} did not exit after SIGTERM; forcing stop\x1b[39m\n`);
-	}
-	try {
-		process.kill(record.pid, "SIGKILL");
-	} catch {
-		return;
-	}
-	await waitForPidExit(record.pid, SERVER_KILL_TIMEOUT_MS);
-}
-
-async function waitForPidExit(pid: number, timeoutMs: number): Promise<boolean> {
-	if (!isPidAlive(pid)) return true;
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		await new Promise((resolve) => setTimeout(resolve, 100));
-		if (!isPidAlive(pid)) return true;
-	}
-	return false;
+async function stopRecordedDevServer(record: DevServerRecord, reason: "restart" | "unhealthy"): Promise<void> {
+	await stopDevServerRecordByPid(record, {
+		stopTimeoutMs: reason === "restart" ? INTENTIONAL_RESTART_STOP_TIMEOUT_MS : SERVER_STOP_TIMEOUT_MS,
+		killTimeoutMs: SERVER_KILL_TIMEOUT_MS,
+		onForceKill: (pid) => {
+			if (reason === "restart") return;
+			process.stderr.write(`  \x1b[33m${reason} Eve dev server pid ${pid} did not exit after SIGTERM; forcing stop\x1b[39m\n`);
+		},
+		onIdentityMismatch: (pid) => {
+			process.stderr.write(`  \x1b[33mrecorded Eve dev server pid ${pid} belongs to another process now; not signaling it\x1b[39m\n`);
+		},
+	});
 }
 
 async function startServer(): Promise<void> {
@@ -9787,6 +9677,9 @@ async function startServer(): Promise<void> {
 async function buildOwnedServerEnv(): Promise<NodeJS.ProcessEnv> {
 	const env = withClankyFaceHerdrEnv(buildEveDevServerEnv(process.env, HOST, PORT));
 	env.CLANKY_REPO_DIR = REPO;
+	// Transient by design: yolo reaches the brain only through this injection.
+	if (yoloArmed) env[YOLO_ENV] = "1";
+	else delete env[YOLO_ENV];
 	const config = await readConfig();
 	startupModelFallback = missingApiKeyStartupFallback(config);
 	if (startupModelFallback !== undefined) {
@@ -9840,6 +9733,11 @@ function withClankyFaceHerdrEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 	copyEnvIfPresent(next, CLANKY_FACE_HERDR_PANE_ID_ENV, process.env.HERDR_PANE_ID);
 	copyEnvIfPresent(next, CLANKY_FACE_HERDR_TAB_ID_ENV, process.env.HERDR_TAB_ID);
 	copyEnvIfPresent(next, CLANKY_FACE_HERDR_WORKSPACE_ID_ENV, process.env.HERDR_WORKSPACE_ID);
+	// The owned brain runs on a herdr stage, so the session-wide pane recorder
+	// (ADR-0007) is on by default; an explicit CLANKY_PANE_RECORDER=0 opts out.
+	if (process.env.HERDR_ENV === "1" && next.CLANKY_PANE_RECORDER === undefined) {
+		next.CLANKY_PANE_RECORDER = "1";
+	}
 	return next;
 }
 
@@ -9876,9 +9774,9 @@ async function ensureServer(): Promise<boolean> {
 		if (discovered.state === "healthy") return false;
 		if (discovered.state === "reachable") {
 			process.stdout.write(`  \x1b[2mdev server ${brainHost} is reachable but not ready; waiting...\x1b[22m\n`);
-			if (await waitForDiscoveredDevServerHealth(discovered)) return false;
+			if (await waitForDiscoveredDevServerHealth(discovered, DEV_TIMEOUTS)) return false;
 			process.stdout.write(`  \x1b[33mdev server ${brainHost} stayed unhealthy; restarting ${discovered.source} for this face.\x1b[39m\n`);
-			await stopDevServerRecord(discovered.record, "unhealthy");
+			await stopRecordedDevServer(discovered.record, "unhealthy");
 			await startServer();
 			await waitForHealth();
 			return true;
@@ -9890,7 +9788,7 @@ async function ensureServer(): Promise<boolean> {
 	if (initial === "healthy") return false;
 	if (initial === "reachable") {
 		process.stdout.write(`  \x1b[2ma server is on ${HOST} but not ready yet; waiting...\x1b[22m\n`);
-		if (await waitForHostHealth(HOST, DEV_SERVER_UNHEALTHY_SETTLE_MS)) {
+		if (await waitForHostHealth(HOST, DEV_TIMEOUTS.unhealthySettleMs, DEV_TIMEOUTS)) {
 			return false;
 		}
 		throw new Error(`${HOST} is reachable but unhealthy, and no live ${DEV_SERVER_FILE} process was available to restart`);
@@ -10006,34 +9904,9 @@ async function stopServer(options: { readonly stopTimeoutMs?: number } = {}): Pr
 	server = null;
 	forwardServerOutput = false;
 	if (child === null || hasChildExited(child)) return;
-	child.kill("SIGTERM");
-	if (await waitForChildExit(child, options.stopTimeoutMs ?? SERVER_STOP_TIMEOUT_MS)) return;
-	child.kill("SIGKILL");
-	await waitForChildExit(child, SERVER_KILL_TIMEOUT_MS);
-}
-
-function hasChildExited(child: ChildProcess): boolean {
-	return child.exitCode !== null || child.signalCode !== null;
-}
-
-async function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
-	if (hasChildExited(child)) return true;
-	return await new Promise<boolean>((resolve) => {
-		let settled = false;
-		const finish = (exited: boolean): void => {
-			if (settled) return;
-			settled = true;
-			clearTimeout(timeout);
-			child.off("exit", onExit);
-			child.off("error", onError);
-			resolve(exited);
-		};
-		const onExit = (): void => finish(true);
-		const onError = (): void => finish(true);
-		const timeout = setTimeout(() => finish(false), timeoutMs);
-		child.once("exit", onExit);
-		child.once("error", onError);
-		if (hasChildExited(child)) finish(true);
+	await stopDevServerChild(child, {
+		stopTimeoutMs: options.stopTimeoutMs ?? SERVER_STOP_TIMEOUT_MS,
+		killTimeoutMs: SERVER_KILL_TIMEOUT_MS,
 	});
 }
 
@@ -10051,15 +9924,9 @@ function ownedServerExitMessage(child: ChildProcess): string {
 }
 
 
-try {
-	await new Promise<void>(() => {});
-} finally {
-	process.off("SIGINT", handleProcessShutdownSignal);
-	process.off("SIGTERM", handleProcessShutdownSignal);
-	stopBrainHealthMonitor();
-	disableClankyMouseTracking();
-	tui.stop();
-	await reportClankyFaceToHerdr("unknown", "Clanky face stopped");
-	await stopCallbackProxy();
-	if (ownsServer) await stopServer();
-}
+// End of module evaluation. The face stays alive on the TUI's stdin listener
+// and timers; exits flow through shutdown() (Ctrl-C, /exit, signals) or the
+// fatal-error envelope installed above — both restore the terminal and stop
+// the owned eve server. (A top-level `await new Promise(() => {})` with a
+// `finally` used to sit here; it was dead code — the promise never settles and
+// process.exit skips finally blocks — so crashes bypassed it entirely.)

@@ -71,37 +71,15 @@ re-resolve the pane id with `herdr agent get` when a pane command needs one.
 
 ## Two run shapes: ephemeral fan-out vs persistent pool
 
-- **Ephemeral fan-out** (this skill's baseline): one worker per independent task,
-  spawned and discarded. Correct for a one-shot swarm of unrelated or
-  write-overlapping tasks — maximal isolation, nothing to keep warm.
-- **Persistent pool** (default for a long, many-issue, tracker-backed effort):
-  keep a small set of **named, warm workers** across the whole run and route each
-  new task to the worker that already owns the touched scope. Warm context plus
-  domain locality beat cold spawns at scale — a worker that built a module carries
-  the context to extend it. Give pool workers stable identities (`clanky:worker1`
-  …) and keep an ownership map (worker -> paths/domain) in the ledger; when the
-  next task lands, dispatch it to the owner rather than spawning fresh. Hold a
-  worker deliberately **reserved** for a blocked capstone instead of force-fitting
-  busywork. Respawn only when a worker dies.
-
-For a pool, prefer the **tracker as the orchestration ledger** (queue + DAG +
-completion record): pull the next issue whose blockers are Done, dispatch it,
-verify, mark it Done, and file follow-up issues as work reveals itself. The run
-directory stays useful for sentinels and results, but do not maintain a second
-durable task ledger that drifts from the tracker.
-
-Drive each pool task under the worker harness's native **`/goal`** loop when the
-harness supports it (Claude, Codex): after the pane is ready, arm it with
-`herdr pane run "$PANE" "/goal <task + definition-of-done>"`. `/goal` gives an
-unambiguous terminal state and per-task turn/token cost, and enforces
-"prove done" inside the worker. This arming is being wired into the spawn seam
-([VUH-321](https://linear.app/vuhlp/issue/VUH-321)); until then, arm it by hand
-after spawn.
-
-The harness-owned form of this whole model — pool registry, tracker scheduler,
-parsed result contract, commit interlock — is [ADR-0002](../../docs/adr/0002-pool-orchestration-operating-model.md)
-([VUH-333](https://linear.app/vuhlp/issue/VUH-333)). Until those land, run the
-model by hand as above.
+**Ephemeral fan-out** (this skill's baseline): one worker per independent task,
+spawned and discarded. **Persistent pool** (default for a long, many-issue,
+tracker-backed effort): a small set of named, warm workers routed by scope
+ownership, with the tracker as the orchestration ledger. Arm each pool task with
+the harness's native `/goal` loop by hand after spawn
+(`herdr pane run "$PANE" "/goal <task + definition-of-done>"`) — the spawn seam
+does not arm it itself ([VUH-321](https://linear.app/vuhlp/issue/VUH-321)).
+Full pool policy — routing, reserved workers, ledger rules, ADR-0002 status —
+is in [references/pool-policy.md](references/pool-policy.md).
 
 ## 1. Spawn
 
@@ -146,37 +124,23 @@ Read durable history for wrapped workers with:
 clanky transcript read clanky:<slug> --lines 120
 ```
 
-Use Herdr reads for live current-screen state and input routing.
+Use Herdr reads for live current-screen state and input routing. Herdr pane
+reads clamp at 1000 recent lines and have no full-history source, so a wrapped
+transcript is the only complete record of a worker's run.
 
 Independent means **write-disjoint**. Workers fanned out concurrently must not
 write the same files, and a read-only worker must never audit files another
-worker in the same run is creating — its analysis reads a moving target and
-reports stale or half-written state. If two tasks share mutable paths (one reads
-what another writes, or both edit the same files), do not fan them out together:
-sequence them (separate runs, or a `blocked` handoff), or, when the work truly
-belongs in separate PR lanes, isolate each writer in its own git worktree under
-the rules below. When unsure whether scopes overlap, assume they do.
-
-Use the parent/current worktree by default. A worker gets a separate git
-worktree only after the operator has deliberately decided that task should land
-as its own branch/PR; do not use per-worker worktrees merely as a convenience
-for concurrent edits. If scopes overlap but the work is not meant to be its own
-PR, sequence the tasks or synthesize them into one edit-capable worker in the
-parent worktree. When scopes are **cleanly disjoint** (each worker owns its own
-directory subtree), a single **scope-partitioned shared worktree** with
-lead-owned commits is the lighter default — no per-worker worktree setup, and
-integration seams stay visible in one tree. For shared-parent runs, integration
-is **lead-owned**: never run `git add -A`/`git add .` or commit while any worker
-in the run is mid-edit — a blind stage captures another worker's half-written
-files. Wait for the run to quiesce (all workers `idle`/done) before committing,
-per the `/c` skill. This interlock is being made enforced ([VUH-337](https://linear.app/vuhlp/issue/VUH-337)).
-
-For PR-lane worktrees, the operator owns the branch/PR lifecycle. Capture the
-branch, worktree path, PR URL, review status, and trunk branch (`main`, `master`,
-or the repo's default) in the run ledger. Review each worker PR yourself before
-accepting it, wait for review-bot comments when they are expected, steer workers
-to address actionable comments, and reconcile the branch with trunk after the PR
-lands so later work starts from the real integrated state.
+worker in the same run is creating. When unsure whether scopes overlap, assume
+they do. Default to the parent/current worktree; a worker gets its own git
+worktree only when the operator has deliberately decided its task should land as
+its own branch/PR. For shared-parent runs, integration is **lead-owned**: never
+`git add -A`/`git add .` or commit while any worker is mid-edit; wait for the
+run to quiesce (all workers `idle`/done), per the `/c` skill — this interlock is
+convention only, nothing enforces it yet
+([VUH-337](https://linear.app/vuhlp/issue/VUH-337)). The full policy —
+sequencing overlapping scopes, scope-partitioned shared worktrees, PR-lane
+lifecycle and ledger fields — is in
+[references/worktrees-and-pr-lanes.md](references/worktrees-and-pr-lanes.md).
 
 Write real briefs: context, exact scope, whether the worker may edit or should
 only explore/plan/review, the verification command, and what result.md must

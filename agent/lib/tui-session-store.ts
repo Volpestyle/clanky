@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { SessionState } from "eve/client";
 
@@ -76,9 +76,13 @@ export function sessionStateId(state: SessionState): string | undefined {
 	return continuationToken !== undefined && continuationToken.length > 0 ? continuationToken : undefined;
 }
 
+// Atomic replace (tmp + rename): the face and the command host can both call
+// rememberTuiSession, and a torn write would corrupt every saved session.
 async function writeTuiSessionStore(path: string, store: TuiSessionStore): Promise<void> {
 	await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-	await writeFile(path, `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 });
+	const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
+	await writeFile(tmp, `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 });
+	await rename(tmp, path);
 }
 
 function emptyStore(): TuiSessionStore {

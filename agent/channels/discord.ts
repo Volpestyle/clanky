@@ -34,10 +34,15 @@ export default discordChannel({
 	},
 	events: {
 		// Post Clanky's reply back to Discord when a turn completes. Skip interim
-		// turns that only emitted tool calls (e.g. spawning a herdr pane).
+		// turns that only emitted tool calls (e.g. spawning a herdr pane). The post
+		// is fire-and-forget; an unhandled rejection here would crash the process.
 		"message.completed"(eventData, channel) {
 			if (eventData.finishReason === "tool-calls") return;
-			if (eventData.message) channel.discord.post(eventData.message);
+			if (eventData.message) {
+				void channel.discord.post(eventData.message).catch((error: unknown) => {
+					console.error("discord interactions reply post failed:", error);
+				});
+			}
 		},
 	},
 });

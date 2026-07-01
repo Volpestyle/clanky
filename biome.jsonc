@@ -1,0 +1,40 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.3.5/schema.json",
+	"vcs": {
+		"enabled": true,
+		"clientKind": "git",
+		"useIgnoreFile": true
+	},
+	"files": {
+		"includes": ["agent/**", "bin/**", "scripts/**", "test/**", "packages/**"]
+	},
+	// Lint-only adoption: the codebase predates Biome and has its own formatting
+	// (tabs, double quotes, long lines); do not reformat it wholesale.
+	"formatter": {
+		"enabled": false
+	},
+	"assist": {
+		"enabled": false
+	},
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"recommended": true,
+			"suspicious": {
+				// The face is a terminal UI: regexes over ANSI/OSC escape bytes are
+				// the domain, not an accident (~56 intentional hits).
+				"noControlCharactersInRegex": "off",
+				// Intentional `??=`/assignment-in-expression globalThis state seams
+				// (discord-gateway hot-reload state, host.ts).
+				"noAssignInExpressions": "off",
+				// Tests assert literal "${...}" source strings (e.g. port-config
+				// checks clanky-up passes `CLANKY_EVE_PORT=${config.port}`).
+				"noTemplateCurlyInString": "off"
+			},
+			"style": {
+				// Existing style uses sparing non-null assertions, mostly in tests.
+				"noNonNullAssertion": "off"
+			}
+		}
+	}
+}

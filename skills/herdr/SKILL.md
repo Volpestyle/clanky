@@ -39,9 +39,9 @@ if you need the raw protocol or full api reference, read the [socket api docs](h
 
 plain shells still exist as panes, but herdr's sidebar agent section intentionally focuses on detected agents rather than listing every shell.
 
-**ids** — workspace ids look like `1`, `2`. tab ids look like `1:1`, `1:2`, `2:1`. pane ids look like `1-1`, `1-2`, `2-1`. these are compact public ids for the current live session.
+**ids** — workspace ids look like `w1`, `w2`. tab ids look like `w1:t1`, `w1:t2E`. pane ids look like `w1:p1`, `w1:pG5`. the token after `t`/`p` is opaque, not a counter — copy ids verbatim from command output. numeric workspace refs (`--workspace w1`) are also accepted.
 
-important: ids can compact when tabs, panes, or workspaces are closed. do not treat them as durable ids. re-read ids from `workspace list`, `tab list`, `pane list`, or create/split responses when you need a current id. do not guess that an older `1-3` is still the same pane later.
+important: ids are compact public ids for the current live session and can compact when tabs, panes, or workspaces are closed. do not treat them as durable ids. re-read ids from `workspace list`, `tab list`, `pane list`, or create/split responses when you need a current id. do not guess that an older `w1:p3` is still the same pane later.
 
 ## discover yourself
 
@@ -64,13 +64,13 @@ herdr workspace list
 list tabs in the current workspace:
 
 ```bash
-herdr tab list --workspace 1
+herdr tab list --workspace w1
 ```
 
 create a new tab:
 
 ```bash
-herdr tab create --workspace 1
+herdr tab create --workspace w1
 ```
 
 without `--label`, the new tab keeps the default numbered tab name.
@@ -78,25 +78,25 @@ without `--label`, the new tab keeps the default numbered tab name.
 create and name it in one step:
 
 ```bash
-herdr tab create --workspace 1 --label "logs"
+herdr tab create --workspace w1 --label "logs"
 ```
 
 rename it:
 
 ```bash
-herdr tab rename 1:2 "logs"
+herdr tab rename w1:t2 "logs"
 ```
 
 focus it:
 
 ```bash
-herdr tab focus 1:2
+herdr tab focus w1:t2
 ```
 
 close it:
 
 ```bash
-herdr tab close 1:2
+herdr tab close w1:t2
 ```
 
 ## read another pane
@@ -104,12 +104,14 @@ herdr tab close 1:2
 see what is on another pane's screen:
 
 ```bash
-herdr pane read 1-1 --source recent --lines 50
+herdr pane read w1:p1 --source recent --lines 50
 ```
 
 - `--source visible` = current viewport
 - `--source recent` = recent scrollback as rendered in the pane
 - `--source recent-unwrapped` = recent terminal text with soft wraps joined back together
+
+`--lines` defaults to 80 and is clamped server-side at 1000. there is no full-history source — a pane's complete output can only be captured as it happens (the transcript seam), not read back later.
 
 If the target is a Clanky-spawned worker and you need durable historical output
 instead of current screen state, use:
@@ -123,20 +125,20 @@ clanky transcript read clanky:<slug> --lines 120
 split your pane to the right and keep focus on your current pane:
 
 ```bash
-herdr pane split 1-2 --direction right --no-focus
+herdr pane split w1:p2 --direction right --no-focus
 ```
 
 that prints json with the new pane nested at `result.pane.pane_id`. parse that value, then run a command in that pane:
 
 ```bash
-NEW_PANE=$(herdr pane split 1-2 --direction right --no-focus | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["pane"]["pane_id"])')
+NEW_PANE=$(herdr pane split w1:p2 --direction right --no-focus | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["pane"]["pane_id"])')
 herdr pane run "$NEW_PANE" "npm run dev"
 ```
 
 split downward instead:
 
 ```bash
-herdr pane split 1-2 --direction down --no-focus
+herdr pane split w1:p2 --direction down --no-focus
 ```
 
 ## wait for output
@@ -146,13 +148,13 @@ block until specific text appears in a pane. useful for waiting on servers, buil
 for `--source recent`, matching uses unwrapped recent terminal text, so pane width and soft wrapping do not break matches. `pane read --source recent` still shows the pane as rendered. if you want to inspect the same transcript that the waiter matches, use `pane read --source recent-unwrapped`.
 
 ```bash
-herdr wait output 1-3 --match "ready on port 3000" --timeout 30000
+herdr wait output w1:p3 --match "ready on port 3000" --timeout 30000
 ```
 
 with regex:
 
 ```bash
-herdr wait output 1-3 --match "server.*ready" --regex --timeout 30000
+herdr wait output w1:p3 --match "server.*ready" --regex --timeout 30000
 ```
 
 if it times out, exit code is `1`.
@@ -162,7 +164,7 @@ if it times out, exit code is `1`.
 block until another agent reaches a specific status:
 
 ```bash
-herdr wait agent-status 1-1 --status done --timeout 60000
+herdr wait agent-status w1:p1 --status done --timeout 60000
 ```
 
 use this when you want the same `done` / `idle` distinction the UI shows.
@@ -172,19 +174,19 @@ use this when you want the same `done` / `idle` distinction the UI shows.
 send text without pressing Enter:
 
 ```bash
-herdr pane send-text 1-1 "hello from claude"
+herdr pane send-text w1:p1 "hello from claude"
 ```
 
 press Enter or other keys:
 
 ```bash
-herdr pane send-keys 1-1 Enter
+herdr pane send-keys w1:p1 Enter
 ```
 
 `pane run` sends the text and then a real `Enter` key in one request:
 
 ```bash
-herdr pane run 1-1 "echo hello"
+herdr pane run w1:p1 "echo hello"
 ```
 
 ## publish your own status (presence)
@@ -229,33 +231,45 @@ herdr workspace create --no-focus
 focus a workspace:
 
 ```bash
-herdr workspace focus 2
+herdr workspace focus w2
 ```
 
 rename:
 
 ```bash
-herdr workspace rename 1 "api server"
+herdr workspace rename w1 "api server"
 ```
 
 close:
 
 ```bash
-herdr workspace close 2
+herdr workspace close w2
 ```
 
 ## close a pane
 
 ```bash
-herdr pane close 1-3
+herdr pane close w1:p3
 ```
+
+## target another session
+
+one herdr server = one session. the default session's socket is `~/.config/herdr/herdr.sock`; named sessions live at `~/.config/herdr/sessions/<name>/herdr.sock`.
+
+session resolution precedence: the `--session=<name>` global flag beats `HERDR_SOCKET_PATH`, which beats `HERDR_SESSION`. inside a herdr pane, `HERDR_SOCKET_PATH` is inherited pointing at the live session — so exporting `HERDR_SESSION=<other>` alone is silently ignored and your commands land in the live session. when targeting another session from inside a pane, pass `--session=<name>` on every invocation (or explicitly re-export `HERDR_SOCKET_PATH` to that session's socket):
+
+```bash
+herdr --session=rehearsal pane list
+```
+
+a named sandbox session is the safe way to rehearse risky operations (server binary upgrades, live handoff) without touching the live session: start a second headless server with the pane-inherited `HERDR_*` vars unset (`unset HERDR_ENV HERDR_PANE_ID HERDR_TAB_ID HERDR_WORKSPACE_ID HERDR_SOCKET_PATH; HERDR_SESSION=<name> herdr server`), rehearse against it with `--session=<name>` pinned on every call, and ping the live socket afterwards to confirm it was untouched.
 
 ## recipes
 
 ### run a server and wait until it is ready
 
 ```bash
-NEW_PANE=$(herdr pane split 1-2 --direction right --no-focus | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["pane"]["pane_id"])')
+NEW_PANE=$(herdr pane split w1:p2 --direction right --no-focus | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["pane"]["pane_id"])')
 herdr pane run "$NEW_PANE" "npm run dev"
 herdr wait output "$NEW_PANE" --match "ready" --timeout 30000
 herdr pane read "$NEW_PANE" --source recent --lines 20
@@ -264,17 +278,17 @@ herdr pane read "$NEW_PANE" --source recent --lines 20
 ### run tests in a separate pane and inspect the result
 
 ```bash
-herdr pane split 1-2 --direction down --no-focus
-herdr pane run 1-3 "cargo test"
-herdr wait output 1-3 --match "test result" --timeout 60000
-herdr pane read 1-3 --source recent --lines 30
+herdr pane split w1:p2 --direction down --no-focus
+herdr pane run w1:p3 "cargo test"
+herdr wait output w1:p3 --match "test result" --timeout 60000
+herdr pane read w1:p3 --source recent --lines 30
 ```
 
 ### check what another agent is working on
 
 ```bash
 herdr pane list
-herdr pane read 1-1 --source recent --lines 80
+herdr pane read w1:p1 --source recent --lines 80
 ```
 
 ### watch another pane robustly
@@ -283,14 +297,14 @@ use this pattern when you need to coordinate with a sibling pane:
 
 ```bash
 # inspect what is already there
-herdr pane read 1-3 --source recent --lines 40
+herdr pane read w1:p3 --source recent --lines 40
 
 # wait only for the next output you expect
-herdr wait output 1-3 --match "ready" --timeout 30000
+herdr wait output w1:p3 --match "ready" --timeout 30000
 
 # if you need to inspect the same transcript the waiter matched,
 # read the unwrapped recent text directly
-herdr pane read 1-3 --source recent-unwrapped --lines 40
+herdr pane read w1:p3 --source recent-unwrapped --lines 40
 ```
 
 ### spawn a new agent and give it a task
@@ -300,17 +314,17 @@ tool or the `clanky-herdr-operator` skill so the worker is launched through the
 transcript seam. Raw pane starts are only for generic ad hoc panes.
 
 ```bash
-herdr pane split 1-2 --direction right --no-focus
-herdr pane run 1-3 "claude"
-herdr wait output 1-3 --match ">" --timeout 15000
-herdr pane run 1-3 "review the test coverage in src/api/"
+herdr pane split w1:p2 --direction right --no-focus
+herdr pane run w1:p3 "claude"
+herdr wait output w1:p3 --match ">" --timeout 15000
+herdr pane run w1:p3 "review the test coverage in src/api/"
 ```
 
 ### coordinate with another agent
 
 ```bash
-herdr wait agent-status 1-1 --status done --timeout 120000
-herdr pane read 1-1 --source recent --lines 100
+herdr wait agent-status w1:p1 --status done --timeout 120000
+herdr pane read w1:p1 --source recent --lines 100
 ```
 
 ## notes

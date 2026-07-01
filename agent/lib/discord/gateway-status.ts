@@ -71,6 +71,8 @@ export interface DiscordGatewayToolStatus {
 }
 
 const DISCORD_GATEWAY_TEXT_PREVIEW_CHARS = 500;
+/** Trailing-edge debounce for hot-path status writes (per accepted message). */
+const DISCORD_GATEWAY_STATUS_WRITE_DEBOUNCE_MS = 2_000;
 
 export function discordGatewayLockPath(env: NodeJS.ProcessEnv = process.env): string {
 	const repo = discordGatewayRepo(env);
@@ -106,6 +108,7 @@ export function acquireDiscordGatewayLock(env: NodeJS.ProcessEnv = process.env):
 
 export function releaseDiscordGatewayLock(lock: DiscordGatewayLock | null): void {
 	if (lock?.status !== "acquired") return;
+	cancelPendingDiscordGatewayStatusWrite(lock.path);
 	rmSync(lock.path, { recursive: true, force: true });
 }
 
@@ -120,19 +123,23 @@ export function readDiscordGatewayLock(env: NodeJS.ProcessEnv = process.env): Di
 	return { status: "held", path, ...(ownerPid === undefined ? {} : { ownerPid }) };
 }
 
+export interface DiscordGatewayStatusInput {
+	state: DiscordGatewayStatus["state"];
+	ready: boolean;
+	credentialKind: DiscordGatewayStatus["credentialKind"];
+	voice: boolean;
+	sessions: DiscordGatewayStatus["sessions"];
+	error?: string;
+}
+
 export function writeDiscordGatewayStatus(
 	lock: DiscordGatewayLock | null,
-	status: {
-		state: DiscordGatewayStatus["state"];
-		ready: boolean;
-		credentialKind: DiscordGatewayStatus["credentialKind"];
-		voice: boolean;
-		sessions: DiscordGatewayStatus["sessions"];
-		error?: string;
-	},
+	status: DiscordGatewayStatusInput,
 	options: { env?: NodeJS.ProcessEnv; startedAt: string },
 ): void {
 	if (lock?.status !== "acquired") return;
+	// An immediate write supersedes any older coalesced snapshot for this lock.
+	cancelPendingDiscordGatewayStatusWrite(lock.path);
 	const env = options.env ?? process.env;
 	const snapshot: DiscordGatewayStatus = {
 		pid: process.pid,
@@ -148,6 +155,60 @@ export function writeDiscordGatewayStatus(
 		...(status.error === undefined ? {} : { error: status.error }),
 	};
 	writeFileSync(discordGatewayStatusPath(lock.path), JSON.stringify(snapshot, null, 2));
+}
+
+interface PendingDiscordGatewayStatusWrite {
+	timer: NodeJS.Timeout;
+	flush: () => void;
+}
+
+const pendingDiscordGatewayStatusWrites = new Map<string, PendingDiscordGatewayStatusWrite>();
+let discordGatewayStatusExitFlushRegistered = false;
+
+function cancelPendingDiscordGatewayStatusWrite(lockPath: string): void {
+	const pending = pendingDiscordGatewayStatusWrites.get(lockPath);
+	if (pending === undefined) return;
+	clearTimeout(pending.timer);
+	pendingDiscordGatewayStatusWrites.delete(lockPath);
+}
+
+/**
+ * Coalesced status write for the hot path (one per accepted message): only the
+ * newest snapshot within the debounce window hits disk. Pending writes flush on
+ * process exit so the last status is never lost; state-transition writes should
+ * keep using writeDiscordGatewayStatus directly.
+ */
+export function scheduleDiscordGatewayStatusWrite(
+	lock: DiscordGatewayLock | null,
+	status: DiscordGatewayStatusInput,
+	options: { env?: NodeJS.ProcessEnv; startedAt: string },
+): void {
+	if (lock?.status !== "acquired") return;
+	cancelPendingDiscordGatewayStatusWrite(lock.path);
+	const flush = (): void => {
+		pendingDiscordGatewayStatusWrites.delete(lock.path);
+		try {
+			writeDiscordGatewayStatus(lock, status, options);
+		} catch (error) {
+			// The lock directory may already be released (e.g. exit ordering).
+			console.error("discord gateway status write failed:", error);
+		}
+	};
+	const timer = setTimeout(flush, DISCORD_GATEWAY_STATUS_WRITE_DEBOUNCE_MS);
+	timer.unref();
+	pendingDiscordGatewayStatusWrites.set(lock.path, { timer, flush });
+	if (!discordGatewayStatusExitFlushRegistered) {
+		discordGatewayStatusExitFlushRegistered = true;
+		process.once("exit", flushDiscordGatewayStatusWrites);
+	}
+}
+
+/** Synchronously flush all pending debounced status writes (exit hook, tests). */
+export function flushDiscordGatewayStatusWrites(): void {
+	for (const pending of [...pendingDiscordGatewayStatusWrites.values()]) {
+		clearTimeout(pending.timer);
+		pending.flush();
+	}
 }
 
 export function readDiscordGatewayStatus(lock: DiscordGatewayLock | null): DiscordGatewayStatus | null {

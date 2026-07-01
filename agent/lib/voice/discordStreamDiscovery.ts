@@ -1,3 +1,4 @@
+import { TtlCache } from "../ttl-cache.ts";
 import { isRecord, type JsonRecord } from "./json.ts";
 
 export interface DiscordRawGatewayClient {
@@ -53,11 +54,21 @@ export interface DiscordStreamScope {
 	channelId?: string;
 }
 
+// Discovered streams (and the Go Live credentials on them) expire after this
+// long without a gateway update, so a missed STREAM_DELETE cannot leave stale
+// endpoint/token pairs cached for the brain's whole uptime. Generous: Go Live
+// sessions rarely outlast half a day without any credential refresh.
+const STREAM_DISCOVERY_TTL_MS = 12 * 60 * 60 * 1000;
+const MAX_DISCOVERED_STREAMS = 128;
+
 export function createDiscordStreamDiscovery(
 	client: DiscordRawGatewayClient,
 	hooks: DiscordStreamDiscoveryHooks = {},
 ): DiscordStreamDiscovery {
-	const streams = new Map<string, DiscoveredDiscordStream>();
+	const streams = new TtlCache<string, DiscoveredDiscordStream>({
+		maxEntries: MAX_DISCOVERED_STREAMS,
+		ttlMs: STREAM_DISCOVERY_TTL_MS,
+	});
 	const listener = (packet: DiscordRawPacket) => {
 		if (packet.d === undefined || packet.d === null) return;
 		if (packet.t === "GUILD_CREATE") handleGuildCreate(packet.d, streams);
@@ -153,7 +164,7 @@ export function deriveDiscordStreamWatchDaveChannelId(rtcServerId: string | null
 
 function handleVoiceStateUpdate(
 	data: JsonRecord,
-	streams: Map<string, DiscoveredDiscordStream>,
+	streams: TtlCache<string, DiscoveredDiscordStream>,
 ): DiscoveredDiscordStream | undefined {
 	const guildId = stringValue(data.guild_id);
 	const channelId = stringValue(data.channel_id);
@@ -177,7 +188,7 @@ function handleVoiceStateUpdate(
 
 function handleStreamCreate(
 	data: JsonRecord,
-	streams: Map<string, DiscoveredDiscordStream>,
+	streams: TtlCache<string, DiscoveredDiscordStream>,
 ): DiscoveredDiscordStream | undefined {
 	const streamKey = stringValue(data.stream_key) || streamKeyFromParts(data);
 	const parts = streamKey === undefined ? undefined : parseStreamKey(streamKey);
@@ -196,7 +207,7 @@ function handleStreamCreate(
 	return hasCredentials(stream) ? stream : undefined;
 }
 
-function handleGuildCreate(data: JsonRecord, streams: Map<string, DiscoveredDiscordStream>): void {
+function handleGuildCreate(data: JsonRecord, streams: TtlCache<string, DiscoveredDiscordStream>): void {
 	const guildId = stringValue(data.id);
 	if (guildId.length === 0 || !Array.isArray(data.voice_states)) return;
 	for (const entry of data.voice_states) {
@@ -220,7 +231,7 @@ function handleGuildCreate(data: JsonRecord, streams: Map<string, DiscoveredDisc
 
 function handleStreamServerUpdate(
 	data: JsonRecord,
-	streams: Map<string, DiscoveredDiscordStream>,
+	streams: TtlCache<string, DiscoveredDiscordStream>,
 ): DiscoveredDiscordStream | undefined {
 	const streamKey = stringValue(data.stream_key) || streamKeyFromParts(data);
 	const parts = streamKey === undefined ? undefined : parseStreamKey(streamKey);
@@ -240,7 +251,7 @@ function handleStreamServerUpdate(
 }
 
 function upsertStream(
-	streams: Map<string, DiscoveredDiscordStream>,
+	streams: TtlCache<string, DiscoveredDiscordStream>,
 	input: DiscoveredDiscordStream,
 ): DiscoveredDiscordStream {
 	const existing = streams.get(input.streamKey);
@@ -260,7 +271,7 @@ function upsertStream(
 }
 
 function removeStreamsForUser(
-	streams: Map<string, DiscoveredDiscordStream>,
+	streams: TtlCache<string, DiscoveredDiscordStream>,
 	input: { guildId: string; userId: string },
 ): DiscoveredDiscordStream | undefined {
 	let removed: DiscoveredDiscordStream | undefined;

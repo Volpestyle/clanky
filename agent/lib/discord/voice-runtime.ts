@@ -8,13 +8,11 @@
 import type { Client, Guild } from "discord.js";
 import type { VoiceRuntime } from "../../channels/voice.ts";
 import { createDiscordPrivateCallVoiceAdapter } from "./private-call.ts";
+import { resolveEveBaseUrl, resolveEvePort } from "../eve-address.ts";
 import { resolveClankyDataPath } from "../paths.ts";
 import type { ClankvoxGuildLike } from "../voice/clankvoxIpcClient.ts";
 import type { DiscordRawGatewayClient } from "../voice/discordStreamDiscovery.ts";
-import {
-	parseElevenLabsPcmOutputFormat,
-	type ElevenLabsPcmOutputFormat,
-} from "../voice/elevenLabsTtsClient.ts";
+import { parseElevenLabsPcmOutputFormat } from "../voice/elevenLabsTtsClient.ts";
 import type { OpenAiRealtimeConnectOptions, OpenAiRealtimeOutputModality } from "../voice/openAiRealtimeClient.ts";
 import type {
 	VoiceExternalTtsConfig,
@@ -266,5 +264,5 @@ export function defaultLocalVoiceValue(provider: VoiceRealtimeProvider): string 
 function resolveVoiceEveSessionHost(env: NodeJS.ProcessEnv): string | undefined {
 	const enabled = env.CLANKY_VOICE_EVE_SESSION?.trim().toLowerCase();
 	if (enabled === "0" || enabled === "false" || enabled === "off" || enabled === "no") return undefined;
-	return env.CLANKY_EVE_HOST?.trim() || "http://127.0.0.1:2000";
+	return resolveEveBaseUrl(resolveEvePort(env), env);
 }

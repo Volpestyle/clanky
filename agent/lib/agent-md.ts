@@ -1,9 +1,28 @@
-import { readFile, realpath, stat } from "node:fs/promises";
+import { open, readFile, realpath, stat } from "node:fs/promises";
 import { dirname, join, parse, resolve } from "node:path";
+import { TtlCache } from "./ttl-cache.ts";
 
 export const CLANKY_AGENT_MD_ENV = "CLANKY_AGENT_MD";
 export const CLANKY_AGENT_MD_ROOT_ENV = "CLANKY_AGENT_MD_ROOT";
 export const AGENT_MD_FILENAMES = ["AGENTS.md", "agent.md", "AGENT.md", "agents.md"] as const;
+
+// Ingested agent files feed straight into the system prompt on every turn, so
+// both a single pathological file and the ancestor chain as a whole are capped.
+export const MAX_AGENT_MD_FILE_BYTES = 64 * 1024;
+export const MAX_AGENT_MD_TOTAL_BYTES = 256 * 1024;
+const AGENT_MD_TRUNCATION_NOTE = `\n\n[truncated: file exceeds the ${MAX_AGENT_MD_FILE_BYTES}-byte AGENT.md ingestion cap]`;
+
+interface CachedAgentMdFile {
+	mtimeMs: number;
+	size: number;
+	realPath: string;
+	content: string;
+}
+
+// Ingestion runs per turn; cache file contents keyed by path and validated by
+// mtime+size so unchanged files are not re-read every turn.
+const AGENT_MD_CACHE_MAX_ENTRIES = 256;
+const agentMdCache = new TtlCache<string, CachedAgentMdFile>({ maxEntries: AGENT_MD_CACHE_MAX_ENTRIES });
 
 export type AgentMdFile = {
 	readonly path: string;
@@ -35,12 +54,16 @@ export async function collectAgentMdFiles(options: {
 	const names = options.fileNames ?? AGENT_MD_FILENAMES;
 	const seen = new Set<string>();
 	const files: AgentMdFile[] = [];
+	let totalBytes = 0;
 	for (const directory of ancestorDirectories(root).reverse()) {
 		for (const name of names) {
 			const candidate = join(directory, name);
 			const file = await readAgentMdFile(candidate);
 			if (file === undefined || seen.has(file.realPath)) continue;
 			seen.add(file.realPath);
+			const contentBytes = Buffer.byteLength(file.content, "utf8");
+			if (totalBytes + contentBytes > MAX_AGENT_MD_TOTAL_BYTES) continue;
+			totalBytes += contentBytes;
 			files.push({ path: candidate, content: file.content });
 		}
 	}
@@ -84,9 +107,28 @@ function ancestorDirectories(start: string): string[] {
 
 async function readAgentMdFile(path: string): Promise<{ readonly realPath: string; readonly content: string } | undefined> {
 	try {
-		const [realPath, content] = await Promise.all([realpath(path), readFile(path, "utf8")]);
+		const info = await stat(path);
+		if (!info.isFile()) return undefined;
+		const cached = agentMdCache.get(path);
+		if (cached !== undefined && cached.mtimeMs === info.mtimeMs && cached.size === info.size) {
+			return cached.content.trim().length === 0 ? undefined : { realPath: cached.realPath, content: cached.content };
+		}
+		const [realPath, content] = await Promise.all([realpath(path), readCappedFile(path, info.size)]);
+		agentMdCache.set(path, { mtimeMs: info.mtimeMs, size: info.size, realPath, content });
 		return content.trim().length === 0 ? undefined : { realPath, content };
 	} catch {
 		return undefined;
+	}
+}
+
+async function readCappedFile(path: string, size: number): Promise<string> {
+	if (size <= MAX_AGENT_MD_FILE_BYTES) return readFile(path, "utf8");
+	const handle = await open(path, "r");
+	try {
+		const buffer = Buffer.alloc(MAX_AGENT_MD_FILE_BYTES);
+		const { bytesRead } = await handle.read(buffer, 0, MAX_AGENT_MD_FILE_BYTES, 0);
+		return `${buffer.toString("utf8", 0, bytesRead)}${AGENT_MD_TRUNCATION_NOTE}`;
+	} finally {
+		await handle.close();
 	}
 }

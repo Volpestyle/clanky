@@ -2,8 +2,6 @@ packages:
   - packages/*
 # Supply-chain guards (AGENTS.md / CLAUDE.md): keep these enabled.
 minimumReleaseAge: 1440
-minimumReleaseAgeExclude:
-  - eve@0.11.4
 strictPeerDependencies: true
 verifyStoreIntegrity: true
 # Explicit build-script allowlist. Empty = no dependency may run install/build

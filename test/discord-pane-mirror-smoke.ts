@@ -5,7 +5,7 @@ import {
 	type FaceBlockOptions,
 	type FaceRenderSink,
 } from "../agent/lib/clanky-face-renderer.ts";
-import { ClankyTranscriptMarkdownBlock, type ClankyTranscriptBlockTheme } from "../agent/lib/clanky-transcript-block.ts";
+import type { ClankyTranscriptBlockTheme } from "../agent/lib/clanky-transcript-block.ts";
 import { ClankyTranscriptViewport } from "../agent/lib/clanky-transcript-viewport.ts";
 import { createClankyFaceAnsiTheme, createClankyFaceMarkdownTheme } from "../agent/lib/clanky-face-theme.ts";
 import { applyMirrorStreamEvent, createMirrorRenderSink, type MirrorView } from "../agent/lib/discord/pane-mirror-view.ts";

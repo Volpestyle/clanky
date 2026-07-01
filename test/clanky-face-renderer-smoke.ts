@@ -140,7 +140,8 @@ assert(blocks.some((block) => block.markdown === "**Clanky**\n\nHello"), "assist
 assert(!blocks.some((block) => block.markdown.includes("HelloHello")), "replayed assistant prefix should not duplicate text");
 assert(blocks.some((block) => block.markdown.includes("**Reasoning**") && block.markdown.includes("Need a tool.")), "reasoning block should render");
 const completedToolBlock = blocks.find((block) => block.markdown.includes("**Tool: bash - completed**"));
-assert(completedToolBlock !== undefined && completedToolBlock.markdown.includes("-> ok"), "tool block should update with compact result");
+assert(completedToolBlock !== undefined, "tool block should exist after completion");
+assert(completedToolBlock.markdown.includes("-> ok"), "tool block should update with compact result");
 assert(completedToolBlock.options?.collapsed === true, "tool blocks should start collapsed");
 assert(completedToolBlock.options?.clickToggle === true, "tool blocks should opt into click expand/collapse");
 assert(completedToolBlock.markdown.includes("input:"), "expanded tool detail should include the request input");

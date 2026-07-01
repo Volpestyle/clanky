@@ -1,11 +1,24 @@
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
-import { chunkDiscordMessage, resolveDiscordCredentialKind, resolveDiscordToken } from "./gateway.ts";
+import {
+	DiscordAPIError,
+	HTTPError,
+	REST,
+	RequestMethod,
+	type InternalRequest,
+	type RESTOptions,
+	type RawFile,
+	type RouteLike,
+} from "discord.js";
+import { type DiscordCredentialKind, chunkDiscordMessage, resolveDiscordCredentialKind, resolveDiscordToken } from "./gateway.ts";
 
-const DISCORD_API_BASE = "https://discord.com/api/v10";
 const DISCORD_EPOCH_MS = 1_420_070_400_000n;
 const TEXT_CHANNEL_TYPES = new Set([0, 5, 10, 11, 12]);
 const DEFAULT_RECENT_ACTIVITY_SINCE = "7d";
+/** Retries for 5xx/network failures inside discord.js's REST handler. */
+const DISCORD_REST_RETRIES = 3;
+/** Parallel per-channel message fetches in discordRecentActivity. */
+const RECENT_ACTIVITY_FETCH_CONCURRENCY = 5;
 
 export interface DiscordRestOptions {
 	env?: NodeJS.ProcessEnv;
@@ -117,6 +130,12 @@ export interface DiscordRecentActivityChannel extends DiscordChannelSummary {
 	messages: DiscordMessageSummary[];
 }
 
+export interface DiscordRecentActivityFailedChannel {
+	channelId: string;
+	name?: string;
+	error: string;
+}
+
 export async function discordWhoami(options: DiscordRestOptions = {}): Promise<DiscordIdentitySummary> {
 	const json = await discordRequest("GET", "/users/@me", undefined, options);
 	if (!isRecord(json) || typeof json.id !== "string" || typeof json.username !== "string") {
@@ -184,7 +203,9 @@ export async function discordReadMessages(
 	if (input.before !== undefined) params.set("before", input.before);
 	if (input.after !== undefined) params.set("after", input.after);
 	if (input.around !== undefined) params.set("around", input.around);
-	const json = await discordRequest("GET", `/channels/${encodeURIComponent(input.channelId)}/messages?${params}`, undefined, options);
+	const json = await discordRequest("GET", `/channels/${encodeURIComponent(input.channelId)}/messages`, undefined, options, {
+		query: params,
+	});
 	if (!Array.isArray(json)) throw new Error("Discord messages response was not an array");
 	return json.flatMap(formatMessage);
 }
@@ -230,6 +251,7 @@ export async function discordRecentActivity(
 	generatedAt: string;
 	activeChannelCount: number;
 	channels: DiscordRecentActivityChannel[];
+	failedChannels: DiscordRecentActivityFailedChannel[];
 }> {
 	const since = resolveOptionalTimeBoundary(input.since, "since") ?? parseTimeBoundary(DEFAULT_RECENT_ACTIVITY_SINCE, "since");
 	const sinceTimestamp = since.toISOString();
@@ -242,24 +264,59 @@ export async function discordRecentActivity(
 		.sort((left, right) => compareSnowflakes(right.lastMessageId, left.lastMessageId));
 	const channels = matchingChannels.slice(0, Math.max(1, Math.min(20, Math.floor(input.channelLimit ?? 5))));
 	const includeMessages = input.includeMessages !== false;
-	const withMessages = await Promise.all(
-		channels.map(async (channel) => {
-			const messages = await discordReadMessages({ channelId: channel.id, limit: input.messageLimit ?? 10, since: sinceTimestamp }, options).catch(() => []);
+	const failedChannels: DiscordRecentActivityFailedChannel[] = [];
+	const withMessages = await mapWithConcurrency(channels, RECENT_ACTIVITY_FETCH_CONCURRENCY, async (channel) => {
+		try {
+			const messages = await discordReadMessages(
+				{ channelId: channel.id, limit: input.messageLimit ?? 10, since: sinceTimestamp },
+				options,
+			);
 			return {
 				...channel,
 				messageCount: messages.length,
 				topParticipants: summarizeParticipants(messages),
 				messages: includeMessages ? messages : [],
 			};
-		}),
-	);
+		} catch (error) {
+			const detail = error instanceof Error ? error.message : String(error);
+			console.error(
+				`discord recent activity read failed channel=${channel.id}${channel.name === undefined ? "" : ` (#${channel.name})`}: ${detail}`,
+			);
+			failedChannels.push({
+				channelId: channel.id,
+				...(channel.name === undefined ? {} : { name: channel.name }),
+				error: detail,
+			});
+			return null;
+		}
+	});
 	return {
 		guildId: input.guildId,
 		sinceTimestamp,
 		generatedAt: new Date().toISOString(),
 		activeChannelCount: matchingChannels.length,
-		channels: withMessages,
+		channels: withMessages.filter((channel) => channel !== null),
+		failedChannels,
 	};
+}
+
+/** Run tasks over items with a bounded worker pool, preserving result order. */
+async function mapWithConcurrency<Item, Result>(
+	items: readonly Item[],
+	concurrency: number,
+	task: (item: Item) => Promise<Result>,
+): Promise<Result[]> {
+	const results = new Array<Result>(items.length);
+	let nextIndex = 0;
+	const workers = Array.from({ length: Math.max(1, Math.min(concurrency, items.length)) }, async () => {
+		while (nextIndex < items.length) {
+			const index = nextIndex;
+			nextIndex += 1;
+			results[index] = await task(items[index] as Item);
+		}
+	});
+	await Promise.all(workers);
+	return results;
 }
 
 export async function discordSendMessage(
@@ -270,7 +327,7 @@ export async function discordSendMessage(
 	const filePaths = (input.filePaths ?? []).map((path) => path.trim()).filter((path) => path.length > 0);
 	if (content.length === 0 && filePaths.length === 0) throw new Error("discord_send_message requires content or file paths");
 	const messageIds: string[] = [];
-	const messagesPath = `/channels/${encodeURIComponent(input.channelId)}/messages`;
+	const messagesPath: RouteLike = `/channels/${encodeURIComponent(input.channelId)}/messages`;
 	const chunks = content.length === 0 ? [] : chunkDiscordMessage(content);
 	// The reply reference attaches to the first message only.
 	let replyToMessageId = input.replyToMessageId;
@@ -300,44 +357,100 @@ export async function discordSendMessage(
 		const sent = await discordRequest("POST", messagesPath, body, options);
 		if (isRecord(sent) && typeof sent.id === "string") messageIds.push(sent.id);
 	}
-	const form = new FormData();
 	const payload: Record<string, unknown> = { content: finalContent, allowed_mentions: { parse: [] } };
 	if (replyToMessageId !== undefined) payload.message_reference = { message_id: replyToMessageId };
-	form.set("payload_json", JSON.stringify(payload));
-	for (let index = 0; index < filePaths.length; index += 1) {
-		const path = filePaths[index];
-		if (path === undefined) continue;
-		const bytes = await readFile(path);
-		form.set(`files[${index}]`, new Blob([bytes]), basename(path));
+	// discord.js's REST builds the multipart body itself: payload as payload_json,
+	// each file appended as files[<index>].
+	const files: RawFile[] = [];
+	for (const path of filePaths) {
+		files.push({ name: basename(path), data: await readFile(path) });
 	}
-	const sent = await discordRequest("POST", messagesPath, form, options);
+	const sent = await discordRequest("POST", messagesPath, payload, options, { files });
 	if (isRecord(sent) && typeof sent.id === "string") messageIds.push(sent.id);
 	return { ok: true, messageIds, attachmentCount: filePaths.length };
 }
 
-async function discordRequest(method: string, path: string, body: unknown, options: DiscordRestOptions): Promise<unknown> {
+const REQUEST_METHODS: Record<"GET" | "POST" | "PUT", RequestMethod> = {
+	GET: RequestMethod.Get,
+	POST: RequestMethod.Post,
+	PUT: RequestMethod.Put,
+};
+
+/** Rate-limit-aware REST clients from discord.js, cached per credential so
+ * per-route buckets and Retry-After state are shared across calls. */
+const discordRestClients = new Map<string, REST>();
+
+function buildDiscordRestClient(token: string, credentialKind: DiscordCredentialKind, fetchImpl: typeof fetch | undefined): REST {
+	const rest = new REST({
+		version: "10",
+		retries: DISCORD_REST_RETRIES,
+		...(fetchImpl === undefined
+			? {}
+			: {
+					makeRequest: (async (url, init) =>
+						fetchImpl(url, init as globalThis.RequestInit)) as RESTOptions["makeRequest"],
+				}),
+	});
+	// User/self tokens carry no "Bot " prefix; those requests set auth headers
+	// themselves (auth: false), so the token is only registered for bot mode.
+	if (credentialKind === "bot-token") rest.setToken(token);
+	rest.on("rateLimited", (info) => {
+		console.warn(
+			`discord REST rate limited: route=${info.route} method=${info.method} timeToReset=${Math.round(info.timeToReset)}ms global=${info.global}`,
+		);
+	});
+	return rest;
+}
+
+function resolveDiscordRestClient(token: string, credentialKind: DiscordCredentialKind, fetchImpl: typeof fetch | undefined): REST {
+	// Injected fetch (offline tests) gets a fresh client so doubles never share state.
+	if (fetchImpl !== undefined) return buildDiscordRestClient(token, credentialKind, fetchImpl);
+	const key = `${credentialKind}:${token}`;
+	const existing = discordRestClients.get(key);
+	if (existing !== undefined) return existing;
+	const created = buildDiscordRestClient(token, credentialKind, undefined);
+	discordRestClients.set(key, created);
+	return created;
+}
+
+/**
+ * One Discord REST call routed through discord.js's rate-limit-aware REST
+ * manager: 429s wait out Retry-After (per-route and global buckets), 5xx and
+ * network failures retry up to DISCORD_REST_RETRIES. The raw response is parsed
+ * here to keep this module's lenient parse-any-body-as-JSON contract.
+ */
+async function discordRequest(
+	method: "GET" | "POST" | "PUT",
+	path: RouteLike,
+	body: unknown,
+	options: DiscordRestOptions,
+	extra: { query?: URLSearchParams; files?: RawFile[] } = {},
+): Promise<unknown> {
 	const env = options.env ?? process.env;
 	const token = resolveDiscordToken(env);
 	if (token === undefined) throw new Error("Discord token missing: set DISCORD_BOT_TOKEN or CLANKY_DISCORD_TOKEN");
 	const credentialKind = resolveDiscordCredentialKind(env);
-	const headers = new Headers();
-	headers.set("authorization", credentialKind === "user-token" ? token : `Bot ${token}`);
-	headers.set("user-agent", "Clanky/0.1");
-	let requestBody: BodyInit | undefined;
-	if (body instanceof FormData) {
-		requestBody = body;
-	} else if (body !== undefined) {
-		headers.set("content-type", "application/json");
-		requestBody = JSON.stringify(body);
-	}
-	const response = await (options.fetchImpl ?? fetch)(`${DISCORD_API_BASE}${path}`, {
-		method,
-		headers,
-		...(requestBody === undefined ? {} : { body: requestBody }),
+	const rest = resolveDiscordRestClient(token, credentialKind, options.fetchImpl);
+	const request: InternalRequest = {
+		fullRoute: path,
+		method: REQUEST_METHODS[method],
+		...(body === undefined ? {} : { body }),
+		...(extra.query === undefined ? {} : { query: extra.query }),
+		...(extra.files === undefined ? {} : { files: extra.files }),
+		...(credentialKind === "user-token" ? { auth: false, headers: { authorization: token } } : {}),
+	};
+	const response = await rest.queueRequest(request).catch((error: unknown): never => {
+		if (error instanceof DiscordAPIError || error instanceof HTTPError) {
+			// A 401 makes discord.js drop its cached token; evict the client so the
+			// next call re-resolves credentials instead of failing forever.
+			if (error.status === 401 && options.fetchImpl === undefined) {
+				discordRestClients.delete(`${credentialKind}:${token}`);
+			}
+			throw new Error(`Discord API ${method} ${path} failed (${error.status}): ${error.message}`, { cause: error });
+		}
+		throw error;
 	});
-	if (response.status === 204) return {};
 	const text = await response.text();
-	if (!response.ok) throw new Error(`Discord API ${method} ${path} failed (${response.status}): ${text.slice(0, 500)}`);
 	if (text.length === 0) return {};
 	try {
 		return JSON.parse(text) as unknown;
@@ -606,7 +719,9 @@ async function readDiscordMessagesWithinWindow(
 		const params = new URLSearchParams();
 		params.set("limit", String(batchLimit));
 		if (beforeCursor !== undefined) params.set("before", beforeCursor);
-		const json = await discordRequest("GET", `/channels/${encodeURIComponent(input.channelId)}/messages?${params}`, undefined, options);
+		const json = await discordRequest("GET", `/channels/${encodeURIComponent(input.channelId)}/messages`, undefined, options, {
+			query: params,
+		});
 		if (!Array.isArray(json)) throw new Error("Discord messages response was not an array");
 		const batch = json.flatMap(formatMessage).sort(compareMessagesNewestFirst);
 		if (batch.length === 0) break;

@@ -237,18 +237,21 @@ local transcript under
 manifest.json
 stream.ansi
 stream.txt
-events.jsonl
 ```
 
-`stream.ansi` is the lossless terminal stream, `stream.txt` is the normalized
-readable history, and `events.jsonl` records timestamped output chunks. Any
+`stream.ansi` is the lossless terminal stream and `stream.txt` is the
+normalized readable history. Stored transcripts are retention-swept
+opportunistically at run creation (30 days / 500 runs / 2 GiB across sessions,
+never touching runs active within 6 hours). Any
 agent in the same Herdr session can read it with `clanky transcript read
 clanky:<slug> --lines N`. `herdr_read` defaults to `source: "auto"`, which
-prefers this transcript when available and falls back to Herdr recent-unwrapped
-output. Explicit Herdr sources (`visible`, `recent`, `recent_unwrapped`) still
-read Herdr for current screen/debugging state. `source: "full"` is an optional
-Herdr capability; with vanilla Herdr builds that do not expose it, Clanky falls
-back to capped `recent_unwrapped` output instead of depending on a private fork.
+prefers durable history (the worker transcript for agents, the pane recording
+in §4.3.1 for panes) and falls back to Herdr recent-unwrapped output. Explicit
+Herdr sources (`visible`, `recent`, `recent_unwrapped`) still read Herdr for
+current screen/debugging state. Herdr intentionally has no full-history read:
+retained scrollback is a bounded in-memory buffer, reads are capped server-side
+(1000 lines, no pagination), and nothing survives pane close — durable history
+is Clanky's, captured at the byte stream (ADR-0007).
 
 A worker has a transcript **iff** it was launched under `clanky transcript-run`;
 sharing Clanky's `HERDR_SESSION` only grants read access to transcripts that
@@ -272,9 +275,73 @@ the explicit escape hatch that starts an unwrapped pane with no transcript.
 | Send text or keys | Herdr |
 | Current TUI screen | Herdr `visible` |
 | Recent terminal screen buffer | Herdr `recent` / `recent_unwrapped` |
-| Full retained terminal scrollback | Herdr `full` when supported; otherwise transcript capture for wrapped Clanky-spawned panes |
+| Full history of a wrapped worker | Clanky worker transcript |
+| Full history of any other pane (iOS-created, manual, mirrors) | Clanky pane recording (§4.3.1) |
 | Historical worker output | Clanky transcript when capture is enabled |
-| Cross-agent audit trail | Clanky transcript when capture is enabled |
+| Cross-agent audit trail | Clanky transcript + pane recordings |
+| Full-text search across all of the above | `herdr_search` / `clanky transcript search` |
+
+#### 4.3.1 Session-wide pane recorder
+
+The worker transcript covers only panes spawned through the wrapping seam. The
+**pane recorder** (ADR-0007) is the second, observational capture plane: a
+service inside the always-on brain that subscribes to Herdr pane lifecycle
+events, attaches to every pane in the connected session via the Herdr 0.7.1+
+`pane.attach` byte stream, and persists per-pane recordings beside the worker
+transcripts under the reserved `panes/` name:
+
+```
+~/.clanky/herdr-transcripts/<herdr-session>/panes/<recording-id>/
+  manifest.json        kind: pane-recording (paneId, terminalId, agent, label)
+  events.jsonl         attach / seed / stream-gap / rotate / prune / finalized
+  seed-NNNNNN.txt      pane.read snapshot at each attach epoch (≤1000 lines)
+  stream.ansi          lossless raw bytes since attach (active segment)
+  stream.txt           normalized readable history (active segment)
+  archive-NNNNNN.*.gz  rotated segments (gzip, ~10x for terminal output)
+```
+
+The two planes carry different guarantees and both stay: the wrapper is
+**in-path** (lossless from birth, survives brain downtime, has exit codes); the
+recorder is **observational** (best-effort from first attach, gaps seeded from
+`pane.read` and marked in events.jsonl, pauses with the brain). Panes whose
+foreground process is a `transcript-run` wrapper are detected via
+`pane.process_info` and recorded lifecycle-only (`coveredBy`), so bytes are
+stored once; `CLANKY_PANE_RECORDER_RECORD_ALL=1` overrides. Recordings ride the
+same retention sweep as worker runs, plus a per-recording cap (256 MiB)
+enforced by pruning oldest archives at rotation so an immortal pane cannot eat
+the shared budget. A brain restart resumes the open recording for a live pane
+by terminal id; against a pre-`pane.attach` Herdr the recorder degrades to
+seed-only capture (`clanky recorder seed` runs one such pass manually, e.g.
+right before a Herdr live-handoff upgrade truncates replay to 8 KB/pane).
+
+```mermaid
+flowchart LR
+  subgraph herdr["herdr session"]
+    ev["events.subscribe<br/>pane created/closed/exited"]
+    att["pane.attach<br/>raw PTY bytes"]
+    rd["pane.read<br/>seed snapshots"]
+  end
+  subgraph brain["clanky brain (always on)"]
+    recorder["pane recorder<br/>(CLANKY_PANE_RECORDER=1)"]
+  end
+  store[("~/.clanky/herdr-transcripts/&lt;session&gt;/<br/>&lt;agent&gt;/&lt;run&gt;/ worker transcripts (in-path wrapper)<br/>panes/&lt;recording&gt;/ pane recordings (recorder)")]
+  wrapper["clanky transcript-run<br/>(in-path, per worker spawn)"]
+  readers["herdr_read auto · herdr_search<br/>clanky transcript/recorder CLI · relay read op"]
+
+  ev --> recorder
+  att --> recorder
+  rd --> recorder
+  recorder --> store
+  wrapper --> store
+  store --> readers
+```
+
+Readers page beyond Herdr's 1000-line cap with `herdr_read`
+`source: recording` (`anchor: head|tail`, `skip`), and `herdr_search` /
+`clanky transcript search` run full-text search across both planes including
+gzipped archives (ripgrep when installed, bounded node scan otherwise). The
+relay `read` op mirrors the same recording-first `auto` behavior, so the iOS
+window gets durable pane history — including panes it created — for free.
 
 Pi is **not** a performer. herdr can technically start any binary in a pane, so
 nothing stops a one-off `pi` pane, but Pi is not maintained as a performer —
@@ -338,12 +405,16 @@ flowchart LR
 - **Push (relay `register-push` + APNs/FCM).** After pairing, mobile clients
   register their push token (`register-push {token, platform, events?}` where
   `platform` is `ios` or `android`; omitted platform defaults to `ios` for the
-  existing iOS client), persisted in `~/.config/clanky/push-tokens.json`; the
+  existing iOS client), persisted as `push-tokens.json` under the Clanky data
+  root (`CLANKY_HOME`, default `~/.clanky`; a legacy `~/.config/clanky` registry
+  is copied forward on first use); the
   relay returns `{ok, registered, platform, apnsConfigured, fcmConfigured}` so
   clients can distinguish token registration from send-ready sender
   configuration. A poll-and-diff watcher (`pane.list` every 5s) pushes an alert
   when an agent transitions to blocked/done/error, carrying the pane/workspace
-  ids so a tap deep-links into that pane's live terminal. iOS devices use APNs
+  ids so a tap deep-links into that pane's live terminal; the watcher also
+  starts at brain boot when the registry is non-empty, not only on the first
+  register-push. iOS devices use APNs
   token-based auth (ES256 JWT over a .p8 key, `node:crypto` + `http2`), gated on
   `CLANKY_APNS_KEY_PATH` / `CLANKY_APNS_KEY_ID` / `CLANKY_APNS_TEAM_ID` (+
   `CLANKY_APNS_BUNDLE_ID`, `CLANKY_APNS_ENV`); Android devices use FCM HTTP v1
@@ -375,9 +446,18 @@ flowchart LR
   chat list is **device-persisted** (`{slug, sessionId, continuationToken, title,
   tabId, paneId}`); per-chat status is reconciled against the workspace tree the
   app already streams, so there is no server-side chat registry.
-- **Live terminal (relay `attach`/`write`).** For a true interactive terminal —
-  the phone typing straight into a pane and seeing it live — the relay adds a
-  held-open `attach` stream and a raw `write` op:
+- **Shared wire schemas.** `packages/clanky-contract` is the zod/TypeScript
+  schema package for the relay and Eve session wire shapes. It lives in this
+  agent repo because the agent owns the API; the relay
+  (`agent/channels/relay.ts`, implementation in `agent/lib/relay/*`) imports
+  it to validate inbound relay requests, and `../clanky-ios` consumes the same
+  package from the sibling checkout through its pnpm workspace. Inbound relay
+  frames are additionally capped at `MAX_RELAY_INBOUND_MESSAGE_BYTES` (~36 MB,
+  sized above the 25 MiB upload limit after base64 expansion); an oversized
+  frame is rejected with an error reply before it is ever parsed.
+- **Live terminal (relay `attach`/`write`/`resize`).** For a true interactive
+  terminal — the phone typing straight into a pane and seeing it live — the
+  relay adds a held-open `attach` stream plus raw `write` and `resize` ops:
   - `attach {pane, terminal_id?, cols?, rows?, cell_width_px?, cell_height_px?, takeover?=true, source?="visible", format?="ansi", strip_ansi?=false, lines?, interval_ms?=180}`
     opens a per-pane stream. When `terminal_id` is present, the relay connects
     to Herdr's client socket (`herdr-client.sock`), requests `TerminalAnsi`, and
@@ -394,6 +474,19 @@ flowchart LR
     native terminal grid; reconnecting with a new grid resizes the server-owned
     terminal while the pane process stays durable.
     The iOS app exposes this as Terminal mode **Native**.
+    Every outgoing `pane.output` body also carries `t_frame` (server
+    `Date.now()` at send) as an additive latency-instrumentation field;
+    strict clients strip it.
+    A slow or backgrounded client is guarded by server-side backpressure:
+    when the peer's WS socket buffers past 4 MiB, live output frames for that
+    attach stream are dropped instead of accumulating in the relay process,
+    and once the socket drains below 512 KiB the stream resyncs itself with a
+    fresh full snapshot (the same buffered-replay seam used at attach time).
+    Initial snapshots and their replays are exempt; polling-mode full-text
+    frames are simply skipped while backpressured and resent on the next
+    healthy tick. (Relay WS sockets run with `TCP_NODELAY`: eve's Node WS
+    stack — crossws over the vendored `ws` — calls `socket.setNoDelay()` on
+    every accepted connection.)
   - Without `terminal_id`, or if the direct attach path is unavailable, the relay
     uses the compatibility path: it first sends a **full** ANSI-preserving
     snapshot of the requested source —
@@ -405,13 +498,49 @@ flowchart LR
     The iOS app exposes this as Terminal mode **Mirror**.
     `detach {pane?}` ends one stream (or all). A peer may hold one `events`
     subscription plus one `attach:<pane>` stream per open pane concurrently.
-  - `write {pane, text}` → herdr `pane.send_text`, writing verbatim bytes to the
-    PTY master with **no** trailing Enter (unlike `run`/`send`). Typed text,
-    control sequences (Ctrl-C as `\x03`), and arrow-key escapes (`\x1b[A`) all pass
-    through, so the client owns keystroke encoding and newlines. The relay
-    serializes `write`, `keys`, `run`, and pane-targeted `send` by target pane
-    before forwarding to Herdr, so clients may pipeline live terminal input over a
-    held-open WebSocket without racing characters or Enter ahead of prior text.
+  - `write {pane, text, t0?}` writes verbatim bytes to the PTY master with
+    **no** trailing Enter (unlike `run`/`send`). Typed text, control sequences
+    (Ctrl-C as `\x03`), and arrow-key escapes (`\x1b[A`) all pass through, so
+    the client owns keystroke encoding and newlines. When the requesting peer
+    holds a live Native attach stream for the pane, the write is injected as
+    `ClientMessage::Input` on that persistent Herdr client socket — the
+    low-latency keystroke path, no per-op API connection — and the reply
+    carries `result:{type:"ok", via:"stream"}`; otherwise it falls back to
+    Herdr's `pane.send_text` API. `keys` always stays on the API socket
+    because `pane.send_keys` is terminal-mode-aware. The relay serializes
+    `write`, `keys`, `run`, and pane-targeted `send` by target pane before
+    forwarding to Herdr, so clients may pipeline live terminal input over a
+    held-open WebSocket without racing characters or Enter ahead of prior
+    text; an API-path input op that follows a stream write within a short
+    ordering-barrier window is briefly delayed so the two Herdr injection
+    channels cannot reorder input (design note in
+    `agent/lib/relay/ordered-input.ts`). `write` and `keys` accept an optional numeric
+    `t0` (client-clock ms) that the relay echoes into its
+    `CLANKY_RELAY_TRACE=1` latency trace log.
+  - `resize {pane, cols, rows}` → `{id, ok:true}` resizes the server-owned
+    terminal of the peer's live Native attach stream in place (Herdr
+    `ClientMessage::Resize`; attach-time cell pixel sizes are preserved), so a
+    client geometry change does not tear down and reattach the stream. When
+    the peer holds no live attach stream for the pane the op fails with the
+    standard `{id, ok:false, error}` shape and the client falls back to
+    reattaching.
+  - `ping {}` → `{id, ok:true, result:{t}}` (server `Date.now()`), an
+    app-level keepalive/RTT probe answered by the relay itself with no herdr
+    round trip.
+  - The relay also heartbeats every peer server-side: a ws protocol ping every
+    30s (auto-answered by any RFC 6455 client; where the runtime exposes no
+    ws-level ping the relay sends an app-level `{type:"ping", t}` frame
+    instead, and any client traffic — e.g. the `ping` op — counts as
+    liveness). A peer silent for 90s is terminated and fully cleaned up
+    (attach streams, poll loops, pending commands), so a phone dropping off
+    the tailnet cannot leave the relay pumping frames into a dead socket.
+    Failed `peer.send`s and WS `error` hooks are logged and feed the same
+    cleanup path.
+  - Native slash commands brokered to the command host (`command`/
+    `face-command`) carry a 60s **inactivity** deadline: every forwarded host
+    event or client menu message re-arms it; on expiry the client gets the
+    standard `{id, ok:false, error}` reply and the host receives `menu.cancel`
+    so no orphaned menu session lingers.
   - `upload {kind:"image", filename?, media_type?, data}` saves a base64 image
     from a remote client into Clanky's private data dir on the host and returns
     `{path, filename, media_type, bytes, directive}`. `directive` is an `@image
@@ -636,6 +765,15 @@ The rule still holds: **eve owns inbound + durability; the terminal stage owns v
 The presence session is the durability; its mirror pane and any delegated
 performers are the visibility.
 
+**Gateway resilience.** Start failures and session invalidation self-heal: the
+gateway retries on a 5s→5m backoff, and each health check re-probes under the
+per-lock guard so a wedged start cannot mask recovery. Readiness derives live
+from `client.isReady()` rather than a cached flag. Gateway status-file writes
+are debounced (~2s) and flushed on exit. Outbound REST goes through
+discord.js's rate-limit-aware request manager (429 Retry-After and 5xx retries
+honored), and `discord_recent_activity` results include `failedChannels` so a
+partial fan-out is visible instead of silently incomplete.
+
 ### 5.3 Discord presence — voice
 
 Voice is the same presence model with a live media plane. The conductor's
@@ -652,13 +790,15 @@ tool exists. On startup, the gateway also fetches recent messages from scoped
 channels and replays only recent server voice intents, covering the restart
 window without replaying ordinary chat turns. The media path is the control
 plane in `agent/lib/voice/*` (ClankVox Rust transport for Discord RTP/Opus,
-per-speaker OpenAI Realtime transcription, Realtime or ElevenLabs TTS), attached
+a realtime voice client — OpenAI/xAI Realtime or the local stack — and
+Realtime or ElevenLabs TTS), attached
 to the gateway's Discord client via `attachVoiceRuntime()` on
 `agent/channels/voice.ts`.
 
-- **Inbound:** ClankVox emits per-speaker PCM; per-speaker STT produces labeled
-  transcripts; those become text turns in a dedicated **voice presence session**
-  (separate thread, same shared memory + persona, like §5.2).
+- **Inbound:** ClankVox emits the voice channel's PCM; the realtime voice
+  client consumes it, and the conversation lands as text turns in a dedicated
+  **voice presence session** (separate thread, same shared memory + persona,
+  like §5.2).
 - **Reasoning + free will:** the realtime agent keeps a small, latency-friendly
   control surface and **delegates** real work — it routes substantive requests
   to the voice presence session / `herdr_spawn` performers rather than mirroring
@@ -684,6 +824,17 @@ never compiles inline. If it is missing, the voice op faults the session with a
 "run `pnpm clankvox:setup`" message rather than crashing the brain. Override the
 source dir with `CLANKY_CLANKVOX_DIR` or point at a prebuilt binary with
 `CLANKY_CLANKVOX_BIN`.
+
+**Voice runtime resilience.** Joins and leaves are serialized so overlapping
+ops cannot interleave transport state. A realtime send on a closed socket is
+dropped and faults the session as `socket_closed` instead of throwing into the
+audio loop. Brain exit kills the ClankVox child, and a stale-PID reap runs on
+rejoin via the `voice/clankvox.pid` file so an orphaned transport never blocks
+the next join. IPC frames are capped at 32 MiB; a desync (oversized or
+malformed frame) faults the session rather than buffering unbounded. The voice
+`status` op redacts the Go Live endpoint/token (exposing only
+`hasCredentials`). The voice fault log rotates at 1 MiB. Local-voice per-turn
+errors degrade that turn instead of faulting the whole session.
 
 **Credential kind (bot vs user/self token).** `CLANKY_DISCORD_CREDENTIAL_KIND`
 selects `bot-token` (default) or `user-token`. Bot tokens cover text presence and
@@ -861,6 +1012,9 @@ clanky/
   skills/
     clanky-herdr-operator/   # coordinator fan-out protocol
     clanky-*-operator/       # web/media/figma/work-tracker/etc.
+  packages/
+    clanky-contract/         # zod/TypeScript relay + Eve wire schemas consumed by iOS
+    clanky-browser-bridge/   # local browser control bridge
   branding/
   SPEC.md                    # this document
   README.md
@@ -884,15 +1038,16 @@ blur them.
    Vercel `connect()` helper, since Clanky does not adopt Vercel surfaces. Adding
    one is a small committed code change plus a dev-server reload; the model cannot
    add a connection at runtime, which is the point for credentialed services.
-   **GitHub** is a curated connection alongside Linear and Figma
-   (`agent/connections/github.ts`, hosted OAuth), bindable to the `work_tracker`
-   and/or `version_control` roles; the Seatbelt-sandboxed host-command tool's `gh`
-   (ADR-0003) is the optional in-checkout local reader.
+   **GitHub** is planned as a curated connection alongside Linear and Figma
+   (hosted OAuth), bindable to the `work_tracker` and/or `version_control`
+   roles — deferred implementation per §11 / ADR-0003 (VUH-358). The
+   Seatbelt-sandboxed `host_command` tool's `gh` is the in-checkout local
+   reader today.
 
 2. **First-party tools (`agent/tools/`)** — capabilities we author and own: the
-   herdr spawn seam, `browser_control` (the custom browser-extension bridge),
-   `web_*`, `discord_*`, `memory_*`, media. Not third-party servers, just our
-   code.
+   herdr spawn seam, `host_command` (the Seatbelt-sandboxed host context shell,
+   ADR-0003), `browser_control` (the custom browser-extension bridge), `web_*`,
+   `discord_*`, `memory_*`, media. Not third-party servers, just our code.
 
 3. **Dynamic MCP bridge (`mcp_list_tools` / `mcp_call` / `mcp_configure`,
    `agent/lib/mcp.ts`)** — runtime-added, no-auth or static-token MCP servers
@@ -940,8 +1095,9 @@ while clients may still show the original `$name`.
 ## 10. Implementation status
 
 - **Core runtime:** eve agent, custom face, model selection, harness profiles,
-  herdr spawn seam, transcript layer, relay channel, schedules, and dynamic MCP
-  bridge are active surfaces.
+  herdr spawn seam, the Seatbelt-sandboxed `host_command` context lane,
+  transcript layer, relay channel, schedules, and dynamic MCP bridge are active
+  surfaces.
 - **Discord presence:** Gateway-owned text presence, wake-name/free-will gate,
   per-channel presence sessions, pane mirror, bridge commands, voice join intent,
   user-token mode, and Go Live control layer are wired and verified offline.
@@ -951,23 +1107,26 @@ while clients may still show the original `$name`.
 
 ## 11. Open decisions
 
-- **Host context access / two lanes — PROPOSED (ADR-0003, pending sign-off).**
-  Clanky's own `read_file`/`grep`/`bash` are sandbox-only (`justbash`, `/workspace`)
-  and blind to host code. The model: a **Context lane** (read work as data/reads —
-  work-tracker and design connections, plus a planned extensible **host-CLI tool**,
-  initially file reads + `gh`, governed by a per-CLI policy registry) and a **Work
-  lane** (`herdr_spawn` a visible pane for build /
-  run / land). The host-command tool adopts **Codex's approval model**
-  (`~/dev/codex`): a raw command surface + a skill (not narrow schemas), default
-  read-only enforced by macOS **Seatbelt** (`sandbox-exec`), a safe-command fast
-  path that auto-runs reads, and **approve-in-place** on-request escalation to
-  `workspace-write` surfaced through `agent/lib/approvals.ts`. An owner-only **yolo** mode
-  (full-access + never-ask) tops the approval ladder (read-only → auto → yolo),
-  clamped to owner-driven turns — untrusted presence turns stay gated. **GitHub is a
-  curated connection** (main integrated MCP alongside Linear/Figma), bindable to the
-  `work_tracker` and/or `version_control` roles; the tool's `gh` is the optional
-  in-checkout reader. Tool, Seatbelt profile, skill, approvals wiring, and the GitHub
-  connection are deferred implementation. Full context in `docs/adr/0003-context-access-two-lane.md`.
+- **Host context access / two lanes — ACCEPTED (ADR-0003); host-command lane
+  shipped, GitHub connection deferred (VUH-358).** Clanky's own
+  `read_file`/`grep`/`bash` stay sandbox-only (`justbash`, `/workspace`); host
+  context flows through the **Context lane**'s `host_command` tool
+  (`agent/tools/host_command.ts`, `agent/lib/host-command/*`), adopting
+  **Codex's approval model** (`~/dev/codex`): a raw command surface plus the
+  `host-command` skill (not narrow schemas), full-disk read minus credential
+  globs (`.env*`, `~/.ssh`, `~/.aws`) enforced by macOS **Seatbelt**
+  (`sandbox-exec`), per-CLI network grants (pipelines of known reads + `gh`
+  read subcommands), a classifier that auto-runs reads and gates mutating `gh`
+  calls plus input-carried escalation (`escalation{write|network,
+  justification}`) through `agent/lib/approvals.ts`. The approval ladder
+  (`/approvals`: read-only → auto → yolo) tops out in a transient yolo —
+  injected as `CLANKY_YOLO` into the face-owned brain env, never persisted —
+  and clamps to owner-driven turns: loopback eve clients self-declare via the
+  `x-clanky-surface` header (face = owner; Discord presence/voice = not),
+  unmarked surfaces fail closed to non-owner. The **Work lane** stays
+  `herdr_spawn`. **GitHub as a curated connection** (bindable `work_tracker` /
+  `version_control`) remains the deferred half — VUH-358. Full context in
+  `docs/adr/0003-context-access-two-lane.md`.
 - **Remote lifecycle / cold-start — PROPOSED (ADR-0001, pending sign-off).** The
   React Native migration has no mature cross-platform SSH stack, so remote
   cold-start moves off SSH to an always-on **supervisor** below the brain with its

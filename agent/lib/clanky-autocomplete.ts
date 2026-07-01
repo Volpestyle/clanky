@@ -57,7 +57,6 @@ export type ClankyCommandDetail = {
 	readonly warning?: string;
 };
 
-const COMMAND_SUGGESTION_LIMIT = 18;
 const ARGUMENT_SUGGESTION_LIMIT = 18;
 
 export function createClankyAutocompleteProvider(

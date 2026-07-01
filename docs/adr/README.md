@@ -28,6 +28,6 @@ work. Routine changes that just follow the existing model do not need one.
 | --- | --- | --- |
 | [0001](0001-remote-lifecycle-cold-start.md) | Remote lifecycle / cold-start after the React Native migration | Proposed |
 | [0002](0002-pool-orchestration-operating-model.md) | Tracker-driven persistent-pool orchestration | Proposed |
-| [0003](0003-context-access-two-lane.md) | Host context access: two lanes + a Seatbelt-sandboxed host-command tool (Codex approval model) | Proposed |
+| [0003](0003-context-access-two-lane.md) | Host context access: two lanes + a Seatbelt-sandboxed host-command tool (Codex approval model) | Accepted |
 | [0004](0004-ios-native-chat-herdr-binding.md) | iOS native chat ↔ herdr binding: per-chat presence mirrors in a dedicated workspace | Proposed (implemented) |
 | [0005](0005-linear-agent-activity-notifications.md) | Linear agent-activity notifications: Clanky writes as a distinct bot actor and @mentions the owner | Proposed |

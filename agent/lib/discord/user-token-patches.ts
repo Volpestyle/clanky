@@ -17,6 +17,7 @@
  */
 import { createRequire } from "node:module";
 import path from "node:path";
+import { version as discordJsVersion } from "discord.js";
 
 const DISCORD_USER_IDENTIFY_PROPERTIES = {
 	os: "Windows",
@@ -25,6 +26,21 @@ const DISCORD_USER_IDENTIFY_PROPERTIES = {
 };
 
 const require = createRequire(import.meta.url);
+
+/**
+ * Loud failure for a missing/misshapen monkeypatch target. These patches reach
+ * into discord.js internals under a caret range, so a routine dependency bump
+ * can silently break user-token mode; failing the gateway start with a clear
+ * operator message beats identifying as a half-patched bot client.
+ */
+function patchTargetError(detail: string): Error {
+	return new Error(
+		`discord.js user-token patch target check failed: ${detail}. ` +
+			`The installed discord.js version (${discordJsVersion}) no longer matches the internals ` +
+			"agent/lib/discord/user-token-patches.ts monkeypatches. Pin or downgrade discord.js to a " +
+			"known-good version; user-token (Go Live) mode cannot run until then.",
+	);
+}
 
 export interface DiscordUserTokenClientLike {
 	rest: unknown;
@@ -91,7 +107,7 @@ export function onRawDispatch(
 
 function patchRestAuth(client: DiscordUserTokenClientLike): void {
 	const rest = coerceRest(client.rest);
-	if (!rest) return;
+	if (!rest) throw patchTargetError("client.rest.resolveRequest is missing or not a function");
 	const originalResolveRequest = rest.resolveRequest;
 	rest.resolveRequest = async (request: Record<string, unknown>) => {
 		const result = await Promise.resolve(originalResolveRequest.call(rest, request));
@@ -105,14 +121,16 @@ function patchRestAuth(client: DiscordUserTokenClientLike): void {
 
 function patchInternalWebSocketManager(client: DiscordUserTokenClientLike): void {
 	const ws = coerceWebSocketManagerHost(client.ws);
-	if (!ws) return;
-	let wsInner: InternalWSManager | null = coerceInternalWsManager(ws._ws);
+	if (!ws) throw patchTargetError("client.ws is missing or not an object");
+	let wsInner: InternalWSManager | null = coerceInternalWsManagerOrThrow(ws._ws);
 	Object.defineProperty(ws, "_ws", {
 		get() {
 			return wsInner;
 		},
 		set(value: unknown) {
-			const nextWs = coerceInternalWsManager(value);
+			// Thrown from inside discord.js's login path, which surfaces the patch
+			// failure instead of silently identifying as an unpatched bot client.
+			const nextWs = coerceInternalWsManagerOrThrow(value);
 			wsInner = nextWs;
 			if (nextWs?.options) {
 				nextWs.options.identifyProperties = { ...DISCORD_USER_IDENTIFY_PROPERTIES };
@@ -153,11 +171,19 @@ function patchFetchGatewayInformation(wsManager: InternalWSManager): void {
 }
 
 function patchReadyHandlerForUserTokenPayload(): void {
-	const handlers = require(resolveDiscordJsHandlersPath()) as {
-		READY?: ReadyHandler;
-	};
+	let handlers: { READY?: ReadyHandler };
+	try {
+		handlers = require(resolveDiscordJsHandlersPath()) as { READY?: ReadyHandler };
+	} catch (error) {
+		throw patchTargetError(
+			`discord.js/src/client/websocket/handlers/index.js could not be loaded (${error instanceof Error ? error.message : String(error)})`,
+		);
+	}
 	const originalReady = handlers.READY;
-	if (typeof originalReady !== "function" || originalReady.__clankyUserTokenPatched) return;
+	if (typeof originalReady !== "function") {
+		throw patchTargetError("the READY dispatch handler is missing from discord.js/src/client/websocket/handlers");
+	}
+	if (originalReady.__clankyUserTokenPatched) return;
 	const patchedReady: ReadyHandler = (client: unknown, packet: ReadyPacket, shard: { id: number }) => {
 		const data = packet?.d;
 		if (data && (!data.application || typeof data.application !== "object")) {
@@ -216,11 +242,19 @@ function coerceWebSocketManagerHost(value: unknown): WebSocketManagerHost | null
 	return value as WebSocketManagerHost;
 }
 
-function coerceInternalWsManager(value: unknown): InternalWSManager | null {
-	if (!value || typeof value !== "object") return null;
+/** Null passes through (pre-login `_ws` is unset); a misshapen manager throws. */
+function coerceInternalWsManagerOrThrow(value: unknown): InternalWSManager | null {
+	if (value === null || value === undefined) return null;
+	if (typeof value !== "object") {
+		throw patchTargetError("client.ws._ws is not an object");
+	}
 	const candidate = value as InternalWSManager;
-	if (!candidate.options || typeof candidate.options !== "object") return null;
-	if (typeof candidate.fetchGatewayInformation !== "function") return null;
+	if (!candidate.options || typeof candidate.options !== "object") {
+		throw patchTargetError("client.ws._ws.options is missing (internal WebSocketManager shape changed)");
+	}
+	if (typeof candidate.fetchGatewayInformation !== "function") {
+		throw patchTargetError("client.ws._ws.fetchGatewayInformation is missing (internal WebSocketManager shape changed)");
+	}
 	return candidate;
 }
 

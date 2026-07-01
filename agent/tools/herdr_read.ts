@@ -2,27 +2,47 @@ import { defineTool } from "eve/tools";
 import { never } from "eve/tools/approval";
 import { z } from "zod";
 import { herdrRequest } from "../lib/herdr-socket.ts";
+import { readPaneRecording } from "../lib/pane-recorder.ts";
 import { readTranscript } from "../lib/transcripts.ts";
 
-const HERDR_SOURCES = ["visible", "recent", "recent_unwrapped", "full", "detection"] as const;
-const READ_SOURCES = ["auto", "transcript", ...HERDR_SOURCES] as const;
+const HERDR_SOURCES = ["visible", "recent", "recent_unwrapped", "detection"] as const;
+const READ_SOURCES = ["auto", "transcript", "recording", ...HERDR_SOURCES] as const;
 type HerdrSource = (typeof HERDR_SOURCES)[number];
-const VANILLA_HERDR_FALLBACK_LINES = 1000;
 
 export default defineTool({
 	needsApproval: never(),
 	description:
-		"Read durable Clanky transcripts or live Herdr output from an agent or pane on the host. Use auto for worker history, visible for exact current TUI state, or full for retained Herdr scrollback.",
+		"Read durable Clanky history or live Herdr output from an agent or pane on the host. auto prefers durable history (worker transcript for agents, pane recording for panes) and falls back to live Herdr reads; visible reads the exact current TUI state. Recording reads support anchor/skip to page through history beyond Herdr's 1000-line cap (anchor=head skip=0 reads a session's beginning).",
 	inputSchema: z.object({
 		agent: z.string().optional().describe("agent name, for example clanky:fix-tests"),
-		pane: z.string().optional().describe("pane id, for example 1-2"),
+		pane: z.string().optional().describe("pane id, for example w1:p3"),
 		source: z.enum(READ_SOURCES).default("auto"),
 		lines: z.number().int().min(1).max(1000).default(120),
+		anchor: z
+			.enum(["tail", "head"])
+			.default("tail")
+			.describe("recording reads: tail reads newest lines, head reads from the start"),
+		skip: z
+			.number()
+			.int()
+			.min(0)
+			.default(0)
+			.describe("recording reads: lines to skip from the anchored end, for paging"),
+		recording_id: z.string().optional().describe("pin a specific pane recording instead of the latest"),
 	}),
 	async execute(input) {
 		if (input.source === "transcript") {
 			if (!input.agent) throw new Error("transcript reads require an agent name");
 			return readTranscript(input.agent, { lines: input.lines });
+		}
+		if (input.source === "recording") {
+			if (!input.pane) throw new Error("recording reads require a pane id");
+			return readPaneRecording(input.pane, {
+				lines: input.lines,
+				anchor: input.anchor,
+				skip: input.skip,
+				recordingId: input.recording_id,
+			});
 		}
 		if (input.source === "auto") {
 			if (input.agent) {
@@ -42,20 +62,29 @@ export default defineTool({
 				}
 			}
 			if (input.pane) {
-				const fallback = await readHerdr(undefined, input.pane, "recent_unwrapped", input.lines);
-				return {
-					source: "herdr-recent-unwrapped",
-					fallback: true,
-					fallbackReason: "transcript reads require an agent name",
-					pane: input.pane,
-					lines: input.lines,
-					text: herdrText(fallback),
-					herdr: fallback,
-				};
+				try {
+					return await readPaneRecording(input.pane, {
+						lines: input.lines,
+						anchor: input.anchor,
+						skip: input.skip,
+						recordingId: input.recording_id,
+					});
+				} catch (error) {
+					const fallback = await readHerdr(undefined, input.pane, "recent_unwrapped", input.lines);
+					return {
+						source: "herdr-recent-unwrapped",
+						fallback: true,
+						fallbackReason: (error as Error).message,
+						pane: input.pane,
+						lines: input.lines,
+						text: herdrText(fallback),
+						herdr: fallback,
+					};
+				}
 			}
 		}
 		if (isHerdrSource(input.source)) {
-			return readHerdr(input.agent, input.pane, input.source, input.source === "full" ? undefined : input.lines);
+			return readHerdr(input.agent, input.pane, input.source, input.lines);
 		}
 		throw new Error("herdr_read requires agent or pane");
 	},
@@ -65,56 +94,11 @@ async function readHerdr(
 	agent: string | undefined,
 	pane: string | undefined,
 	source: HerdrSource,
-	lines: number | undefined,
+	lines: number,
 ): Promise<unknown> {
-	if (agent) {
-		const params: Record<string, unknown> = {
-			target: agent,
-			source,
-		};
-		if (lines !== undefined) params.lines = lines;
-		return readHerdrWithFullFallback("agent.read", params);
-	}
-	if (pane) {
-		const params: Record<string, unknown> = {
-			pane_id: pane,
-			source,
-		};
-		if (lines !== undefined) params.lines = lines;
-		return readHerdrWithFullFallback("pane.read", params);
-	}
+	if (agent) return herdrRequest("agent.read", { target: agent, source, lines });
+	if (pane) return herdrRequest("pane.read", { pane_id: pane, source, lines });
 	throw new Error("herdr_read requires agent or pane");
-}
-
-async function readHerdrWithFullFallback(
-	method: "agent.read" | "pane.read",
-	params: Record<string, unknown>,
-): Promise<unknown> {
-	try {
-		return await herdrRequest(method, params);
-	} catch (error) {
-		if (params.source !== "full" || !isUnsupportedFullSourceError(error)) throw error;
-		const fallbackParams = {
-			...params,
-			source: "recent_unwrapped",
-			lines: VANILLA_HERDR_FALLBACK_LINES,
-		};
-		return {
-			source: "herdr-recent-unwrapped",
-			fallback: true,
-			fallbackReason: (error as Error).message,
-			text: herdrText(await herdrRequest(method, fallbackParams)),
-		};
-	}
-}
-
-function isUnsupportedFullSourceError(error: unknown): boolean {
-	const message = error instanceof Error ? error.message : String(error);
-	return (
-		message.includes("unknown variant `full`") ||
-		message.includes("unknown variant 'full'") ||
-		message.includes("invalid read source: full")
-	);
 }
 
 function isHerdrSource(source: string): source is HerdrSource {

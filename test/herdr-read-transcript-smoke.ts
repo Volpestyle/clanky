@@ -26,7 +26,7 @@ try {
 	await appendTranscriptChunk(run, "stdout", Buffer.from("alpha\nbeta\n"));
 
 	const explicit = await tool.execute(
-		{ agent: "clanky:reader", source: "transcript", lines: 1 },
+		{ agent: "clanky:reader", source: "transcript", lines: 1, anchor: "tail", skip: 0 },
 		undefined as never,
 	);
 	expectEqual(
@@ -35,7 +35,7 @@ try {
 		"explicit transcript read returns durable text",
 	);
 
-	const auto = await tool.execute({ agent: "clanky:reader", source: "auto", lines: 2 }, undefined as never);
+	const auto = await tool.execute({ agent: "clanky:reader", source: "auto", lines: 2, anchor: "tail", skip: 0 }, undefined as never);
 	expectEqual(
 		{ source: (auto as { source?: unknown }).source, fallback: (auto as { fallback?: unknown }).fallback },
 		{ source: "clanky-transcript", fallback: false },

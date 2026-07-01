@@ -14,6 +14,7 @@ import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { generatePkce } from "./oauth-pkce.ts";
+import { resolveClankyDataPath } from "./paths.ts";
 
 const CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
@@ -40,19 +41,28 @@ interface TokenResponse {
 	expires_in: number;
 }
 
+// Store path goes through the CLANKY_HOME-aware paths resolver. Migration
+// care: this file holds a live login, so when the resolved location has no
+// store yet, fall back to reading the legacy fixed ~/.clanky path a pre-
+// resolver build wrote — never orphan an existing credential. Writes always
+// target the resolved path, which completes the migration on next refresh.
 function authPath(): string {
-	return (
-		process.env.CLANKY_CLAUDE_AUTH ??
-		join(homedir(), ".clanky", "profiles", "default", "auth.json")
-	);
+	return process.env.CLANKY_CLAUDE_AUTH ?? resolveClankyDataPath("profiles/default/auth.json");
+}
+
+function legacyAuthPath(): string {
+	return join(homedir(), ".clanky", "profiles", "default", "auth.json");
 }
 
 // --- credential store ---
 
 async function readStore(): Promise<Record<string, ClaudeCredentials | undefined>> {
-	const raw = await readFile(authPath(), "utf8").catch(() => "{}");
+	let raw = await readFile(authPath(), "utf8").catch(() => "");
+	if (raw.length === 0 && authPath() !== legacyAuthPath()) {
+		raw = await readFile(legacyAuthPath(), "utf8").catch(() => "");
+	}
 	try {
-		return JSON.parse(raw) as Record<string, ClaudeCredentials | undefined>;
+		return JSON.parse(raw.length === 0 ? "{}" : raw) as Record<string, ClaudeCredentials | undefined>;
 	} catch {
 		return {};
 	}

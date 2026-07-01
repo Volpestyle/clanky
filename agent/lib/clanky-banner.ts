@@ -32,6 +32,8 @@ export type BannerFields = {
 	stage?: string;
 	/** The row label for `stage` — the detected multiplexer ("herdr"/"tmux"). */
 	stageLabel?: string;
+	/** Non-default approval posture (e.g. armed yolo mode); omitted when gated. */
+	approvals?: string;
 	hint?: string;
 };
 
@@ -122,6 +124,7 @@ function buildFeedLines(
 			["cwd", fields.cwd],
 			["eve server", fields.server],
 			[fields.stageLabel ?? "stage", fields.stage],
+			["approvals", fields.approvals],
 		] as const
 	).filter(([, value]) => value !== undefined && value.length > 0);
 	const labelWidth = Math.max(8, ...rows.map(([label]) => label.length + 1));

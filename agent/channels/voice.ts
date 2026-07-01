@@ -28,6 +28,7 @@ import {
 	type VoiceSessionFault,
 	type VoiceSpeakerResolver,
 	type VoiceControlInput,
+	createSerialOpQueue,
 	summarizeVoiceRuntimeConfig,
 } from "../lib/voice/index.ts";
 
@@ -50,16 +51,41 @@ export interface VoiceRuntime {
 
 let runtime: VoiceRuntime | null = null;
 let session: VoiceSession | null = null;
+/** Serializes join/leave: concurrent joins would spawn two ClankVox processes and orphan one (H5). */
+const voiceOps = createSerialOpQueue();
+let shutdownHookInstalled = false;
 
 /** A Discord-connected host attaches the live voice runtime (adapter + creds). */
 export function attachVoiceRuntime(value: VoiceRuntime): void {
 	runtime = value;
 }
 
+/**
+ * Kill the ClankVox child when the brain exits. Without this a brain shutdown
+ * leaves a zombie transport holding the Discord voice connection. "exit"
+ * handlers must be synchronous; an unclean brain death (SIGKILL) is covered by
+ * the stale-PID reap on the next join instead.
+ */
+function installVoiceShutdownHook(): void {
+	if (shutdownHookInstalled) return;
+	shutdownHookInstalled = true;
+	process.on("exit", () => {
+		session?.vox.killProcessSync();
+	});
+}
+
 /** Programmatic join, for the gateway host's "hop in vc" intent (SPEC.md §5.3). */
 export async function joinVoice(guildId: string, channelId: string): Promise<void> {
+	return await voiceOps.run(() => joinVoiceNow(guildId, channelId));
+}
+
+async function joinVoiceNow(guildId: string, channelId: string): Promise<void> {
 	if (!runtime) throw new Error("voice runtime not attached (no Discord adapter / creds)");
-	if (session) await session.stop();
+	installVoiceShutdownHook();
+	if (session) {
+		await session.stop();
+		session = null;
+	}
 	const started = await startVoiceSession({
 		guildId,
 		channelId,
@@ -122,9 +148,11 @@ async function handleVoiceFault(
 
 /** Programmatic leave. */
 export async function leaveVoice(): Promise<void> {
-	if (!session) return;
-	await session.stop();
-	session = null;
+	return await voiceOps.run(async () => {
+		if (!session) return;
+		await session.stop();
+		session = null;
+	});
 }
 
 export function voiceStatus(): { runtimeAttached: boolean; sessionActive: boolean; voice: Record<string, unknown> } {

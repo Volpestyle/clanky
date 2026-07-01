@@ -1,5 +1,6 @@
 import { Client } from "eve/client";
 import type { ClientSession } from "eve/client";
+import { SURFACE_HEADER } from "../frontdoor-auth.ts";
 import type { OpenAiRealtimeTranscript } from "./openAiRealtimeClient.ts";
 import {
 	isVoiceInputTranscript,
@@ -201,7 +202,12 @@ class VoiceEveSessionBridge implements VoiceEveSessionBinding {
 }
 
 function createClientSession(host: string): VoiceEveSessionHandle {
-	const session: ClientSession = new Client({ host }).session();
+	// Voice presence turns are autonomous, not owner-driven (host_command yolo
+	// clamps on this surface).
+	const session: ClientSession = new Client({
+		host,
+		headers: { [SURFACE_HEADER]: "discord-voice" },
+	}).session();
 	return session;
 }
 

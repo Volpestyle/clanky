@@ -8,9 +8,9 @@
  * TUI and stream.
  */
 import type { HandleMessageStreamEvent } from "eve/client";
-import { ClankyFaceRenderer, type FaceBlockHandle, type FaceBlockOptions, type FaceRenderSink } from "../clanky-face-renderer.ts";
+import type { ClankyFaceRenderer, FaceBlockHandle, FaceBlockOptions, FaceRenderSink } from "../clanky-face-renderer.ts";
 import { ClankyTranscriptMarkdownBlock, type ClankyTranscriptBlockTheme } from "../clanky-transcript-block.ts";
-import { ClankyTranscriptViewport } from "../clanky-transcript-viewport.ts";
+import type { ClankyTranscriptViewport } from "../clanky-transcript-viewport.ts";
 import { summarizePresencePromptForMirror } from "./prompt.ts";
 
 export type MirrorSinkHooks = {

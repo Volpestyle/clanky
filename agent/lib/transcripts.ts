@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { appendFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, open, readFile, readdir, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { resolveClankyDataPath } from "./paths.ts";
 
 export const TRANSCRIPT_SOURCE = "clanky-transcript" as const;
+
+const TRANSCRIPTS_DATA_DIR = "herdr-transcripts";
 
 export interface TranscriptManifest {
 	version: 1;
@@ -23,7 +25,6 @@ export interface TranscriptRun {
 	manifestPath: string;
 	ansiPath: string;
 	textPath: string;
-	eventsPath: string;
 	manifest: TranscriptManifest;
 	/** Bytes withheld from stream.txt because an escape sequence spans chunks. */
 	pending: { stdout: string; stderr: string };
@@ -58,7 +59,7 @@ export function resolveTranscriptSession(env: NodeJS.ProcessEnv = process.env): 
 }
 
 export function resolveTranscriptRoot(env: NodeJS.ProcessEnv = process.env): string {
-	return resolveClankyDataPath(join("herdr-transcripts", pathSegment(resolveTranscriptSession(env), "session")), env);
+	return resolveClankyDataPath(join(TRANSCRIPTS_DATA_DIR, transcriptPathSegment(resolveTranscriptSession(env), "session")), env);
 }
 
 export function newTranscriptRunId(now = new Date()): string {
@@ -71,7 +72,7 @@ export function resolveTranscriptRunPath(input: {
 	runId: string;
 	env?: NodeJS.ProcessEnv;
 }): string {
-	return join(resolveTranscriptRoot(input.env), pathSegment(input.agent, "agent"), pathSegment(input.runId, "run id"));
+	return join(resolveTranscriptRoot(input.env), transcriptPathSegment(input.agent, "agent"), transcriptPathSegment(input.runId, "run id"));
 }
 
 export async function createTranscriptRun(input: {
@@ -100,8 +101,8 @@ export async function createTranscriptRun(input: {
 		writeFile(run.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`),
 		writeFile(run.ansiPath, ""),
 		writeFile(run.textPath, ""),
-		writeFile(run.eventsPath, ""),
 	]);
+	await maybeSweepTranscriptRetention(input.env);
 	return run;
 }
 
@@ -109,25 +110,17 @@ export async function appendTranscriptChunk(
 	run: TranscriptRun,
 	stream: TranscriptStream,
 	chunk: Buffer | Uint8Array,
-	now = new Date(),
 ): Promise<void> {
 	const buffer = Buffer.from(chunk);
 	// Escape sequences can split across chunks; normalize only the portion that
 	// cannot still be growing and carry the rest into the next append. stream.ansi
-	// stays the lossless raw record.
+	// stays the lossless raw record; stream.txt is the normalized readable one.
 	const combined = run.pending[stream] + buffer.toString("utf8");
 	const { done, pending } = splitPendingEscape(combined);
 	run.pending[stream] = pending;
 	const text = normalizeTerminalText(done);
-	const event = {
-		ts: now.toISOString(),
-		stream,
-		bytes: buffer.byteLength,
-		text,
-	};
 	await appendFile(run.ansiPath, buffer);
 	if (text.length > 0) await appendFile(run.textPath, text);
-	await appendFile(run.eventsPath, `${JSON.stringify(event)}\n`);
 }
 
 export async function finishTranscriptRun(
@@ -154,6 +147,9 @@ export async function listTranscriptRuns(env: NodeJS.ProcessEnv = process.env): 
 	const summaries: TranscriptSummary[] = [];
 	for (const agentDir of agents) {
 		if (!agentDir.isDirectory()) continue;
+		// "panes" is reserved for the session-wide pane recorder (ADR-0007);
+		// its recording dirs are not worker runs.
+		if (agentDir.name === "panes") continue;
 		const agentPath = join(root, agentDir.name);
 		const runs = await readdir(agentPath, { withFileTypes: true }).catch(() => []);
 		for (const runDir of runs) {
@@ -180,9 +176,9 @@ export async function latestTranscriptRun(
 	options: { runId?: string; env?: NodeJS.ProcessEnv } = {},
 ): Promise<TranscriptRun> {
 	const root = resolveTranscriptRoot(options.env);
-	const agentPath = join(root, pathSegment(agent, "agent"));
+	const agentPath = join(root, transcriptPathSegment(agent, "agent"));
 	if (options.runId !== undefined) {
-		const dir = join(agentPath, pathSegment(options.runId, "run id"));
+		const dir = join(agentPath, transcriptPathSegment(options.runId, "run id"));
 		const manifest = await readManifest(join(dir, "manifest.json"));
 		return transcriptRunFromManifest(dir, manifest);
 	}
@@ -206,6 +202,14 @@ export async function latestTranscriptRun(
 	return found;
 }
 
+// Tail reads only need the last `lines` lines, so bound how much of the
+// (potentially very large) stream.txt is loaded per read. The per-line byte
+// allowance is generous; pathological single lines degrade to a partial tail
+// rather than an unbounded read.
+const READ_TAIL_BYTES_PER_LINE = 2048;
+const READ_TAIL_MIN_BYTES = 64 * 1024;
+const READ_TAIL_MAX_BYTES = 4 * 1024 * 1024;
+
 export async function readTranscript(
 	agent: string,
 	options: { lines?: number; runId?: string; env?: NodeJS.ProcessEnv } = {},
@@ -213,10 +217,8 @@ export async function readTranscript(
 	const lines = options.lines ?? 120;
 	if (!Number.isInteger(lines) || lines < 1) throw new Error(`lines must be a positive integer; got ${lines}`);
 	const run = await latestTranscriptRun(agent, { runId: options.runId, env: options.env });
-	const text = await readFile(run.textPath, "utf8").catch((error: NodeJS.ErrnoException) => {
-		if (error.code === "ENOENT") return "";
-		throw error;
-	});
+	const windowBytes = Math.min(READ_TAIL_MAX_BYTES, Math.max(READ_TAIL_MIN_BYTES, lines * READ_TAIL_BYTES_PER_LINE));
+	const text = await readFileTail(run.textPath, windowBytes);
 	return {
 		source: TRANSCRIPT_SOURCE,
 		fallback: false,
@@ -227,6 +229,32 @@ export async function readTranscript(
 		lines,
 		text: lastLines(text, lines),
 	};
+}
+
+/** Read at most the last `maxBytes` of a file; missing file reads as empty. */
+async function readFileTail(path: string, maxBytes: number): Promise<string> {
+	const handle = await open(path, "r").catch((error: NodeJS.ErrnoException) => {
+		if (error.code === "ENOENT") return undefined;
+		throw error;
+	});
+	if (handle === undefined) return "";
+	try {
+		const size = (await handle.stat()).size;
+		const length = Math.min(size, maxBytes);
+		if (length === 0) return "";
+		const buffer = Buffer.alloc(length);
+		const { bytesRead } = await handle.read(buffer, 0, length, size - length);
+		let text = buffer.toString("utf8", 0, bytesRead);
+		// A mid-file window can open inside a line (or a multi-byte character);
+		// drop that partial first line when complete lines follow it.
+		if (size > length) {
+			const newline = text.indexOf("\n");
+			if (newline !== -1) text = text.slice(newline + 1);
+		}
+		return text;
+	} finally {
+		await handle.close();
+	}
 }
 
 export function lastLines(text: string, lines: number): string {
@@ -329,7 +357,6 @@ function transcriptRunFromManifest(dir: string, manifest: TranscriptManifest): T
 		manifestPath: join(dir, "manifest.json"),
 		ansiPath: join(dir, "stream.ansi"),
 		textPath: join(dir, "stream.txt"),
-		eventsPath: join(dir, "events.jsonl"),
 		manifest,
 		pending: { stdout: "", stderr: "" },
 	};
@@ -350,7 +377,8 @@ function isManifest(value: unknown): value is TranscriptManifest {
 	);
 }
 
-function pathSegment(value: string, label: string): string {
+/** Sanitized path segment for transcript-store dir names (pane recorder shares the scheme). */
+export function transcriptPathSegment(value: string, label: string): string {
 	const trimmed = value.trim();
 	if (trimmed.length === 0) throw new Error(`transcript ${label} must not be empty`);
 	const segment = trimmed.replace(/[^A-Za-z0-9._:-]+/g, "_");
@@ -358,4 +386,132 @@ function pathSegment(value: string, label: string): string {
 		throw new Error(`invalid transcript ${label}: ${value}`);
 	}
 	return segment;
+}
+
+export interface TranscriptRetentionBudget {
+	/** Runs with activity newer than this are always kept (live-run guard). */
+	minAgeMs: number;
+	/** Runs idle longer than this are deleted regardless of the other budgets. */
+	maxAgeMs: number;
+	/** Newest-first cap on stored runs across all sessions. */
+	maxRuns: number;
+	/** Newest-first cap on total stored bytes across all sessions. */
+	maxTotalBytes: number;
+}
+
+/** Conservative defaults: 30 days, 500 runs, 2 GiB across every session. */
+export const TRANSCRIPT_RETENTION: TranscriptRetentionBudget = {
+	minAgeMs: 6 * 60 * 60 * 1000,
+	maxAgeMs: 30 * 24 * 60 * 60 * 1000,
+	maxRuns: 500,
+	maxTotalBytes: 2 * 1024 * 1024 * 1024,
+};
+
+const RETENTION_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
+const RETENTION_SWEEP_MARKER = ".retention-sweep";
+
+interface TranscriptRunUsage {
+	dir: string;
+	bytes: number;
+	/** Newest file mtime in the run dir, so live runs keep counting as active. */
+	lastActiveAt: number;
+}
+
+/**
+ * Enforce the retention budget across every stored transcript run (all
+ * sessions). Runs are ranked newest-activity first; a run is deleted once it
+ * is idle past `maxAgeMs` or falls outside the run/byte budgets, but never
+ * while its newest file is younger than `minAgeMs` (an in-flight capture keeps
+ * appending, so a live run always looks recent). Returns deleted run count.
+ */
+export async function sweepTranscriptRetention(
+	env: NodeJS.ProcessEnv = process.env,
+	budget: TranscriptRetentionBudget = TRANSCRIPT_RETENTION,
+	now = Date.now(),
+): Promise<number> {
+	const base = resolveClankyDataPath(TRANSCRIPTS_DATA_DIR, env);
+	const runs: TranscriptRunUsage[] = [];
+	for (const sessionName of await listDirectories(base)) {
+		const sessionPath = join(base, sessionName);
+		for (const agentName of await listDirectories(sessionPath)) {
+			const agentPath = join(sessionPath, agentName);
+			for (const runName of await listDirectories(agentPath)) {
+				const usage = await measureRunDir(join(agentPath, runName));
+				if (usage !== undefined) runs.push(usage);
+			}
+		}
+	}
+	runs.sort((left, right) => right.lastActiveAt - left.lastActiveAt);
+	let keptRuns = 0;
+	let keptBytes = 0;
+	let deleted = 0;
+	for (const run of runs) {
+		const idleMs = now - run.lastActiveAt;
+		if (idleMs > budget.minAgeMs) {
+			const overBudget = keptRuns >= budget.maxRuns || keptBytes + run.bytes > budget.maxTotalBytes;
+			if (idleMs > budget.maxAgeMs || overBudget) {
+				await rm(run.dir, { recursive: true, force: true });
+				deleted += 1;
+				continue;
+			}
+		}
+		keptRuns += 1;
+		keptBytes += run.bytes;
+	}
+	if (deleted > 0) await pruneEmptyTranscriptDirs(base);
+	return deleted;
+}
+
+/**
+ * Opportunistic, throttled retention: runs at most once per sweep interval,
+ * keyed off a marker file's mtime so concurrent short-lived transcript-run
+ * processes share the throttle. Best-effort by design.
+ */
+async function maybeSweepTranscriptRetention(env: NodeJS.ProcessEnv | undefined): Promise<void> {
+	try {
+		const marker = resolveClankyDataPath(join(TRANSCRIPTS_DATA_DIR, RETENTION_SWEEP_MARKER), env);
+		const info = await stat(marker).catch(() => undefined);
+		const now = Date.now();
+		if (info !== undefined && now - info.mtimeMs < RETENTION_SWEEP_INTERVAL_MS) return;
+		await writeFile(marker, `${new Date(now).toISOString()}\n`);
+		await sweepTranscriptRetention(env, TRANSCRIPT_RETENTION, now);
+	} catch {
+		// Retention must never block creating a new transcript run.
+	}
+}
+
+async function listDirectories(path: string): Promise<string[]> {
+	const entries = await readdir(path, { withFileTypes: true }).catch(() => []);
+	return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+}
+
+async function measureRunDir(dir: string): Promise<TranscriptRunUsage | undefined> {
+	const entries = await readdir(dir, { withFileTypes: true }).catch(() => undefined);
+	if (entries === undefined) return undefined;
+	let bytes = 0;
+	let lastActiveAt = 0;
+	for (const entry of entries) {
+		if (!entry.isFile()) continue;
+		const info = await stat(join(dir, entry.name)).catch(() => undefined);
+		if (info === undefined) continue;
+		bytes += info.size;
+		lastActiveAt = Math.max(lastActiveAt, info.mtimeMs);
+	}
+	if (lastActiveAt === 0) {
+		const info = await stat(dir).catch(() => undefined);
+		if (info === undefined) return undefined;
+		lastActiveAt = info.mtimeMs;
+	}
+	return { dir, bytes, lastActiveAt };
+}
+
+/** Drop agent/session dirs a sweep emptied; rmdir refuses non-empty dirs. */
+async function pruneEmptyTranscriptDirs(base: string): Promise<void> {
+	for (const sessionName of await listDirectories(base)) {
+		const sessionPath = join(base, sessionName);
+		for (const agentName of await listDirectories(sessionPath)) {
+			await rmdir(join(sessionPath, agentName)).catch(() => undefined);
+		}
+		await rmdir(sessionPath).catch(() => undefined);
+	}
 }

@@ -47,6 +47,20 @@ export function normalizeCommandToken(value: string): string {
 	return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
 
+// The one boolean parser for face toggles (previously four divergent copies:
+// parseBooleanFlag, parseOnOff, parseToggle, parseVoiceToggle). Accepts the
+// union of all synonyms each surface historically took.
+const TRUE_TOKENS = new Set(["1", "true", "yes", "on", "enable", "enabled", "show", "allow"]);
+const FALSE_TOKENS = new Set(["0", "false", "no", "off", "disable", "disabled", "hide", "block"]);
+
+export function parseBooleanToggle(value: string | undefined): boolean | undefined {
+	const normalized = value?.trim().toLowerCase();
+	if (normalized === undefined || normalized.length === 0) return undefined;
+	if (TRUE_TOKENS.has(normalized)) return true;
+	if (FALSE_TOKENS.has(normalized)) return false;
+	return undefined;
+}
+
 export function integrationSavedMessage(role: IntegrationRole, binding: string | undefined): string {
 	return `${roleLabel(role)} ${binding === undefined ? "unset" : `bound to ${binding}`}. New turns will use the updated role binding.`;
 }

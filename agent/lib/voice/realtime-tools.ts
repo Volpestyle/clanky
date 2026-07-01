@@ -163,6 +163,9 @@ export function appendVoiceRealtimeTools(options: {
 	return [...existing, ...VOICE_REALTIME_TOOLS.filter((tool) => !names.has(tool.name))];
 }
 
+/** Dedupe window for realtime function-call ids (a call can appear in several events). */
+const MAX_TRACKED_CALL_IDS = 200;
+
 export function bindRealtimeVoiceTools(options: BindRealtimeVoiceToolOptions): RealtimeVoiceToolBinding {
 	const seenCallIds = new Set<string>();
 	let latestSpeakerContext: VoiceTranscriptSpeakerContext | undefined;
@@ -170,21 +173,32 @@ export function bindRealtimeVoiceTools(options: BindRealtimeVoiceToolOptions): R
 		if (!isVoiceInputTranscript(transcript)) return;
 		latestSpeakerContext = options.resolveSpeakerContext?.(transcript);
 	};
+	// The realtime clients drop sends on a closed socket instead of throwing,
+	// but keep the guard: a throwing send-back here would surface as an
+	// unhandled rejection inside this promise chain and crash the brain.
+	const sendToolResult = (callId: string, output: unknown): void => {
+		try {
+			options.realtime.sendFunctionCallOutput({ callId, output });
+			options.realtime.createAudioResponse();
+		} catch (error) {
+			console.error("voice realtime tool result send failed:", error);
+		}
+	};
 	const eventListener = (event: JsonRecord): void => {
 		const call = parseRealtimeFunctionCall(event);
 		if (call === undefined || seenCallIds.has(call.callId)) return;
 		seenCallIds.add(call.callId);
+		while (seenCallIds.size > MAX_TRACKED_CALL_IDS) {
+			const oldest = seenCallIds.values().next().value;
+			if (oldest === undefined) break;
+			seenCallIds.delete(oldest);
+		}
 		void executeRealtimeVoiceTool(call, options, latestSpeakerContext)
 			.then((output) => {
-				options.realtime.sendFunctionCallOutput({ callId: call.callId, output });
-				options.realtime.createAudioResponse();
+				sendToolResult(call.callId, output);
 			})
 			.catch((error: unknown) => {
-				options.realtime.sendFunctionCallOutput({
-					callId: call.callId,
-					output: { ok: false, error: errorMessage(error) },
-				});
-				options.realtime.createAudioResponse();
+				sendToolResult(call.callId, { ok: false, error: errorMessage(error) });
 			});
 	};
 	options.realtime.on("transcript", transcriptListener);

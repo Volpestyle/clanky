@@ -3,6 +3,7 @@ import {
 	encodeAttachTerminal,
 	encodeDetach,
 	encodeHello,
+	encodeInput,
 	encodeResize,
 	frameMessage,
 	HERDR_CLIENT_PROTOCOL_VERSION,
@@ -19,13 +20,19 @@ function expectEqual(actual: unknown, expected: unknown, label: string): void {
 	if (actualJson !== expectedJson) throw new Error(`${label}: expected ${expectedJson}, got ${actualJson}`);
 }
 
-expectEqual(HERDR_CLIENT_PROTOCOL_VERSION, 14, "protocol version matches herdr wire.rs");
+expectEqual(HERDR_CLIENT_PROTOCOL_VERSION, 15, "protocol version matches herdr wire.rs");
 expectHex(
 	encodeHello({ cols: 80, rows: 24, cellWidthPx: 8, cellHeightPx: 16 }),
-	"000e50180810010001",
-	"terminal attach Hello encodes pinned protocol-14 field order",
+	"000f50180810010001",
+	"terminal attach Hello encodes pinned protocol-15 field order",
 );
 expectHex(encodeAttachTerminal("term_123", true), "05087465726d5f31323301", "AttachTerminal encodes tag/string/bool");
+expectHex(encodeInput(Buffer.from("hi\r", "utf8")), `0103${Buffer.from("hi\r").toString("hex")}`, "Input encodes tag/len/bytes");
+expectHex(
+	encodeInput(Buffer.alloc(300, 0x61)),
+	`01fb2c01${"61".repeat(300)}`,
+	"Input length uses bincode standard varints",
+);
 expectHex(
 	encodeResize({ cols: 300, rows: 40, cellWidthPx: 12, cellHeightPx: 22 }),
 	"03fb2c01280c16",

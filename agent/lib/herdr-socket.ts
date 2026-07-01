@@ -4,6 +4,14 @@ import { join } from "node:path";
 
 const SOCKET_TIMEOUT_MS = 30_000;
 
+// A unary herdr API request is a local unix-socket round trip that normally
+// completes well under a millisecond. Anything slower than this is a stall
+// worth counting — most notably herdr builds whose api server still polls
+// read_initial_request_line on a 100ms sleep, where a lost wakeup race adds
+// ~100ms to the request (the F1 typing-latency tail).
+const SLOW_REQUEST_WARN_MS = 50;
+let slowRequestCount = 0;
+
 export interface HerdrRequest {
 	id: string;
 	method: string;
@@ -14,10 +22,11 @@ export interface HerdrStream {
 	close(): void;
 }
 
-/// Resolve the herdr api socket for a request. An explicit `session` (a session
-/// name, the literal "default", or an absolute socket path) overrides the
-/// process env, enabling per-request targeting of any herdr session on the host.
-/// When omitted, falls back to the env-bound session the relay was started with.
+/// Resolve the herdr api socket for a request. An explicit `session` is a herdr
+/// session name or the literal "default"; per-request absolute paths are
+/// rejected so remote relay clients cannot steer Clanky at arbitrary unix
+/// sockets. When omitted, falls back to the env-bound session the relay was
+/// started with.
 export function herdrSocketPath(session?: string): string {
 	const explicit = session?.trim();
 	if (explicit) return resolveSessionSocketPath(explicit);
@@ -29,13 +38,21 @@ export function herdrSocketPath(session?: string): string {
 	return join(homedir(), ".config", "herdr", "herdr.sock");
 }
 
-/// Map a session token to its api socket. A value that already looks like a path
-/// (contains a slash or ends in .sock) is used verbatim; "default" maps to the
-/// top-level socket; any other name maps to sessions/<name>/herdr.sock.
+/// Map a session token to its api socket. Only bare session names pass
+/// (assertSafeSessionName): "default" maps to the top-level socket; any other
+/// name maps to sessions/<name>/herdr.sock. Raw socket paths are rejected here
+/// — the local path override lives in the HERDR_SOCKET_PATH env, never in a
+/// per-request value a relay client controls.
 function resolveSessionSocketPath(session: string): string {
-	if (session.includes("/") || session.endsWith(".sock")) return session;
+	assertSafeSessionName(session);
 	if (session === "default") return join(homedir(), ".config", "herdr", "herdr.sock");
 	return join(homedir(), ".config", "herdr", "sessions", session, "herdr.sock");
+}
+
+export function assertSafeSessionName(session: string): void {
+	if (!/^[A-Za-z0-9._-]+$/u.test(session)) {
+		throw new Error("herdr session must be a session name, not a socket path");
+	}
 }
 
 export function herdrClientSocketPath(session?: string): string {
@@ -62,6 +79,7 @@ export function herdrRequest(method: string, params: Record<string, unknown> = {
 }
 
 export function herdrRequestLine(request: HerdrRequest, session?: string): Promise<string> {
+	const started = performance.now();
 	return new Promise((resolve, reject) => {
 		const socket = createConnection(herdrSocketPath(session));
 		let buffer = "";
@@ -85,6 +103,11 @@ export function herdrRequestLine(request: HerdrRequest, session?: string): Promi
 			if (settled) return;
 			settled = true;
 			socket.end();
+			const elapsed = performance.now() - started;
+			if (elapsed > SLOW_REQUEST_WARN_MS) {
+				slowRequestCount += 1;
+				console.error(`herdr slow api request #${slowRequestCount}: ${request.method} took ${elapsed.toFixed(1)}ms`);
+			}
 			resolve(line);
 		});
 		socket.on("close", () => {

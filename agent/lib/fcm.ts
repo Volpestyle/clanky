@@ -10,10 +10,16 @@
  *   CLANKY_FCM_PRIVATE_KEY           env-only service account private key
  */
 import { createPrivateKey, sign as cryptoSign } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 
 const FCM_SCOPE = "https://www.googleapis.com/auth/firebase.messaging";
 const DEFAULT_TOKEN_URI = "https://oauth2.googleapis.com/token";
+// Deadline for OAuth and send fetches: a hung request must not wedge the push
+// watcher tick.
+const FCM_REQUEST_TIMEOUT_MS = 10_000;
+const FCM_JWT_TTL_S = 3600;
+const FCM_TOKEN_REFRESH_MARGIN_S = 60;
+const FCM_COLLAPSE_ID_MAX_LENGTH = 64;
 
 export interface FcmConfig {
 	projectId: string;
@@ -84,6 +90,20 @@ function normalizePrivateKey(value: string | undefined): string | undefined {
 	return value?.replace(/\\n/gu, "\n").trim();
 }
 
+// Service-account JSON cache keyed on path + mtime: each send resolves the
+// config, so without this the file is re-read and re-parsed per push (M13).
+let cachedServiceAccount: { path: string; mtimeMs: number; account: Record<string, unknown> } | undefined;
+
+function readServiceAccount(path: string): Record<string, unknown> {
+	const mtimeMs = statSync(path).mtimeMs;
+	if (cachedServiceAccount !== undefined && cachedServiceAccount.path === path && cachedServiceAccount.mtimeMs === mtimeMs) {
+		return cachedServiceAccount.account;
+	}
+	const account = parseJsonRecord(readFileSync(path, "utf8"));
+	cachedServiceAccount = { path, mtimeMs, account };
+	return account;
+}
+
 export function fcmConfigFromEnv(env: NodeJS.ProcessEnv = process.env): FcmConfig | undefined {
 	const explicitProjectId = str(env.CLANKY_FCM_PROJECT_ID);
 	const explicitClientEmail = str(env.CLANKY_FCM_CLIENT_EMAIL);
@@ -100,7 +120,7 @@ export function fcmConfigFromEnv(env: NodeJS.ProcessEnv = process.env): FcmConfi
 	const serviceAccountPath = str(env.CLANKY_FCM_SERVICE_ACCOUNT_PATH) ?? str(env.GOOGLE_APPLICATION_CREDENTIALS);
 	if (serviceAccountPath === undefined) return undefined;
 	try {
-		const account = parseJsonRecord(readFileSync(serviceAccountPath, "utf8"));
+		const account = readServiceAccount(serviceAccountPath);
 		const projectId = explicitProjectId ?? str(account.project_id);
 		const clientEmail = explicitClientEmail ?? str(account.client_email);
 		const privateKey = explicitPrivateKey ?? normalizePrivateKey(str(account.private_key));
@@ -139,7 +159,7 @@ function serviceAccountJwt(config: FcmConfig): string {
 			scope: FCM_SCOPE,
 			aud: config.tokenUri,
 			iat: now,
-			exp: now + 3600,
+			exp: now + FCM_JWT_TTL_S,
 		}),
 	);
 	const signingInput = `${header}.${claims}`;
@@ -151,7 +171,7 @@ function serviceAccountJwt(config: FcmConfig): string {
 async function accessToken(config: FcmConfig): Promise<string> {
 	const now = Date.now();
 	const cacheKey = `${config.clientEmail}\0${config.privateKey}\0${config.tokenUri}`;
-	if (cachedAccessToken !== undefined && cachedAccessToken.cacheKey === cacheKey && cachedAccessToken.expiresAtMs > now + 60_000) {
+	if (cachedAccessToken !== undefined && cachedAccessToken.cacheKey === cacheKey && cachedAccessToken.expiresAtMs > now + FCM_TOKEN_REFRESH_MARGIN_S * 1000) {
 		return cachedAccessToken.token;
 	}
 	const body = new URLSearchParams({
@@ -162,6 +182,7 @@ async function accessToken(config: FcmConfig): Promise<string> {
 		method: "POST",
 		headers: { "content-type": "application/x-www-form-urlencoded" },
 		body,
+		signal: AbortSignal.timeout(FCM_REQUEST_TIMEOUT_MS),
 	});
 	const text = await response.text();
 	const parsed = text.trim().length === 0 ? {} : parseJsonRecord(text);
@@ -169,17 +190,17 @@ async function accessToken(config: FcmConfig): Promise<string> {
 	if (!response.ok || token === undefined) {
 		throw new Error(fcmErrorReason(text) ?? response.statusText);
 	}
-	const expiresIn = num(parsed.expires_in) ?? 3600;
+	const expiresIn = num(parsed.expires_in) ?? FCM_JWT_TTL_S;
 	cachedAccessToken = {
 		token,
-		expiresAtMs: now + Math.max(60, expiresIn - 60) * 1000,
+		expiresAtMs: now + Math.max(FCM_TOKEN_REFRESH_MARGIN_S, expiresIn - FCM_TOKEN_REFRESH_MARGIN_S) * 1000,
 		cacheKey,
 	};
 	return token;
 }
 
 export function fcmRequestBody(token: string, note: FcmNotification): FcmSendRequest {
-	const collapseId = note.collapseId?.slice(0, 64);
+	const collapseId = note.collapseId?.slice(0, FCM_COLLAPSE_ID_MAX_LENGTH);
 	const message: FcmSendRequest["message"] = {
 		token,
 		notification: { title: note.title, body: note.body },
@@ -227,6 +248,7 @@ export async function sendFcm(token: string, note: FcmNotification, config = fcm
 				"content-type": "application/json",
 			},
 			body: JSON.stringify(fcmRequestBody(token, note)),
+			signal: AbortSignal.timeout(FCM_REQUEST_TIMEOUT_MS),
 		});
 		const text = await response.text();
 		if (response.ok) {

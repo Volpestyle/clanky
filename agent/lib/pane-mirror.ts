@@ -8,9 +8,10 @@
  * the transcript-run seam.
  */
 import { join } from "node:path";
+import { resolveEveBaseUrl, resolveEvePort } from "./eve-address.ts";
 
 export function paneMirrorArgv(sessionId: string, slug: string): string[] {
-	const eveHost = process.env.CLANKY_EVE_HOST ?? "http://127.0.0.1:2000";
+	const eveHost = resolveEveBaseUrl(resolveEvePort(process.env), process.env);
 	const scriptPath = join(process.env.CLANKY_REPO_DIR ?? process.cwd(), "scripts", "discord-pane-mirror.ts");
 	return [process.execPath, scriptPath, eveHost, sessionId, slug];
 }

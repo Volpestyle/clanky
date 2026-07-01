@@ -20,6 +20,9 @@ importers:
       '@ai-sdk/xai':
         specifier: 4.0.0-beta.75
         version: 4.0.0-beta.75(zod@4.4.3)
+      '@clanky/contract':
+        specifier: workspace:*
+        version: link:packages/clanky-contract
       '@earendil-works/pi-tui':
         specifier: ^0.80.2
         version: 0.80.2
@@ -30,7 +33,7 @@ importers:
         specifier: 7.0.0-beta.178
         version: 7.0.0-beta.178(zod@4.4.3)
       discord.js:
-        specifier: ^14.26.4
+        specifier: 14.26.4
         version: 14.26.4
       eve:
         specifier: 0.13.0
@@ -73,6 +76,16 @@ importers:
       '@types/ws':
         specifier: ^8.18.1
         version: 8.18.1
+
+  packages/clanky-contract:
+    dependencies:
+      zod:
+        specifier: ^4.0.0
+        version: 4.4.3
+    devDependencies:
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
 
 packages:
 

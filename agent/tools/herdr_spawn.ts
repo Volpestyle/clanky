@@ -5,9 +5,11 @@
  * visible herdr pane (`clanky:<slug>`), never a hidden in-process subagent.
  * Runs in the eve host process, so it reaches the local herdr socket directly.
  */
-import { execFile } from "node:child_process";
-import { mkdir, stat } from "node:fs/promises";
-import { resolve } from "node:path";
+import { execFile, spawn } from "node:child_process";
+import type { Stats } from "node:fs";
+import { mkdir, open, stat } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { defineTool } from "eve/tools";
 import { never } from "eve/tools/approval";
@@ -22,7 +24,9 @@ import {
 	type Performer,
 	resolveCodingHarness,
 } from "../lib/coding-harness.ts";
-import { resolveClankyHome } from "../lib/paths.ts";
+import { resolveClankyDataPath, resolveClankyHome } from "../lib/paths.ts";
+import { parsePaneRoster, resolveSelf } from "../lib/herdr-message.ts";
+import { workerSlugFromAgent } from "../lib/worker-watch.ts";
 import { resolveClankyFacePanePlacement, startHerdrAgentNearPlacement } from "../lib/herdr-placement.ts";
 import { newTranscriptRunId, resolveTranscriptRunPath, resolveTranscriptSession } from "../lib/transcripts.ts";
 import { resolveWorkerTranscriptSetting } from "../lib/worker-transcripts.ts";
@@ -31,7 +35,12 @@ const run = promisify(execFile);
 
 const KICKOFF_TOKEN = "{KICKOFF}";
 const WORKER_SKILL_RELATIVE_PATH = "skills/clanky-herdr-worker/SKILL.md";
-const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
+// Length-capped: the slug becomes a pane name and transcript directory segment.
+const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+// The eve host is not guaranteed to run from the repo root, so repo-relative
+// paths (bin/clanky.ts, the worker skill) anchor to this file's location, with
+// CLANKY_REPO_DIR as the explicit override — never bare process.cwd().
+const REPO_DIR = resolve(process.env.CLANKY_REPO_DIR?.trim() || join(dirname(fileURLToPath(import.meta.url)), "..", ".."));
 type ResolvedPerformer = Performer | "custom";
 
 // Default performer command lines. {KICKOFF} is replaced by the task brief.
@@ -128,7 +137,7 @@ async function herdr(args: string[]): Promise<string> {
 
 export async function resolvePaneCwd(cwd: string | undefined): Promise<string> {
 	const paneCwd = cwd?.trim() ? cwd : process.cwd();
-	let stats;
+	let stats: Stats;
 	try {
 		stats = await stat(paneCwd);
 	} catch (error) {
@@ -144,11 +153,11 @@ export async function resolvePaneCwd(cwd: string | undefined): Promise<string> {
 	return paneCwd;
 }
 
-export function resolveWorkerSkillPath(repoCwd = process.cwd()): string {
+export function resolveWorkerSkillPath(repoCwd = REPO_DIR): string {
 	return resolve(repoCwd, WORKER_SKILL_RELATIVE_PATH);
 }
 
-export function resolveClankyCliPath(repoCwd = process.cwd()): string {
+export function resolveClankyCliPath(repoCwd = REPO_DIR): string {
 	return resolve(repoCwd, "bin/clanky.ts");
 }
 
@@ -271,8 +280,18 @@ export interface SpawnClankyWorkerInput {
 	cwd?: string;
 	command?: readonly string[];
 	transcript?: boolean;
+	/** Arm the detached completion watcher (default true); false disarms this spawn. */
+	watch?: boolean;
 	/** Env used for harness resolution and transcript session/home pinning. */
 	env?: NodeJS.ProcessEnv;
+}
+
+export interface SpawnWatchInfo {
+	armed: boolean;
+	notify: string | null;
+	logPath: string | null;
+	pid: number | null;
+	error?: string;
 }
 
 export interface SpawnClankyWorkerResult {
@@ -290,7 +309,63 @@ export interface SpawnClankyWorkerResult {
 		path: string | null;
 		readCommand: string | null;
 	};
+	watch: SpawnWatchInfo;
 	started: true;
+}
+
+/**
+ * The wake target for a watcher armed at spawn time: the spawning lead's
+ * durable name (pane label or `clanky:<slug>` agent), resolved fresh from
+ * `HERDR_PANE_ID` against the live roster. A raw pane id is never used — pane
+ * ids compact when panes close — so an unset or non-durable self falls back to
+ * `clanky:main`.
+ */
+export async function resolveSpawnNotifyTarget(env: NodeJS.ProcessEnv = process.env): Promise<string> {
+	const selfPaneId = env.HERDR_PANE_ID?.trim();
+	if (selfPaneId === undefined || selfPaneId.length === 0) return "clanky:main";
+	try {
+		const roster = parsePaneRoster(await herdr(["pane", "list"]));
+		const self = resolveSelf(roster, selfPaneId);
+		return self.name === self.paneId ? "clanky:main" : self.name;
+	} catch {
+		return "clanky:main";
+	}
+}
+
+/**
+ * Arm the detached one-shot `clanky watch` for a spawned worker so wake-on-done
+ * is a property of being spawned, not something the lead remembers to do. The
+ * watcher survives this call (detached + unref, output appended to
+ * `<clanky-home>/watch/<slug>.log`) and dies with the herdr session. This path
+ * has no run dir, so the watcher classifies on agent status alone and its wake
+ * says so; the operator spawn.sh passes --run-dir for sentinel truth. Arming
+ * failure never fails the spawn — the pane is already up.
+ */
+export async function armWorkerCompletionWatch(input: {
+	agent: string;
+	notify: string;
+	env?: NodeJS.ProcessEnv;
+}): Promise<SpawnWatchInfo> {
+	const env = input.env ?? process.env;
+	try {
+		const logDir = resolveClankyDataPath("watch", env);
+		await mkdir(logDir, { recursive: true });
+		const logPath = join(logDir, `${workerSlugFromAgent(input.agent)}.log`);
+		const log = await open(logPath, "a");
+		try {
+			const child = spawn(process.execPath, [resolveClankyCliPath(), "watch", input.agent, "--notify", input.notify], {
+				detached: true,
+				stdio: ["ignore", log.fd, log.fd],
+				env,
+			});
+			child.unref();
+			return { armed: true, notify: input.notify, logPath, pid: child.pid ?? null };
+		} finally {
+			await log.close();
+		}
+	} catch (error) {
+		return { armed: false, notify: input.notify, logPath: null, pid: null, error: (error as Error).message };
+	}
 }
 
 /**
@@ -305,7 +380,7 @@ export async function spawnClankyWorker(input: SpawnClankyWorkerInput): Promise<
 	const env = input.env ?? process.env;
 	const transcript = resolveWorkerTranscriptSetting({ override: input.transcript, env });
 	if (!SLUG_RE.test(slug)) {
-		throw new Error(`invalid slug '${slug}' (use lowercase letters, digits, hyphens)`);
+		throw new Error(`invalid slug '${slug}' (use lowercase letters, digits, hyphens; max 64 chars)`);
 	}
 	const agent = `clanky:${slug}`;
 
@@ -354,6 +429,12 @@ export async function spawnClankyWorker(input: SpawnClankyWorkerInput): Promise<
 			placement,
 		}),
 	);
+	// Wake-on-done is a property of being spawned: every funnel spawn arms a
+	// detached one-shot watcher unless this spawn opts out with watch: false.
+	const watch =
+		input.watch === false
+			? { armed: false, notify: null, logPath: null, pid: null }
+			: await armWorkerCompletionWatch({ agent, notify: await resolveSpawnNotifyTarget(env), env });
 	return {
 		agent,
 		paneId: started?.pane_id ?? null,
@@ -369,6 +450,7 @@ export async function spawnClankyWorker(input: SpawnClankyWorkerInput): Promise<
 			path: transcriptPath ?? null,
 			readCommand: runId === undefined ? null : `clanky transcript read ${agent} --lines 300`,
 		},
+		watch,
 		started: true,
 	};
 }
@@ -403,6 +485,12 @@ export default defineTool({
 			.boolean()
 			.optional()
 			.describe("override the /harness transcripts default for this spawn; true wraps in Clanky's transcript runner, false starts unwrapped"),
+		watch: z
+			.boolean()
+			.optional()
+			.describe(
+				"arm the detached one-shot completion watcher (clanky watch) that wakes the spawning lead with a [worker <outcome>] message when this worker settles; default true, pass false to disarm for this spawn",
+			),
 	}),
 	async execute(input) {
 		return await spawnClankyWorker({
@@ -414,6 +502,7 @@ export default defineTool({
 			cwd: input.cwd,
 			command: input.command,
 			transcript: input.transcript,
+			watch: input.watch,
 		});
 	},
 });

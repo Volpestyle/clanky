@@ -35,7 +35,7 @@ export type TargetResolution =
  */
 export function paneDisplayName(row: HerdrPaneRow): string {
 	if (row.label !== undefined) return row.label;
-	if (row.agent !== undefined && row.agent.startsWith("clanky:")) return row.agent;
+	if (row.agent?.startsWith("clanky:")) return row.agent;
 	return row.paneId;
 }
 

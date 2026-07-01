@@ -1,6 +1,7 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
 import { resolveClankyDataPath } from "./paths.ts";
 
 export type MemorySubjectKind = "main_user" | "discord_user" | "discord_server" | "project" | "other";
@@ -60,6 +61,7 @@ interface MemoryContextScope {
 
 const MEMORY_FILE = "memory/facts.json";
 const DEFAULT_CONTEXT_LIMIT = 16;
+const MAX_MEMORY_FACTS = 5000;
 
 // Serialize the read-modify-write of the facts file. Multiple writers run
 // concurrently in practice (the voice/Discord bindings persist facts from
@@ -74,6 +76,43 @@ function withMemoryWriteLock<T>(task: () => Promise<T>): Promise<T> {
 		() => undefined,
 	);
 	return run;
+}
+
+// Cross-process safety: worker processes are second writers to the same facts
+// file, so the in-process chain above cannot prevent lost updates on its own.
+// An advisory lock directory serializes the read-modify-write across processes
+// (mkdir is atomic on POSIX); this was chosen over merge-on-write because a
+// merge still leaves a read-to-rename race window, while the lock closes it.
+// A crashed holder's lock goes stale and is stolen after MEMORY_LOCK_STALE_MS.
+const MEMORY_LOCK_STALE_MS = 10_000;
+const MEMORY_LOCK_RETRY_MS = 25;
+const MEMORY_LOCK_MAX_WAIT_MS = 15_000;
+
+async function acquireMemoryFileLock(env: NodeJS.ProcessEnv): Promise<string | undefined> {
+	const lockPath = `${resolveClankyDataPath(MEMORY_FILE, env)}.lock`;
+	await mkdir(dirname(lockPath), { recursive: true, mode: 0o700 });
+	const deadline = Date.now() + MEMORY_LOCK_MAX_WAIT_MS;
+	for (;;) {
+		try {
+			// Non-recursive mkdir: fails with EEXIST while another process holds it.
+			await mkdir(lockPath, { mode: 0o700 });
+			return lockPath;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+		}
+		const info = await stat(lockPath).catch(() => undefined);
+		if (info !== undefined && Date.now() - info.mtimeMs > MEMORY_LOCK_STALE_MS) {
+			await rm(lockPath, { recursive: true, force: true });
+			continue;
+		}
+		if (Date.now() >= deadline) {
+			// A pathologically held lock must not hang the turn; proceed unlocked
+			// (atomic temp+rename still prevents torn files, only merges may race).
+			console.error("clanky memory: lock wait timed out; writing without cross-process lock");
+			return undefined;
+		}
+		await sleep(MEMORY_LOCK_RETRY_MS);
+	}
 }
 
 export async function rememberMemory(input: RememberMemoryInput): Promise<MemoryFact> {
@@ -94,10 +133,15 @@ export async function rememberMemory(input: RememberMemoryInput): Promise<Memory
 	if (input.source?.trim()) next.source = input.source.trim();
 
 	return withMemoryWriteLock(async () => {
-		const memories = await readMemories();
-		memories.push(next);
-		await writeMemories(dedupeMemories(memories));
-		return next;
+		const lockPath = await acquireMemoryFileLock(process.env);
+		try {
+			const memories = await readMemories();
+			memories.push(next);
+			await writeMemories(dedupeMemories(memories));
+			return next;
+		} finally {
+			if (lockPath !== undefined) await rm(lockPath, { recursive: true, force: true });
+		}
 	});
 }
 
@@ -245,7 +289,21 @@ function dedupeMemories(memories: readonly MemoryFact[]): MemoryFact[] {
 		seen.add(key);
 		out.push(memory);
 	}
-	return out.slice(-5000);
+	return evictMemoryOverflow(out);
+}
+
+/**
+ * Cap the store at MAX_MEMORY_FACTS, evicting the least valuable facts first:
+ * lowest importance, then oldest updatedAt within the same importance. File
+ * order (chronological) is preserved for the survivors.
+ */
+function evictMemoryOverflow(memories: MemoryFact[]): MemoryFact[] {
+	if (memories.length <= MAX_MEMORY_FACTS) return memories;
+	const ranked = [...memories].sort(
+		(left, right) => right.importance - left.importance || right.updatedAt.localeCompare(left.updatedAt),
+	);
+	const keep = new Set(ranked.slice(0, MAX_MEMORY_FACTS).map((memory) => memory.id));
+	return memories.filter((memory) => keep.has(memory.id));
 }
 
 async function collectScopedMemories(scope: MemoryContextScope, limit: number): Promise<MemoryFact[]> {

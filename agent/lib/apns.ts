@@ -60,12 +60,18 @@ function base64url(input: Buffer | string): string {
 
 // APNs requires the provider token be refreshed at least hourly and reused at
 // least 20 min; cache for 30 min.
+const APNS_PROVIDER_TOKEN_TTL_S = 1800;
+// Deadline for the full send (connect + request): one hung HTTP/2 stream must
+// not wedge push delivery forever.
+const APNS_REQUEST_TIMEOUT_MS = 10_000;
+const APNS_COLLAPSE_ID_MAX_LENGTH = 64;
+
 let cachedToken: { jwt: string; iat: number; cacheKey: string } | undefined;
 
 function providerToken(config: ApnsConfig): string {
 	const now = Math.floor(Date.now() / 1000);
 	const cacheKey = `${config.keyPath}\0${config.keyId}\0${config.teamId}`;
-	if (cachedToken && cachedToken.cacheKey === cacheKey && now - cachedToken.iat < 1800) return cachedToken.jwt;
+	if (cachedToken && cachedToken.cacheKey === cacheKey && now - cachedToken.iat < APNS_PROVIDER_TOKEN_TTL_S) return cachedToken.jwt;
 	const key = createPrivateKey(readFileSync(config.keyPath));
 	const header = base64url(JSON.stringify({ alg: "ES256", kid: config.keyId }));
 	const claims = base64url(JSON.stringify({ iss: config.teamId, iat: now }));
@@ -94,9 +100,17 @@ export function sendApns(token: string, note: ApnsNotification, config = apnsCon
 	return new Promise<ApnsResult>((resolve) => {
 		const client = http2.connect(`https://${config.host}`);
 		let settled = false;
+		const deadline = setTimeout(() => {
+			if (settled) return;
+			settled = true;
+			// destroy(), not close(): close() waits for the hung stream to finish.
+			client.destroy();
+			resolve({ ok: false, reason: `timeout after ${APNS_REQUEST_TIMEOUT_MS}ms` });
+		}, APNS_REQUEST_TIMEOUT_MS);
 		const finish = (result: ApnsResult): void => {
 			if (settled) return;
 			settled = true;
+			clearTimeout(deadline);
 			client.close();
 			resolve(result);
 		};
@@ -110,7 +124,7 @@ export function sendApns(token: string, note: ApnsNotification, config = apnsCon
 			"apns-push-type": "alert",
 			"apns-priority": "10",
 		};
-		if (note.collapseId) headers["apns-collapse-id"] = note.collapseId.slice(0, 64);
+		if (note.collapseId) headers["apns-collapse-id"] = note.collapseId.slice(0, APNS_COLLAPSE_ID_MAX_LENGTH);
 
 		const request = client.request(headers);
 		let status = 0;
@@ -130,7 +144,9 @@ export function sendApns(token: string, note: ApnsNotification, config = apnsCon
 			let reason = bodyText;
 			try {
 				reason = (JSON.parse(bodyText) as { reason?: string }).reason ?? bodyText;
-			} catch {}
+			} catch (error) {
+				console.error(`apns error body was not JSON (status ${status}):`, error);
+			}
 			finish({ ok: false, status, reason });
 		});
 		request.on("error", (error) => finish({ ok: false, reason: error.message }));

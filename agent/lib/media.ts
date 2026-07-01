@@ -17,6 +17,7 @@ import {
 	resolveGeminiApiKey,
 	resolveXaiApiKey,
 } from "./model-selection.ts";
+import { DEFAULT_OPENAI_VISION_MODEL } from "./config-defaults.ts";
 import { guardedFetch } from "./net-guard.ts";
 import { resolveClankyDataPath } from "./paths.ts";
 import type { SandboxSession } from "eve/sandbox";
@@ -149,7 +150,6 @@ export interface VisualInspectOptions {
 }
 
 const DEFAULT_OPENAI_IMAGE_MODEL = "gpt-image-2";
-const DEFAULT_OPENAI_VISION_MODEL = "gpt-5.4-mini";
 const DEFAULT_OUTPUT_DIR_RELATIVE = "media/openai-images";
 const DEFAULT_XAI_IMAGE_MODEL = "grok-imagine-image-quality";
 const DEFAULT_GEMINI_IMAGE_MODEL = "gemini-3.1-flash-image";

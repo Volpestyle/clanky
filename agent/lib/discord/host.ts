@@ -24,6 +24,8 @@ import { discordGatewaySessionStatusFromMessage, type DiscordGatewaySessionStatu
 import { rememberDiscordMessageFacts } from "./memory.ts";
 import { buildPresenceSessionMessage } from "./presence-payload.ts";
 import type { DiscordHistoryEntry } from "./prompt.ts";
+import { SURFACE_HEADER } from "../frontdoor-auth.ts";
+import { TtlCache } from "../ttl-cache.ts";
 import { type VoiceIntent, detectVoiceIntent } from "./voice-intent.ts";
 import type { VoiceSessionFault } from "../voice/supervisor.ts";
 import { resolveWakeNameMatch, resolveWakeNames } from "./wake-names.ts";
@@ -91,6 +93,12 @@ export interface DiscordPresenceHostOptions {
 const DEFAULT_EVE_HOST = "http://127.0.0.1:2000";
 const MAX_CHANNEL_HISTORY = 40;
 const MAX_INBOUND_MESSAGE_MEMORY = 1000;
+// Per-channel state (presence sessions, gateway history) is bounded so the
+// always-on host does not accumulate an entry for every Discord channel ever
+// seen. Bounds are generous: hundreds of channels, expiry only after days of
+// idle, so an active conversation is never evicted mid-flight.
+const MAX_TRACKED_CHANNELS = 500;
+const CHANNEL_STATE_IDLE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_VOICE_INTENT_CATCH_UP_WINDOW_MS = 30_000;
 const DISCORD_EPOCH_MS = 1_420_070_400_000n;
 
@@ -233,8 +241,19 @@ export class DiscordPresenceHost {
 	private readonly wakeNames: string[];
 	private readonly scope: DiscordScopeOptions;
 	private readonly inboundMessageIds = sharedInboundMessageIds();
-	private readonly channelHistory = new Map<string, DiscordHistoryEntry[]>();
-	private readonly sessions = new Map<string, ClientSession>();
+	private readonly channelHistory = new TtlCache<string, DiscordHistoryEntry[]>({
+		maxEntries: MAX_TRACKED_CHANNELS,
+		ttlMs: CHANNEL_STATE_IDLE_TTL_MS,
+	});
+	// Sliding idle expiry: any turn in the channel keeps its session alive. When
+	// a session drops out, its mirror mark goes with it so the replacement
+	// session gets a fresh pane mirror instead of silently going unmirrored.
+	private readonly sessions = new TtlCache<string, ClientSession>({
+		maxEntries: MAX_TRACKED_CHANNELS,
+		ttlMs: CHANNEL_STATE_IDLE_TTL_MS,
+		refreshTtlOnGet: true,
+		onEvict: (channelId) => this.mirrored.delete(channelId),
+	});
 	private readonly mirrored = new Set<string>();
 	private readonly options: DiscordPresenceHostOptions;
 
@@ -246,7 +265,12 @@ export class DiscordPresenceHost {
 			chat: true,
 			voice: options.voice,
 		});
-		this.client = new Client({ host: options.eveHost ?? DEFAULT_EVE_HOST });
+		// Presence turns are autonomous, not owner-driven: declare the surface so
+		// privileged tools (host_command yolo) clamp to the gated policy.
+		this.client = new Client({
+			host: options.eveHost ?? DEFAULT_EVE_HOST,
+			headers: { [SURFACE_HEADER]: "discord-presence" },
+		});
 		this.tracker = new EngagementTracker(resolveEngagementWindowMs(process.env));
 		this.wakeNames = options.wakeNames ?? resolveWakeNames(process.env);
 		this.scope = resolveDiscordScopeOptions(process.env);

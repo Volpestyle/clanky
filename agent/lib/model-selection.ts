@@ -7,12 +7,28 @@ import { createXaiModel } from "./xai-model.ts";
 
 const CODEX_EFFORTS: readonly CodexReasoningEffort[] = ["minimal", "low", "medium", "high", "xhigh"];
 
-export const DEFAULT_CODEX_MODEL = "gpt-5.5";
-export const DEFAULT_CLAUDE_MODEL = "claude-opus-4-8";
-export const DEFAULT_LOCAL_MODEL = "qwen3-coder-next";
-export const DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:11434/v1";
-export const DEFAULT_XAI_MODEL = "grok-4";
-export const DEFAULT_GEMINI_MODEL = "gemini-3-pro";
+// Model defaults live in config-defaults.ts (the single source; bump there).
+// Re-exported here because this module is the agent-side entrypoint for model
+// selection and existing importers reference these names.
+export {
+	DEFAULT_CLAUDE_MODEL,
+	DEFAULT_CODEX_MODEL,
+	DEFAULT_GEMINI_MODEL,
+	DEFAULT_LOCAL_BASE_URL,
+	DEFAULT_LOCAL_MODEL,
+	DEFAULT_XAI_MODEL,
+} from "./config-defaults.ts";
+import {
+	DEFAULT_CLAUDE_MODEL,
+	DEFAULT_CODEX_MODEL,
+	DEFAULT_GEMINI_MODEL,
+	DEFAULT_LOCAL_BASE_URL,
+	DEFAULT_LOCAL_MODEL,
+	DEFAULT_XAI_MODEL,
+	firstEnvValue,
+	GEMINI_API_KEY_ENV_NAMES,
+	XAI_API_KEY_ENV_NAMES,
+} from "./config-defaults.ts";
 
 export type ClankyModelProvider = "claude" | "codex" | "local" | "xai" | "gemini";
 
@@ -62,12 +78,12 @@ export function brainContextWindowTokensFromEnv(env: NodeJS.ProcessEnv = process
 
 /** Resolve the xAI API key (shared with Discord voice realtime). */
 export function resolveXaiApiKey(env: NodeJS.ProcessEnv = process.env): string | undefined {
-	return env.CLANKY_XAI_API_KEY?.trim() || env.XAI_API_KEY?.trim() || undefined;
+	return firstEnvValue(XAI_API_KEY_ENV_NAMES, env);
 }
 
 /** Resolve the Gemini API key from any of the accepted env names. */
 export function resolveGeminiApiKey(env: NodeJS.ProcessEnv = process.env): string | undefined {
-	return env.CLANKY_GEMINI_API_KEY?.trim() || env.GEMINI_API_KEY?.trim() || env.GOOGLE_GENERATIVE_AI_API_KEY?.trim() || undefined;
+	return firstEnvValue(GEMINI_API_KEY_ENV_NAMES, env);
 }
 
 export interface ClankyCodexModelSettings {

@@ -4,7 +4,7 @@ import { EventEmitter } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type JsonRecord } from "./json.ts";
+import type { JsonRecord } from "./json.ts";
 import type {
 	OpenAiRealtimeClientOptions,
 	OpenAiRealtimeConnectOptions,
@@ -158,8 +158,12 @@ export class LocalRealtimeClient extends EventEmitter {
 			.then(task, task)
 			.catch((error: unknown) => {
 				const err = error instanceof Error ? error : new Error(String(error));
-				this.logger?.("error", "local_realtime_error", { error: err.message });
-				this.emit("socket_error", err);
+				this.logger?.("error", "local_realtime_turn_error", { error: err.message });
+				// A failed ASR/LLM/TTS run degrades that turn only. Do not emit
+				// socket_error: the supervisor treats it as a fatal session fault and
+				// tears the whole voice session down for what is a per-turn hiccup
+				// (e.g. one slow local LLM request).
+				this.emit("error_event", { type: "error", provider: "local", error: err.message } satisfies JsonRecord);
 			});
 	}
 

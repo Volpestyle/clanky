@@ -41,6 +41,9 @@ try {
 					task: item.task,
 					harness: "custom",
 					command: ["bash", "-lc", item.command, "bash", "{KICKOFF}"],
+					// The smoke pane closes seconds after spawn; do not arm a
+					// completion watcher that would wake the real lead pane.
+					watch: false,
 				},
 				undefined as never,
 			)) as { agent: string; paneId: string | null; started: boolean };
