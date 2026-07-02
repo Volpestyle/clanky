@@ -12,6 +12,7 @@ const repo = await mkdtemp(join(tmpdir(), "clanky-skills-"));
 try {
 	await mkdir(join(repo, "agent", "skills"), { recursive: true });
 	await mkdir(join(repo, "skills", "clanky-operator"), { recursive: true });
+	await writeFile(join(repo, "skills", "README.md"), "# Bundled skills\n", "utf8");
 
 	await writeFile(
 		join(repo, "agent", "skills", "coding.md"),
@@ -51,7 +52,7 @@ try {
 	);
 
 	const skills = await listClankySkills(repo);
-	assert(skills.length === 3, "inventory should include flat, TypeScript, and packaged skills");
+	assert(skills.length === 3, "inventory should include flat, TypeScript, and packaged skills, not root README files");
 	assert(skills.map((skill) => skill.name).join(",") === "clanky-operator,coding,research", "inventory should sort as one name list");
 	const coding = skills.find((skill) => skill.name === "coding");
 	const research = skills.find((skill) => skill.name === "research");

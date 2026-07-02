@@ -29,6 +29,10 @@ export interface MirrorIosChatInput {
 	/// Device-remembered handles from a prior call, used to re-place idempotently.
 	tabId?: string;
 	paneId?: string;
+	/// Fresh-materialization target. Existing remembered handles win; if both
+	/// workspace fields are set, workspaceId wins over workspaceLabel.
+	workspaceId?: string;
+	workspaceLabel?: string;
 	/// Target herdr session (name/path). Omit for the relay's env-bound session.
 	session?: string;
 }
@@ -53,8 +57,14 @@ interface WorkspaceHandle {
 	initialTab?: { tabId: string };
 }
 
-// Memoize the dedicated workspace per herdr session (ids are session-scoped). An
-// in-flight create is memoized too so concurrent first chats never double-create.
+type WorkspaceTarget =
+	| { kind: "id"; workspaceId: string }
+	| { kind: "label"; label: string }
+	| { kind: "default"; label: string; overrideId?: string };
+
+// Memoize workspaces per herdr session and requested target (ids are
+// session-scoped). An in-flight create is memoized too so concurrent first chats
+// to the same target never double-create.
 const resolvedWorkspaces = new Map<string, WorkspaceHandle>();
 const pendingWorkspaces = new Map<string, Promise<WorkspaceHandle>>();
 
@@ -71,6 +81,11 @@ function isMissingTargetError(error: unknown): boolean {
 	return message.includes("not found") && (message.includes("workspace") || message.includes("tab"));
 }
 
+function isLastTabCloseError(error: unknown): boolean {
+	const message = error instanceof Error ? error.message : String(error);
+	return message.includes("cannot close the last tab in a workspace");
+}
+
 function findWorkspaceIdByLabel(listed: unknown, label: string): string | undefined {
 	const workspaces = asRecord(listed)?.workspaces;
 	if (!Array.isArray(workspaces)) return undefined;
@@ -84,16 +99,50 @@ function findWorkspaceIdByLabel(listed: unknown, label: string): string | undefi
 	return undefined;
 }
 
-/**
- * Find the "Clanky" workspace by stable label (env CLANKY_IOS_WORKSPACE_LABEL,
- * default "Clanky"; hard override CLANKY_IOS_WORKSPACE_ID) or create it. A fresh
- * workspace exposes its default tab so the first chat can reuse it.
- */
-async function findOrCreateWorkspace(session: string | undefined): Promise<WorkspaceHandle> {
-	const override = nonEmptyString(process.env.CLANKY_IOS_WORKSPACE_ID);
-	if (override !== undefined) return { workspaceId: override };
+function findWorkspaceIdById(listed: unknown, workspaceId: string): string | undefined {
+	const workspaces = asRecord(listed)?.workspaces;
+	if (!Array.isArray(workspaces)) return undefined;
+	for (const entry of workspaces) {
+		const id = nonEmptyString(asRecord(entry)?.workspace_id);
+		if (id === workspaceId) return id;
+	}
+	return undefined;
+}
 
-	const label = workspaceLabel();
+function workspaceTarget(input: MirrorIosChatInput): WorkspaceTarget {
+	const workspaceId = nonEmptyString(input.workspaceId?.trim());
+	if (workspaceId !== undefined) return { kind: "id", workspaceId };
+	const label = nonEmptyString(input.workspaceLabel?.trim());
+	if (label !== undefined) return { kind: "label", label };
+	const overrideId = nonEmptyString(process.env.CLANKY_IOS_WORKSPACE_ID);
+	return { kind: "default", label: workspaceLabel(), ...(overrideId === undefined ? {} : { overrideId }) };
+}
+
+function workspaceCacheKey(session: string | undefined, target: WorkspaceTarget): string {
+	const sessionKey = session ?? "";
+	switch (target.kind) {
+		case "id":
+			return `${sessionKey}\0id\0${target.workspaceId}`;
+		case "label":
+			return `${sessionKey}\0label\0${target.label}`;
+		case "default":
+			return `${sessionKey}\0default\0${target.overrideId ?? target.label}`;
+	}
+}
+
+async function workspaceById(session: string | undefined, workspaceId: string): Promise<WorkspaceHandle> {
+	const existing = findWorkspaceIdById(await herdrRequest("workspace.list", {}, session), workspaceId);
+	if (existing === undefined) {
+		throw new Error(`chat.mirror workspace_id '${workspaceId}' does not exist in the target herdr session`);
+	}
+	return { workspaceId: existing };
+}
+
+/**
+ * Find a workspace by stable label or create it. A fresh workspace exposes its
+ * default tab so the first chat can reuse it.
+ */
+async function findOrCreateWorkspaceByLabel(session: string | undefined, label: string): Promise<WorkspaceHandle> {
 	const existing = findWorkspaceIdByLabel(await herdrRequest("workspace.list", {}, session), label);
 	if (existing !== undefined) return { workspaceId: existing };
 
@@ -104,13 +153,25 @@ async function findOrCreateWorkspace(session: string | undefined): Promise<Works
 	return { workspaceId, ...(initialTabId === undefined ? {} : { initialTab: { tabId: initialTabId } }) };
 }
 
-async function resolveWorkspace(session: string | undefined): Promise<WorkspaceHandle> {
-	const key = session ?? "";
+async function findOrCreateWorkspace(session: string | undefined, target: WorkspaceTarget): Promise<WorkspaceHandle> {
+	switch (target.kind) {
+		case "id":
+			return workspaceById(session, target.workspaceId);
+		case "label":
+			return findOrCreateWorkspaceByLabel(session, target.label);
+		case "default":
+			if (target.overrideId !== undefined) return { workspaceId: target.overrideId };
+			return findOrCreateWorkspaceByLabel(session, target.label);
+	}
+}
+
+async function resolveWorkspace(session: string | undefined, target: WorkspaceTarget): Promise<WorkspaceHandle> {
+	const key = workspaceCacheKey(session, target);
 	const resolved = resolvedWorkspaces.get(key);
 	if (resolved !== undefined) return resolved;
 	const inflight = pendingWorkspaces.get(key);
 	if (inflight !== undefined) return inflight;
-	const promise = findOrCreateWorkspace(session)
+	const promise = findOrCreateWorkspace(session, target)
 		.then((handle) => {
 			resolvedWorkspaces.set(key, handle);
 			pendingWorkspaces.delete(key);
@@ -153,7 +214,7 @@ async function applyMirrorTab(
 }
 
 async function applyFreshMirrorTab(input: MirrorIosChatInput): Promise<IosChatMirrorHandles> {
-	const workspace = await resolveWorkspace(input.session);
+	const workspace = await resolveWorkspace(input.session, workspaceTarget(input));
 	// Claim the workspace's default tab synchronously so a concurrent first chat
 	// cannot re-root the same tab twice (JS runs this claim uninterrupted).
 	const initialTab = workspace.initialTab;
@@ -180,12 +241,30 @@ async function tabIsAlive(tabId: string, session: string | undefined): Promise<b
 	);
 }
 
+async function workspaceIdForTab(tabId: string, session: string | undefined): Promise<string> {
+	const tab = asRecord(asRecord(await herdrRequest("tab.get", { tab_id: tabId }, session))?.tab);
+	const workspaceId = nonEmptyString(tab?.workspace_id);
+	if (workspaceId === undefined) throw new Error(`herdr tab.get returned no workspace id for tab '${tabId}'`);
+	return workspaceId;
+}
+
+async function closeTabOrWorkspace(tabId: string, session: string | undefined): Promise<void> {
+	try {
+		await herdrRequest("tab.close", { tab_id: tabId }, session);
+	} catch (error) {
+		if (!isLastTabCloseError(error)) throw error;
+		await herdrRequest("workspace.close", { workspace_id: await workspaceIdForTab(tabId, session) }, session);
+	}
+}
+
 /**
  * Materialize (or revalidate) a chat's mirror. Idempotent by handle, not by agent
  * name (the mirror is a tab-root command pane, not a registered agent):
  *   1. the remembered pane still runs this chat's mirror -> return it (no-op);
  *   2. else the remembered tab is alive -> re-root its one pane (reuse the tab);
- *   3. else find-or-create the "Clanky" workspace and apply a new one-pane tab.
+ *   3. else resolve the requested/default workspace and apply a new one-pane tab.
+ * A live remembered handle pins the chat where it already is; workspace targets
+ * only affect fresh materialization.
  */
 export async function mirrorIosChat(input: MirrorIosChatInput): Promise<IosChatMirrorHandles> {
 	if (input.paneId !== undefined) {
@@ -200,22 +279,22 @@ export async function mirrorIosChat(input: MirrorIosChatInput): Promise<IosChatM
 	} catch (error) {
 		// Tearing down the last chat also closes the dedicated workspace (herdr drops
 		// a workspace when its final pane goes), leaving the memoized id stale. Drop
-		// the cache and rebuild the workspace once.
+		// the matching target cache and rebuild the workspace once.
 		if (!isMissingTargetError(error)) throw error;
-		resolvedWorkspaces.delete(input.session ?? "");
+		resolvedWorkspaces.delete(workspaceCacheKey(input.session, workspaceTarget(input)));
 		return applyFreshMirrorTab(input);
 	}
 }
 
 /**
  * Tear down a chat's presence. With `closeTab`, close the tab directly — that
- * removes the mirror pane with it (and, for a one-pane tab, is the only clean way,
- * since closing the sole pane already drops the tab). Otherwise close just the
- * mirror pane, leaving any sibling panes (a chat's subagents) in the tab.
+ * removes the mirror pane with it. If Herdr refuses to close the workspace's last
+ * tab, close the owning workspace instead. Otherwise close just the mirror pane,
+ * leaving any sibling panes (a chat's subagents) in the tab.
  */
 export async function closeIosChatMirror(input: CloseIosChatInput): Promise<CloseIosChatResult> {
 	if (input.closeTab === true && input.tabId !== undefined) {
-		await herdrRequest("tab.close", { tab_id: input.tabId }, input.session);
+		await closeTabOrWorkspace(input.tabId, input.session);
 		return { closed_pane: input.paneId !== undefined, closed_tab: true };
 	}
 	if (input.paneId !== undefined) {
@@ -223,7 +302,7 @@ export async function closeIosChatMirror(input: CloseIosChatInput): Promise<Clos
 		return { closed_pane: true, closed_tab: false };
 	}
 	if (input.tabId !== undefined) {
-		await herdrRequest("tab.close", { tab_id: input.tabId }, input.session);
+		await closeTabOrWorkspace(input.tabId, input.session);
 		return { closed_pane: false, closed_tab: true };
 	}
 	throw new Error("chat.close requires pane_id or tab_id");

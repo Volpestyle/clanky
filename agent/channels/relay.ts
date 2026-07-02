@@ -22,13 +22,19 @@ import { herdrRequest } from "../lib/herdr-socket.ts";
 import { relayLogError, relayTrace } from "../lib/relay/log.ts";
 import { int, parseRelayRequest, relayMessageText, str, type RelayRequest } from "../lib/relay/protocol.ts";
 import {
+	attachCommandPeer,
+	attachFacePeer,
 	closeStream,
 	commandPeers,
 	commandPresence,
+	detachCommandPeer,
+	detachFacePeer,
+	detachPresencePeer,
 	facePeers,
 	facePresence,
 	liveTerminalStream,
 	attachStreamKey,
+	type PresencePeerDetail,
 	reply,
 } from "../lib/relay/peers.ts";
 import { markPeerAlive, startPeerHeartbeat, stopPeerHeartbeat } from "../lib/relay/heartbeat.ts";
@@ -50,6 +56,39 @@ function authorize(peer: WebSocketPeer): boolean {
 	return isFrontdoorAuthorized(peer.request);
 }
 
+function peerAddress(peer: WebSocketPeer): string {
+	return peer.remoteAddress ?? peer.request.headers.get("x-forwarded-for") ?? "unknown";
+}
+
+function logRejectedPeer(peer: WebSocketPeer, where: string): void {
+	relayLogError(`peer ${peer.id} unauthorized ${where} from ${peerAddress(peer)}; closing 4401`);
+}
+
+function logPresence(peer: WebSocketPeer, action: "attached" | "detached", detail: PresencePeerDetail): void {
+	console.error(`relay presence: ${action} role=${detail.role} pid=${detail.pid ?? "unknown"} peer=${peer.id} address=${peerAddress(peer)}`);
+}
+
+function presencePidValue(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
+function presencePid(req: RelayRequest, rawFrame: string): number | undefined {
+	return presencePidValue(req.args?.pid) ?? rawPresencePid(req, rawFrame);
+}
+
+function rawPresencePid(req: RelayRequest, rawFrame: string): number | undefined {
+	if (req.op !== "face-attach" && req.op !== "command-attach") return undefined;
+	try {
+		const parsed = JSON.parse(rawFrame) as unknown;
+		if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+		const args = (parsed as { readonly args?: unknown }).args;
+		if (args === null || typeof args !== "object" || Array.isArray(args)) return undefined;
+		return presencePidValue((args as { readonly pid?: unknown }).pid);
+	} catch {
+		return undefined;
+	}
+}
+
 /// Full teardown for a departing peer — graceful close, socket error, or failed
 /// liveness all funnel here: heartbeat, presence sets, pending commands (the
 /// surviving counterparty gets notified), and every attach stream / poll loop.
@@ -57,8 +96,7 @@ function authorize(peer: WebSocketPeer): boolean {
 /// self-expire as their promise chains drain, so they need no per-peer surgery.
 function cleanupPeer(peer: WebSocketPeer): void {
 	stopPeerHeartbeat(peer);
-	facePeers.delete(peer);
-	commandPeers.delete(peer);
+	for (const detail of detachPresencePeer(peer)) logPresence(peer, "detached", detail);
 	closePendingCommandsFor(peer);
 	closeStream(peer);
 }
@@ -77,6 +115,7 @@ export default defineChannel({
 		WS("/relay/ws", async () => ({
 			open(peer: WebSocketPeer) {
 				if (!authorize(peer)) {
+					logRejectedPeer(peer, "on open");
 					peer.close(4401, "unauthorized");
 					return;
 				}
@@ -88,14 +127,17 @@ export default defineChannel({
 			},
 			async message(peer: WebSocketPeer, message: WebSocketMessage) {
 				if (!authorize(peer)) {
+					logRejectedPeer(peer, "on message");
 					peer.close(4401, "unauthorized");
 					return;
 				}
 				markPeerAlive(peer);
 				const tRx = Date.now();
 				let req: RelayRequest;
+				let rawFrame: string;
 				try {
-					req = parseRelayRequest(relayMessageText(message));
+					rawFrame = relayMessageText(message);
+					req = parseRelayRequest(rawFrame);
 				} catch (error) {
 					relayLogError(`peer ${peer.id} sent a rejected frame`, error);
 					reply(peer, { error: (error as Error).message });
@@ -145,23 +187,25 @@ export default defineChannel({
 						return;
 					}
 					if (req.op === "face-attach") {
-						facePeers.add(peer);
+						logPresence(peer, "attached", attachFacePeer(peer, presencePid(req, rawFrame)));
 						reply(peer, { id: req.id, ok: true, face: "attached" });
 						return;
 					}
 					if (req.op === "face-detach") {
-						facePeers.delete(peer);
+						const detail = detachFacePeer(peer);
+						if (detail !== undefined) logPresence(peer, "detached", detail);
 						if (!commandPeers.has(peer)) closePendingCommandsFor(peer);
 						reply(peer, { id: req.id, ok: true, face: "detached" });
 						return;
 					}
 					if (req.op === "command-attach") {
-						commandPeers.add(peer);
+						logPresence(peer, "attached", attachCommandPeer(peer, presencePid(req, rawFrame)));
 						reply(peer, { id: req.id, ok: true, commandHost: "attached" });
 						return;
 					}
 					if (req.op === "command-detach") {
-						commandPeers.delete(peer);
+						const detail = detachCommandPeer(peer);
+						if (detail !== undefined) logPresence(peer, "detached", detail);
 						if (!facePeers.has(peer)) closePendingCommandsFor(peer);
 						reply(peer, { id: req.id, ok: true, commandHost: "detached" });
 						return;

@@ -393,20 +393,25 @@ export async function dispatch(op: string, args: Record<string, unknown>): Promi
 		}
 		case "chat.mirror": {
 			// Bind an iOS native chat to a herdr pane mirror (ADR-0004): a one-pane tab
-			// in the dedicated "Clanky" workspace, tailing the eve session read-only.
-			// Idempotent by the device-remembered {tab_id, pane_id} handles.
+			// in the requested/default workspace, tailing the eve session read-only.
+			// Idempotent by the device-remembered {tab_id, pane_id} handles; live
+			// handles win over workspace targeting.
 			const sessionId = str(args.session_id);
 			const slug = str(args.slug);
 			if (sessionId === undefined || slug === undefined) throw new Error("chat.mirror requires session_id and slug");
 			const title = str(args.title);
 			const tabId = str(args.tab_id);
 			const paneId = str(args.pane_id);
+			const workspaceId = str(args.workspace_id);
+			const workspaceLabel = str(args.workspace_label);
 			return mirrorIosChat({
 				sessionId,
 				slug,
 				...(title === undefined ? {} : { title }),
 				...(tabId === undefined ? {} : { tabId }),
 				...(paneId === undefined ? {} : { paneId }),
+				...(workspaceId === undefined ? {} : { workspaceId }),
+				...(workspaceLabel === undefined ? {} : { workspaceLabel }),
 				...(session === undefined ? {} : { session }),
 			});
 		}

@@ -69,7 +69,7 @@ import {
 	resolveWorkflowDataDir,
 	resolveWorkflowRetentionHours,
 } from "../agent/lib/workflow-data-retention.ts";
-import { startFacePresence, stopFacePresence, type FaceCommandRequest } from "../agent/lib/face-presence.ts";
+import { facePresenceState, startFacePresence, stopFacePresence, type FaceCommandRequest, type FacePresenceState } from "../agent/lib/face-presence.ts";
 import { SURFACE_HEADER } from "../agent/lib/frontdoor-auth.ts";
 import { YOLO_ENV } from "../agent/lib/host-command/mode.ts";
 import type { ClankyMenuClientMessage, ClankyMenuServerEvent } from "../agent/lib/clanky-menu-protocol.ts";
@@ -574,6 +574,25 @@ type BrainHealthState =
 	| { state: "unhealthy"; checkedAt: number; status: number; statusText: string; detail?: string }
 	| { state: "down"; checkedAt: number; detail: string };
 
+type RelayPresencePeer = {
+	readonly pid?: number;
+	readonly role?: string;
+	readonly connectedAt?: string;
+};
+
+type RelayPresenceSummary = {
+	readonly attached?: boolean;
+	readonly count?: number;
+	readonly peers?: readonly RelayPresencePeer[];
+};
+
+type RelayHealth = {
+	readonly ok?: boolean;
+	readonly error?: string;
+	readonly face?: RelayPresenceSummary;
+	readonly commandHost?: RelayPresenceSummary;
+};
+
 type SettingsMenuStatus =
 	| string
 	| {
@@ -969,7 +988,14 @@ uiReady = true;
 startBrainHealthMonitor();
 // Announce this face to the brain so the iOS app can show headless vs attached.
 // Reconnects across brain restarts and host changes via the getters.
-startFacePresence({ host: () => brainHost, token: resolveRelayTokenSync, pid: process.pid, role: "face-command-host", onCommandRequest: runRemoteFaceCommand });
+startFacePresence({
+	host: () => brainHost,
+	token: resolveRelayTokenSync,
+	pid: process.pid,
+	role: "face-command-host",
+	onCommandRequest: runRemoteFaceCommand,
+	onStateChange: () => refreshStatusView(),
+});
 refreshStatus("ready");
 tui.start();
 enableClankyMouseTracking();
@@ -3125,6 +3151,7 @@ function formatStatusText(label: string): string {
 		? `${ansi.accent("shell")}${bashRunning > 0 ? ansi.dim(" running") : ansi.dim(` · ${displayHomePath(REPO)}`)}`
 		: "";
 	const brainState = formatBrainHealthStatus(brainHealth);
+	const presenceState = formatFacePresenceStatus(facePresenceState());
 	const parts = [
 		formatPrimaryStatusLabel(label),
 		...(responseState.length === 0 ? [] : [ansi.dim(responseState)]),
@@ -3132,6 +3159,7 @@ function formatStatusText(label: string): string {
 		authState,
 		focusState,
 		bashState,
+		presenceState,
 		model,
 		formatContextUsage(faceRenderer.lastUsage, currentContextSize),
 	]
@@ -3199,6 +3227,21 @@ function formatBrainHealthStatus(health: BrainHealthState): string {
 			return ansi.yellow(`eve unavailable ${health.status}`);
 		case "down":
 			return ansi.red("eve unreachable");
+	}
+}
+
+function formatFacePresenceStatus(state: FacePresenceState): string {
+	switch (state.state) {
+		case "attached":
+			return ansi.green("presence attached");
+		case "connecting":
+			return ansi.yellow("presence connecting");
+		case "detached": {
+			const detail = state.lastError === undefined ? "" : ` ${ansi.dim(`(${truncate(state.lastError, 64)})`)}`;
+			return `${ansi.yellow("presence detached")}${detail}`;
+		}
+		case "stopped":
+			return ansi.dim("presence stopped");
 	}
 }
 
@@ -8106,13 +8149,14 @@ async function configurePairing(argument: string): Promise<string> {
 }
 
 async function statusText(): Promise<string> {
-	const [info, gateway, browser, claudeAuth, codexAuth, mcpStore] = await Promise.all([
+	const [info, gateway, browser, claudeAuth, codexAuth, mcpStore, relayHealth] = await Promise.all([
 		fetchInfo(),
 		fetchDiscordGatewayHealth(),
 		browserBridgeStatus(),
 		claudeCredentialStatus(),
 		codexCredentialStatus(),
 		listMcpServerConfigs(),
+		fetchRelayHealth(),
 	]);
 	const config = await readConfig();
 	const bindings = await resolveRoleBindings();
@@ -8138,6 +8182,7 @@ async function statusText(): Promise<string> {
 		statusLine("integrations", formatIntegrationSummary(bindings, connections)),
 		statusLine("mcp", formatMcpStatusSummary(info, mcpStore)),
 		statusLine("browser bridge", formatBrowserBridgeSummary(browser)),
+		statusLine("relay presence", formatRelayPresenceSummary(relayHealth), relayPresenceTone(relayHealth)),
 		statusLine("discord scope", formatDiscordScopeSummary(config)),
 		statusLine("discord gateway", formatJson(gateway), "muted"),
 	];
@@ -8632,6 +8677,34 @@ function formatBrainHealthSummary(health: BrainHealthState): string {
 		case "down":
 			return `unreachable (${brainHost}): ${health.detail}`;
 	}
+}
+
+function formatRelayPresenceSummary(health: RelayHealth | undefined): string {
+	if (health === undefined) return "relay token unavailable";
+	if (health.ok !== true) return health.error === undefined ? "unavailable" : `unavailable: ${health.error}`;
+	return [
+		statusInline("face", formatRelayPresenceSide(health.face), health.face?.attached === true ? "ok" : "warn"),
+		statusInline("command", formatRelayPresenceSide(health.commandHost), health.commandHost?.attached === true ? "ok" : "warn"),
+	].join("; ");
+}
+
+function relayPresenceTone(health: RelayHealth | undefined): StatusTone {
+	if (health?.ok !== true) return "warn";
+	return health.face?.attached === true && health.commandHost?.attached === true ? "ok" : "warn";
+}
+
+function formatRelayPresenceSide(summary: RelayPresenceSummary | undefined): string {
+	const count = summary?.count ?? 0;
+	if (count === 0) return "detached";
+	const peerText = (summary?.peers ?? []).map(formatRelayPresencePeer).join(", ");
+	return peerText.length === 0 ? `attached ${count}` : `attached ${count} (${peerText})`;
+}
+
+function formatRelayPresencePeer(peer: RelayPresencePeer): string {
+	const role = peer.role ?? "peer";
+	const pid = typeof peer.pid === "number" ? `pid ${peer.pid}` : "pid unknown";
+	const connectedAt = peer.connectedAt === undefined ? "" : ` since ${peer.connectedAt}`;
+	return `${role} ${pid}${connectedAt}`;
 }
 
 function formatDiscordScopeSummary(config: ClankyConfig): string {
@@ -9596,6 +9669,24 @@ async function fetchBrainHealth(): Promise<BrainHealthState> {
 			checkedAt: Date.now(),
 			detail: error instanceof Error ? error.message : String(error),
 		};
+	}
+}
+
+async function fetchRelayHealth(): Promise<RelayHealth | undefined> {
+	const token = resolveRelayTokenSync();
+	if (token.trim().length === 0) return undefined;
+	try {
+		const response = await fetch(`${brainHost}/relay/health`, { headers: { Authorization: `Bearer ${token}` } });
+		if (!response.ok) {
+			const detail = await responseDetail(response);
+			return {
+				ok: false,
+				error: `${response.status} ${response.statusText}${detail === undefined ? "" : `: ${detail}`}`,
+			};
+		}
+		return (await response.json()) as RelayHealth;
+	} catch (error) {
+		return { ok: false, error: error instanceof Error ? error.message : String(error) };
 	}
 }
 

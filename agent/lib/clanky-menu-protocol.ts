@@ -9,9 +9,9 @@
  * step as a `ClankyMenuServerEvent` and resolves its `readSelect` / `readText`
  * promises from a `ClankyMenuClientMessage`.
  *
- * The Swift side mirrors these shapes in `clanky-ios/ClankyIOS/Models/
- * ClankyMenuSession.swift`. Keep the two in sync. See
- * `clanky-ios/docs/native-menu-mirroring.md`.
+ * The React Native side mirrors these shapes in
+ * `clanky-ios/apps/mobile/src/net/command.ts` and renders them from
+ * `clanky-ios/apps/mobile/src/menus/`. Keep the two in sync.
  *
  * Types only — no behavior — so this module is safe to import from either the
  * face process (where command handlers run) or the relay/eve server process.

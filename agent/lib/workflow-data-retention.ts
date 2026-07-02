@@ -12,8 +12,14 @@
  * stale when its record's `updatedAt` (falling back to `createdAt`, then
  * file mtime) is older than the retention window; dev-server kills strand
  * runs in `running` status forever, so status is deliberately not consulted.
+ *
+ * Hooks additionally own hash-named sidecars under `hooks/tokens/` (the
+ * token claim file and the recovery marker) that are only reachable through
+ * the hook body; unreferenced sidecars older than the cutoff are swept so
+ * they cannot accumulate and stale tokens are freed for reuse.
  */
 
+import { createHash } from "node:crypto";
 import { readdir, readFile, rm, stat } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 
@@ -22,6 +28,7 @@ export type WorkflowDataPruneCounts = {
 	events: number;
 	steps: number;
 	hooks: number;
+	hookTokens: number;
 	streamRuns: number;
 	streamChunks: number;
 };
@@ -48,7 +55,13 @@ export function resolveWorkflowDataDir(env: NodeJS.ProcessEnv, repoRoot: string)
 
 export function formatWorkflowPruneSummary(counts: WorkflowDataPruneCounts): string | undefined {
 	const total =
-		counts.runs + counts.events + counts.steps + counts.hooks + counts.streamRuns + counts.streamChunks;
+		counts.runs +
+		counts.events +
+		counts.steps +
+		counts.hooks +
+		counts.hookTokens +
+		counts.streamRuns +
+		counts.streamChunks;
 	if (total === 0) return undefined;
 	return `pruned ${counts.runs} stale workflow runs (${total} files) from the local workflow store`;
 }
@@ -80,14 +93,24 @@ export async function pruneWorkflowLocalData(
 		else liveRunIds.add(runId);
 	}
 
-	const counts: WorkflowDataPruneCounts = { runs: 0, events: 0, steps: 0, hooks: 0, streamRuns: 0, streamChunks: 0 };
+	const counts: WorkflowDataPruneCounts = {
+		runs: 0,
+		events: 0,
+		steps: 0,
+		hooks: 0,
+		hookTokens: 0,
+		streamRuns: 0,
+		streamChunks: 0,
+	};
 	for (const runId of staleRunIds) {
 		await rm(join(runsDir, `${runId}.json`), { force: true });
 		counts.runs += 1;
 	}
 	counts.events = await pruneRunLinkedFiles(join(dataDir, "events"), extractEventRunId, staleRunIds, liveRunIds, cutoffMs);
 	counts.steps = await pruneRunLinkedFiles(join(dataDir, "steps"), extractEventRunId, staleRunIds, liveRunIds, cutoffMs);
-	counts.hooks = await pruneHooks(join(dataDir, "hooks"), staleRunIds, liveRunIds, cutoffMs);
+	const hookCounts = await pruneHooks(join(dataDir, "hooks"), staleRunIds, liveRunIds, cutoffMs);
+	counts.hooks = hookCounts.hooks;
+	counts.hookTokens = hookCounts.hookTokens;
 	counts.streamRuns = await pruneRunLinkedFiles(
 		join(dataDir, "streams", "runs"),
 		extractStreamRunRunId,
@@ -193,32 +216,59 @@ async function pruneRunLinkedFiles(
 	return removed;
 }
 
-/** Hooks carry their run linkage inside the JSON body rather than the filename. */
+/**
+ * Hooks carry their run linkage inside the JSON body rather than the
+ * filename. While deciding which hooks to remove, the sidecar names of every
+ * surviving hook are collected so the token sidecar sweep afterwards knows
+ * which `hooks/tokens/` entries are still referenced; everything else ages
+ * out. Deleted hooks need no inline sidecar cleanup — a stale hook's
+ * sidecars were last touched no later than its run, so the sweep removes
+ * them in the same pass.
+ */
 async function pruneHooks(
 	dir: string,
 	staleRunIds: ReadonlySet<string>,
 	liveRunIds: ReadonlySet<string>,
 	cutoffMs: number,
-): Promise<number> {
+): Promise<{ hooks: number; hookTokens: number }> {
 	const entries = await listDirectory(dir);
-	if (entries === undefined) return 0;
+	if (entries === undefined) return { hooks: 0, hookTokens: 0 };
 	let removed = 0;
+	const referencedSidecarNames = new Set<string>();
 	for (const name of entries) {
 		if (!name.endsWith(".json")) continue;
 		const path = join(dir, name);
-		const runId = await hookRunId(path);
-		if (runId !== undefined && liveRunIds.has(runId)) continue;
-		if (runId === undefined || !staleRunIds.has(runId)) {
+		const hook = await readHookRecord(path);
+		const runId = hook?.runId;
+		let keep: boolean;
+		if (runId !== undefined && liveRunIds.has(runId)) {
+			keep = true;
+		} else if (runId !== undefined && staleRunIds.has(runId)) {
+			keep = false;
+		} else {
 			const mtimeMs = await fileMtimeMs(path);
-			if (mtimeMs === undefined || mtimeMs >= cutoffMs) continue;
+			keep = mtimeMs === undefined || mtimeMs >= cutoffMs;
+		}
+		if (keep) {
+			if (hook !== undefined) {
+				for (const sidecarName of hookTokenSidecarNames(hook)) referencedSidecarNames.add(sidecarName);
+			}
+			continue;
 		}
 		await rm(path, { force: true });
 		removed += 1;
 	}
-	return removed;
+	const hookTokens = await pruneOrphanedTokenSidecars(join(dir, "tokens"), referencedSidecarNames, cutoffMs);
+	return { hooks: removed, hookTokens };
 }
 
-async function hookRunId(path: string): Promise<string | undefined> {
+type HookRecord = {
+	hookId: string | undefined;
+	runId: string | undefined;
+	token: string | undefined;
+};
+
+async function readHookRecord(path: string): Promise<HookRecord | undefined> {
 	let record: unknown;
 	try {
 		record = JSON.parse(await readFile(path, "utf8"));
@@ -226,6 +276,57 @@ async function hookRunId(path: string): Promise<string | undefined> {
 		return undefined;
 	}
 	if (typeof record !== "object" || record === null) return undefined;
-	const runId = (record as Record<string, unknown>).runId;
-	return typeof runId === "string" ? runId : undefined;
+	const fields = record as Record<string, unknown>;
+	return {
+		hookId: typeof fields.hookId === "string" ? fields.hookId : undefined,
+		runId: typeof fields.runId === "string" ? fields.runId : undefined,
+		token: typeof fields.token === "string" ? fields.token : undefined,
+	};
+}
+
+/**
+ * Sidecar filenames a hook owns under `hooks/tokens/`: the token claim file
+ * (`sha256(token).json`, which also keeps the token claimed against reuse)
+ * and the recovery marker (`sha256(token \0 runId \0 hookId).recovery.json`).
+ * The derivations mirror `hashToken` / `hookRecoveryMarkerPath` in
+ * `@workflow/world-local`'s storage helpers, which the package does not
+ * export.
+ */
+function hookTokenSidecarNames(hook: HookRecord): string[] {
+	if (hook.token === undefined) return [];
+	const names = [`${sha256Hex(hook.token)}.json`];
+	if (hook.runId !== undefined && hook.hookId !== undefined) {
+		names.push(`${sha256Hex(`${hook.token}\x00${hook.runId}\x00${hook.hookId}`)}.recovery.json`);
+	}
+	return names;
+}
+
+function sha256Hex(value: string): string {
+	return createHash("sha256").update(value).digest("hex");
+}
+
+/**
+ * Remove `hooks/tokens/` sidecars no surviving hook references once they age
+ * past the cutoff. This covers sidecars of hooks pruned in this pass, leaks
+ * from earlier pruner versions that removed hooks without their sidecars,
+ * and interrupted prunes. Fresh unreferenced sidecars survive: the SDK
+ * writes the token claim before the hook file when creating a hook.
+ */
+async function pruneOrphanedTokenSidecars(
+	tokensDir: string,
+	referencedSidecarNames: ReadonlySet<string>,
+	cutoffMs: number,
+): Promise<number> {
+	const entries = await listDirectory(tokensDir);
+	if (entries === undefined) return 0;
+	let removed = 0;
+	for (const name of entries) {
+		if (!name.endsWith(".json") || referencedSidecarNames.has(name)) continue;
+		const path = join(tokensDir, name);
+		const mtimeMs = await fileMtimeMs(path);
+		if (mtimeMs === undefined || mtimeMs >= cutoffMs) continue;
+		await rm(path, { force: true });
+		removed += 1;
+	}
+	return removed;
 }

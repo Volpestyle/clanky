@@ -1,6 +1,8 @@
 # ADR-0004 — iOS native chat ↔ herdr binding: per-chat presence mirrors in a dedicated workspace
 
 - **Status:** Proposed (backend + iOS implemented 2026-07-01, green checks; SPEC §4.4/§5.4/§5.6/§11 folded; pending James's ratification → Accepted)
+- **Ratification note:** The 2026-07-02 workspace-targeting amendment is implemented
+  while the ADR remains Proposed pending owner ratification.
 - **Date:** 2026-07-01
 - **Deciders:** James Volpe
 - **Issue:** Unfiled — file under the work tracker before ratifying.
@@ -70,7 +72,7 @@ flowchart LR
     ws["'Clanky' workspace<br/>tab per chat"]
   end
   ui -->|"createSession / stream"| eve
-  ui -->|"chat.mirror {tabId?, paneId?}"| relay
+  ui -->|"chat.mirror {tabId?, paneId?, workspace?}"| relay
   relay -->|"layout.apply one-pane tab"| mirror
   mirror --> ws
   mirror -. "tails NDJSON" .-> eve
@@ -97,16 +99,19 @@ chat. So iOS makes the **mirror occupy the tab root** instead of splitting:
 
 - **Preferred — the mirror *is* the tab root** via the relay's existing one-pane
   tab pattern (`create-tab` → herdr `layout.apply` with a one-pane root running
-  `argv`). A new `resolveIosChatWorkspace()` helper (via `herdrRequest`, vanilla
-  herdr methods — no fork):
-  1. **Find-or-create** the workspace by stable label (default `"Clanky"`,
-     override `CLANKY_IOS_WORKSPACE_LABEL`): `workspace.list` → match label; else
-     `workspace.create`. Memoize its id (`CLANKY_IOS_WORKSPACE_ID`).
-  2. For a new chat, apply a one-pane tab whose root runs the mirror argv
+  `argv`). `resolveIosChatWorkspace()` (via `herdrRequest`, vanilla herdr methods
+  — no fork) resolves fresh materialization targets in this order:
+  `workspace_id` validates an existing workspace from `workspace.list`;
+  `workspace_label` find-or-creates by label; absent explicit target →
+  find-or-create by stable default label (`"Clanky"`, override
+  `CLANKY_IOS_WORKSPACE_LABEL`; `CLANKY_IOS_WORKSPACE_ID` remains the unscoped
+  hard override). Resolved workspaces are memoized by herdr session + target so
+  multiple scoped chat groups coexist.
+  1. For a new chat, apply a one-pane tab whose root runs the mirror argv
      (`layout.apply { workspace_id, root: one-pane(argv = [node, mirrorScript,
      eveHost, sessionId, slug]), label: title }`) → `{ tab_id, pane_id }`. The
      tab's single pane is the mirror; no shell root is left behind.
-  3. **First chat reuses** the workspace's initial tab/`root_pane` (returned by
+  2. **First chat reuses** the workspace's initial tab/`root_pane` (returned by
      `workspace.create`) rather than adding a second tab, so the default tab is
      never orphaned.
 - If a named `clanky:ios-<slug>` agent is wanted for parity with Discord/voice,
@@ -129,27 +134,34 @@ no-transcript escape hatch.
 
 - **`chat.mirror`** — materialize (or revalidate) a chat's mirror.
   - args: `{ session_id: string, slug: string, title?: string, tab_id?: string,
-    pane_id?: string, session? }` — the optional `tab_id`/`pane_id` are the
-    device-remembered handles from a prior call (see below).
+    pane_id?: string, workspace_id?: string, workspace_label?: string, session? }`
+    — the optional `tab_id`/`pane_id` are the device-remembered handles from a
+    prior call (see below). For a fresh mirror, `workspace_id` targets an existing
+    workspace and wins over `workspace_label`; `workspace_label` find-or-creates by
+    label; absent fields use the default "Clanky" workspace path.
   - result: `{ workspace_id, tab_id, pane_id }`.
   - **Idempotent by handle, not by agent name** (the mirror is a tab-root command
     pane, not a registered agent):
     - if `pane_id` is alive and running this chat's mirror → return it (no-op);
     - else if `tab_id` is alive → re-root the one-pane mirror layout in that tab
       and return it (reuse the tab, no new pane);
-    - else → find-or-create the "Clanky" workspace and apply a new one-pane mirror
-      tab (§ Backend seam), returning fresh handles.
+    - else → resolve the requested/default workspace and apply a new one-pane
+      mirror tab (§ Backend seam), returning fresh handles.
+    - a live remembered handle wins over a conflicting workspace target; workspace
+      fields apply only when the mirror must materialize fresh.
 - **`chat.close`** — tear down a chat's presence.
   - args: `{ tab_id?: string, pane_id?: string, close_tab?: boolean, session? }`
   - closes the mirror pane; closes its tab when `close_tab` is set. Takes the
     device-remembered handles (there is no `clanky:ios-<slug>` agent to resolve).
+    When Herdr refuses to close the workspace's final tab, the backend closes the
+    owning workspace.
 
 ### iOS flow
 
 Create/continue/stream are unchanged; one materialize call is added:
 
 1. `EveClient.createSession(message)` → `{ sessionId, continuationToken }`.
-2. relay `chat.mirror { session_id, slug, title, tab_id?, pane_id? }` →
+2. relay `chat.mirror { session_id, slug, title, tab_id?, pane_id?, workspace_id?, workspace_label? }` →
    `{ workspaceId, tabId, paneId }`. The device passes back the `tab_id`/`pane_id`
    it stored from a prior call so the op reuses the same tab. Best-effort: on
    failure the chat still works (degrades to "no pane yet"); retry on next send.
@@ -244,8 +256,6 @@ materialized presence.
 
 - **Desktop steering:** keep the mirror watch-only (Discord parity) or let herdr
   input reach the session? Default watch-only for v1.
-- **Workspace identity:** fixed `"Clanky"` label vs user-configurable? Default
-  fixed with env override.
 - **Tab lifecycle:** auto-close the tab when a chat is deleted on device
   (`chat.close { close_tab: true }`) vs leave for manual cleanup? Default
   auto-close on delete.

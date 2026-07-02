@@ -53,6 +53,21 @@ face's `startServer` in `scripts/clanky.ts` — via
   multi-day-quiet "running" run is a zombie.
 - Pruning a run removes its record plus linked events, steps, hooks (linked
   by `runId` in the JSON body), stream run records, and stream chunks.
+- **Hook token sidecars** — each hook owns up to two hash-named files under
+  `hooks/tokens/`: the token claim (`sha256(token).json`, which keeps the
+  token claimed against reuse) and the recovery marker
+  (`sha256(token\0runId\0hookId).recovery.json`), derived as
+  `@workflow/world-local`'s unexported `hashToken`/`hookRecoveryMarkerPath`
+  do. They are reachable only through the hook body, so the pruner collects
+  the sidecar names of every *surviving* hook and then sweeps unreferenced
+  sidecars older than the window. The reference set — never mtime — is what
+  protects a live hook's sidecars (a parked HITL run can be far older than
+  the window); the age guard only spares fresh unreferenced sidecars, since
+  the SDK writes the token claim before the hook file. The sweep is
+  self-healing: it also clears sidecars leaked by earlier pruner versions or
+  interrupted prunes. The same leak was fixed upstream in the eve dev-store
+  pruner (vercel/eve#475), inline-per-hook there since it has no orphan
+  sweep.
 - **Orphans** (linked files whose run record is already gone) are pruned only
   when older than the window; fresh orphans survive because a run mid-creation
   writes linked files before its record.

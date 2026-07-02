@@ -25,6 +25,7 @@
   - `agent/` is the eve Clanky agent: `instructions.md`, `agent.ts`, `channels/`, `tools/`, `schedules/`, `skills/`, `lib/`.
   - `agent/lib/` owns memory, persona, and the stage/mux spawn-seam helpers.
   - `skills/` holds bundled Clanky operator/worker skills loaded from disk; `clanky-herdr-operator` is the coordinator-only fan-out protocol, and `clanky-herdr-worker` is the worker-side coordination protocol.
+  - `.agents/skills/` holds repo-owned host-agent skills for developing and debugging this repo. `.claude/skills` and selected user skill roots may symlink here, but Clanky does not load these as bundled runtime skills.
 - The free-will Discord gateway is agent-owned via `agent/channels/discord-gateway.ts` (`agent/channels/discord.ts` is only the HTTP Interactions baseline): Clanky holds the credential and the conversation. Inbound work that should be watched is surfaced as a visible stage pane through the spawn seam, never as a hidden in-process subagent.
 - Do not fork muxes. Herdr is the current adapter, so use the vanilla `herdr` CLI/skill today; if a herdr-side feature is needed, upstream it to `ogulcancelik/herdr`. Future tmux/Zellij adapters should follow the same rule: adapt at Clanky's boundary or upstream generally useful mux features.
 - All worker spawns funnel through the transcript-run wrapping seam (`wrapTranscriptArgv` in `agent/tools/herdr_spawn.ts`): the eve `herdr_spawn` tool, the operator `spawn.sh`, the TUI `/spawn` command, and the relay `start` op all resolve the transcript default from `CLANKY_WORKER_TRANSCRIPTS` (managed by `/harness transcripts on|off`) and launch under `clanky transcript-run` with pinned `HERDR_SESSION`/`CLANKY_HOME` when capture is enabled. A worker has a durable transcript only if launched through the seam with capture enabled or an explicit per-spawn transcript override. Never spawn a worker with raw `herdr agent start`/`agent.start`, and route every new spawn surface (TUI slash command, iOS button) through the seam, not raw mux commands.
@@ -77,6 +78,12 @@ Two surfaces live in their own repos next to this one (`../clankvox`, `../clanky
 
 - Model, work-tracker, and chat-gateway tokens (Discord bot tokens, etc.) remain live gates requiring credentials or user approval. Clanky's agent-owned Discord token and other secrets are resolved from the eve agent's environment / connection config (`.env.local`), not committed. The relay channel binds to the tailnet only and requires a bearer token.
 - Local-face auth is socket-verified loopback: only the real socket remote address can mint a local principal — a Host header naming a loopback hostname is never trusted (`agent/lib/frontdoor-auth.ts`).
+
+## Work Tracking
+
+- Clanky tracks work in the configured work-tracker connection by default, following the provider-neutral `clanky-work-tracker` protocol: read the relevant issues before starting, plan multi-step work as issues, and post decisions, results, and verification to the issue as comments while the work happens — not after. The tracker, not pane scrollback, is the durable source of truth for work context; leads and spawned workers inherit the same protocol. Which tracker is bound is deployment configuration (the owner's connection config / workspace docs), never hardcoded here.
+- Tracker writes use Clanky's own tracker actor and mention the owner so updates reach their inbox; trackers suppress self-notifications (ADR-0005).
+- Once tracked, pane scrollback is disposable: harvest and verify a worker, update the issue, then close the worker's pane.
 
 ## State Safety
 

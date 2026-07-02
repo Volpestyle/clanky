@@ -152,7 +152,9 @@ For tracker-backed work, include the issue id, acceptance criteria, and expected
 tracker transition in the brief. The operator owns tracker state: assign/start
 work before dispatch when possible, verify the result after the worker finishes,
 then move the issue and leave a concise comment. Do not let a worker's "done"
-claim substitute for operator verification.
+claim substitute for operator verification. The tracker — not pane scrollback —
+is the durable context: post what the worker found/changed/verified to the
+issue at harvest time, so the pane can close without losing anything.
 
 Keep shared repo mutations lead-owned unless each writer is isolated in its own
 worktree. Package installs, lockfiles, global config, workspace manifests, and
@@ -218,6 +220,37 @@ explicit command after `--` when a task needs a different permission mode. For
 Claude Code, `--permission-mode auto` (the "auto mode" convention) auto-accepts
 edits and safe commands, so a self-driving worker won't stall on a bash-permission
 prompt the way `acceptEdits` can; reserve full bypass for when it is truly needed.
+
+### Stage layout (keep workers human-readable)
+
+Every `herdr agent start --tab` **appends another column to one row**, and
+finished workers keep their columns until cleanup — a run that spawns waves
+into one tab decays into unreadable slivers. Levers that exist today:
+
+- **Ratio-sized agent panes (preferred).** An agent is just a process in a
+  pane: herdr detects `agent`/`agent_status` from the running process, not
+  from `agent start` (verified live). So compose exact sizing yourself:
+  `herdr pane split --pane <ref> --direction right|down --ratio 0.X --cwd
+  <dir>` → `herdr pane rename <new-pane> clanky:<slug>` → `herdr pane run
+  <new-pane> "<worker argv>"`. `agent start` is the one-call convenience but
+  supports only `--split right|down` — direction, no ratio.
+- Background/service panes (servers, log tails): same split, small ratio
+  (`--ratio 0.2`), no rename ceremony needed.
+- `herdr pane rename <pane> <label>` names panes (also fixes wake routing).
+- `herdr pane resize --direction <d> --amount <cells>` is **grow-only**
+  (negative amounts are silent no-ops), clamps at pane minimums, and can
+  return `"changed": false` — check that field; do not build equalizers on it
+  without verifying each call took effect.
+- `herdr pane zoom` is a human affordance, not an agent tool: steering via
+  `pane run` works at any pane width. The one agent-side use is rescuing a
+  read of a slivered TUI (a TUI renders to its width, so no read source can
+  recover what it never drew) — but zoom hijacks the user's visible screen;
+  prefer right-sizing at spawn so it never comes to that.
+
+Policy: rename your lead pane before the first spawn; prefer ratio-split
+spawns so panes start human-readable instead of repairing them after; keep a
+run's live panes few (waves help); if a tab has decayed into slivers, say so
+and let the user rearrange rather than fighting resize blind.
 
 ## 2. Monitor and wait
 
@@ -337,7 +370,15 @@ overlapping plans become one ordered change set.
 
 ## 5. Clean up
 
-After harvesting:
+Close each worker's pane as soon as its result is harvested, verified, and
+tracked — context lives in the tracker, the run dir, and the transcript, not
+in scrollback. A finished TUI pane closes from the outside by quitting the
+agent: `herdr pane run <pane> "/quit"` (codex) or `"/exit"` (claude) ends the
+TUI, the transcript wrapper exits with it, and the pane closes; if a bare
+shell remains, `herdr pane run <pane> "exit"`. Pane ids compact on close —
+re-resolve survivors by durable name afterward.
+
+After the whole run is harvested:
 
 ```bash
 $OP/cleanup.sh "$RUN_ID" --rm
@@ -351,6 +392,19 @@ Omit `--rm` to keep results on disk. It refuses while workers are still
 
 **Worker blocked.** See "Unblock or steer". If the question needs the user,
 relay it, get the answer, send it on.
+
+**Wake never arrived (undelivered watch).** spawn.sh resolves the wake target
+from the spawning pane's label, else its `clanky:*` agent name; a lead it
+cannot name — e.g. a bare `claude`/`codex` operator pane — falls back to
+`clanky:main`, and when the brain isn't running the wake dies as
+`undelivered` in `workers/<slug>/watch.log`. Read the `WATCH=armed
+notify=...` line every spawn prints: if it says `clanky:main` and you are not
+the brain, fix your own name first — `herdr pane rename <your-pane-id>
+clanky:<lead-name>` gives your pane a durable label the resolver picks up
+automatically for every later spawn — or pass `--notify <name>` per spawn /
+re-arm by hand (`clanky watch clanky:<slug> --notify <name> --run-dir
+"$RUN_DIR"`). A missed wake is recoverable — the sentinel files are still
+truth; harvest.
 
 **Worker stuck on a startup prompt.** A worker showing `running` long after
 spawn with no activity may be sitting on an interactive prompt before the

@@ -235,6 +235,7 @@ function displayPathForInheritedSkill(path: string): string {
 }
 
 function isSkillFile(name: string): boolean {
+	if (name.toLowerCase() === "readme.md") return false;
 	return name.endsWith(".md") || name.endsWith(".ts");
 }
 

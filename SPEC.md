@@ -455,11 +455,16 @@ flowchart LR
   tab.
   Chat-with-Clanky uses eve's session routes (`/eve/v1/session`). Each native
   chat also binds to a Herdr mirror: after creating an eve session the app calls
-  `chat.mirror {session_id, slug, title?, tab_id?, pane_id?}`, which places (or,
-  by handle, reuses) a one-pane mirror tab in a dedicated **"Clanky" workspace**
-  — one tab per chat, materialized via `layout.apply` so the mirror is the tab
-  root with no orphan shell — and returns `{workspace_id, tab_id, pane_id}`;
-  `chat.close {tab_id?, pane_id?, close_tab?}` tears it down. The mirror pane runs
+  `chat.mirror {session_id, slug, title?, tab_id?, pane_id?, workspace_id?,
+  workspace_label?}`, which places (or, by handle, reuses) a one-pane mirror tab
+  in the requested workspace (`workspace_id` existing, else
+  `workspace_label` find-or-create) or the default **"Clanky" workspace** — one
+  tab per chat, materialized via `layout.apply` so the mirror is the tab root
+  with no orphan shell — and returns `{workspace_id, tab_id, pane_id}`. Live
+  remembered handles win over workspace targeting, so workspace fields affect
+  only fresh materialization;
+  `chat.close {tab_id?, pane_id?, close_tab?}` tears it down, closing the owning
+  workspace when Herdr refuses to close its final tab. The mirror pane runs
   the shared session viewer (`scripts/discord-pane-mirror.ts`), so an iOS chat is
   watchable on the desktop stage like the Discord/voice presences (§5.6). The
   chat list is **device-persisted** (`{slug, sessionId, continuationToken, title,

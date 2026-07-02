@@ -52,12 +52,10 @@ Live lookup and real-browser automation, in preference order.
 | --- | --- |
 | [`clanky-media-operator`](clanky-media-operator/SKILL.md) | Route image and video generation across OpenAI Images, Gemini (Nano Banana), and xAI Grok Imagine image/video. |
 
-## Diagnostics
-
-| Skill | What it does |
-| --- | --- |
-| [`clanky-log-dive`](clanky-log-dive/SKILL.md) | Inspect Clanky's local eve/herdr runtime status, Discord presence panes, voice symptoms, and performance/cost signals when debugging recent sessions. |
-
 > Skills inherited from the host Codex/Claude skill roots are advertised
 > separately at runtime through `/skills` and relay `list-skills`; only the
 > Clanky-bundled skills above live in this directory.
+>
+> Host-agent development and debugging skills for working on this repo live in
+> `.agents/skills/` and are inherited through the user's skill-root symlinks;
+> they are not bundled here unless Clanky needs them as runtime behavior.

@@ -190,13 +190,17 @@ export type WriteArgs = z.infer<typeof WriteArgsSchema>;
 
 /** `chat.mirror`: materialize (or revalidate by handle) a native chat's herdr
  *  pane mirror. Optional `tab_id`/`pane_id` are the device-remembered handles
- *  from a prior call (reuse the same tab); absent → create a fresh mirror tab. */
+ *  from a prior call (reuse the same tab); absent → create a fresh mirror tab.
+ *  For fresh mirrors, `workspace_id` targets an existing workspace and wins over
+ *  `workspace_label`, which find-or-creates by label; absent → default workspace. */
 export const ChatMirrorArgsSchema = z.object({
   session_id: z.string(),
   slug: z.string(),
   title: z.string().optional(),
   tab_id: z.string().optional(),
   pane_id: z.string().optional(),
+  workspace_id: z.string().optional(),
+  workspace_label: z.string().optional(),
   ...sessionArg,
 });
 export type ChatMirrorArgs = z.infer<typeof ChatMirrorArgsSchema>;
@@ -217,6 +221,13 @@ export const ChatMirrorResultSchema = z.object({
   pane_id: z.string(),
 });
 export type ChatMirrorResult = z.infer<typeof ChatMirrorResultSchema>;
+
+/** Result of `chat.close` — whether the requested mirror handles were closed. */
+export const ChatCloseResultSchema = z.object({
+  closed_pane: z.boolean(),
+  closed_tab: z.boolean(),
+});
+export type ChatCloseResult = z.infer<typeof ChatCloseResultSchema>;
 
 // --- Streaming / control op args -------------------------------------------
 
@@ -300,7 +311,14 @@ export const CommandEventArgsSchema = z.object({
 });
 export type CommandEventArgs = z.infer<typeof CommandEventArgsSchema>;
 
-/** Args for the presence toggles (`face-attach`/`command-attach`/...): none. */
+/** Args for the presence toggles (`face-attach`/`command-attach`/...). The
+ *  optional `pid` identifies the attaching companion process in `/relay/health`
+ *  peer details; detach ops send none. */
+export const PresenceAttachArgsSchema = z.object({
+  pid: z.number().optional(),
+});
+export type PresenceAttachArgs = z.infer<typeof PresenceAttachArgsSchema>;
+
 export const EmptyArgsSchema = z.object({});
 export type EmptyArgs = z.infer<typeof EmptyArgsSchema>;
 
@@ -380,7 +398,7 @@ export const OP_RESULT_SCHEMAS = {
   "unregister-push": PushUnregistrationResponseSchema,
   write: JsonValueSchema,
   "chat.mirror": ChatMirrorResultSchema,
-  "chat.close": JsonValueSchema,
+  "chat.close": ChatCloseResultSchema,
   ping: PingResultSchema,
 } as const;
 
@@ -423,9 +441,9 @@ export const RelayRequestByOpSchema = z.discriminatedUnion("op", [
   req("detach", DetachArgsSchema),
   req("resize", ResizeArgsSchema),
   req("ping", PingArgsSchema),
-  req("face-attach", EmptyArgsSchema),
+  req("face-attach", PresenceAttachArgsSchema),
   req("face-detach", EmptyArgsSchema),
-  req("command-attach", EmptyArgsSchema),
+  req("command-attach", PresenceAttachArgsSchema),
   req("command-detach", EmptyArgsSchema),
   req("command", CommandArgsSchema),
   req("face-command", CommandArgsSchema),

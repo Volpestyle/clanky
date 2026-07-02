@@ -8,7 +8,7 @@ Usage: spawn.sh --slug <task-slug> --task "<one-line summary>" \
 				(--prompt "<text>" | --prompt-file <path>) \
 				--harness <clanky|claude|codex|opencode|custom> \
 				[--run <run-id>] [--cwd <dir>] \
-				[--transcript|--no-transcript] [--no-watch] [-- <worker argv...>]
+				[--transcript|--no-transcript] [--no-watch] [--notify <target>] [-- <worker argv...>]
 
 Spawns one worker agent named clanky:<slug> into the run's herdr tab.
 CLANKY_CODING_HARNESSES allowlists usable harnesses. Pass --harness explicitly;
@@ -20,7 +20,10 @@ without the token the kickoff is appended as the final argument.
 Each spawn also arms a detached one-shot completion watcher (clanky watch)
 that classifies the worker against the run's DONE/BLOCKED sentinels and wakes
 the spawning lead with one [worker <outcome>] message; --no-watch disarms it
-for this spawn. Watcher output lands in workers/<slug>/watch.log.
+for this spawn. --notify overrides the wake target (a durable pane label or
+clanky:<name>) for leads the auto-resolver cannot name; without it, an
+unnameable lead falls back to clanky:main. Watcher output lands in
+workers/<slug>/watch.log.
 
 Prints RUN_ID, RUN_DIR, AGENT, PANE_ID, WATCH lines on success. Pass the same
 --run to later spawns to group workers into one run.
@@ -118,7 +121,7 @@ parse_allowed_harnesses() {
 	fi
 }
 
-RUN_ID="" SLUG="" TASK="" PROMPT="" PROMPT_FILE="" WORKER_CWD="$PWD" HARNESS="" TRANSCRIPT="$(worker_transcript_default)" WATCH=1
+RUN_ID="" SLUG="" TASK="" PROMPT="" PROMPT_FILE="" WORKER_CWD="$PWD" HARNESS="" TRANSCRIPT="$(worker_transcript_default)" WATCH=1 NOTIFY_OVERRIDE=""
 ARGV=()
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -133,6 +136,7 @@ while [ $# -gt 0 ]; do
 		--no-transcript) TRANSCRIPT=0; shift ;;
 		--watch) WATCH=1; shift ;;
 		--no-watch) WATCH=0; shift ;;
+		--notify) NOTIFY_OVERRIDE="$2"; shift 2 ;;
 		--) shift; ARGV=("$@"); break ;;
 		*) usage ;;
 	esac
@@ -428,7 +432,7 @@ if [ "$WATCH" = "1" ]; then
 		WATCH_STATE=unavailable
 		echo "spawn.sh: warning: cannot arm completion watcher (need 'clanky' on PATH or node + $REPO_ROOT/bin/clanky.ts); spawned without wake-on-done" >&2
 	else
-		WATCH_NOTIFY="$(resolve_notify_target)"
+		WATCH_NOTIFY="${NOTIFY_OVERRIDE:-$(resolve_notify_target)}"
 		WATCH_PID="$( (nohup "${CLANKY_RUNNER[@]}" watch "$AGENT_NAME" --notify "$WATCH_NOTIFY" --run-dir "$RUN_DIR" \
 			>> "$WORKER_DIR/watch.log" 2>&1 & echo $!) )"
 		WATCH_STATE=armed

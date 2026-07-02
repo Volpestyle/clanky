@@ -101,17 +101,83 @@ export const facePeers = new Set<WebSocketPeer>();
 // this capability, not on the visible TUI being open.
 export const commandPeers = new Set<WebSocketPeer>();
 
-export function facePresence(): { attached: boolean; count: number } {
-	return { attached: facePeers.size > 0, count: facePeers.size };
+export type PresenceRole = "face" | "command-host";
+
+export interface PresencePeerDetail {
+	readonly pid?: number;
+	readonly role: PresenceRole;
+	readonly connectedAt: string;
 }
 
-export function commandPresence(): { attached: boolean; count: number } {
-	return { attached: commandPeers.size > 0, count: commandPeers.size };
+export interface PresenceSummary {
+	readonly attached: boolean;
+	readonly count: number;
+	readonly peers: readonly PresencePeerDetail[];
+}
+
+const facePeerDetails = new WeakMap<WebSocketPeer, PresencePeerDetail>();
+const commandPeerDetails = new WeakMap<WebSocketPeer, PresencePeerDetail>();
+
+export function attachFacePeer(peer: WebSocketPeer, pid: number | undefined): PresencePeerDetail {
+	const detail = presenceDetail("face", pid);
+	facePeers.add(peer);
+	facePeerDetails.set(peer, detail);
+	return detail;
+}
+
+export function detachFacePeer(peer: WebSocketPeer): PresencePeerDetail | undefined {
+	const detail = facePeerDetails.get(peer);
+	facePeers.delete(peer);
+	facePeerDetails.delete(peer);
+	return detail;
+}
+
+export function attachCommandPeer(peer: WebSocketPeer, pid: number | undefined): PresencePeerDetail {
+	const detail = presenceDetail("command-host", pid);
+	commandPeers.add(peer);
+	commandPeerDetails.set(peer, detail);
+	return detail;
+}
+
+export function detachCommandPeer(peer: WebSocketPeer): PresencePeerDetail | undefined {
+	const detail = commandPeerDetails.get(peer);
+	commandPeers.delete(peer);
+	commandPeerDetails.delete(peer);
+	return detail;
+}
+
+export function detachPresencePeer(peer: WebSocketPeer): readonly PresencePeerDetail[] {
+	const details = [detachFacePeer(peer), detachCommandPeer(peer)].filter((detail): detail is PresencePeerDetail => detail !== undefined);
+	return details;
+}
+
+export function facePresence(): PresenceSummary {
+	return presenceSummary(facePeers, facePeerDetails, "face");
+}
+
+export function commandPresence(): PresenceSummary {
+	return presenceSummary(commandPeers, commandPeerDetails, "command-host");
 }
 
 export function attachedCommandPeer(): WebSocketPeer | undefined {
 	for (const peer of commandPeers) {
 		if (!facePeers.has(peer)) return peer;
 	}
-	return commandPeers.values().next().value ?? facePeers.values().next().value;
+	return commandPeers.values().next().value;
+}
+
+function presenceDetail(role: PresenceRole, pid: number | undefined): PresencePeerDetail {
+	return {
+		...(pid === undefined ? {} : { pid }),
+		role,
+		connectedAt: new Date().toISOString(),
+	};
+}
+
+function presenceSummary(peers: Set<WebSocketPeer>, details: WeakMap<WebSocketPeer, PresencePeerDetail>, role: PresenceRole): PresenceSummary {
+	return {
+		attached: peers.size > 0,
+		count: peers.size,
+		peers: [...peers].map((peer) => details.get(peer) ?? presenceDetail(role, undefined)),
+	};
 }
