@@ -1,9 +1,11 @@
 import { resolveTarget, stampMessage } from "../agent/lib/herdr-message.ts";
 import {
 	classifyWorkerState,
+	evaluateSettleProbe,
 	formatWakeMessage,
 	isSettledAgentStatus,
 	parseWatchEventLine,
+	SETTLE_QUIET_PROBES_REQUIRED,
 	watcherSelfName,
 	workerRunPaths,
 	workerSlugFromAgent,
@@ -121,6 +123,68 @@ expectEqual(
 	formatWakeMessage({ agent: "clanky:fix-auth", outcome: "timeout", runId: "run-1", hasRunDir: true, timeoutMs: 900000 }),
 	"[worker timeout] clanky:fix-auth run=run-1 (no completion after 900000ms, watcher exited — re-arm or harvest manually)",
 	"timeout wake says the watcher disarmed",
+);
+
+// Settle confirmation: agent_status is heuristic (observed live: a pane reads
+// idle mid-turn while visibly working), so a status-only settle fires only
+// after consecutive probes with a quiet screen. Sentinels and death are truth.
+const noSentinels = { done: false, blocked: false };
+expectEqual(
+	evaluateSettleProbe(
+		{ paneAlive: true, agentStatus: "working", sentinels: { done: true, blocked: false }, screenSignature: "a" },
+		{ quietProbes: 0 },
+	),
+	{ kind: "fire", outcome: "done" },
+	"DONE sentinel fires immediately, no quiet window needed",
+);
+expectEqual(
+	evaluateSettleProbe({ paneAlive: false, sentinels: noSentinels }, { quietProbes: 0 }),
+	{ kind: "fire", outcome: "dead" },
+	"pane death fires immediately",
+);
+expectEqual(
+	evaluateSettleProbe({ paneAlive: true, agentStatus: "working", sentinels: noSentinels, screenSignature: "a" }, { quietProbes: 2 }),
+	{ kind: "watch" },
+	"status back at working abandons confirmation to event waiting",
+);
+expectEqual(
+	evaluateSettleProbe({ paneAlive: true, agentStatus: "unknown", sentinels: noSentinels, screenSignature: "a" }, { quietProbes: 2 }),
+	{ kind: "watch" },
+	"status lost to unknown abandons confirmation",
+);
+expectEqual(
+	evaluateSettleProbe({ paneAlive: true, agentStatus: "idle", sentinels: noSentinels, screenSignature: "a" }, { quietProbes: 0 }),
+	{ kind: "confirming", progress: { quietProbes: 1, screenSignature: "a" } },
+	"first settled probe starts the quiet window, does not fire",
+);
+expectEqual(
+	evaluateSettleProbe(
+		{ paneAlive: true, agentStatus: "idle", sentinels: noSentinels, screenSignature: "b" },
+		{ quietProbes: 2, screenSignature: "a" },
+	),
+	{ kind: "confirming", progress: { quietProbes: 1, screenSignature: "b" } },
+	"a changed screen (mid-turn idle) resets the quiet window instead of firing",
+);
+expectEqual(
+	evaluateSettleProbe(
+		{ paneAlive: true, agentStatus: "idle", sentinels: noSentinels, screenSignature: "a" },
+		{ quietProbes: SETTLE_QUIET_PROBES_REQUIRED - 1, screenSignature: "a" },
+	),
+	{ kind: "fire", outcome: "idle" },
+	"a settled status with a quiet screen across enough probes fires idle",
+);
+expectEqual(
+	evaluateSettleProbe(
+		{ paneAlive: true, agentStatus: "done", screenSignature: "a" },
+		{ quietProbes: SETTLE_QUIET_PROBES_REQUIRED - 1, screenSignature: "a" },
+	),
+	{ kind: "fire", outcome: "done" },
+	"no run dir: a quiet done status fires done after confirmation",
+);
+expectEqual(
+	evaluateSettleProbe({ paneAlive: true, agentStatus: "idle", sentinels: noSentinels, screenSignature: "a" }, { quietProbes: 0 }, 1),
+	{ kind: "fire", outcome: "idle" },
+	"the quiet-probe requirement is tunable",
 );
 
 // Event-line decoding: ack, error, agent-status, both pane-death spellings.

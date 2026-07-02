@@ -135,6 +135,59 @@ export function formatWakeMessage(input: WakeMessageInput): string {
 	return parts.join(" ");
 }
 
+/** Consecutive quiet probes required before a status-only settle fires a wake. */
+export const SETTLE_QUIET_PROBES_REQUIRED = 3;
+
+export interface SettleProbeSnapshot {
+	readonly paneAlive: boolean;
+	readonly agentStatus?: string;
+	/** Digest of the pane's visible screen text; changes while output flows. */
+	readonly screenSignature?: string;
+	readonly sentinels?: WorkerSentinels;
+}
+
+export interface SettleProgress {
+	readonly quietProbes: number;
+	readonly screenSignature?: string;
+}
+
+export type SettleDecision =
+	| { readonly kind: "fire"; readonly outcome: "done" | "blocked" | "idle" | "dead" }
+	| { readonly kind: "watch" }
+	| { readonly kind: "confirming"; readonly progress: SettleProgress };
+
+/**
+ * One step of settle confirmation. `agent_status` is heuristic — a pane has
+ * been observed reading `idle` mid-turn while visibly working — so a
+ * status-only settle must hold across consecutive probes with a quiet screen
+ * before it fires. Sentinel files and pane death are truth and fire
+ * immediately; a status back at `working` (or lost to `unknown`) abandons
+ * confirmation and returns to event waiting, where the next settle emits a
+ * fresh status-change event.
+ */
+export function evaluateSettleProbe(
+	snapshot: SettleProbeSnapshot,
+	previous: SettleProgress,
+	quietProbesRequired: number = SETTLE_QUIET_PROBES_REQUIRED,
+): SettleDecision {
+	const state = classifyWorkerState({
+		paneAlive: snapshot.paneAlive,
+		agentStatus: snapshot.agentStatus,
+		sentinels: snapshot.sentinels,
+	});
+	if (snapshot.sentinels?.done === true || snapshot.sentinels?.blocked === true || !snapshot.paneAlive) {
+		return { kind: "fire", outcome: state === "running" || state === "idle" ? "dead" : state };
+	}
+	if (state === "running") return { kind: "watch" };
+	// state is a status-derived done/blocked/idle. A probe is quiet when the
+	// visible screen did not change since the previous probe; the first probe
+	// after a settle event starts the quiet window.
+	const quiet = previous.screenSignature === undefined || previous.screenSignature === snapshot.screenSignature;
+	const quietProbes = quiet ? previous.quietProbes + 1 : 1;
+	if (quietProbes >= quietProbesRequired) return { kind: "fire", outcome: state };
+	return { kind: "confirming", progress: { quietProbes, screenSignature: snapshot.screenSignature } };
+}
+
 /** One line from the watcher's `events.subscribe` stream, decoded. */
 export type WatchEvent =
 	| { readonly kind: "subscribed" }

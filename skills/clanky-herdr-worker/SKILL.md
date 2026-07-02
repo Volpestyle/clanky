@@ -91,6 +91,13 @@ If your task prompt includes a `result.md`, `DONE`, or `BLOCKED` completion
 protocol, follow it exactly. Otherwise, leave a concise final report in your
 pane.
 
+You do not need to tell the lead you finished: a harness watcher armed at
+spawn delivers the completion wake, and it classifies you by your sentinel
+files — writing `result.md` plus `DONE`/`BLOCKED` exactly as your protocol
+says is what makes that wake accurate. Ending your turn without a sentinel
+reaches the lead as `[worker idle]` (forgot-the-protocol). Message the lead
+directly only for blockers, per the section above.
+
 ## Shared files
 
 Use the cwd/worktree Clanky assigned you. Do not create or switch to a separate

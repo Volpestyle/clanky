@@ -203,6 +203,18 @@ Mechanisms this composes with: worker `/goal` completion (VUH-321) supplies the
 unambiguous terminal state and the verification-in-output contract; the conductor
 drive loop (VUH-332) supplies the autonomous wake that runs the supervisor.
 
+The supervisor's **wake substrate is shipped** ([VUH-359](https://linear.app/vuhlp/issue/VUH-359)):
+every spawn seam (`spawnClankyWorker`, operator `spawn.sh`) arms a detached
+one-shot `clanky watch` per worker that classifies completion against the run's
+sentinels — sentinel files are truth; `agent_status` is heuristic, confirmed by
+a quiet-screen window and a slow recheck, with dropped event subscriptions
+re-resolved by durable name and resubscribed — and delivers one
+provenance-stamped `[worker done|blocked|idle|dead]` wake to the spawning
+lead's pane (SPEC §4.3, §5.5). The target supervisor's "keeps N waiters armed,
+wakes on any completion" box builds on this: today re-arming happens
+per-spawn; the pool supervisor (VUH-334) owns keeping a warm worker's watcher
+armed across `/goal` re-dispatches.
+
 ## Consequences
 
 **Positive**

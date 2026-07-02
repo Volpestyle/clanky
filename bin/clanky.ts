@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
 import { watch } from "node:fs";
 import { lstat, mkdir, readlink, rm, symlink } from "node:fs/promises";
 import { open, readFile, stat, writeFile } from "node:fs/promises";
@@ -17,6 +18,12 @@ import {
 	XAI_API_KEY_ENV_NAMES,
 } from "../agent/lib/config-defaults.ts";
 import { DEFAULT_EVE_PORT, parsePortValue, resolveEveBindHost, resolveEvePort } from "../agent/lib/eve-address.ts";
+import {
+	formatWorkflowPruneSummary,
+	pruneWorkflowLocalData,
+	resolveWorkflowDataDir,
+	resolveWorkflowRetentionHours,
+} from "../agent/lib/workflow-data-retention.ts";
 import { readEnvLocal } from "../agent/lib/env-store.ts";
 import {
 	devServerRecordPath,
@@ -39,11 +46,13 @@ import { parsePaneRoster, resolveSelf, resolveTarget, stampMessage } from "../ag
 import { herdrStreamLines, type HerdrRequest, type HerdrStream } from "../agent/lib/herdr-socket.ts";
 import {
 	classifyWorkerState,
+	evaluateSettleProbe,
 	formatWakeMessage,
 	isSettledAgentStatus,
 	parseWatchEventLine,
 	watcherSelfName,
 	workerRunPaths,
+	type SettleProgress,
 	type WatchEvent,
 	type WorkerRunPaths,
 	type WorkerSentinels,
@@ -85,6 +94,22 @@ const DEV_BRAIN_SUPERVISE_FAILS = 3;
 const CLANKY_STARTUP_MODEL_FALLBACK_PROVIDER_ENV = "CLANKY_STARTUP_MODEL_FALLBACK_PROVIDER";
 const CLANKY_STARTUP_MODEL_FALLBACK_ENV_NAMES_ENV = "CLANKY_STARTUP_MODEL_FALLBACK_ENV_NAMES";
 const TRANSCRIPT_FORWARDED_SIGNALS: readonly NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
+// clanky watch: agent_status is heuristic (a pane has been observed reading
+// idle mid-turn), so a status-only settle fires only after consecutive probes
+// at this interval with a quiet screen (worker-watch.ts evaluateSettleProbe).
+// These live up here with the other constants: the CLI dispatches through a
+// top-level await, so consts declared after it are TDZ while a command runs.
+const WATCH_CONFIRM_INTERVAL_MS = 5_000;
+const WATCH_RESUBSCRIBE_DELAY_MS = 1_000;
+const WATCH_MAX_SUBSCRIBE_FAILURES = 5;
+const WATCH_SIGNATURE_LINES = 40;
+// Safety net under the event stream: agent-status change events have been
+// observed not arriving (a worker that settled before the subscription
+// started never changes again; events can also be missed on a busy stage), so
+// the watcher rechecks sentinels + status at this slow interval. It also
+// catches sentinels written by panes herdr never classifies (status stays
+// unknown), which emit no settle event at all.
+const WATCH_RECHECK_INTERVAL_MS = 90_000;
 
 // Children this CLI owns (the dev brain, transcript performers). The crash
 // envelope below SIGTERMs them so a CLI bug never orphans an eve server.
@@ -380,6 +405,12 @@ async function runWatchedFace(commandArgs: readonly string[]): Promise<CommandRe
 
 async function startDevBrain(): Promise<DevBrain> {
 	const host = clankyHost();
+	const pruned = await pruneWorkflowLocalData(
+		resolveWorkflowDataDir(process.env, REPO),
+		resolveWorkflowRetentionHours(process.env),
+	);
+	const pruneSummary = pruned === undefined ? undefined : formatWorkflowPruneSummary(pruned);
+	if (pruneSummary !== undefined) process.stdout.write(`\x1b[2m${pruneSummary}\x1b[22m\n`);
 	const output: string[] = [];
 	const appendOutput = (chunk: Buffer): void => {
 		output.push(chunk.toString("utf8"));
@@ -718,12 +749,6 @@ async function runMsg(commandArgs: readonly string[]): Promise<CommandResult> {
 	return { code: 0 };
 }
 
-// Statuses flicker while a harness redraws; only a settle that survives this
-// re-probe window (or a sentinel file) is treated as a completion.
-const WATCH_SETTLE_DEBOUNCE_MS = 1_500;
-const WATCH_RESUBSCRIBE_DELAY_MS = 1_000;
-const WATCH_MAX_SUBSCRIBE_FAILURES = 5;
-
 // `clanky watch <agent>` — the one-shot completion watcher armed at the spawn
 // seam (agent/lib/worker-watch.ts). It blocks on herdr agent-status events for
 // one worker, classifies the outcome against the run dir's DONE/BLOCKED
@@ -735,7 +760,9 @@ async function runWatch(commandArgs: readonly string[]): Promise<CommandResult> 
 	const options = parseWatchArgs(commandArgs);
 	const paths = options.runDir === undefined ? undefined : workerRunPaths(options.runDir, options.agent);
 	const deadline = options.timeoutMs === undefined ? undefined : Date.now() + options.timeoutMs;
+	const pastDeadline = (): boolean => deadline !== undefined && Date.now() >= deadline;
 	let subscribeFailures = 0;
+	let armTime = true;
 	while (true) {
 		const probe = await probeWatchedAgent(options.agent);
 		if (probe.kind === "unreachable") {
@@ -756,27 +783,28 @@ async function runWatch(commandArgs: readonly string[]): Promise<CommandResult> 
 			return await deliverWorkerWake({ ...options, paths, outcome: state, agentStatus: probe.status });
 		}
 		// An arm-time settled status without a sentinel is not a completion (a
-		// worker still booting can read idle); wait for a post-arm settle event.
+		// worker still booting can read idle), so the first pass goes straight to
+		// event waiting. After a subscription drop, though, the settle event may
+		// already have been missed — confirm a settled status before resubscribing.
+		if (!armTime && isSettledAgentStatus(probe.status)) {
+			const confirm = await confirmWorkerSettle({ agent: options.agent, paths, aborted: pastDeadline });
+			if (confirm.kind === "fire") {
+				return await deliverWorkerWake({ ...options, paths, outcome: confirm.outcome, agentStatus: confirm.agentStatus });
+			}
+			if (confirm.kind === "aborted") return await deliverTimeoutWake(options, paths);
+			if (confirm.kind === "resubscribe") continue;
+			// "watch": the settle did not hold; fall through to event waiting.
+		}
+		armTime = false;
 		const wait = await waitForWorkerSettle({ agent: options.agent, paneId: probe.paneId, paths, deadline });
 		if (wait.kind === "deliver") {
 			return await deliverWorkerWake({ ...options, paths, outcome: wait.outcome, agentStatus: wait.agentStatus });
 		}
-		if (wait.kind === "timeout") {
-			const finalProbe = await probeWatchedAgent(options.agent);
-			const finalSentinels = paths === undefined ? undefined : await readWorkerSentinels(paths);
-			const finalStatus = finalProbe.kind === "alive" ? finalProbe.status : undefined;
-			const finalState = classifyWorkerState({
-				paneAlive: finalProbe.kind === "alive",
-				agentStatus: finalStatus,
-				sentinels: finalSentinels,
-			});
-			return await deliverWorkerWake({
-				...options,
-				paths,
-				outcome: finalState === "running" ? "timeout" : finalState,
-				agentStatus: finalStatus,
-			});
-		}
+		if (wait.kind === "timeout") return await deliverTimeoutWake(options, paths);
+		// Subscription close is not a death verdict (observed live: subscriptions
+		// can drop while the pane is alive and mid-turn). Re-resolve the worker by
+		// durable name at the top of the loop and resubscribe, with a bound on
+		// consecutive attempts that never reached a started subscription.
 		subscribeFailures = wait.subscribed ? 0 : subscribeFailures + 1;
 		if (subscribeFailures >= WATCH_MAX_SUBSCRIBE_FAILURES) {
 			process.stderr.write(`clanky watch: giving up after ${subscribeFailures} failed event subscriptions\n`);
@@ -784,6 +812,25 @@ async function runWatch(commandArgs: readonly string[]): Promise<CommandResult> 
 		}
 		await sleep(WATCH_RESUBSCRIBE_DELAY_MS);
 	}
+}
+
+// The deadline hit before a confirmed completion: classify whatever is true
+// right now (sentinels still win) and deliver that, or an explicit timeout
+// wake when the worker is genuinely still running.
+async function deliverTimeoutWake(
+	options: { agent: string; notify: string; timeoutMs?: number },
+	paths?: WorkerRunPaths,
+): Promise<CommandResult> {
+	const probe = await probeWatchedAgent(options.agent);
+	const sentinels = paths === undefined ? undefined : await readWorkerSentinels(paths);
+	const status = probe.kind === "alive" ? probe.status : undefined;
+	const state = classifyWorkerState({ paneAlive: probe.kind === "alive", agentStatus: status, sentinels });
+	return await deliverWorkerWake({
+		...options,
+		paths,
+		outcome: state === "running" ? "timeout" : state,
+		agentStatus: status,
+	});
 }
 
 function parseWatchArgs(commandArgs: readonly string[]): {
@@ -872,6 +919,54 @@ async function readWorkerSentinels(paths: WorkerRunPaths): Promise<WorkerSentine
 	return { done, blocked };
 }
 
+// Digest of the pane's visible screen: an actively-working harness redraws
+// (spinners, elapsed-time counters), a finished turn goes static. herdr's pane
+// output revision counter is not populated in current builds, so screen text is
+// the quiescence signal.
+async function probeWorkerScreenSignature(agent: string): Promise<string | undefined> {
+	try {
+		const stdout = await herdrCapture(["agent", "read", agent, "--source", "visible", "--lines", String(WATCH_SIGNATURE_LINES)]);
+		const envelope = JSON.parse(stdout) as { result?: { read?: { text?: unknown } } };
+		const text = envelope.result?.read?.text;
+		if (typeof text !== "string") return undefined;
+		return createHash("sha256").update(text).digest("hex");
+	} catch {
+		return undefined;
+	}
+}
+
+type SettleConfirmResult =
+	| { kind: "fire"; outcome: WorkerWakeOutcome; agentStatus?: string }
+	| { kind: "watch" }
+	| { kind: "aborted" }
+	| { kind: "resubscribe" };
+
+// Confirm a status-only settle before waking the lead: probe sentinels, agent
+// liveness/status, and the visible screen every WATCH_CONFIRM_INTERVAL_MS and
+// feed evaluateSettleProbe until it fires, the settle collapses back to
+// working, herdr becomes unreachable, or the caller aborts (outer deadline).
+async function confirmWorkerSettle(input: {
+	agent: string;
+	paths?: WorkerRunPaths;
+	aborted: () => boolean;
+}): Promise<SettleConfirmResult> {
+	let progress: SettleProgress = { quietProbes: 0 };
+	while (true) {
+		if (input.aborted()) return { kind: "aborted" };
+		const sentinels = input.paths === undefined ? undefined : await readWorkerSentinels(input.paths);
+		const probe = await probeWatchedAgent(input.agent);
+		if (probe.kind === "unreachable") return { kind: "resubscribe" };
+		const alive = probe.kind === "alive";
+		const status = alive ? probe.status : undefined;
+		const screenSignature = alive ? await probeWorkerScreenSignature(input.agent) : undefined;
+		const decision = evaluateSettleProbe({ paneAlive: alive, agentStatus: status, screenSignature, sentinels }, progress);
+		if (decision.kind === "fire") return { kind: "fire", outcome: decision.outcome, agentStatus: status };
+		if (decision.kind === "watch") return { kind: "watch" };
+		progress = decision.progress;
+		await sleep(WATCH_CONFIRM_INTERVAL_MS);
+	}
+}
+
 type WorkerSettleWait =
 	| { kind: "deliver"; outcome: WorkerWakeOutcome; agentStatus?: string }
 	| { kind: "timeout" }
@@ -892,13 +987,39 @@ async function waitForWorkerSettle(input: {
 		let subscribed = false;
 		let processing = Promise.resolve();
 		let timer: ReturnType<typeof setTimeout> | undefined;
+		let recheckTimer: ReturnType<typeof setInterval> | undefined;
 		let stream: HerdrStream | undefined;
 		const finish = (result: WorkerSettleWait): void => {
 			if (finished) return;
 			finished = true;
 			if (timer !== undefined) clearTimeout(timer);
+			if (recheckTimer !== undefined) clearInterval(recheckTimer);
 			stream?.close();
 			resolvePromise(result);
+		};
+		// The slow safety recheck: fire the same settle confirmation the event
+		// path uses whenever sentinels exist or the status reads settled, so a
+		// missed or never-emitted settle event cannot strand the watcher.
+		const handleRecheck = async (): Promise<void> => {
+			if (finished) return;
+			const probe = await probeWatchedAgent(input.agent);
+			if (probe.kind === "unreachable") {
+				finish({ kind: "resubscribe", subscribed });
+				return;
+			}
+			const sentinels = input.paths === undefined ? undefined : await readWorkerSentinels(input.paths);
+			if (probe.kind === "gone") {
+				const state = classifyWorkerState({ paneAlive: false, sentinels });
+				finish({ kind: "deliver", outcome: state === "running" || state === "idle" ? "dead" : state });
+				return;
+			}
+			if (sentinels?.done !== true && sentinels?.blocked !== true && !isSettledAgentStatus(probe.status)) return;
+			const confirm = await confirmWorkerSettle({ agent: input.agent, paths: input.paths, aborted: () => finished });
+			if (confirm.kind === "fire") {
+				finish({ kind: "deliver", outcome: confirm.outcome, agentStatus: confirm.agentStatus ?? probe.status });
+			} else if (confirm.kind === "resubscribe") {
+				finish({ kind: "resubscribe", subscribed });
+			}
 		};
 		const handleEvent = async (event: WatchEvent): Promise<void> => {
 			if (finished) return;
@@ -924,22 +1045,21 @@ async function waitForWorkerSettle(input: {
 				return;
 			}
 			if (!isSettledAgentStatus(event.status)) return;
-			await sleep(WATCH_SETTLE_DEBOUNCE_MS);
-			if (finished) return;
-			const sentinels = input.paths === undefined ? undefined : await readWorkerSentinels(input.paths);
-			const probe = await probeWatchedAgent(input.agent);
-			if (probe.kind === "unreachable") {
+			const confirm = await confirmWorkerSettle({ agent: input.agent, paths: input.paths, aborted: () => finished });
+			if (confirm.kind === "fire") {
+				finish({ kind: "deliver", outcome: confirm.outcome, agentStatus: confirm.agentStatus ?? event.status });
+			} else if (confirm.kind === "resubscribe") {
 				finish({ kind: "resubscribe", subscribed });
-				return;
 			}
-			const status = probe.kind === "alive" ? probe.status : undefined;
-			const state = classifyWorkerState({ paneAlive: probe.kind === "alive", agentStatus: status, sentinels });
-			if (state === "running") return;
-			finish({ kind: "deliver", outcome: state, agentStatus: status ?? event.status });
+			// "watch" (the settle did not hold) and "aborted" (the outer timer
+			// already finished) both fall back to waiting on events.
 		};
 		if (input.deadline !== undefined) {
 			timer = setTimeout(() => finish({ kind: "timeout" }), Math.max(0, input.deadline - Date.now()));
 		}
+		recheckTimer = setInterval(() => {
+			processing = processing.then(handleRecheck).catch(() => finish({ kind: "resubscribe", subscribed }));
+		}, WATCH_RECHECK_INTERVAL_MS);
 		stream = herdrStreamLines(
 			{
 				id: `clanky_watch_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,

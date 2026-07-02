@@ -63,6 +63,12 @@ import { apnsConfigFromEnv, sendApns } from "../agent/lib/apns.ts";
 import { fcmConfigFromEnv, sendFcm } from "../agent/lib/fcm.ts";
 import { browserBridgeStatus } from "../agent/lib/browser-bridge.ts";
 import { buildEveDevServerEnv } from "../agent/lib/eve-dev-env.ts";
+import {
+	formatWorkflowPruneSummary,
+	pruneWorkflowLocalData,
+	resolveWorkflowDataDir,
+	resolveWorkflowRetentionHours,
+} from "../agent/lib/workflow-data-retention.ts";
 import { startFacePresence, stopFacePresence, type FaceCommandRequest } from "../agent/lib/face-presence.ts";
 import { SURFACE_HEADER } from "../agent/lib/frontdoor-auth.ts";
 import { YOLO_ENV } from "../agent/lib/host-command/mode.ts";
@@ -9648,6 +9654,12 @@ async function startServer(): Promise<void> {
 	ownedServerStartupOutput = "";
 	ownedServerStartError = undefined;
 	brainHost = HOST;
+	const pruned = await pruneWorkflowLocalData(
+		resolveWorkflowDataDir(process.env, REPO),
+		resolveWorkflowRetentionHours(process.env),
+	);
+	const pruneSummary = pruned === undefined ? undefined : formatWorkflowPruneSummary(pruned);
+	if (pruneSummary !== undefined) appendOwnedServerStartupOutput(`${pruneSummary}\n`);
 	const env = await buildOwnedServerEnv();
 	const args = [
 		"dev",

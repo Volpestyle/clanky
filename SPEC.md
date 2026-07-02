@@ -269,9 +269,28 @@ wrapping is enabled. Per-spawn overrides remain explicit: `herdr_spawn`
 raw `herdr agent start`. The relay's raw `api`/`agent.start` passthrough stays
 the explicit escape hatch that starts an unwrapped pane with no transcript.
 
+Spawns are also **wake-armed** by default: the spawn funnel
+(`spawnClankyWorker`) and the operator `spawn.sh` each arm a detached one-shot
+completion watcher (`clanky watch`; classification logic in
+`agent/lib/worker-watch.ts`) per worker. The watcher blocks on the mux's
+agent-status events for that pane, classifies the outcome against the run's
+`DONE`/`BLOCKED` sentinels — sentinels are completion truth, `agent_status` is
+a heuristic confirmed by a quiet-screen window plus a slow recheck under the
+event stream — and delivers exactly one provenance-stamped
+`[from watch:<slug>] [worker done|blocked|idle|dead]` wake into the spawning
+lead's pane through the `clanky msg` machinery, then exits. The notify target
+is resolved to a durable name at spawn time (never a stored pane id, which
+compacts). Opt out per spawn with `herdr_spawn` `watch: false` or `spawn.sh
+--no-watch`; `spawn.sh` records the armed watcher in `manifest.json` and logs
+it to `workers/<slug>/watch.log`. This wake bridge is the supervisor's wake
+substrate in the pool orchestration operating model
+(`docs/adr/0002-pool-orchestration-operating-model.md`). The relay `start` op
+does not arm a watcher yet.
+
 | Need | Source |
 | --- | --- |
 | Running, idle, blocked, done | Herdr |
+| Completion wake ("ping me when done") | `clanky watch`, armed per spawn at the seam |
 | Send text or keys | Herdr |
 | Current TUI screen | Herdr `visible` |
 | Recent terminal screen buffer | Herdr `recent` / `recent_unwrapped` |
@@ -880,11 +899,16 @@ conversations with full awareness of that work.
 ### 5.5 Fan-out / swarm orchestration
 
 Clanky (or any agent) acting as orchestrator loads `clanky-herdr-operator`,
-spawns one pane per task (`clanky:<slug>`), monitors via sentinel files +
+spawns one pane per task (`clanky:<slug>`), ends its turn, and acts on the
+`[worker <outcome>]` completion wakes the per-spawn watchers deliver (§4.3).
+Sentinel files remain completion truth and `harvest.sh --wait` remains the
+polling safety net when a wake never arrives. The orchestrator inspects with
 `herdr_read` (`auto` for history, `visible` for current screen), unblocks by
 injecting into panes, and harvests results.
 The operator skill owns run directories, manifest files, sentinels, and cleanup;
-eve decides when to invoke it.
+eve decides when to invoke it. The wake bridge is the supervisor's wake
+substrate in the pool operating model
+(`docs/adr/0002-pool-orchestration-operating-model.md`).
 
 ### 5.6 Self-subagents and pane mirrors
 

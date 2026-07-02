@@ -57,6 +57,7 @@ workers/<slug>/prompt.md    # task brief + completion protocol (spawn.sh writes 
 workers/<slug>/result.md    # worker's output
 workers/<slug>/DONE         # sentinel file: finished
 workers/<slug>/BLOCKED      # sentinel file: needs input
+workers/<slug>/watch.log    # completion watcher output (see section 2)
 ```
 
 The sentinel **files** are the source of truth for completion. Workers also
@@ -91,8 +92,8 @@ $OP/spawn.sh --slug fix-auth-tests --task "Fix the failing auth tests" \
 	--prompt "Run the auth test suite in this repo, fix the failures, re-run until green. List every file you changed."
 ```
 
-It prints `RUN_ID=...`, `RUN_DIR=...`, `AGENT=...`, `PANE_ID=...`. Pass that
-`RUN_ID` to every later spawn so the workers share one run and one tab:
+It prints `RUN_ID=...`, `RUN_DIR=...`, `AGENT=...`, `PANE_ID=...`, `WATCH=...`.
+Pass that `RUN_ID` to every later spawn so the workers share one run and one tab:
 
 ```bash
 $OP/spawn.sh --run "$RUN_ID" --slug update-readme --task "Update README" \
@@ -220,12 +221,45 @@ prompt the way `acceptEdits` can; reserve full bypass for when it is truly neede
 
 ## 2. Monitor and wait
 
-```bash
-$OP/harvest.sh "$RUN_ID"                      # snapshot: <slug> done|blocked|running|dead
-$OP/harvest.sh "$RUN_ID" --wait --timeout 900 # poll until nothing is running
+**Wake-driven is the default.** Every spawn — `spawn.sh` and the eve
+`herdr_spawn` tool — arms a detached one-shot watcher (`clanky watch`) for its
+worker. So the loop is: spawn, optionally arm the harness's `/goal` loop, end
+your turn. When the worker settles, the watcher classifies it against the run's
+sentinel files and delivers one provenance-stamped wake into the spawning
+lead's pane:
+
+```
+[from watch:<slug>] [worker done|blocked|idle|dead] clanky:<slug> run=<run-id> result=<result.md path>
 ```
 
-Exit 0 means every worker is done. Peek at a live worker anytime:
+Act on the wake (verify, then unblock/harvest per §3/§4); the watcher is
+one-shot, so re-arming is the next spawn's (or your) job —
+`clanky watch clanky:<slug> --notify <your durable name> --run-dir "$RUN_DIR"`
+re-arms one by hand. Opt a spawn out with `--no-watch` (spawn.sh) or
+`watch: false` (`herdr_spawn`). The armed watcher is recorded in
+`manifest.json` (notify target, pid, log) and its output lands in
+`workers/<slug>/watch.log`.
+
+Classification trusts sentinel files over herdr's heuristic `agent_status`:
+`done`/`blocked` mean the sentinel exists; `idle` means the status settled with
+no sentinel (finished-but-forgot-the-protocol, or stuck at a startup prompt —
+inspect the pane); `dead` means the pane is gone with no sentinel. Because
+statuses flicker (a pane can read `idle` mid-turn), a status-only settle fires
+only after the screen stays quiet across consecutive probes, and a slow
+recheck under the event stream catches sentinels whose settle event never
+arrived. A dropped event subscription is not a death verdict: the watcher
+re-resolves the pane by durable name and resubscribes.
+
+`harvest.sh` is the timeout safety net and state snapshot, not the completion
+mechanism:
+
+```bash
+$OP/harvest.sh "$RUN_ID"                      # snapshot: <slug> done|blocked|running|dead
+$OP/harvest.sh "$RUN_ID" --wait --timeout 900 # fallback poll when a wake never came
+```
+
+Exit 0 means every worker is done. Watching a pane live is a deliberate
+steering mode, not how you learn about completion:
 
 ```bash
 herdr agent read clanky:fix-auth-tests --source recent --lines 60
@@ -241,8 +275,9 @@ current TUI screen matters.
 Long-running waiters should have timeouts. A timeout is not a verdict: inspect
 the worker's recent output, decide whether it is progressing, blocked, or dead,
 then either steer it, harvest it, or re-arm the waiter with a fresh timeout.
-Avoid tight polling loops; use event waits for completion and explicit reads for
-progress checks.
+Avoid tight polling loops: completion is the spawn-armed wake's job; use
+explicit `herdr wait` event waits for intermediate milestones (server ready,
+tests started) and explicit reads for progress checks.
 
 ## 3. Unblock or steer
 

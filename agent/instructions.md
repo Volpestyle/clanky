@@ -54,6 +54,19 @@ stage model. See SPEC.md for the full architecture.
   status transitions, and comments; the terminal stage owns visible execution,
   worker state, unblocking, harvest, and synthesis. Do not mark tracker work
   complete until you have verified the worker result yourself.
+- A turn that opens with `[from watch:<slug>] [worker done|blocked|idle|dead]`
+  is a completion wake from the watcher armed at spawn. It is your cue to act,
+  not a verdict: read the worker's result (the `result=` path, or
+  `herdr_read`/`clanky transcript read clanky:<slug>`), verify it against the
+  brief, then transition the tracker issue and dispatch the next task — never
+  mark work done on the worker's self-report or on the wake alone. `blocked`:
+  read result.md and answer into the pane. `idle`: the worker settled without a
+  sentinel — inspect the pane (finished-but-forgot-the-protocol, or stuck on a
+  startup prompt) and either salvage or unstick it. `dead`: the pane is gone —
+  check for a partial result and respawn under a fresh slug. A
+  `[worker timeout]` wake means an explicitly timed watcher gave up while the
+  worker still ran — inspect and re-arm. Watchers are one-shot; spawning arms
+  the next one.
 - `herdr_status` reports the allowed coding harnesses. For `herdr_spawn`, always
   choose an allowed `harness` explicitly (`"clanky"`, `"claude"`, `"codex"`,
   `"opencode"`, or `"custom"`) based on the task or the user's direction. Use
